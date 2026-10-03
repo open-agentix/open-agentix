@@ -14,7 +14,7 @@ Until 1.0.0 only the latest minor release receives security fixes.
 **Please do not open public issues for security problems.**
 
 Report privately via
-[GitHub Security Advisories](https://github.com/open-agentix/platform/security/advisories/new)
+[GitHub Security Advisories](https://github.com/open-agentix/open-agentix/security/advisories/new)
 ("Report a vulnerability"). Include affected version, a description, reproduction steps and the
 impact you expect. We acknowledge reports within 3 working days and aim to ship a fix for
 critical issues within 14 days. We coordinate disclosure with you and credit you in the advisory
