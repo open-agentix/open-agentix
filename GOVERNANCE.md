@@ -1,7 +1,19 @@
 # Governance
 
 openagentix is an open-source project under the Apache-2.0 license, developed in the open in the
-GitHub organization [`open-agentix`](https://github.com/open-agentix).
+GitHub organization [`open-agentix`](https://github.com/open-agentix). Repositories:
+[`open-agentix`](https://github.com/open-agentix/open-agentix) (platform),
+[`open-agentix-helm`](https://github.com/open-agentix/open-agentix-helm) (Helm charts) and
+[`openagentix.si`](https://github.com/open-agentix/openagentix.si) (website and docs).
+
+## Transparency: built by an agent
+
+Code in this project is written by **agentix-zero**, the project's AI agent account. That is
+deliberate: we trust our goal and vision enough to build the platform with the kind of agent it is
+meant to govern. Humans stay accountable: every change is reviewed by a human maintainer, and
+decisions (roadmap, ADRs, releases, security handling) are owned by the maintainers, currently
+the project lead. agentix-zero has no authority of its own; it acts on behalf of the maintainers
+and its commits follow the same rules as everyone else's (DCO sign-off, Conventional Commits, tests).
 
 ## Roles
 
@@ -10,9 +22,10 @@ GitHub organization [`open-agentix`](https://github.com/open-agentix).
 - **Maintainers** review and merge pull requests, cut releases and steward the roadmap.
   Maintainers are listed below and in `CODEOWNERS` (once more than one maintainer exists).
 
-| Maintainer   | GitHub          | Areas |
-| ------------ | --------------- | ----- |
-| agentix-zero | `@agentix-zero` | all   |
+| Maintainer   | GitHub          | Areas                                       |
+| ------------ | --------------- | ------------------------------------------- |
+| the project lead | via `@agentix-zero` | all (project lead, owns decisions)      |
+| agentix-zero | `@agentix-zero` | all (agent account, authors changes, no own decision rights) |
 
 A contributor with a track record of substantial, high-quality contributions over at least three
 months can be nominated as maintainer by any maintainer; the nomination passes with lazy
