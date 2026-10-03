@@ -45,8 +45,11 @@ Commit subjects (and PR titles) follow
 
 The project version (root `package.json`) follows [SemVer](https://semver.org):
 `fix` -> PATCH, `feat` -> MINOR, breaking change -> MAJOR. Before 1.0.0 breaking changes may land in
-a MINOR release and are flagged in the changelog. A release bumps the version, updates
-[CHANGELOG.md](CHANGELOG.md) (Keep a Changelog), creates the tag `vX.Y.Z` and a GitHub release.
+a MINOR release and are flagged in the changelog. A release bumps the version with
+`node scripts/set-version.mjs X.Y.Z` (root `package.json` is the single source, copied to all
+workspace packages), updates [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog), creates the tag
+`vX.Y.Z` and a GitHub release; container images are tagged with the version and carry the label
+`org.opencontainers.image.version`.
 
 ## Running locally
 
@@ -78,7 +81,13 @@ node packages/runners/dist/cli.js run examples/cve-triage.agents.md --event exam
 If you change an API route, regenerate the OpenAPI document (a test fails when it is stale):
 
 ```bash
-pnpm --filter @openagentix/api openapi
+UPDATE_OPENAPI=1 pnpm vitest run apps/api/test/routes.test.ts   # or: pnpm build && pnpm --filter @openagentix/api openapi
+```
+
+Benchmark the hot paths (see [docs/performance.md](docs/performance.md)):
+
+```bash
+pnpm build && node scripts/bench.mjs --duration 10 --connections 10
 ```
 
 If you change the database schema, add a migration:
