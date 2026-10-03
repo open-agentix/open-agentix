@@ -35,7 +35,12 @@ const AGENT_HEADING = /^agent:\s*([a-z][a-z0-9-]*)\s*$/i;
 
 /** Normalises line endings and trailing whitespace so digests are stable across platforms. */
 export function normalizeSource(source: string): string {
-  return source.replace(/\r\n?/g, '\n').replace(/^\uFEFF/, '').trimEnd() + '\n';
+  return (
+    source
+      .replace(/\r\n?/g, '\n')
+      .replace(/^\uFEFF/, '')
+      .trimEnd() + '\n'
+  );
 }
 
 export function splitFrontMatter(source: string): { frontMatter: string; body: string } {
