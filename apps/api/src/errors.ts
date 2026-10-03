@@ -1,6 +1,7 @@
 import { OaxError, ValidationError } from '@openagentix/core';
 import type { FastifyError, FastifyInstance } from 'fastify';
 import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
+import { ZodError } from 'zod';
 
 /** HTTP status for stable error codes. */
 const STATUS: Record<string, number> = {
@@ -47,6 +48,16 @@ export function registerErrorHandler(app: FastifyInstance): void {
         error: 'validation_failed',
         message: 'request validation failed',
         details: err.validation.map((v) => ({ path: v.instancePath, message: v.message })),
+      });
+    }
+    if (err instanceof ZodError) {
+      return reply.status(400).send({
+        error: 'validation_failed',
+        message: 'invalid input',
+        details: err.issues.map((i) => ({
+          path: i.path.map(String).join('.'),
+          message: i.message,
+        })),
       });
     }
     if (err instanceof HttpError) {
