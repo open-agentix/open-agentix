@@ -362,14 +362,12 @@ export class IdentityService {
     if (!this.oidc) throw new HttpError(404, 'not_found', 'OIDC is not configured');
     const v = randomOidcValues();
     await this.ctx.db.delete(oidcStates).where(lt(oidcStates.expiresAt, this.ctx.now()));
-    await this.ctx.db
-      .insert(oidcStates)
-      .values({
-        state: v.state,
-        nonce: v.nonce,
-        codeVerifier: v.codeVerifier,
-        expiresAt: new Date(this.ctx.now().getTime() + 600_000),
-      });
+    await this.ctx.db.insert(oidcStates).values({
+      state: v.state,
+      nonce: v.nonce,
+      codeVerifier: v.codeVerifier,
+      expiresAt: new Date(this.ctx.now().getTime() + 600_000),
+    });
     return this.oidc.authorizationUrl({
       state: v.state,
       nonce: v.nonce,
@@ -453,16 +451,14 @@ export class IdentityService {
       .where(eq(users.email, email));
     if (exists) throw conflict(`user ${email} already exists`);
     const id = randomUUID();
-    await this.ctx.db
-      .insert(users)
-      .values({
-        id,
-        email,
-        displayName: input.displayName,
-        passwordHash: await hashPassword(input.password),
-        source: 'local',
-        globalRoles: input.globalRoles,
-      });
+    await this.ctx.db.insert(users).values({
+      id,
+      email,
+      displayName: input.displayName,
+      passwordHash: await hashPassword(input.password),
+      source: 'local',
+      globalRoles: input.globalRoles,
+    });
     await this.audit.append({
       actor,
       action: 'user.created',

@@ -83,16 +83,14 @@ export class RunsService {
     let eventRowId = input.eventRowId ?? null;
     if (!eventRowId) {
       eventRowId = randomUUID();
-      await db
-        .insert(events)
-        .values({
-          id: eventRowId,
-          sourceId: null,
-          cloudEventId: input.event.id,
-          type: input.event.type,
-          subject: input.event.subject ?? null,
-          payload: input.event as object,
-        });
+      await db.insert(events).values({
+        id: eventRowId,
+        sourceId: null,
+        cloudEventId: input.event.id,
+        type: input.event.type,
+        subject: input.event.subject ?? null,
+        payload: input.event as object,
+      });
     }
     const budget = await this.teamBudgetExceeded(latest.teamId);
     const id = randomUUID();

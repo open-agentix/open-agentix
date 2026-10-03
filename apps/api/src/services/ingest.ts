@@ -203,17 +203,15 @@ export class IngestService {
     triggeredBy: string,
   ): Promise<IngestResult> {
     const eventId = randomUUID();
-    await this.ctx.db
-      .insert(events)
-      .values({
-        id: eventId,
-        sourceId: source.id,
-        cloudEventId: event.id,
-        type: event.type,
-        subject: event.subject ?? null,
-        payload: event as object,
-        receivedAt: this.ctx.now(),
-      });
+    await this.ctx.db.insert(events).values({
+      id: eventId,
+      sourceId: source.id,
+      cloudEventId: event.id,
+      type: event.type,
+      subject: event.subject ?? null,
+      payload: event as object,
+      receivedAt: this.ctx.now(),
+    });
     let runId: string | null = null;
     if (source.agentId) {
       const latest = await this.runs
