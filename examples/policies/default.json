@@ -1,0 +1,9 @@
+{
+  "forbiddenTools": ["*/delete_*", "shell/*"],
+  "forbiddenArgPatterns": [
+    { "pattern": "rm\\s+-rf", "reason": "destructive shell command" },
+    { "pattern": "drop\\s+table", "reason": "destructive SQL" }
+  ],
+  "requireApprovalTools": ["*/merge_*", "*/deploy_*"],
+  "maxClassification": "confidential"
+}
