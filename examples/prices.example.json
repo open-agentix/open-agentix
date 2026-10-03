@@ -1,0 +1,7 @@
+[
+  { "provider": "anthropic", "model": "claude-opus-5-5", "inputPerMTok": 4, "outputPerMTok": 20 },
+  { "provider": "anthropic", "model": "claude-sonnet-5-5", "inputPerMTok": 2, "outputPerMTok": 10 },
+  { "provider": "anthropic", "model": "claude-haiku-4-5", "inputPerMTok": 1, "outputPerMTok": 5 },
+  { "provider": "bedrock", "model": "anthropic.claude-*", "inputPerMTok": 4, "outputPerMTok": 20 },
+  { "provider": "openai", "model": "*", "inputPerMTok": 2.5, "outputPerMTok": 10 }
+]

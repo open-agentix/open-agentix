@@ -1,0 +1,10 @@
+{
+  "specversion": "1.0",
+  "id": "jira-10001",
+  "source": "/jira/acme",
+  "type": "com.atlassian.jira.issue.updated",
+  "subject": "SEC-42",
+  "data": {
+    "issue": { "key": "SEC-42", "severity": "critical", "summary": "CVE-2024-3094 in api image" }
+  }
+}
