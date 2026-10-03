@@ -64,7 +64,7 @@ export async function createContext(
     cache: overrides.cache ?? (await createCache(config.cache.url, config.cache.maxEntries)),
     metrics: overrides.metrics ?? new Metrics(),
     logger,
-    secrets: overrides.secrets ?? new DefaultSecretResolver(),
+    secrets: overrides.secrets ?? new DefaultSecretResolver(process.env, config.secrets.dir),
     costModel: overrides.costModel ?? new CostModel(config.priceTable),
     now: overrides.now ?? (() => new Date()),
     ...(overrides.ldapFactory ? { ldapFactory: overrides.ldapFactory } : {}),

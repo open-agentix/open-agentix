@@ -1,11 +1,14 @@
 import {
   OaxError,
+  RUNNER_KINDS,
+  type RunnerKind,
   PriceTableSchema,
   isRole,
   type PriceEntry,
   type RoleBinding,
 } from '@openagentix/core';
 import { parseProviderConfigs, type ProviderConfig } from '@openagentix/providers';
+import { KubernetesJobRunnerConfigSchema } from '@openagentix/runners';
 import { z } from 'zod';
 import { loadDatabaseConfig, type DatabaseConfig } from './db/settings.js';
 
@@ -99,6 +102,27 @@ export const EnvSchema = z.object({
   OAX_SSE_POLL_MS: int(500),
 
   OAX_METRICS_TOKEN: z.string().optional(),
+  OAX_WORKER_HTTP_PORT: int(9090),
+  OAX_WORKER_HTTP_HOST: z.string().default('0.0.0.0'),
+
+  OAX_SECRETS_DIR: z.string().optional(),
+  OAX_DEMO_MCP: bool.default(false),
+
+  // Runners (v0.2; parsed and validated now, feature-flagged off).
+  OAX_RUNNERS_ENABLED: z.string().default('in-process'),
+  OAX_K8S_JOB_ENABLED: bool.default(false),
+  OAX_K8S_NAMESPACE: z.string().default('openagentix-runs'),
+  OAX_K8S_SERVICE_ACCOUNT: z.string().default('openagentix-worker'),
+  OAX_K8S_TTL_SECONDS_AFTER_FINISHED: int(600),
+  OAX_K8S_ACTIVE_DEADLINE_SECONDS: int(3600),
+  OAX_K8S_IMAGE_PULL_SECRETS: z.string().default(''),
+  OAX_K8S_NODE_SELECTOR: json(z.record(z.string(), z.string())).optional(),
+  OAX_K8S_RESOURCES_CPU: z.string().default('500m'),
+  OAX_K8S_RESOURCES_MEMORY: z.string().default('512Mi'),
+  OAX_K8S_EGRESS: z.string().default(''),
+  OAX_TOOLBOX_REGISTRY: z.string().default('ghcr.io/open-agentix'),
+  OAX_TOOLBOX_ALLOWLIST: z.string().default(''),
+  OAX_TOOLBOX_REQUIRE_SIGNATURE: bool.default(true),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
   OTEL_SERVICE_NAME: z.string().optional(),
 });
@@ -166,6 +190,16 @@ export interface Config {
   ssePollMs: number;
   metricsToken: string | undefined;
   otel: { endpoint: string | undefined; serviceName: string };
+  workerHttp: { host: string; port: number };
+  secrets: { dir: string | undefined; envRefs: string[] };
+  demoMcp: boolean;
+  runners: {
+    enabled: RunnerKind[];
+    kubernetesJob: { enabled: boolean } & z.infer<typeof KubernetesJobRunnerConfigSchema> & {
+        imagePullSecrets: string[];
+      };
+  };
+  toolboxes: { registry: string; allowlist: string[]; requireSignature: boolean };
 }
 
 /** Group/claim value -> role bindings; values are `role` (global) or `role@team-slug`. */
@@ -290,6 +324,74 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     otel: {
       endpoint: e.OTEL_EXPORTER_OTLP_ENDPOINT,
       serviceName: e.OTEL_SERVICE_NAME ?? 'openagentix-api',
+    },
+    workerHttp: { host: e.OAX_WORKER_HTTP_HOST, port: e.OAX_WORKER_HTTP_PORT },
+    secrets: { dir: e.OAX_SECRETS_DIR, envRefs: secretEnvRefs(env) },
+    demoMcp: e.OAX_DEMO_MCP,
+    runners: runnersConfig(e),
+    toolboxes: {
+      registry: e.OAX_TOOLBOX_REGISTRY,
+      allowlist: list(e.OAX_TOOLBOX_ALLOWLIST),
+      requireSignature: e.OAX_TOOLBOX_REQUIRE_SIGNATURE,
+    },
+  };
+}
+
+const list = (s: string) =>
+  s
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+/** Names of `OAX_SECRET_<NAME>` variables (values stay in the environment). */
+export function secretEnvRefs(env: NodeJS.ProcessEnv): string[] {
+  const out: string[] = [];
+  for (const key of Object.keys(env)) {
+    if (!key.startsWith('OAX_SECRET_') || key === 'OAX_SECRETS_DIR') continue;
+    const name = key.slice('OAX_SECRET_'.length);
+    if (!/^[A-Z0-9_]{1,128}$/.test(name)) {
+      throw new OaxError(
+        'config_invalid',
+        `invalid configuration: ${key} must match OAX_SECRET_[A-Z0-9_]+`,
+      );
+    }
+    out.push(name.toLowerCase());
+  }
+  return out.sort();
+}
+
+function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
+  const enabled = list(e.OAX_RUNNERS_ENABLED);
+  for (const r of enabled) {
+    if (!(RUNNER_KINDS as readonly string[]).includes(r)) {
+      throw new OaxError(
+        'config_invalid',
+        `invalid configuration: OAX_RUNNERS_ENABLED contains unknown runner "${r}"`,
+      );
+    }
+  }
+  const job = KubernetesJobRunnerConfigSchema.parse({
+    namespace: e.OAX_K8S_NAMESPACE,
+    serviceAccountName: e.OAX_K8S_SERVICE_ACCOUNT,
+    registry: e.OAX_TOOLBOX_REGISTRY,
+    ttlSecondsAfterFinished: e.OAX_K8S_TTL_SECONDS_AFTER_FINISHED,
+    activeDeadlineSeconds: e.OAX_K8S_ACTIVE_DEADLINE_SECONDS,
+    egress: list(e.OAX_K8S_EGRESS),
+    resources: { cpu: e.OAX_K8S_RESOURCES_CPU, memory: e.OAX_K8S_RESOURCES_MEMORY },
+    nodeSelector: e.OAX_K8S_NODE_SELECTOR ?? {},
+  });
+  if (enabled.includes('kubernetes-job') && !e.OAX_K8S_JOB_ENABLED) {
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: runner "kubernetes-job" requires OAX_K8S_JOB_ENABLED=true (v0.2 feature flag)',
+    );
+  }
+  return {
+    enabled: enabled as RunnerKind[],
+    kubernetesJob: {
+      enabled: e.OAX_K8S_JOB_ENABLED,
+      ...job,
+      imagePullSecrets: list(e.OAX_K8S_IMAGE_PULL_SECRETS),
     },
   };
 }
