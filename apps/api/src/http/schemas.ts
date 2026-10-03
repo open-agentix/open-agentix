@@ -373,6 +373,9 @@ export const HealthSchema = z.object({
   status: z.enum(['ok', 'unavailable']),
   checks: z.record(z.string(), z.boolean()).optional(),
 });
+export const ReadySchema = HealthSchema.extend({
+  schema: z.object({ expected: z.number().int(), applied: z.number().int(), ok: z.boolean() }),
+});
 
 // ---------- worker contract (run token) ----------
 export const RunIdParams = z.object({ id: Id });
