@@ -3,3 +3,4 @@ export * from './connection.js';
 export * from './gateway.js';
 export * from './testing.js';
 export * from './demo.js';
+export * from './gate-server.js';

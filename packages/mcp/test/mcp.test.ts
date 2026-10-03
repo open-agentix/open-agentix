@@ -8,6 +8,7 @@ import {
   McpServerConfigSchema,
   ToolGateway,
   createMockMcpServer,
+  createPolicyGateServer,
   createTransport,
   cveDbServer,
   demoServerFactories,
@@ -213,6 +214,62 @@ describe('transports', () => {
       { secrets },
     );
     expect(t).toBeInstanceOf(StreamableHTTPClientTransport);
+  });
+});
+
+describe('policy gate MCP proxy', () => {
+  it('routes harness tool calls through the gate', async () => {
+    const store = new Map<string, Ticket>();
+    const g = demoGateway(store);
+    const policy = ctx([
+      {
+        server: 'tickets',
+        tool: 'add_comment',
+        args: { key: { type: 'string', pattern: '^SEC-' }, comment: { type: 'string' } },
+      },
+      { server: 'tickets', tool: 'update_ticket', approval: 'required', allowAdditionalArgs: true },
+    ]);
+    const seen: string[] = [];
+    const server = createPolicyGateServer({
+      gateway: g,
+      gate: localPolicyGate(policy),
+      tools: await g.exposedTools(policy.agent),
+      onCall: (call, r) => void seen.push(`${call.tool}:${r.status}`),
+    });
+    const client = new Client({ name: 'harness', version: '0' });
+    await client.connect(await linkInMemory(server));
+    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([
+      'tickets__add_comment',
+      'tickets__update_ticket',
+    ]);
+    const ok = await client.callTool({
+      name: 'tickets__add_comment',
+      arguments: { key: 'SEC-1', comment: 'hi' },
+    });
+    expect(ok.isError).toBe(false);
+    const denied = await client.callTool({
+      name: 'tickets__add_comment',
+      arguments: { key: 'OPS-1', comment: 'x' },
+    });
+    expect(denied.isError).toBe(true);
+    expect(JSON.stringify(denied.content)).toMatch(/Denied by policy/);
+    const pending = await client.callTool({
+      name: 'tickets__update_ticket',
+      arguments: { key: 'SEC-1' },
+    });
+    expect(JSON.stringify(pending.content)).toMatch(/Requires human approval/);
+    const unknown = await client.callTool({
+      name: 'tickets__delete_ticket',
+      arguments: { key: 'SEC-1' },
+    });
+    expect(unknown.isError).toBe(true);
+    expect(seen).toEqual([
+      'add_comment:ok',
+      'add_comment:denied',
+      'update_ticket:approval_required',
+    ]);
+    expect(store.get('SEC-1')?.comments).toEqual(['hi']);
+    await client.close();
   });
 });
 
