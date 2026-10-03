@@ -10,6 +10,7 @@ export class Metrics {
   readonly policyDecisions: Counter<'effect'>;
   readonly queueDepth: Gauge<'status'>;
   readonly costMicros: Counter<'provider'>;
+  readonly workerActiveRuns: Gauge<'worker'>;
 
   constructor(prefix = 'oax_') {
     collectDefaultMetrics({ register: this.registry, prefix });
@@ -54,6 +55,12 @@ export class Metrics {
       name: `${prefix}cost_micro_usd_total`,
       help: 'Model and tool cost in micro-USD',
       labelNames: ['provider'],
+      registers: [this.registry],
+    });
+    this.workerActiveRuns = new Gauge({
+      name: `${prefix}worker_active_runs`,
+      help: 'Runs currently executed by a worker process',
+      labelNames: ['worker'],
       registers: [this.registry],
     });
   }
