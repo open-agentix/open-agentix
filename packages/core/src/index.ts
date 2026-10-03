@@ -8,3 +8,4 @@ export * from './agents/parser.js';
 export * from './agents/validate.js';
 export * from './policy/engine.js';
 export * from './control/controller.js';
+export * from './redact.js';
