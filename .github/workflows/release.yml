@@ -19,9 +19,6 @@ jobs:
     strategy:
       matrix:
         target: [api, worker]
-    outputs:
-      digest-api: ${{ steps.out.outputs.digest-api }}
-      digest-worker: ${{ steps.out.outputs.digest-worker }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -64,8 +61,6 @@ jobs:
         run: |
           cosign sign --yes "$IMAGE"
           cosign attest --yes --type spdxjson --predicate sbom-${{ matrix.target }}.spdx.json "$IMAGE"
-      - id: out
-        run: echo "digest-${{ matrix.target }}=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
   release:
     name: GitHub release
@@ -79,10 +74,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-          DIGEST_API: ${{ needs.images.outputs.digest-api }}
-          DIGEST_WORKER: ${{ needs.images.outputs.digest-worker }}
         run: |
           version="${TAG#v}"
+          digest() { docker buildx imagetools inspect "ghcr.io/open-agentix/open-agentix-$1:${version}" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
+          DIGEST_API=$(digest api)
+          DIGEST_WORKER=$(digest worker)
           awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > notes.md
           {
             echo
