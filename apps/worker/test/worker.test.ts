@@ -1,11 +1,12 @@
 import { schema } from '@openagentix/api';
+import { createEvent, type ConsumerLike, type KafkaMessageLike } from '@openagentix/events';
 import { demoServerFactories, inMemoryServers } from '@openagentix/mcp';
 import type { Runner } from '@openagentix/runners';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentSource } from '../../api/test/fixtures.js';
 import { testNode, type TestNode } from '../../api/test/helpers.js';
-import { RunQueue, Worker } from '../src/index.js';
+import { CronScheduler, KafkaSources, RunQueue, Worker } from '../src/index.js';
 
 let n: TestNode;
 let agentId: string;
@@ -128,5 +129,83 @@ describe('Worker', () => {
     for (let i = 0; i < 100 && w.activeRuns === 0; i++) await new Promise((r) => setTimeout(r, 10));
     await w.stop(true);
     expect(await status(id)).toBe('failed');
+  });
+});
+
+describe('CronScheduler', () => {
+  it('loads cron triggers and creates one run per tick', async () => {
+    const s = new CronScheduler(n.ctx, n.services);
+    const jobs = await s.reload();
+    expect(jobs).toHaveLength(1);
+    expect(await s.reload()).toEqual(jobs);
+    const event = createEvent({
+      source: '/sources/cron/x',
+      type: 'io.openagentix.cron.tick',
+      time: new Date('2026-10-04T03:00:00Z'),
+    });
+    const first = await s.fire(agentId, '0 3 * * *', event);
+    const second = await s.fire(agentId, '0 3 * * *', event);
+    expect(first).toBeTruthy();
+    expect(second).toBeNull();
+    s.start(1_000_000);
+    s.stop();
+    await n.ctx.db
+      .update(schema.agents)
+      .set({ latestVersionId: null })
+      .where(eq(schema.agents.id, agentId));
+    await n.ctx.cache.delPrefix('');
+    const s2 = new CronScheduler(n.ctx, n.services);
+    await s2.reload();
+    // a scheduler that had the job drops it when the agent no longer has the trigger
+    expect(await s.reload()).toEqual([]);
+    s2.stop();
+    const [v] = await n.ctx.db
+      .select()
+      .from(schema.agentVersions)
+      .where(eq(schema.agentVersions.agentId, agentId));
+    await n.ctx.db
+      .update(schema.agents)
+      .set({ latestVersionId: v!.id })
+      .where(eq(schema.agents.id, agentId));
+    await n.ctx.cache.delPrefix('');
+  });
+});
+
+describe('KafkaSources', () => {
+  it('ingests records from enabled Kafka sources', async () => {
+    await n.req({
+      method: 'POST',
+      url: '/v1/event-sources',
+      payload: {
+        name: 'jira-kafka',
+        kind: 'kafka',
+        agentId,
+        config: { brokers: ['kafka:9092'], groupId: 'oax', topics: ['jira'] },
+      },
+    });
+    let each:
+      | ((p: { topic: string; partition: number; message: KafkaMessageLike }) => Promise<void>)
+      | undefined;
+    const consumer: ConsumerLike = {
+      connect: async () => undefined,
+      subscribe: async () => undefined,
+      run: async (o) => {
+        each = o.eachMessage;
+      },
+      disconnect: async () => undefined,
+    };
+    const k = new KafkaSources(n.ctx, n.services, () => consumer);
+    expect(await k.start()).toBe(1);
+    await each!({
+      topic: 'jira',
+      partition: 0,
+      message: { value: Buffer.from('{"key":"SEC-1"}'), offset: '3' },
+    });
+    const events = (await n.req({ method: 'GET', url: '/v1/events?limit=1' })).json().items;
+    expect(events[0]).toMatchObject({
+      cloudEventId: 'jira-0-3',
+      type: 'io.openagentix.kafka.message',
+    });
+    await k.stop();
   });
 });
