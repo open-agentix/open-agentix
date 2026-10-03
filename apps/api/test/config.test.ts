@@ -73,3 +73,69 @@ describe('mapGroupsToBindings', () => {
     ]);
   });
 });
+
+describe('runner, toolbox, secrets and worker settings', () => {
+  it('parses defaults', () => {
+    const c = loadConfig(base);
+    expect(c.runners.enabled).toEqual(['in-process']);
+    expect(c.runners.kubernetesJob).toMatchObject({
+      enabled: false,
+      namespace: 'openagentix-runs',
+      serviceAccountName: 'openagentix-worker',
+      imagePullSecrets: [],
+    });
+    expect(c.toolboxes).toEqual({
+      registry: 'ghcr.io/open-agentix',
+      allowlist: [],
+      requireSignature: true,
+    });
+    expect(c.workerHttp).toEqual({ host: '0.0.0.0', port: 9090 });
+    expect(c.demoMcp).toBe(false);
+    expect(c.secrets).toEqual({ dir: undefined, envRefs: [] });
+  });
+
+  it('parses the v0.2 Kubernetes Job contract behind its feature flag', () => {
+    const c = loadConfig({
+      ...base,
+      OAX_RUNNERS_ENABLED: 'in-process, kubernetes-job',
+      OAX_K8S_JOB_ENABLED: 'true',
+      OAX_K8S_NAMESPACE: 'runs',
+      OAX_K8S_IMAGE_PULL_SECRETS: 'ghcr, other',
+      OAX_K8S_NODE_SELECTOR: '{"pool":"agents"}',
+      OAX_K8S_EGRESS: '10.0.0.0/8',
+      OAX_TOOLBOX_ALLOWLIST: 'trivy,git+node',
+      OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false',
+      OAX_SECRETS_DIR: '/var/run/secrets/oax',
+      OAX_SECRET_GITHUB_TOKEN: 'x',
+      OAX_SECRET_JIRA: 'y',
+      OAX_DEMO_MCP: 'true',
+      OAX_WORKER_HTTP_PORT: '9191',
+    });
+    expect(c.runners.enabled).toEqual(['in-process', 'kubernetes-job']);
+    expect(c.runners.kubernetesJob).toMatchObject({
+      enabled: true,
+      namespace: 'runs',
+      imagePullSecrets: ['ghcr', 'other'],
+      nodeSelector: { pool: 'agents' },
+      egress: ['10.0.0.0/8'],
+    });
+    expect(c.toolboxes).toEqual({
+      registry: 'ghcr.io/open-agentix',
+      allowlist: ['trivy', 'git+node'],
+      requireSignature: false,
+    });
+    expect(c.secrets).toEqual({ dir: '/var/run/secrets/oax', envRefs: ['github_token', 'jira'] });
+    expect(c.demoMcp).toBe(true);
+    expect(c.workerHttp.port).toBe(9191);
+  });
+
+  it('rejects unknown runners, disabled feature flags and bad secret names', () => {
+    expect(() => loadConfig({ ...base, OAX_RUNNERS_ENABLED: 'magic' })).toThrow(
+      /unknown runner "magic"/,
+    );
+    expect(() => loadConfig({ ...base, OAX_RUNNERS_ENABLED: 'kubernetes-job' })).toThrow(
+      /OAX_K8S_JOB_ENABLED/,
+    );
+    expect(() => loadConfig({ ...base, 'OAX_SECRET_bad-name': 'x' })).toThrow(/OAX_SECRET_/);
+  });
+});
