@@ -1,0 +1,26 @@
+{
+  "name": "@openagentix/mcp",
+  "version": "0.0.0",
+  "description": "MCP client wrapper with per-agent tool allowlists enforced by the policy engine, timeouts and result size limits",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "@openagentix/core": "workspace:*",
+    "zod": "4.6.5"
+  }
+}
