@@ -5,3 +5,4 @@ pnpm-lock.yaml
 openapi.yaml
 apps/api/drizzle
 *.md
+apps/ui/src/api/schema.d.ts
