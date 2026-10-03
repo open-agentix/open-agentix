@@ -9,14 +9,23 @@ should come from a Kubernetes Secret (`envFrom`/`secretKeyRef`) or a mounted fil
 
 ## Images and processes
 
-| Image | Command | Port | Probes |
-| --- | --- | --- | --- |
-| `ghcr.io/open-agentix/open-agentix-api:<version>` | `node dist/main.js` | 8080 | liveness `GET /healthz`, readiness `GET /readyz` |
-| `ghcr.io/open-agentix/open-agentix-api:<version>` | `node dist/migrate-cli.js` | – | migrations Job (Helm hook, pre-install/pre-upgrade) |
-| `ghcr.io/open-agentix/open-agentix-worker:<version>` | `node dist/main.js` | – | process check; metrics via the API |
+Chart and images are named `open-agentix` (chart repo `open-agentix/open-agentix-helm`).
 
-Both images run as user `node` (uid 1000), need no writable root file system (mount `/tmp` as
-`emptyDir` if desired) and no Linux capabilities.
+| Image | Command (workdir) | Port | Probes |
+| --- | --- | --- | --- |
+| `ghcr.io/open-agentix/open-agentix-api:<version>` | `node dist/main.js` (`/app/apps/api`) | 8080 | liveness `GET /healthz`, readiness `GET /readyz` (DB reachable + schema migrated) |
+| `ghcr.io/open-agentix/open-agentix-api:<version>` | `node dist/migrate-cli.js` (`/app/apps/api`) | – | migrations Job (Helm hook); needs **only** the database variables |
+| `ghcr.io/open-agentix/open-agentix-worker:<version>` | `node dist/main.js` (`/app/apps/worker`) | 9090 | `GET /healthz`, `GET /readyz` (DB + schema + loop), `GET /metrics` |
+| `ghcr.io/open-agentix/open-agentix-ui:<version>` | provided by the UI (`apps/ui/Dockerfile`, branch `feat/ui`) | 8080 | expected: `nginxinc/nginx-unprivileged` serving static files on 8080, uid 101, `GET /healthz` |
+
+API and worker images run as user `node` (uid 1000), need no writable root file system (mount
+`/tmp` as `emptyDir` if desired) and no Linux capabilities. Images carry the label
+`org.opencontainers.image.version` and are signed with cosign (keyless) with an SPDX SBOM
+attestation (release workflow).
+
+Migrations run under a Postgres advisory lock, so the Helm hook Job and API replicas with
+`OAX_DB_MIGRATE_ON_START=true` can race safely; every process waits for the database with
+exponential backoff before it starts.
 
 ## Core
 
@@ -36,9 +45,13 @@ Both images run as user `node` (uid 1000), need no writable root file system (mo
 
 | Variable | Default | Used by | Meaning |
 | --- | --- | --- | --- |
-| `OAX_DATABASE_URL` | – (required, *secret*) | both | `postgres://user:pass@host:5432/db?sslmode=require`. `memory://` / `pglite://<dir>` = embedded PGlite (tests/demos only; needs the dev dependency). |
+| `OAX_DATABASE_URL` | – (*secret* if it contains a password) | both | `postgres://user@host:5432/db?sslmode=require`. `memory://` / `pglite://<dir>` = embedded PGlite (tests/demos only). Either this or `PGHOST` is required. |
+| `OAX_DATABASE_PASSWORD` | – (*secret*) | both | Password, overrides the URL password (no URL encoding needed). |
+| `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGSSLMODE` | – / `5432` / – / – / `openagentix` / – | both | libpq-style alternative to `OAX_DATABASE_URL` (e.g. from a CloudNativePG/RDS secret). `OAX_DATABASE_PASSWORD` wins over `PGPASSWORD`. |
+| `OAX_DB_CONNECT_RETRIES` | `30` | both | Attempts to reach the database at start-up (exponential backoff, capped at 5 s). |
+| `OAX_DB_CONNECT_BACKOFF_MS` | `500` | both | Initial backoff. |
 | `OAX_DB_POOL_MAX` | `20` | both | Connection pool size per process. |
-| `OAX_DB_STATEMENT_TIMEOUT_MS` | `15000` | both | `statement_timeout` per connection. |
+| `OAX_DB_STATEMENT_TIMEOUT_MS` | `15000` | both | `statement_timeout` per connection (also used by `migrate-cli`). |
 | `OAX_DB_MIGRATE_ON_START` | `true` | both | Apply migrations at start. Set `false` when Helm runs the migration Job; set `false` on workers. |
 
 Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
@@ -104,6 +117,8 @@ Roles: `admin`, `agent-engineer`, `integrator`, `operator`, `auditor`, `viewer`
 | `OAX_DEFAULT_MAX_STEPS` | `50` | worker | Reserved: platform default when an agent sets no step budget. |
 | `OAX_DEFAULT_TIMEOUT_SECONDS` | `1800` | worker | Reserved: platform default timeout. |
 | `OAX_DEMO_MCP` | `false` | worker | Registers the built-in demo MCP servers (`cve-db`, `tickets`) for `in-memory` connections. Demo only. |
+| `OAX_WORKER_HTTP_PORT` | `9090` | worker | Port of the worker's probe/metrics server. |
+| `OAX_WORKER_HTTP_HOST` | `0.0.0.0` | worker | Listen address of that server. |
 | `OAX_SSE_POLL_MS` | `500` | api | Poll interval of `GET /v1/runs/{id}/stream`. |
 
 ## Providers and costs
@@ -112,7 +127,7 @@ Roles: `admin`, `agent-engineer`, `integrator`, `operator`, `auditor`, `viewer`
 | --- | --- | --- |
 | `OAX_PROVIDERS` | `[{"kind":"simulated","name":"simulated"}]` | JSON array of providers (below). Agents reference them by `name`. |
 | `OAX_PRICE_TABLE` | `[]` | JSON array `{provider, model (glob), inputPerMTok, outputPerMTok, perToolCallUsd?}` in USD; `provider` is the provider name or kind. `simulated`/`ollama` are free. Example: [`examples/prices.example.json`](../examples/prices.example.json). |
-| `OAX_SECRET_<NAME>` | – (*secret*) | Value of the secret reference `<name>` (upper case, non-alphanumerics -> `_`). |
+| `OAX_SECRET_<NAME>` | – (*secret*) | Value of the secret reference `<name>` (upper case, non-alphanumerics -> `_`; `<NAME>` must match `[A-Z0-9_]+`, validated at start-up). |
 | `OAX_SECRETS_DIR` | – | Directory with one file per secret reference (e.g. a mounted Kubernetes Secret). |
 
 Provider entries (`clearance` = highest data classification the provider may receive:
@@ -136,6 +151,44 @@ Bedrock uses the AWS default credential chain: on EKS annotate the ServiceAccoun
 `eks.amazonaws.com/role-arn` (IRSA); no keys in configuration. Standard AWS variables
 (`AWS_REGION`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `HTTPS_PROXY` for the SDK) apply.
 
+## Outbound proxy
+
+Node's `fetch` and the AWS SDK do not honour proxy variables on their own; openagentix resolves
+them explicitly for **LLM providers** (OpenAI-compatible, Ollama, Anthropic, Bedrock), **OIDC**
+(discovery, JWKS, token endpoint) and **MCP over streamable HTTP**.
+
+| Variable | Meaning |
+| --- | --- |
+| `HTTPS_PROXY` / `https_proxy` | Proxy for `https://` targets (falls back to `HTTP_PROXY`). |
+| `HTTP_PROXY` / `http_proxy` | Proxy for `http://` targets. |
+| `NO_PROXY` / `no_proxy` | Comma list of hosts, domain suffixes (`.internal`), `host:port` or `*` that bypass the proxy (e.g. VPC endpoints `.vpce.amazonaws.com`, the database, in-cluster services). |
+
+A provider's own `proxyUrl` overrides the environment for that provider (NO_PROXY still applies).
+**LDAP** connections (`ldap://`/`ldaps://`) are plain TCP/TLS and are **not** proxied; allow
+direct egress to the directory (NetworkPolicy) instead. Kafka brokers and PostgreSQL are not
+proxied either.
+
+## Runners and toolboxes (v0.2 contract, feature-flagged off)
+
+These variables are parsed and validated today so the Helm chart can expose them; the
+`kubernetes-job` runner itself ships in v0.2.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_RUNNERS_ENABLED` | `in-process` | Comma list of runners agents may use (`in-process`, `local`, `container`, `kubernetes-job`, `aws-lambda`, `github-actions`, `gitlab-ci`). Publishing an agent with another `runtime.runner` fails. |
+| `OAX_K8S_JOB_ENABLED` | `false` | Feature flag; required when `kubernetes-job` is enabled. |
+| `OAX_K8S_NAMESPACE` | `openagentix-runs` | Namespace for run Jobs. |
+| `OAX_K8S_SERVICE_ACCOUNT` | `openagentix-worker` | ServiceAccount of run Jobs (annotate for IRSA on EKS). |
+| `OAX_K8S_TTL_SECONDS_AFTER_FINISHED` | `600` | Job TTL. |
+| `OAX_K8S_ACTIVE_DEADLINE_SECONDS` | `3600` | Job deadline. |
+| `OAX_K8S_IMAGE_PULL_SECRETS` | – | Comma list of image pull secret names. |
+| `OAX_K8S_NODE_SELECTOR` | `{}` | JSON node selector for run Pods. |
+| `OAX_K8S_RESOURCES_CPU` / `OAX_K8S_RESOURCES_MEMORY` | `500m` / `512Mi` | Requests/limits of run Pods. |
+| `OAX_K8S_EGRESS` | – | Comma list of allowed egress CIDRs/hosts (rendered into NetworkPolicies). |
+| `OAX_TOOLBOX_REGISTRY` | `ghcr.io/open-agentix` | Registry of toolbox images. |
+| `OAX_TOOLBOX_ALLOWLIST` | – | Comma list of toolbox names agents may declare (`runtime.toolbox`); empty = any catalog toolbox. Enforced at publish. |
+| `OAX_TOOLBOX_REQUIRE_SIGNATURE` | `true` | Only run cosign-verified toolbox images (enforced by the v0.2 runners/admission policy). |
+
 ## Webhooks
 
 | Variable | Default | Meaning |
@@ -151,7 +204,7 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `OAX_METRICS_TOKEN` | – (*secret*) | If set, `GET /metrics` requires `Authorization: Bearer <token>` (ServiceMonitor `bearerTokenSecret`). |
+| `OAX_METRICS_TOKEN` | – (*secret*) | If set, `GET /metrics` (API and worker) requires `Authorization: Bearer <token>` (ServiceMonitor `bearerTokenSecret`). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | – | Enables OpenTelemetry traces via OTLP/HTTP (`<endpoint>/v1/traces`). |
 | `OTEL_SERVICE_NAME` | `openagentix-api` / `openagentix-worker` | Service name in traces. |
 
