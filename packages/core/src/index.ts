@@ -10,3 +10,4 @@ export * from './policy/engine.js';
 export * from './control/controller.js';
 export * from './redact.js';
 export * from './audit/chain.js';
+export * from './cost/model.js';
