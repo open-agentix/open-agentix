@@ -39,17 +39,15 @@ describe('migrations', () => {
   });
 
   it('keeps the audit log and agent versions append-only', async () => {
-    await database.db
-      .insert(schema.auditLog)
-      .values({
-        seq: 1,
-        ts: new Date(),
-        actor: 'a',
-        action: 'x',
-        payloadDigest: 'd',
-        prevHash: 'p',
-        hash: 'h',
-      });
+    await database.db.insert(schema.auditLog).values({
+      seq: 1,
+      ts: new Date(),
+      actor: 'a',
+      action: 'x',
+      payloadDigest: 'd',
+      prevHash: 'p',
+      hash: 'h',
+    });
     expect(await failure(database.db.execute(sql`update audit_log set actor = 'mallory'`))).toMatch(
       /append-only/,
     );
@@ -58,16 +56,14 @@ describe('migrations', () => {
     const agentId = randomUUID();
     const versionId = randomUUID();
     await database.db.insert(schema.agents).values({ id: agentId, name: 'x', draftSource: '' });
-    await database.db
-      .insert(schema.agentVersions)
-      .values({
-        id: versionId,
-        agentId,
-        version: '1.0.0',
-        digest: 'd',
-        source: 's',
-        definition: {},
-      });
+    await database.db.insert(schema.agentVersions).values({
+      id: versionId,
+      agentId,
+      version: '1.0.0',
+      digest: 'd',
+      source: 's',
+      definition: {},
+    });
     expect(
       await failure(database.db.execute(sql`update agent_versions set source = 'changed'`)),
     ).toMatch(/append-only/);
