@@ -1,0 +1,30 @@
+{
+  "name": "@openagentix/providers",
+  "version": "0.0.0",
+  "description": "LLM provider adapters behind one interface: OpenAI-compatible, Ollama, AWS Bedrock, Anthropic, simulated",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1146.0",
+    "@openagentix/core": "workspace:*",
+    "@smithy/node-http-handler": "4.12.1",
+    "https-proxy-agent": "9.1.0",
+    "undici": "7.30.0",
+    "zod": "4.6.5"
+  }
+}
