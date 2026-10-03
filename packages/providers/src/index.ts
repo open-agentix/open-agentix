@@ -5,3 +5,4 @@ export * from './ollama.js';
 export * from './anthropic.js';
 export * from './bedrock.js';
 export * from './simulated.js';
+export * from './registry.js';
