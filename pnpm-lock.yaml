@@ -93,6 +93,24 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
 
+  packages/runners:
+    dependencies:
+      '@openagentix/core':
+        specifier: workspace:*
+        version: link:../core
+      '@openagentix/events':
+        specifier: workspace:*
+        version: link:../events
+      '@openagentix/mcp':
+        specifier: workspace:*
+        version: link:../mcp
+      '@openagentix/providers':
+        specifier: workspace:*
+        version: link:../providers
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+
 packages:
 
   '@anthropic-ai/sdk@0.131.0':
