@@ -12,6 +12,9 @@ if (existsSync(packagesDir)) {
   }
 }
 
+const apiEntry = fileURLToPath(new URL('./apps/api/src/index.ts', import.meta.url));
+if (existsSync(apiEntry)) alias['@openagentix/api'] = apiEntry;
+
 export default defineConfig({
   resolve: { alias },
   test: {
