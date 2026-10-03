@@ -1,0 +1,27 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 'Security problems: please do NOT open an issue, see SECURITY.md.'
+  - type: input
+    id: version
+    attributes: { label: Version, description: 'Output of GET /v1/version or the image tag' }
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes: { label: What happened?, description: Include the agents.md (without secrets) and the run id if relevant }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: What did you expect? }
+    validations: { required: true }
+  - type: textarea
+    id: reproduce
+    attributes: { label: Steps to reproduce }
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [api, worker, policy engine, audit, providers, events, mcp, runners, helm, docs]
