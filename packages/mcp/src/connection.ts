@@ -1,4 +1,5 @@
 import { OaxError, type SecretResolver } from '@openagentix/core';
+import { createProxyAwareFetch } from '@openagentix/providers';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -26,6 +27,8 @@ export interface ConnectDeps {
   secrets: SecretResolver;
   /** Provides transports for `in-memory` servers. */
   inMemory?: InMemoryTransportFactory | undefined;
+  /** Environment for proxy resolution (defaults to process.env). */
+  env?: Record<string, string | undefined>;
 }
 
 export async function createTransport(cfg: McpServerConfig, deps: ConnectDeps): Promise<Transport> {
@@ -47,7 +50,11 @@ export async function createTransport(cfg: McpServerConfig, deps: ConnectDeps): 
       const headers: Record<string, string> = { ...cfg.headers };
       for (const [h, ref] of Object.entries(cfg.headerSecrets))
         headers[h] = await deps.secrets.resolve(ref);
-      return new StreamableHTTPClientTransport(new URL(cfg.url), { requestInit: { headers } });
+      // Outbound MCP over HTTP honours HTTPS_PROXY/NO_PROXY explicitly.
+      return new StreamableHTTPClientTransport(new URL(cfg.url), {
+        requestInit: { headers },
+        fetch: createProxyAwareFetch({ ...(deps.env ? { env: deps.env } : {}) }),
+      });
     }
     case 'in-memory': {
       if (!deps.inMemory)

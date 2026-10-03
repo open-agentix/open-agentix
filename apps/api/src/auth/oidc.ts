@@ -1,3 +1,4 @@
+import { createProxyAwareFetch } from '@openagentix/providers';
 import * as oidc from 'openid-client';
 import type { Config } from '../config.js';
 
