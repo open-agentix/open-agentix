@@ -1,0 +1,76 @@
+# Local development stack: PostgreSQL 16, control node (api), worker; optional Ollama.
+#   docker compose up --build
+#   docker compose --profile ollama up --build
+# Default credentials are for local use only.
+name: openagentix
+
+x-common-env: &common-env
+  NODE_ENV: production
+  # Password kept separate from the URL (no URL encoding needed); PG* variables work as well.
+  OAX_DATABASE_URL: postgres://openagentix@postgres:5432/openagentix
+  OAX_DATABASE_PASSWORD: openagentix
+  OAX_RUN_TOKEN_SECRET: local-development-run-token-secret-0001
+  OAX_LOG_LEVEL: info
+  # JSON list of providers; the simulated provider needs no network and no API key.
+  OAX_PROVIDERS: '[{"kind":"simulated","name":"simulated"},{"kind":"ollama","name":"ollama","baseUrl":"http://ollama:11434"}]'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: openagentix
+      POSTGRES_PASSWORD: openagentix
+      POSTGRES_DB: openagentix
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U openagentix']
+      interval: 5s
+      retries: 20
+
+  api:
+    build: { context: ., target: api }
+    image: ghcr.io/open-agentix/open-agentix-api:dev
+    environment:
+      <<: *common-env
+      OAX_PUBLIC_URL: http://localhost:8080
+      OAX_BOOTSTRAP_ADMIN_EMAIL: admin@example.com
+      OAX_BOOTSTRAP_ADMIN_PASSWORD: change-me-please-123
+      OAX_CORS_ORIGINS: http://localhost:5173
+      # Webhook signing secret referenced by event sources as "demo-hook".
+      OAX_SECRET_DEMO_HOOK: demo-webhook-secret
+    ports: ['8080:8080']
+    read_only: true
+    tmpfs: ['/tmp']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: ['ALL']
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  worker:
+    build: { context: ., target: worker }
+    image: ghcr.io/open-agentix/open-agentix-worker:dev
+    environment:
+      <<: *common-env
+      OAX_DB_MIGRATE_ON_START: 'false'
+      OAX_WORKER_CONCURRENCY: '4'
+      # Registers the built-in demo MCP servers (cve-db, tickets) for in-memory connections.
+      OAX_DEMO_MCP: 'true'
+      OAX_WORKER_HTTP_PORT: '9090'
+    ports: ['9090:9090']
+    read_only: true
+    tmpfs: ['/tmp']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: ['ALL']
+    depends_on:
+      api: { condition: service_healthy }
+
+  ollama:
+    image: ollama/ollama:0.12.3
+    profiles: ['ollama']
+    volumes:
+      - ollama:/root/.ollama
+
+volumes:
+  pgdata:
+  ollama:
