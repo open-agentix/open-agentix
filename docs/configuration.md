@@ -1,0 +1,170 @@
+# Configuration contract
+
+This is the contract between the platform, the **Helm chart** (`open-agentix/open-agentix-helm`)
+and the **UI**. The control node (`api`) and the worker read the same environment variables
+(`apps/api/src/config.ts` validates them at start-up and refuses to start on invalid values).
+
+Secrets are never stored in the database, agent files or prompts: anything marked *secret*
+should come from a Kubernetes Secret (`envFrom`/`secretKeyRef`) or a mounted file.
+
+## Images and processes
+
+| Image | Command | Port | Probes |
+| --- | --- | --- | --- |
+| `ghcr.io/open-agentix/open-agentix-api:<version>` | `node dist/main.js` | 8080 | liveness `GET /healthz`, readiness `GET /readyz` |
+| `ghcr.io/open-agentix/open-agentix-api:<version>` | `node dist/migrate-cli.js` | – | migrations Job (Helm hook, pre-install/pre-upgrade) |
+| `ghcr.io/open-agentix/open-agentix-worker:<version>` | `node dist/main.js` | – | process check; metrics via the API |
+
+Both images run as user `node` (uid 1000), need no writable root file system (mount `/tmp` as
+`emptyDir` if desired) and no Linux capabilities.
+
+## Core
+
+| Variable | Default | Used by | Meaning |
+| --- | --- | --- | --- |
+| `NODE_ENV` | `production` | both | `production` requires `OAX_RUN_TOKEN_SECRET`. |
+| `OAX_HOST` | `0.0.0.0` | api | Listen address. |
+| `OAX_PORT` | `8080` | api | Listen port. |
+| `OAX_PUBLIC_URL` | `http://localhost:8080` | api | External base URL (OIDC redirects, ingest URLs, OpenAPI servers). |
+| `OAX_UI_URL` | – | api | UI base URL; OIDC callback redirects to `<ui>/auth/callback#token=…`. |
+| `OAX_CORS_ORIGINS` | – | api | Comma-separated allowed origins (the UI). Empty = no CORS. |
+| `OAX_TRUST_PROXY` | `false` | api | Trust `X-Forwarded-*` (behind an ingress/ALB). |
+| `OAX_LOG_LEVEL` | `info` | both | `fatal`…`trace`, `silent`. JSON logs, secrets redacted. |
+| `OAX_BODY_LIMIT_BYTES` | `1048576` | api | Max request body size. |
+
+## Database
+
+| Variable | Default | Used by | Meaning |
+| --- | --- | --- | --- |
+| `OAX_DATABASE_URL` | – (required, *secret*) | both | `postgres://user:pass@host:5432/db?sslmode=require`. `memory://` / `pglite://<dir>` = embedded PGlite (tests/demos only; needs the dev dependency). |
+| `OAX_DB_POOL_MAX` | `20` | both | Connection pool size per process. |
+| `OAX_DB_STATEMENT_TIMEOUT_MS` | `15000` | both | `statement_timeout` per connection. |
+| `OAX_DB_MIGRATE_ON_START` | `true` | both | Apply migrations at start. Set `false` when Helm runs the migration Job; set `false` on workers. |
+
+Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
+
+## Cache
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_CACHE_URL` | – | `redis://` / `rediss://` URL of Valkey/Redis (shared cache + invalidation across replicas). Empty = in-memory LRU per process. |
+| `OAX_CACHE_MAX_ENTRIES` | `10000` | LRU size. |
+| `OAX_AUTH_CACHE_TTL_SECONDS` | `30` | Max time a resolved token/principal is cached (never longer than the token lifetime). |
+
+## Authentication
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_BOOTSTRAP_ADMIN_EMAIL` | – | Creates a local admin when the user table is empty. |
+| `OAX_BOOTSTRAP_ADMIN_PASSWORD` | – (*secret*, >= 12 chars) | Password of the bootstrap admin. |
+| `OAX_SESSION_TTL_SECONDS` | `28800` | Lifetime of session tokens from login. |
+| `OAX_TOKEN_MAX_TTL_DAYS` | `365` | Upper bound for API token lifetimes. |
+| `OAX_RATE_LIMIT_MAX` | `600` | Requests per minute per token/IP. |
+| `OAX_RATE_LIMIT_LOGIN_MAX` | `10` | Login attempts per minute per IP. |
+| `OAX_OIDC_ISSUER` | – | Issuer URL (Keycloak realm, Entra ID tenant, Okta). OIDC is enabled when issuer, client id and redirect URI are set. |
+| `OAX_OIDC_CLIENT_ID` | – | Client id. |
+| `OAX_OIDC_CLIENT_SECRET` | – (*secret*) | Client secret (confidential client; PKCE is always used). |
+| `OAX_OIDC_REDIRECT_URI` | – | `<public url>/v1/auth/oidc/callback`. |
+| `OAX_OIDC_SCOPES` | `openid profile email` | Requested scopes. |
+| `OAX_OIDC_GROUPS_CLAIM` | `groups` | Claim with group names. |
+| `OAX_OIDC_ROLE_MAPPING` | `{}` | JSON: group -> `role` or `role@team-slug` (or a list). |
+| `OAX_LDAP_URL` | – | `ldaps://ldap.example.com:636`. LDAP is enabled with URL + user base DN. |
+| `OAX_LDAP_BIND_DN` | – | Service account for the user search. |
+| `OAX_LDAP_BIND_PASSWORD` | – (*secret*) | Its password. |
+| `OAX_LDAP_USER_BASE_DN` | – | Search base, e.g. `ou=people,dc=example,dc=com`. |
+| `OAX_LDAP_USER_FILTER` | `(uid={username})` | `{username}` is RFC 4515 escaped. AD: `(sAMAccountName={username})`. |
+| `OAX_LDAP_GROUP_ATTRIBUTE` | `memberOf` | Attribute with group DNs. |
+| `OAX_LDAP_ROLE_MAPPING` | `{}` | JSON: group DN -> `role` / `role@team-slug`. |
+| `OAX_LDAP_TLS_REJECT_UNAUTHORIZED` | `true` | Verify the LDAP server certificate. |
+
+Roles: `admin`, `agent-engineer`, `integrator`, `operator`, `auditor`, `viewer`
+(permissions: `GET /v1/settings` or `packages/core/src/rbac.ts`).
+
+## Audit
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_AUDIT_SIGNING_KEY` | – (*secret*) | Ed25519 private key (PKCS#8 PEM or base64 DER) for checkpoints. Generate: `openssl genpkey -algorithm ed25519`. |
+| `OAX_AUDIT_SIGNING_KEY_ID` | `default` | Key id written into checkpoints (rotate by changing id + key). |
+| `OAX_AUDIT_PUBLIC_KEYS` | `{}` | JSON `{keyId: publicKeyPem}` of older keys to verify historic checkpoints. |
+| `OAX_AUDIT_CHECKPOINT_EVERY` | `1000` | Sign a checkpoint every N entries. |
+
+## Worker, runs and control agent
+
+| Variable | Default | Used by | Meaning |
+| --- | --- | --- | --- |
+| `OAX_RUN_TOKEN_SECRET` | dev fallback (*secret*, >= 32 chars, required in production) | both | HMAC key for run tokens (control node <-> worker nodes). Same value on api and worker. |
+| `OAX_RUN_TOKEN_TTL_SECONDS` | `14400` | both | Run token lifetime. |
+| `OAX_WORKER_CONCURRENCY` | `4` | worker | Parallel runs per worker process. |
+| `OAX_WORKER_POLL_MS` | `500` | worker | Queue poll interval. |
+| `OAX_WORKER_LEASE_SECONDS` | `60` | worker | Run lease; renewed every lease/3, expired leases are requeued. |
+| `OAX_WORKER_MAX_ATTEMPTS` | `3` | worker | Attempts before a lost run is failed. |
+| `OAX_APPROVAL_POLL_MS` | `1000` | worker | Poll interval while waiting for a human approval. |
+| `OAX_CONTROL_MAX_TOOL_CALLS_PER_MINUTE` | `30` | worker | Rate guardrail of the control agent (pause above). |
+| `OAX_DEFAULT_MAX_STEPS` | `50` | worker | Reserved: platform default when an agent sets no step budget. |
+| `OAX_DEFAULT_TIMEOUT_SECONDS` | `1800` | worker | Reserved: platform default timeout. |
+| `OAX_DEMO_MCP` | `false` | worker | Registers the built-in demo MCP servers (`cve-db`, `tickets`) for `in-memory` connections. Demo only. |
+| `OAX_SSE_POLL_MS` | `500` | api | Poll interval of `GET /v1/runs/{id}/stream`. |
+
+## Providers and costs
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_PROVIDERS` | `[{"kind":"simulated","name":"simulated"}]` | JSON array of providers (below). Agents reference them by `name`. |
+| `OAX_PRICE_TABLE` | `[]` | JSON array `{provider, model (glob), inputPerMTok, outputPerMTok, perToolCallUsd?}` in USD; `provider` is the provider name or kind. `simulated`/`ollama` are free. Example: [`examples/prices.example.json`](../examples/prices.example.json). |
+| `OAX_SECRET_<NAME>` | – (*secret*) | Value of the secret reference `<name>` (upper case, non-alphanumerics -> `_`). |
+| `OAX_SECRETS_DIR` | – | Directory with one file per secret reference (e.g. a mounted Kubernetes Secret). |
+
+Provider entries (`clearance` = highest data classification the provider may receive:
+`public|internal|confidential|restricted`; `proxyUrl`, `timeoutMs`, `maxRetries` are optional on all):
+
+```json
+[
+  { "kind": "simulated", "name": "simulated" },
+  { "kind": "ollama", "name": "ollama", "baseUrl": "http://ollama:11434", "clearance": "restricted" },
+  { "kind": "openai", "name": "openai", "baseUrl": "https://api.openai.com/v1", "apiKeySecret": "openai-key" },
+  { "kind": "openai", "name": "azure", "baseUrl": "https://res.openai.azure.com/openai/deployments/gpt",
+    "query": "api-version=2024-10-21", "headerSecrets": { "api-key": "azure-openai-key" } },
+  { "kind": "anthropic", "name": "anthropic", "apiKeySecret": "anthropic-key" },
+  { "kind": "bedrock", "name": "bedrock", "region": "eu-central-1",
+    "endpoint": "https://vpce-0abc.bedrock-runtime.eu-central-1.vpce.amazonaws.com",
+    "proxyUrl": "http://egress-proxy:3128", "clearance": "confidential" }
+]
+```
+
+Bedrock uses the AWS default credential chain: on EKS annotate the ServiceAccount with
+`eks.amazonaws.com/role-arn` (IRSA); no keys in configuration. Standard AWS variables
+(`AWS_REGION`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `HTTPS_PROXY` for the SDK) apply.
+
+## Webhooks
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_WEBHOOK_TOLERANCE_SECONDS` | `300` | Allowed clock skew for `x-oax-timestamp`; replay window. |
+| `OAX_WEBHOOK_MAX_BYTES` | `1048576` | Max webhook body size. |
+
+Signature scheme `oax-v1`: `x-oax-timestamp: <unix>`, `x-oax-signature: v1=<hex HMAC-SHA256(secret, "<timestamp>.<raw body>")>`,
+optional `x-oax-delivery: <id>`. Scheme `github`: `x-hub-signature-256` + `x-github-delivery`.
+Event sources reference signing secrets by name (`secretRefs`, two during rotation).
+
+## Observability
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_METRICS_TOKEN` | – (*secret*) | If set, `GET /metrics` requires `Authorization: Bearer <token>` (ServiceMonitor `bearerTokenSecret`). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | – | Enables OpenTelemetry traces via OTLP/HTTP (`<endpoint>/v1/traces`). |
+| `OTEL_SERVICE_NAME` | `openagentix-api` / `openagentix-worker` | Service name in traces. |
+
+## What the UI needs
+
+- Base URL of the API (`OAX_PUBLIC_URL`), the OpenAPI document at `/openapi.json` or
+  [`openapi.yaml`](../openapi.yaml), and its origin in `OAX_CORS_ORIGINS`.
+- Login: `POST /v1/auth/login` (local/LDAP) or redirect to `GET /v1/auth/oidc/login`; the OIDC
+  callback redirects to `<OAX_UI_URL>/auth/callback#token=<session token>`.
+- Capabilities and labels: `GET /v1/settings` (providers, runners, enabled auth methods, roles,
+  permissions) and `GET /v1/me` (effective permissions for showing/hiding actions).
+- Live runs: `GET /v1/runs/{id}/stream` (SSE events `step`, `status`, `end`; supports
+  `Last-Event-ID`).
+- Lists use keyset pagination: `?limit=&cursor=` -> `{items, nextCursor}`. Reads send weak ETags;
+  send `If-None-Match` to get `304`.
+- Errors: `{error: <stable code>, message, details?}`.
