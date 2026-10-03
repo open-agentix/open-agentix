@@ -5,6 +5,7 @@
     "declaration": false,
     "declarationMap": false,
     "paths": {
+      "@openagentix/api": ["./apps/api/src/index.ts"],
       "@openagentix/*": ["./packages/*/src/index.ts"]
     }
   },
