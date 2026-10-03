@@ -133,6 +133,43 @@ importers:
         specifier: 0.31.11
         version: 0.31.11
 
+  apps/worker:
+    dependencies:
+      '@openagentix/api':
+        specifier: workspace:*
+        version: link:../api
+      '@openagentix/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@openagentix/events':
+        specifier: workspace:*
+        version: link:../../packages/events
+      '@openagentix/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
+      '@openagentix/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@openagentix/runners':
+        specifier: workspace:*
+        version: link:../../packages/runners
+      drizzle-orm:
+        specifier: 0.45.3
+        version: 0.45.3(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(pg@8.23.1)
+      pino:
+        specifier: 10.4.0
+        version: 10.4.0
+    devDependencies:
+      '@electric-sql/pglite':
+        specifier: 0.5.8
+        version: 0.5.8
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
+      drizzle-kit:
+        specifier: 0.31.11
+        version: 0.31.11
+
   packages/core:
     dependencies:
       yaml:
