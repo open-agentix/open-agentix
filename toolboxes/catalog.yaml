@@ -1,0 +1,22 @@
+# Toolbox catalog: name -> image (pinned by digest once published in v0.2).
+apiVersion: openagentix.io/v1alpha1
+kind: ToolboxCatalog
+toolboxes:
+  - name: trivy
+    description: Container image and filesystem vulnerability scanning
+    binaries: [trivy]
+    image: ghcr.io/open-agentix/toolbox-trivy
+    digest: null # set by the release pipeline
+    defaultEgress: [ghcr.io, mirror.gcr.io]
+  - name: git+node
+    description: Git and Node.js for code changes and pull requests
+    binaries: [git, node]
+    image: ghcr.io/open-agentix/toolbox-git-node
+    digest: null
+    defaultEgress: []
+  - name: jira-cli
+    description: Jira command line client
+    binaries: [jira]
+    image: ghcr.io/open-agentix/toolbox-jira-cli
+    digest: null
+    defaultEgress: []
