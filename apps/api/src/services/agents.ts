@@ -145,6 +145,37 @@ export class AgentsService {
     return row!;
   }
 
+  /** Platform constraints on `runtime`: enabled runners and the toolbox allowlist. */
+  checkRuntime(def: AgentDefinition): void {
+    const issues: { path: string; message: string }[] = [];
+    const { runners, toolboxes } = this.ctx.config;
+    if (!runners.enabled.includes(def.runtime.runner)) {
+      issues.push({
+        path: 'runtime.runner',
+        message: `runner "${def.runtime.runner}" is not enabled (OAX_RUNNERS_ENABLED=${runners.enabled.join(',')})`,
+      });
+    }
+    if (toolboxes.allowlist.length > 0) {
+      const used = [def.runtime.toolbox, ...def.agents.map((a) => a.toolbox)].filter(
+        (t): t is string => !!t,
+      );
+      for (const t of new Set(used)) {
+        if (!toolboxes.allowlist.includes(t))
+          issues.push({
+            path: 'runtime.toolbox',
+            message: `toolbox "${t}" is not in OAX_TOOLBOX_ALLOWLIST`,
+          });
+      }
+    }
+    if (issues.length)
+      throw new HttpError(
+        400,
+        'validation_failed',
+        'agent runtime is not allowed on this platform',
+        issues,
+      );
+  }
+
   /** Publishes the current draft as an immutable version (idempotent for identical content). */
   async publish(
     principal: Principal,
@@ -153,6 +184,7 @@ export class AgentsService {
     const agent = await this.get(id);
     this.assertAccess(principal, agent, 'agents:publish');
     const def = loadAgentDefinition(agent.draftSource);
+    this.checkRuntime(def);
     const published = await this.ctx.db
       .select()
       .from(agentVersions)

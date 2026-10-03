@@ -107,7 +107,7 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
       })),
       runners: RUNNER_KINDS.map((k) => ({
         kind: k,
-        available: k === 'in-process' || k === 'local',
+        available: ctx.config.runners.enabled.includes(k),
       })),
       auth: { local: true, ldap: !!ctx.config.auth.ldap, oidc: !!ctx.config.auth.oidc },
       roles: [...ROLES],
