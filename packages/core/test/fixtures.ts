@@ -13,6 +13,10 @@ budget:
   maxTokens: 20000
   maxCostUsd: 0.5
   maxSteps: 12
+runtime:
+  runner: in-process
+  toolbox: trivy
+  egress: [nvd.nist.gov]
 approvals:
   approverRoles: [operator]
   timeoutSeconds: 600

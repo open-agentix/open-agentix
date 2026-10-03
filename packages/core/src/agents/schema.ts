@@ -110,12 +110,46 @@ export const AgentSpecSchema = z.strictObject({
   /** Inline instructions; usually taken from the `## Agent: <id>` markdown section instead. */
   instructions: z.string().optional(),
   tools: z.array(ToolGrantSchema).default([]),
+  /** Overrides the pipeline toolbox for this agent. */
+  toolbox: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]*(\+[a-z0-9][a-z0-9-]*)*$/)
+    .optional(),
   outputs: z.array(OutputSchema).default([{ format: 'markdown' }]),
   budget: BudgetSchema.optional(),
   /** Scripted model responses used by the `simulated` provider (tests, demos). */
   simulation: z.strictObject({ responses: z.array(SimulatedResponseSchema).min(1) }).optional(),
 });
 export type AgentSpecInput = z.input<typeof AgentSpecSchema>;
+
+export const RUNNER_KINDS = [
+  'in-process',
+  'local',
+  'container',
+  'kubernetes-job',
+  'aws-lambda',
+  'github-actions',
+  'gitlab-ci',
+] as const;
+export type RunnerKind = (typeof RUNNER_KINDS)[number];
+
+/**
+ * Where and with which tools a run executes. A toolbox is a minimal, signed container image from
+ * the catalog in `toolboxes/` (e.g. `trivy`, `git+node`); worker nodes are spawned from it (v0.2).
+ */
+export const RuntimeSchema = z.strictObject({
+  runner: z.enum(RUNNER_KINDS).default('in-process'),
+  toolbox: z
+    .string()
+    .regex(
+      /^[a-z0-9][a-z0-9-]*(\+[a-z0-9][a-z0-9-]*)*$/,
+      'toolbox must look like "trivy" or "git+node"',
+    )
+    .optional(),
+  /** Hostnames the worker node may reach (in addition to the control node). */
+  egress: z.array(z.string().min(1)).default([]),
+});
+export type Runtime = z.infer<typeof RuntimeSchema>;
 
 export const ApprovalSettingsSchema = z.strictObject({
   approverRoles: z.array(z.enum(ROLES)).min(1).default(['operator', 'admin']),
@@ -137,6 +171,7 @@ export const PipelineFrontMatterSchema = z.strictObject({
     approverRoles: ['operator', 'admin'],
     timeoutSeconds: 3600,
   }),
+  runtime: RuntimeSchema.default({ runner: 'in-process', egress: [] }),
   agents: z.array(AgentSpecSchema).min(1),
   /** Execution order of agent ids; defaults to the order in `agents`. */
   pipeline: z.array(slug).optional(),
