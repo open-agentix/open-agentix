@@ -17,7 +17,8 @@ describe('system endpoints', () => {
     });
     expect((await n.req({ method: 'GET', url: '/readyz', token: null })).json()).toEqual({
       status: 'ok',
-      checks: { database: true },
+      checks: { database: true, schema: true },
+      schema: { expected: 2, applied: 2, ok: true },
     });
     expect((await n.req({ method: 'GET', url: '/v1/version', token: null })).json()).toMatchObject({
       name: 'openagentix',
@@ -28,6 +29,24 @@ describe('system endpoints', () => {
       auth: { local: true, ldap: false, oidc: false },
     });
     expect((await n.req({ method: 'GET', url: '/v1/settings', token: null })).statusCode).toBe(401);
+  });
+
+  it('reports not ready when the database is down or the schema is behind', async () => {
+    const ping = n.ctx.database.ping;
+    const status = n.ctx.database.schemaStatus;
+    n.ctx.database.schemaStatus = async () => ({ expected: 3, applied: 2, ok: false });
+    const behind = await n.req({ method: 'GET', url: '/readyz', token: null });
+    expect(behind.statusCode).toBe(503);
+    expect(behind.json().checks).toEqual({ database: true, schema: false });
+    n.ctx.database.ping = async () => {
+      throw new Error('down');
+    };
+    expect((await n.req({ method: 'GET', url: '/readyz', token: null })).json().checks).toEqual({
+      database: false,
+      schema: false,
+    });
+    n.ctx.database.ping = ping;
+    n.ctx.database.schemaStatus = status;
   });
 
   it('protects metrics with a token', async () => {

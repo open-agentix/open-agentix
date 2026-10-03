@@ -24,6 +24,146 @@ components:
       description: HMAC-SHA256 signature
   schemas: {}
 paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      tags:
+        - ops
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - ok
+                      - unavailable
+                  checks:
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties:
+                      type: boolean
+                required:
+                  - status
+                additionalProperties: false
+  /readyz:
+    get:
+      summary: "Readiness probe: database reachable and schema migrated for this build"
+      tags:
+        - ops
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - ok
+                      - unavailable
+                  checks:
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties:
+                      type: boolean
+                  schema:
+                    type: object
+                    properties:
+                      expected:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      applied:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      ok:
+                        type: boolean
+                    required:
+                      - expected
+                      - applied
+                      - ok
+                    additionalProperties: false
+                required:
+                  - status
+                  - schema
+                additionalProperties: false
+        "503":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - ok
+                      - unavailable
+                  checks:
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties:
+                      type: boolean
+                  schema:
+                    type: object
+                    properties:
+                      expected:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      applied:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      ok:
+                        type: boolean
+                    required:
+                      - expected
+                      - applied
+                      - ok
+                    additionalProperties: false
+                required:
+                  - status
+                  - schema
+                additionalProperties: false
+  /metrics:
+    get:
+      summary: Prometheus metrics (bearer token required if OAX_METRICS_TOKEN is set)
+      tags:
+        - ops
+      responses:
+        "200":
+          description: Default Response
+          content:
+            text/plain:
+              schema:
+                type: string
+  /openapi.json:
+    get:
+      summary: This OpenAPI 3.1 document
+      tags:
+        - ops
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                propertyNames:
+                  type: string
+                additionalProperties: {}
   /v1/version:
     get:
       summary: Version of the control node

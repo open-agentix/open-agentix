@@ -4,13 +4,17 @@ import { HttpError } from '../../errors.js';
 import { VERSION } from '../../version.js';
 import type { Deps } from '../app.js';
 import { bearerOf } from '../app.js';
-import { HealthSchema, SettingsSchema, VersionInfoSchema } from '../schemas.js';
+import { HealthSchema, ReadySchema, SettingsSchema, VersionInfoSchema } from '../schemas.js';
 import type { ZApp } from '../zapp.js';
 
 export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
+  const ops = ['ops'];
   app.get(
     '/healthz',
-    { config: { access: 'public' }, schema: { hide: true, response: { 200: HealthSchema } } },
+    {
+      config: { access: 'public' },
+      schema: { tags: ops, summary: 'Liveness probe', response: { 200: HealthSchema } },
+    },
     async () => ({ status: 'ok' as const }),
   );
 
@@ -18,30 +22,56 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
     '/readyz',
     {
       config: { access: 'public' },
-      schema: { hide: true, response: { 200: HealthSchema, 503: HealthSchema } },
+      schema: {
+        tags: ops,
+        summary: 'Readiness probe: database reachable and schema migrated for this build',
+        response: { 200: ReadySchema, 503: ReadySchema },
+      },
     },
     async (_req, reply) => {
       const db = await ctx.database.ping().catch(() => false);
-      return reply
-        .status(db ? 200 : 503)
-        .send({ status: db ? 'ok' : 'unavailable', checks: { database: db } });
+      const schema = db ? await ctx.database.schemaStatus().catch(() => null) : null;
+      const ok = db && !!schema?.ok;
+      return reply.status(ok ? 200 : 503).send({
+        status: ok ? 'ok' : 'unavailable',
+        checks: { database: db, schema: !!schema?.ok },
+        schema: schema ?? { expected: 0, applied: 0, ok: false },
+      });
     },
   );
 
   app.get(
     '/metrics',
-    { config: { access: 'public' }, schema: { hide: true } },
+    {
+      config: { access: 'public' },
+      schema: {
+        tags: ops,
+        summary: 'Prometheus metrics (bearer token required if OAX_METRICS_TOKEN is set)',
+        produces: ['text/plain'],
+        response: { 200: z.string() },
+      },
+    },
     async (req, reply) => {
-      if (ctx.config.metricsToken && bearerOf(req) !== ctx.config.metricsToken)
+      if (ctx.config.metricsToken && bearerOf(req) !== ctx.config.metricsToken) {
         throw new HttpError(401, 'unauthenticated', 'metrics token required');
+      }
       return reply
         .type(ctx.metrics.registry.contentType)
         .send(await ctx.metrics.registry.metrics());
     },
   );
 
-  app.get('/openapi.json', { config: { access: 'public' }, schema: { hide: true } }, async () =>
-    app.swagger(),
+  app.get(
+    '/openapi.json',
+    {
+      config: { access: 'public' },
+      schema: {
+        tags: ops,
+        summary: 'This OpenAPI 3.1 document',
+        response: { 200: z.record(z.string(), z.unknown()) },
+      },
+    },
+    async () => app.swagger() as unknown as Record<string, unknown>,
   );
 
   app.get(
@@ -84,5 +114,4 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
       permissions: [...PERMISSIONS],
     }),
   );
-  void z;
 }
