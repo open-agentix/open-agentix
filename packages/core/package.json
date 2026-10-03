@@ -1,0 +1,25 @@
+{
+  "name": "@openagentix/core",
+  "version": "0.0.0",
+  "description": "openagentix domain model: agents.md parser, policy engine, control agent, audit chain, cost model",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  }
+}
