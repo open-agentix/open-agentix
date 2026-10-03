@@ -34,6 +34,11 @@ describe('parseAgentDefinition', () => {
     expect(def.sections).toEqual({ Notes: 'Free text.' });
     expect(def.digest).toMatch(/^[0-9a-f]{64}$/);
     expect(def.approvals.approverRoles).toEqual(['operator']);
+    expect(def.runtime).toEqual({
+      runner: 'in-process',
+      toolbox: 'trivy',
+      egress: ['nvd.nist.gov'],
+    });
   });
 
   it('produces the same digest regardless of line endings', () => {
@@ -47,6 +52,14 @@ describe('parseAgentDefinition', () => {
     expect(def.triggers).toEqual([{ type: 'manual' }]);
     expect(def.pipeline).toEqual(['a']);
     expect(def.approvals.timeoutSeconds).toBe(3600);
+    expect(def.runtime).toEqual({ runner: 'in-process', egress: [] });
+  });
+
+  it('validates toolbox names', () => {
+    const bad = MINIMAL_FM + '\nruntime: { toolbox: "Git Node" }';
+    expect(issuesOf(() => parseAgentDefinition(withFrontMatter(bad))).join()).toMatch(/toolbox/);
+    const ok = MINIMAL_FM.replace('model: sim-1', 'model: sim-1\n    toolbox: git+node');
+    expect(parseAgentDefinition(withFrontMatter(ok)).agents[0]?.toolbox).toBe('git+node');
   });
 
   it('accepts inline instructions', () => {
