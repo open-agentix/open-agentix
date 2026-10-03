@@ -7,6 +7,7 @@ import {
 } from '@openagentix/core';
 import { parseProviderConfigs, type ProviderConfig } from '@openagentix/providers';
 import { z } from 'zod';
+import { loadDatabaseConfig, type DatabaseConfig } from './db/settings.js';
 
 /**
  * The configuration contract of the control node and worker. Every key is an environment variable
@@ -42,11 +43,6 @@ export const EnvSchema = z.object({
     .default('info'),
   OAX_CORS_ORIGINS: z.string().default(''),
   OAX_TRUST_PROXY: bool.default(false),
-
-  OAX_DATABASE_URL: z.string().min(1),
-  OAX_DB_POOL_MAX: int(20),
-  OAX_DB_STATEMENT_TIMEOUT_MS: int(15_000),
-  OAX_DB_MIGRATE_ON_START: bool.default(true),
 
   OAX_CACHE_URL: z.string().optional(),
   OAX_CACHE_MAX_ENTRIES: int(10_000),
@@ -116,7 +112,7 @@ export interface Config {
   logLevel: string;
   corsOrigins: string[];
   trustProxy: boolean;
-  database: { url: string; poolMax: number; statementTimeoutMs: number; migrateOnStart: boolean };
+  database: DatabaseConfig;
   cache: { url: string | undefined; maxEntries: number };
   rateLimit: { max: number; loginMax: number };
   bodyLimit: number;
@@ -204,6 +200,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new OaxError('config_invalid', `invalid configuration: ${details}`);
   }
   const e = parsed.data;
+  const database = loadDatabaseConfig(env);
   if (e.NODE_ENV === 'production' && !e.OAX_RUN_TOKEN_SECRET) {
     throw new OaxError(
       'config_invalid',
@@ -222,12 +219,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .map((s) => s.trim())
       .filter(Boolean),
     trustProxy: e.OAX_TRUST_PROXY,
-    database: {
-      url: e.OAX_DATABASE_URL,
-      poolMax: e.OAX_DB_POOL_MAX,
-      statementTimeoutMs: e.OAX_DB_STATEMENT_TIMEOUT_MS,
-      migrateOnStart: e.OAX_DB_MIGRATE_ON_START,
-    },
+    database,
     cache: { url: e.OAX_CACHE_URL, maxEntries: e.OAX_CACHE_MAX_ENTRIES },
     rateLimit: { max: e.OAX_RATE_LIMIT_MAX, loginMax: e.OAX_RATE_LIMIT_LOGIN_MAX },
     bodyLimit: e.OAX_BODY_LIMIT_BYTES,

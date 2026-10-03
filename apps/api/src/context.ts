@@ -2,7 +2,7 @@ import { CostModel, DefaultSecretResolver, type SecretResolver } from '@openagen
 import pino, { type Logger } from 'pino';
 import { createCache, type Cache } from './cache.js';
 import type { Config } from './config.js';
-import { createDatabase, type Database, type Db } from './db/client.js';
+import { createDatabase, waitForDatabase, type Database, type Db } from './db/client.js';
 import { Metrics } from './metrics.js';
 import type { LdapClientFactory } from './auth/ldap.js';
 import type { OidcClient } from './auth/oidc.js';
@@ -41,21 +41,29 @@ export async function createContext(
   config: Config,
   overrides: Partial<AppContext> = {},
 ): Promise<AppContext> {
+  const logger = overrides.logger ?? createLogger(config.logLevel);
+  const db = config.database;
   const database =
     overrides.database ??
     (await createDatabase({
-      url: config.database.url,
-      poolMax: config.database.poolMax,
-      statementTimeoutMs: config.database.statementTimeoutMs,
+      url: db.url,
+      password: db.password,
+      poolMax: db.poolMax,
+      statementTimeoutMs: db.statementTimeoutMs,
     }));
-  if (config.database.migrateOnStart && !overrides.database) await database.migrate();
+  if (!overrides.database) {
+    await waitForDatabase(database, db.connectRetries, db.connectBackoffMs, (attempt, err) =>
+      logger.warn({ attempt, err: (err as Error).message }, 'database not reachable yet, retrying'),
+    );
+    if (db.migrateOnStart) await database.migrate();
+  }
   return {
     config,
     database,
     db: database.db,
     cache: overrides.cache ?? (await createCache(config.cache.url, config.cache.maxEntries)),
     metrics: overrides.metrics ?? new Metrics(),
-    logger: overrides.logger ?? createLogger(config.logLevel),
+    logger,
     secrets: overrides.secrets ?? new DefaultSecretResolver(),
     costModel: overrides.costModel ?? new CostModel(config.priceTable),
     now: overrides.now ?? (() => new Date()),
