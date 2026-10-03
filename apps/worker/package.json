@@ -1,0 +1,38 @@
+{
+  "name": "@openagentix/worker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "openagentix worker: claims runs from the Postgres SKIP LOCKED queue, executes them via runners, schedules cron triggers and consumes Kafka sources",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@openagentix/api": "workspace:*",
+    "@openagentix/core": "workspace:*",
+    "@openagentix/events": "workspace:*",
+    "@openagentix/mcp": "workspace:*",
+    "@openagentix/providers": "workspace:*",
+    "@openagentix/runners": "workspace:*",
+    "drizzle-orm": "0.45.3",
+    "pino": "10.4.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@types/pg": "8.23.1",
+    "drizzle-kit": "0.31.11"
+  },
+  "files": [
+    "dist"
+  ]
+}

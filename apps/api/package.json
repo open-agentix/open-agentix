@@ -55,5 +55,9 @@
     "@electric-sql/pglite": "0.5.8",
     "@types/pg": "8.23.1",
     "drizzle-kit": "0.31.11"
-  }
+  },
+  "files": [
+    "dist",
+    "drizzle"
+  ]
 }

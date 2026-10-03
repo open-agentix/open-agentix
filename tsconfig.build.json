@@ -15,6 +15,12 @@
     },
     {
       "path": "packages/runners"
+    },
+    {
+      "path": "apps/api"
+    },
+    {
+      "path": "apps/worker"
     }
   ]
 }
