@@ -11,7 +11,11 @@ body:
     validations: { required: true }
   - type: textarea
     id: what
-    attributes: { label: What happened?, description: Include the agents.md (without secrets) and the run id if relevant }
+    attributes:
+      {
+        label: What happened?,
+        description: Include the agents.md (without secrets) and the run id if relevant,
+      }
     validations: { required: true }
   - type: textarea
     id: expected

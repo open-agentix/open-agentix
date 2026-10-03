@@ -4,7 +4,8 @@ labels: [enhancement]
 body:
   - type: textarea
     id: story
-    attributes: { label: User story, description: 'As a <persona>, I want <capability> so that <outcome>.' }
+    attributes:
+      { label: User story, description: 'As a <persona>, I want <capability> so that <outcome>.' }
     validations: { required: true }
   - type: textarea
     id: proposal

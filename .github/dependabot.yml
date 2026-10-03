@@ -12,7 +12,17 @@ updates:
       include: scope
     groups:
       dev-tooling:
-        patterns: ['eslint*', '@eslint/*', 'typescript-eslint', 'prettier', 'vitest', '@vitest/*', 'typescript', '@types/*']
+        patterns:
+          [
+            'eslint*',
+            '@eslint/*',
+            'typescript-eslint',
+            'prettier',
+            'vitest',
+            '@vitest/*',
+            'typescript',
+            '@types/*',
+          ]
       opentelemetry:
         patterns: ['@opentelemetry/*']
       aws-sdk:
