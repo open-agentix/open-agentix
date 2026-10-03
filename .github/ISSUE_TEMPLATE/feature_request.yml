@@ -1,0 +1,20 @@
+name: Feature request
+description: Propose an improvement or a new capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: story
+    attributes: { label: User story, description: 'As a <persona>, I want <capability> so that <outcome>.' }
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: Proposal, description: API, agents.md fields, security impact }
+  - type: textarea
+    id: alternatives
+    attributes: { label: Alternatives considered }
+  - type: checkboxes
+    id: adr
+    attributes:
+      label: Significant change
+      options:
+        - label: This needs an ADR (architecture, security model, breaking API change)
