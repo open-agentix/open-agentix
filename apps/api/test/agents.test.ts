@@ -276,3 +276,36 @@ describe('agent registry', () => {
     expect(ce.statusCode).toBe(202);
   });
 });
+
+describe('runtime constraints at publish', () => {
+  it('rejects disabled runners and toolboxes outside the allowlist', async () => {
+    const strict = await testNode({ OAX_TOOLBOX_ALLOWLIST: 'git+node' });
+    await strict.req({
+      method: 'POST',
+      url: '/v1/teams',
+      payload: { slug: 'team-ops', name: 'Ops' },
+    });
+    const mk = async (name: string, runtime: string) =>
+      (
+        await strict.req({
+          method: 'POST',
+          url: '/v1/agents',
+          payload: { source: agentSource(name, 'team-ops', '1.0.0', runtime) },
+        })
+      ).json().id as string;
+    const toolbox = await mk('tb', 'runtime: { toolbox: trivy }');
+    const res = await strict.req({ method: 'POST', url: `/v1/agents/${toolbox}/publish` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().details[0].message).toMatch(/OAX_TOOLBOX_ALLOWLIST/);
+    const runner = await mk('rn', 'runtime: { runner: kubernetes-job, toolbox: git+node }');
+    expect(
+      (await strict.req({ method: 'POST', url: `/v1/agents/${runner}/publish` })).json().details[0]
+        .message,
+    ).toMatch(/not enabled/);
+    const ok = await mk('ok', 'runtime: { toolbox: git+node }');
+    expect((await strict.req({ method: 'POST', url: `/v1/agents/${ok}/publish` })).statusCode).toBe(
+      201,
+    );
+    await strict.close();
+  });
+});
