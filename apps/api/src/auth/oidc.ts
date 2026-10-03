@@ -27,10 +27,23 @@ export function pkceChallenge(verifier: string): Promise<string> {
   return oidc.calculatePKCECodeChallenge(verifier);
 }
 
-export function openidClient(cfg: NonNullable<Config['auth']['oidc']>): OidcClient {
+export function openidClient(
+  cfg: NonNullable<Config['auth']['oidc']>,
+  env: Record<string, string | undefined> = process.env,
+): OidcClient {
   let configuration: Promise<oidc.Configuration> | null = null;
+  // Discovery, JWKS and token requests honour HTTPS_PROXY/NO_PROXY explicitly.
+  const proxyFetch = createProxyAwareFetch({ env });
   const conf = () =>
-    (configuration ??= oidc.discovery(new URL(cfg.issuer), cfg.clientId, cfg.clientSecret));
+    (configuration ??= oidc.discovery(
+      new URL(cfg.issuer),
+      cfg.clientId,
+      cfg.clientSecret,
+      undefined,
+      {
+        [oidc.customFetch]: (url, options) => proxyFetch(url, options as RequestInit),
+      },
+    ));
   return {
     async authorizationUrl({ state, nonce, codeChallenge }) {
       return oidc
