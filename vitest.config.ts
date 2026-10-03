@@ -19,13 +19,15 @@ export default defineConfig({
   resolve: { alias },
   test: {
     include: ['packages/*/test/**/*.test.ts', 'apps/*/test/**/*.test.ts'],
+    // The web UI has its own vitest config (jsdom, React) in apps/ui.
+    exclude: ['**/node_modules/**', 'apps/ui/**'],
     environment: 'node',
     testTimeout: 30_000,
     hookTimeout: 60_000,
     coverage: {
       provider: 'v8',
       include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.ts'],
-      exclude: ['**/*.d.ts', '**/main.ts', '**/types.ts'],
+      exclude: ['apps/ui/**', '**/*.d.ts', '**/main.ts', '**/types.ts'],
       reporter: ['text', 'json-summary', 'lcov'],
       thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 },
     },

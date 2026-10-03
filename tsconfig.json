@@ -17,5 +17,6 @@
     "scripts",
     "examples",
     "*.ts"
-  ]
+  ],
+  "exclude": ["apps/ui"]
 }
