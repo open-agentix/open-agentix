@@ -1,5 +1,5 @@
 import { OaxError } from '@openagentix/core';
-import { ProxyAgent, fetch as undiciFetch } from 'undici';
+import { createProxyAwareFetch, type Env } from './proxy.js';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -16,8 +16,9 @@ export class ProviderError extends OaxError {
 export interface GuardedFetchOptions {
   /** Endpoints the provider was configured with; requests to other origins are refused. */
   allowedOrigins: readonly string[];
-  /** Optional HTTPS proxy (e.g. corporate egress proxy). */
+  /** Optional explicit proxy; otherwise HTTPS_PROXY/HTTP_PROXY/NO_PROXY from `env` apply. */
   proxyUrl?: string | undefined;
+  env?: Env;
   /** Injected fetch (tests). Defaults to global fetch, or undici fetch when a proxy is set. */
   fetchImpl?: FetchLike | undefined;
 }
@@ -28,16 +29,9 @@ export interface GuardedFetchOptions {
  */
 export function createGuardedFetch(opts: GuardedFetchOptions): FetchLike {
   const allowed = new Set(opts.allowedOrigins.map((o) => new URL(o).origin));
-  let base: FetchLike;
-  if (opts.fetchImpl) {
-    base = opts.fetchImpl;
-  } else if (opts.proxyUrl) {
-    const dispatcher = new ProxyAgent(opts.proxyUrl);
-    base = (input, init) =>
-      undiciFetch(input, { ...(init as object), dispatcher }) as unknown as Promise<Response>;
-  } else {
-    base = (input, init) => fetch(input, init);
-  }
+  const base: FetchLike =
+    opts.fetchImpl ??
+    createProxyAwareFetch({ proxyUrl: opts.proxyUrl, ...(opts.env ? { env: opts.env } : {}) });
   return (input, init) => {
     const origin = new URL(input).origin;
     if (!allowed.has(origin)) {
