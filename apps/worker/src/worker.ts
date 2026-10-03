@@ -46,6 +46,10 @@ export class Worker {
     return this.providers;
   }
 
+  get running(): boolean {
+    return this.loop !== null && !this.stopping;
+  }
+
   get activeRuns(): number {
     return this.active.size;
   }
@@ -105,6 +109,7 @@ export class Worker {
     const free = this.ctx.config.worker.concurrency - this.active.size;
     const claimed = await this.queue.claim(free);
     for (const c of claimed) void this.execute(c.id);
+    this.ctx.metrics.workerActiveRuns.set({ worker: this.id }, this.active.size);
     return claimed.map((c) => c.id);
   }
 
