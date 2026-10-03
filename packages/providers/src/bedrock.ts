@@ -9,6 +9,7 @@ import {
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import type { Classification } from '@openagentix/core';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { proxyFor, type Env } from './proxy.js';
 import type {
   ChatRequest,
   ChatResponse,
@@ -55,13 +56,17 @@ const STOP: Record<string, StopReason> = {
  */
 export function createBedrockClient(
   opts: Pick<BedrockOptions, 'region' | 'endpoint' | 'proxyUrl' | 'maxAttempts'>,
+  env: Env = process.env,
 ): BedrockRuntimeClient {
+  // The AWS SDK ignores HTTPS_PROXY; resolve it explicitly (NO_PROXY honoured, e.g. for VPC endpoints).
+  const target = opts.endpoint ?? `https://bedrock-runtime.${opts.region}.amazonaws.com`;
+  const proxy = proxyFor(target, env, opts.proxyUrl);
   return new BedrockRuntimeClient({
     region: opts.region,
     ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
     ...(opts.maxAttempts ? { maxAttempts: opts.maxAttempts } : {}),
-    ...(opts.proxyUrl
-      ? { requestHandler: new NodeHttpHandler({ httpsAgent: new HttpsProxyAgent(opts.proxyUrl) }) }
+    ...(proxy
+      ? { requestHandler: new NodeHttpHandler({ httpsAgent: new HttpsProxyAgent(proxy) }) }
       : {}),
   });
 }
