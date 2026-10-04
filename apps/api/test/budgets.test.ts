@@ -214,9 +214,10 @@ describe('hard stop', () => {
   });
 
   it('a second run of the same month is stopped by the spend of the first', async () => {
-    const [{ total }] = await n.ctx.db
+    const [row] = await n.ctx.db
       .select({ total: sql<number>`coalesce(sum(${costLedger.costMicros}), 0)::int` })
       .from(costLedger);
+    const total = row?.total ?? 0;
     await put(USE_CASE, total / 1_000_000);
     expect(await start()).toMatchObject({ errorCode: 'use_case_budget_exceeded' });
     await n.req({ method: 'DELETE', url: `/v1/budgets/use-cases/${USE_CASE}` });
@@ -263,9 +264,9 @@ describe('alerts', () => {
     expect(
       (await auditActions('budget.alert')).filter((e) => e.payload.key === 'alerting'),
     ).toHaveLength(3);
-    expect((await overview()).useCases.find((u) => u.key === 'alerting')?.alerts).toEqual([
-      50, 80, 100,
-    ]);
+    expect(
+      (await overview()).useCases.find((u: { key: string }) => u.key === 'alerting')?.alerts,
+    ).toEqual([50, 80, 100]);
     await n.services.budgets.raiseAlerts(n.ctx.db, target, 0);
     expect((await alertEvents()).length).toBe(3);
   });
