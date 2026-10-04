@@ -2,9 +2,101 @@ import { screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { budgetAlert, periodStart } from '../src/features/costs/CostsPage';
+import { topAlert } from '../src/features/costs/BudgetsSection';
 import { api } from './handlers';
 import { server } from './server';
-import { expectNoA11yViolations, heading, renderApp } from './utils';
+import * as f from './fixtures';
+import { asViewer, expectNoA11yViolations, heading, renderApp } from './utils';
+
+describe('monthly budgets', () => {
+  it('shows tenant and use case budgets with alerts and stops, and is accessible', async () => {
+    await renderApp('/costs');
+    await heading('Costs');
+    expect(await screen.findByRole('heading', { name: 'Monthly budgets' })).toBeInTheDocument();
+    expect(screen.getByText('Whole tenant')).toBeInTheDocument();
+    expect(screen.getByText('Alert at 80 %')).toBeInTheDocument();
+    expect(screen.getByText('Runs stopped')).toBeInTheDocument();
+    expect(screen.getAllByText('On track').length).toBeGreaterThan(0);
+    await expectNoA11yViolations();
+  });
+
+  it('lets admins set and remove a use case budget and validates the form', async () => {
+    let put: { url: string; body: unknown } | null = null;
+    server.use(
+      http.put(api('/v1/budgets/use-cases/:useCase'), async ({ request }) => {
+        put = { url: new URL(request.url).pathname, body: await request.json() };
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const { user } = await renderApp('/costs');
+    await screen.findByRole('heading', { name: 'Monthly budgets' });
+    await user.click(screen.getByRole('button', { name: 'Set budget' }));
+    expect(
+      await screen.findByText('Enter a use case and a limit of 0 or more.'),
+    ).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Use case'), 'finance');
+    await user.type(screen.getByLabelText('Monthly limit (USD)'), '25.5');
+    await user.click(screen.getByRole('button', { name: 'Set budget' }));
+    await waitFor(() =>
+      expect(put).toEqual({
+        url: '/v1/budgets/use-cases/finance',
+        body: { monthlyBudgetUsd: 25.5 },
+      }),
+    );
+    expect(await screen.findByText('Budget of finance saved')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Remove the budget of ops' }));
+    expect(await screen.findByText('Budget of ops removed')).toBeInTheDocument();
+  });
+
+  it('reports save and remove errors', async () => {
+    server.use(
+      http.put(api('/v1/budgets/use-cases/:useCase'), () =>
+        HttpResponse.json({ error: 'forbidden', message: 'not allowed' }, { status: 403 }),
+      ),
+      http.delete(api('/v1/budgets/use-cases/:useCase'), () =>
+        HttpResponse.json({ error: 'not_found', message: 'gone already' }, { status: 404 }),
+      ),
+    );
+    const { user } = await renderApp('/costs');
+    await screen.findByRole('heading', { name: 'Monthly budgets' });
+    await user.type(screen.getByLabelText('Use case'), 'finance');
+    await user.type(screen.getByLabelText('Monthly limit (USD)'), '1');
+    await user.click(screen.getByRole('button', { name: 'Set budget' }));
+    expect(await screen.findByText('not allowed')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Remove the budget of ops' }));
+    expect(await screen.findByText('gone already')).toBeInTheDocument();
+  });
+
+  it('is read-only for non-admins and hidden when nothing is set', async () => {
+    asViewer();
+    await renderApp('/costs');
+    await screen.findByRole('heading', { name: 'Monthly budgets' });
+    expect(screen.queryByRole('button', { name: 'Set budget' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Remove the budget/ })).not.toBeInTheDocument();
+  });
+
+  it('shows nothing to viewers when no budget exists', async () => {
+    asViewer();
+    server.use(
+      http.get(api('/v1/budgets'), () =>
+        HttpResponse.json({
+          ...f.budgets,
+          tenant: { ...f.budgets.tenant, limitUsd: null },
+          useCases: [],
+        }),
+      ),
+    );
+    await renderApp('/costs');
+    await heading('Costs');
+    await screen.findByText('$9.001', {}, { timeout: 3000 }).catch(() => undefined);
+    expect(screen.queryByRole('heading', { name: 'Monthly budgets' })).not.toBeInTheDocument();
+  });
+
+  it('picks the highest raised alert', () => {
+    expect(topAlert({ alerts: [] })).toBeNull();
+    expect(topAlert({ alerts: [50, 80] })).toBe(80);
+  });
+});
 
 describe('costs', () => {
   it('groups costs, shows budgets with alerts and is accessible', async () => {

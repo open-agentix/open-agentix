@@ -12,7 +12,7 @@ import {
 import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { agents, approvals, costLedger, events, runSteps, runs, teams } from '../db/schema.js';
+import { agents, approvals, events, runSteps, runs } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
 import {
   decodeSeqCursor,
@@ -23,6 +23,7 @@ import {
 } from '../pagination.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
+import type { BudgetsService } from './budgets.js';
 
 export type RunRow = typeof runs.$inferSelect;
 export type StepRow = typeof runSteps.$inferSelect;
@@ -59,6 +60,7 @@ export class RunsService {
     private readonly ctx: AppContext,
     private readonly audit: AuditService,
     private readonly agents: AgentsService,
+    private readonly budgets: BudgetsService,
   ) {
     // Prepared statements for the hottest read paths.
     this.getRunQuery = ctx.db
@@ -106,7 +108,18 @@ export class RunsService {
         payload: input.event as object,
       });
     }
-    const budget = await this.teamBudgetExceeded(latest.teamId);
+    const { definition } = await this.agents.definitionOf(versionId);
+    const verdict = await this.budgets.verdictFor(
+      {
+        tenantId: latest.tenantId,
+        teamId: latest.teamId,
+        useCase: definition.labels.useCase ?? null,
+      },
+      db,
+    );
+    // Hard stop at admission: the first breached scope names the error code and reason.
+    const breach = verdict.breaches[0];
+    const budget = breach ? breach.message : null;
     const id = randomUUID();
     const now = this.ctx.now();
     const [row] = await db
@@ -123,7 +136,7 @@ export class RunsService {
         createdAt: now,
         availableAt: now,
         ...(budget
-          ? { finishedAt: now, errorCode: 'team_budget_exceeded', errorMessage: budget }
+          ? { finishedAt: now, errorCode: `${breach!.scope}_budget_exceeded`, errorMessage: budget }
           : {}),
       })
       .returning();
@@ -134,27 +147,14 @@ export class RunsService {
       action: budget ? 'run.blocked' : 'run.queued',
       target: input.agentId,
       runId: id,
-      payload: { versionId, eventId: input.event.id, reason: budget },
+      payload: {
+        versionId,
+        eventId: input.event.id,
+        reason: budget,
+        ...(verdict.blocked ? { breaches: verdict.breaches } : {}),
+      },
     });
     return row!;
-  }
-
-  /** Hard stop: returns a reason when the team spent its monthly budget. */
-  async teamBudgetExceeded(teamId: string | null): Promise<string | null> {
-    if (!teamId) return null;
-    const [team] = await this.ctx.db
-      .select({ budget: teams.monthlyBudgetMicros, slug: teams.slug })
-      .from(teams)
-      .where(eq(teams.id, teamId));
-    if (!team?.budget) return null;
-    const [spent] = await this.ctx.db
-      .select({ total: sql<number>`coalesce(sum(${costLedger.costMicros}), 0)::bigint` })
-      .from(costLedger)
-      .where(and(eq(costLedger.teamId, teamId), eq(costLedger.month, monthOf(this.ctx.now()))));
-    const total = Number(spent?.total ?? 0);
-    return total >= team.budget
-      ? `team "${team.slug}" exceeded its monthly budget (${total / 1e6} >= ${team.budget / 1e6} USD)`
-      : null;
   }
 
   async get(id: string): Promise<RunRow> {

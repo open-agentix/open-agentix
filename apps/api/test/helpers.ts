@@ -1,5 +1,6 @@
 import { StaticSecretResolver } from '@openagentix/core';
-import type { InjectOptions, LightMyRequestResponse } from 'fastify';
+import type { FetchFn } from '@openagentix/runners';
+import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { createControlNode, loadConfig, type AppContext, type ControlNode } from '../src/index.js';
 
 export const ADMIN = { email: 'admin@example.com', password: 'admin-password-123' };
@@ -61,5 +62,22 @@ export async function testNode(
       await node.app.close();
       await node.ctx.database.close();
     },
+  };
+}
+
+/** A `fetch` that talks to an in-process app (for HttpControlPlane in tests). */
+export function injectFetch(app: FastifyInstance): FetchFn {
+  return async (url, init) => {
+    const u = new URL(url);
+    const res = await app.inject({
+      method: (init?.method ?? 'GET') as 'GET',
+      url: u.pathname + u.search,
+      headers: init?.headers as Record<string, string>,
+      ...(init?.body ? { payload: String(init.body) } : {}),
+    });
+    return new Response(res.statusCode === 204 ? null : res.body, {
+      status: res.statusCode,
+      headers: { 'content-type': String(res.headers['content-type'] ?? 'application/json') },
+    });
   };
 }

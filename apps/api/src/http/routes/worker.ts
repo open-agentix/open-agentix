@@ -6,6 +6,7 @@ import {
   ApprovalParams,
   ApprovalRequestBody,
   ApprovalStatusSchema,
+  BudgetVerdictSchema,
   CancelStatusSchema,
   DecisionSchema,
   ErrorSchema,
@@ -125,6 +126,24 @@ export function registerWorkerRoutes(app: ZApp, { services }: Deps): void {
     async (req) => {
       await control.authorize(token(req), req.params.id);
       return { cancelled: await control.isCancelled(req.params.id) };
+    },
+  );
+
+  app.get(
+    '/v1/worker/runs/:id/budget',
+    {
+      config: { access: 'run-token' },
+      schema: {
+        tags,
+        summary: 'Monthly tenant, use case and team budgets of a run (hard stop)',
+        security: sec,
+        params: RunIdParams,
+        response: { 200: BudgetVerdictSchema },
+      },
+    },
+    async (req) => {
+      await control.authorize(token(req), req.params.id);
+      return services.budgets.verdictForRun(req.params.id);
     },
   );
 

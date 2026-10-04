@@ -9,6 +9,7 @@ import type {
   RunnerKind,
   StepKind,
   ToolCallRequest,
+  BudgetVerdict,
 } from '@openagentix/core';
 import type { ToolGateway } from '@openagentix/mcp';
 import type { ProviderRegistry } from '@openagentix/providers';
@@ -84,6 +85,11 @@ export interface ControlPlane {
     signal?: AbortSignal,
   ): Promise<ApprovalOutcome>;
   isCancelled(runId: string): Promise<boolean>;
+  /**
+   * Monthly tenant/use-case/team budgets of the run (hard stop). Optional so that control planes
+   * without a ledger (local CLI) keep working; the executor asks before every step.
+   */
+  checkBudget?(runId: string): Promise<BudgetVerdict>;
   completeRun(runId: string, result: RunResult): Promise<void>;
 }
 

@@ -123,6 +123,9 @@ export const handlers = [
       ],
     });
   }),
+  http.get(api('/v1/budgets'), () => json(f.budgets)),
+  http.put(api('/v1/budgets/use-cases/:useCase'), () => new HttpResponse(null, { status: 204 })),
+  http.delete(api('/v1/budgets/use-cases/:useCase'), () => new HttpResponse(null, { status: 204 })),
   http.get(api('/v1/event-sources'), () => json({ items: f.sources })),
   http.post(api('/v1/event-sources'), async ({ request }) => {
     const body = (await request.json()) as { name: string };
