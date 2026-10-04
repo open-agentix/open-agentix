@@ -41,3 +41,56 @@ describe('run tokens', () => {
     );
   });
 });
+
+describe('step-scoped run tokens (run node sessions)', () => {
+  const scoped = { runId: 'r1', workerId: 'n1', ttlSeconds: 60, sid: 's1', steps: ['a', 'b'] };
+  it('round-trips sid and steps and keeps unscoped tokens unchanged', () => {
+    const t = issueRunToken(SECRET, scoped, 0);
+    expect(verifyRunToken(SECRET, t, 0)).toMatchObject({ sid: 's1', steps: ['a', 'b'] });
+    const plain = verifyRunToken(
+      SECRET,
+      issueRunToken(SECRET, { runId: 'r1', workerId: 'w', ttlSeconds: 5 }, 0),
+      0,
+    );
+    expect(plain).not.toHaveProperty('sid');
+    expect(plain).not.toHaveProperty('steps');
+  });
+  it('refuses half-scoped or oversized scopes when issuing', () => {
+    expect(code(() => issueRunToken(SECRET, { ...scoped, steps: undefined }, 0))).toBe(
+      'config_invalid',
+    );
+    expect(code(() => issueRunToken(SECRET, { ...scoped, sid: undefined }, 0))).toBe(
+      'config_invalid',
+    );
+    expect(code(() => issueRunToken(SECRET, { ...scoped, steps: [] }, 0))).toBe('config_invalid');
+    expect(
+      code(() =>
+        issueRunToken(
+          SECRET,
+          { ...scoped, steps: Array.from({ length: 17 }, (_, i) => `s${i}`) },
+          0,
+        ),
+      ),
+    ).toBe('config_invalid');
+  });
+  it('fails closed on a correctly signed token with a malformed scope', () => {
+    const sign = (claims: object) => {
+      const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
+      const mac = createHmac('sha256', SECRET).update(`oaxrt.${payload}`).digest('base64url');
+      return `oaxrt.${payload}.${mac}`;
+    };
+    const base = { runId: 'r', workerId: 'n', iat: 0, exp: 60 };
+    for (const bad of [
+      { sid: 's' },
+      { steps: ['a'] },
+      { sid: '', steps: ['a'] },
+      { sid: 's', steps: [] },
+      { sid: 's', steps: [1] },
+      { sid: 's', steps: 'a' },
+      { sid: 's', steps: Array.from({ length: 17 }, () => 'a') },
+    ])
+      expect(code(() => verifyRunToken(SECRET, sign({ ...base, ...bad }), 0))).toBe(
+        'run_token_invalid',
+      );
+  });
+});

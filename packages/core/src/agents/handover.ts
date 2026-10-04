@@ -1,6 +1,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import type { ValidateFunction } from 'ajv/dist/2020.js';
 import { canonicalJson, sha256Hex } from '../canonical.js';
+import { OaxError } from '../errors.js';
 import { checkJsonSchemaSubset, SCHEMA_REF_PREFIX } from './json-schema.js';
 
 /**
@@ -63,6 +64,24 @@ function inline(schema: unknown, named: Readonly<Record<string, unknown>>): unkn
     }
   }
   return out;
+}
+
+/**
+ * The schema with every `#/schemas/<name>` reference inlined, for handing it to a run node that
+ * does not know the named schemas. Throws `handover_invalid` when the schema is outside the
+ * supported subset (so a cyclic or oversize schema never reaches the recursion).
+ */
+export function resolveSchema(
+  schema: unknown,
+  named: Readonly<Record<string, unknown>> | undefined,
+): unknown {
+  const names = named ?? {};
+  if (checkJsonSchemaSubset(schema, 'schema', names).length > 0)
+    throw new OaxError(
+      'handover_invalid',
+      'the schema is outside the supported JSON Schema subset',
+    );
+  return inline(schema, names);
 }
 
 /**
