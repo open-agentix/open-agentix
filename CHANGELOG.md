@@ -108,6 +108,14 @@ All notable changes to this project are documented here. The format follows
   profile pricing, import script with a field whitelist and a weekly reviewed refresh PR job
   (`.github/workflows/catalog-refresh.yml`). Docs: `docs/providers.md`.
 - UI: model connections with provider presets, scope and catalog price proposals.
+- **Model proxy foundations (W1-3b-1, ADR 0009)**: model token (`oaxmt.`, HMAC key derived from the
+  run token secret with the label `openagentix/model-token/v1`, bound to run, session, node and
+  step, expiring, constant-time verification; cannot verify as a run token and vice versa),
+  strict wire schemas of the native model endpoint (`WorkerModelRequest`, `WorkerModelResponse`,
+  `ModelTokenResponse`, error envelope and code table), pure token estimators
+  (`estimateInputUpperBound`, `estimateOutputTokens`, `outputFloor`) and prompt cache prices in
+  the cost model (`cacheReadPerMTok`, `cacheWritePerMTok`; fallback input and 1.25 x input). No
+  endpoint or behaviour change yet.
 
 ### Changed
 
