@@ -27,6 +27,14 @@ All notable changes to this project are documented here. The format follows
   approved, audited and costed; agent limits map to `--max-turns`/`--max-budget-usd` and are enforced
   by the platform. `oax run --harness claude-code`, opt-in real-run test (`OAX_TEST_CLAUDE=1`),
   `docs/harnesses.md`, `docs/verification/claude-code-harness.md`. Other harnesses stay documented stubs.
+- **OpenCode harness**: `createHarness('opencode')` / `oax run --harness opencode` runs
+  `opencode run --format json` non-interactively with a generated deny-by-default config whose only
+  tool source is the loopback policy gate, a minimal environment inside the temporary work directory,
+  the model taken from an existing model connection (BYOK secret references; the key reaches the CLI
+  only through the child environment and is redacted everywhere), platform-side step, cost and time
+  limits, an air-gapped egress check of the model endpoint and an optional binary checksum pin. Tested
+  with a fake CLI; the opt-in real-run test (`OAX_TEST_OPENCODE=1`) and its verification note are
+  pending a pinned binary. `docs/harnesses.md`. Hermes and OpenClaw stay documented stubs.
 - **Air-gapped mode** (`OAX_AIRGAPPED`, `OAX_AIRGAPPED_ALLOW`): fail-closed start-up self-check,
   process-wide egress policy and network guard (TCP, DNS, UDP), vendored model catalog only,
   `airgapped` state on `/readyz`, tests proving no outbound traffic, and `docs/airgapped.md`.
