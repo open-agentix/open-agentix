@@ -4,6 +4,7 @@ import {
   hasPermission,
   loadAgentDefinition,
   validateAgentSource,
+  visibleAgents,
   visibleTeams,
   type AgentDefinition,
   type Principal,
@@ -52,12 +53,26 @@ export class AgentsService {
     return t?.id ?? null;
   }
 
-  assertAccess(
+  /**
+   * Resource-level check incl. agent-scoped bindings. Principals that cannot even read the agent
+   * get 404 (existence is not revealed) and the denial is audited.
+   */
+  async assertAccess(
     principal: Principal,
     agent: AgentRow,
     permission: 'agents:read' | 'agents:write' | 'agents:publish' | 'runs:execute',
-  ): void {
-    if (!hasPermission(principal, permission, agent.teamId)) throw forbidden();
+  ): Promise<void> {
+    if (hasPermission(principal, permission, agent.teamId, agent.id)) return;
+    if (!hasPermission(principal, 'agents:read', agent.teamId, agent.id)) {
+      await this.audit.append({
+        actor: principal.userId,
+        action: 'access.denied',
+        target: agent.id,
+        payload: { permission, resource: 'agent' },
+      });
+      throw notFound('agent');
+    }
+    throw forbidden();
   }
 
   validate(source: string): ValidationResult {
@@ -103,14 +118,20 @@ export class AgentsService {
   async list(principal: Principal, limit: number, cursor?: string, q?: string) {
     const c = decodeTimeCursor(cursor);
     const teamsVisible = visibleTeams(principal, 'agents:read');
-    if (Array.isArray(teamsVisible) && teamsVisible.length === 0)
+    const agentsVisible = visibleAgents(principal, 'agents:read');
+    if (Array.isArray(teamsVisible) && teamsVisible.length === 0 && agentsVisible.length === 0)
       return { items: [], nextCursor: null };
     const rows = await this.ctx.db
       .select()
       .from(agents)
       .where(
         and(
-          teamsVisible === 'all' ? undefined : inArray(agents.teamId, teamsVisible),
+          teamsVisible === 'all'
+            ? undefined
+            : or(
+                teamsVisible.length ? inArray(agents.teamId, teamsVisible) : undefined,
+                agentsVisible.length ? inArray(agents.id, agentsVisible) : undefined,
+              ),
           q ? ilike(agents.name, `%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`) : undefined,
           c
             ? or(lt(agents.createdAt, c.t), and(eq(agents.createdAt, c.t), lt(agents.id, c.id)))
@@ -124,7 +145,7 @@ export class AgentsService {
 
   async updateDraft(principal: Principal, id: string, source: string): Promise<AgentRow> {
     const agent = await this.get(id);
-    this.assertAccess(principal, agent, 'agents:write');
+    await this.assertAccess(principal, agent, 'agents:write');
     const def = loadAgentDefinition(source);
     if (def.name !== agent.name)
       throw new HttpError(400, 'validation_failed', `name must stay "${agent.name}"`);
@@ -183,7 +204,7 @@ export class AgentsService {
     id: string,
   ): Promise<{ version: VersionSummary; created: boolean }> {
     const agent = await this.get(id);
-    this.assertAccess(principal, agent, 'agents:publish');
+    await this.assertAccess(principal, agent, 'agents:publish');
     const def = loadAgentDefinition(agent.draftSource);
     this.checkRuntime(def);
     const published = await this.ctx.db

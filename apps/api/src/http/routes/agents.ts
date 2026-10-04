@@ -11,9 +11,11 @@ import {
   ErrorSchema,
   IdParams,
   ManualRunBody,
+  MembersBody,
   PageQuery,
   PublishResultSchema,
   RunSchema,
+  TeamMemberSchema,
   ValidationResultSchema,
   VersionDetailSchema,
   VersionSchema,
@@ -105,7 +107,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req) => {
       const a = await agents.get(req.params.id);
-      agents.assertAccess(principalOf(req), a, 'agents:read');
+      await agents.assertAccess(principalOf(req), a, 'agents:read');
       return agentDetailDto(a);
     },
   );
@@ -160,7 +162,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      agents.assertAccess(principalOf(req), await agents.get(req.params.id), 'agents:read');
+      await agents.assertAccess(principalOf(req), await agents.get(req.params.id), 'agents:read');
       return { items: (await agents.versions(req.params.id)).map(versionDto) };
     },
   );
@@ -178,8 +180,50 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      agents.assertAccess(principalOf(req), await agents.get(req.params.id), 'agents:read');
+      await agents.assertAccess(principalOf(req), await agents.get(req.params.id), 'agents:read');
       return versionDetailDto(await agents.getVersion(req.params.id, req.params.version));
+    },
+  );
+
+  app.get(
+    '/v1/agents/:id/members',
+    {
+      config: { access: 'agents:read' },
+      schema: {
+        tags,
+        summary: 'Users with a role on this agent only (agent-scoped bindings)',
+        security: sec,
+        params: IdParams,
+        response: { 200: z.object({ items: z.array(TeamMemberSchema) }) },
+      },
+    },
+    async (req) => {
+      await agents.assertAccess(principalOf(req), await agents.get(req.params.id), 'agents:read');
+      return { items: await services.identity.agentMembers(req.params.id) };
+    },
+  );
+
+  app.put(
+    '/v1/agents/:id/members',
+    {
+      config: { access: 'users:write' },
+      schema: {
+        tags,
+        summary: 'Replace the agent-scoped role bindings (user + role) of an agent',
+        security: sec,
+        params: IdParams,
+        body: MembersBody,
+        response: { 204: z.null() },
+      },
+    },
+    async (req, reply) => {
+      await agents.get(req.params.id);
+      await services.identity.setAgentMembers(
+        principalOf(req).userId,
+        req.params.id,
+        req.body.members,
+      );
+      return reply.status(204).send(null);
     },
   );
 
@@ -226,7 +270,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req) => {
       const agent = await agents.get(req.params.id);
-      agents.assertAccess(principalOf(req), agent, 'agents:write');
+      await agents.assertAccess(principalOf(req), agent, 'agents:write');
       const r = await dryRunAgent(
         req.body.source ?? agent.draftSource,
         req.body.data,
@@ -270,7 +314,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
     async (req, reply) => {
       const p = principalOf(req);
       const agent = await agents.get(req.params.id);
-      agents.assertAccess(p, agent, 'runs:execute');
+      await agents.assertAccess(p, agent, 'runs:execute');
       const event = isCloudEvent(req.body.data)
         ? parseCloudEvent(req.body.data)
         : createEvent({

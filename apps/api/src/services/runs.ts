@@ -3,6 +3,7 @@ import {
   ROLE_PERMISSIONS,
   hasPermission,
   isTerminal,
+  visibleAgents,
   visibleTeams,
   type OaxEvent,
   type Principal,
@@ -165,14 +166,25 @@ export class RunsService {
     permission: 'runs:read' | 'runs:cancel' | 'runs:approve' | 'costs:read' = 'runs:read',
   ): Promise<RunRow> {
     const run = await this.get(id);
-    if (!hasPermission(principal, permission, run.teamId)) throw notFound('run');
+    if (!hasPermission(principal, permission, run.teamId, run.agentId)) {
+      await this.audit.append({
+        actor: principal.userId,
+        action: 'access.denied',
+        target: id,
+        runId: id,
+        payload: { permission, resource: 'run' },
+      });
+      throw notFound('run');
+    }
     return run;
   }
 
   async list(principal: Principal, filter: RunFilter, limit: number, cursor?: string) {
     const c = decodeTimeCursor(cursor);
     const scope = visibleTeams(principal, 'runs:read');
-    if (Array.isArray(scope) && scope.length === 0) return { items: [], nextCursor: null };
+    const scopedAgents = visibleAgents(principal, 'runs:read');
+    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0)
+      return { items: [], nextCursor: null };
     const rows = await this.ctx.db
       .select()
       .from(runs)
@@ -183,7 +195,7 @@ export class RunsService {
           filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
           filter.from ? gte(runs.createdAt, filter.from) : undefined,
           filter.to ? lt(runs.createdAt, filter.to) : undefined,
-          scope === 'all' ? undefined : inArray(runs.teamId, scope),
+          scope === 'all' ? undefined : this.runScope(scope, scopedAgents),
           c
             ? or(lt(runs.createdAt, c.t), and(eq(runs.createdAt, c.t), lt(runs.id, c.id)))
             : undefined,
@@ -206,7 +218,8 @@ export class RunsService {
       costUsd: 0,
       avgDurationMs: null,
     };
-    if (Array.isArray(scope) && scope.length === 0) return empty;
+    const scopedAgents = visibleAgents(principal, 'runs:read');
+    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return empty;
     const rows = await this.ctx.db
       .select({
         status: runs.status,
@@ -226,7 +239,7 @@ export class RunsService {
           filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
           filter.from ? gte(runs.createdAt, filter.from) : undefined,
           filter.to ? lt(runs.createdAt, filter.to) : undefined,
-          scope === 'all' ? undefined : inArray(runs.teamId, scope),
+          scope === 'all' ? undefined : this.runScope(scope, scopedAgents),
         ),
       )
       .groupBy(runs.status);
@@ -268,6 +281,14 @@ export class RunsService {
       .innerJoin(agents, eq(agents.id, runs.agentId))
       .where(inArray(runs.id, unique));
     return new Map(rows.map((r) => [r.id, r.name]));
+  }
+
+  /** Team scope OR agent-scoped bindings. */
+  private runScope(teamsIn: string[], agentsIn: string[]) {
+    return or(
+      teamsIn.length ? inArray(runs.teamId, teamsIn) : undefined,
+      agentsIn.length ? inArray(runs.agentId, agentsIn) : undefined,
+    );
   }
 
   async steps(
@@ -327,7 +348,9 @@ export class RunsService {
   ) {
     const c = decodeTimeCursor(cursor);
     const scope = visibleTeams(principal, 'runs:read');
-    if (Array.isArray(scope) && scope.length === 0) return { items: [], nextCursor: null };
+    const scopedAgents = visibleAgents(principal, 'runs:read');
+    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0)
+      return { items: [], nextCursor: null };
     const rows = await this.ctx.db
       .select()
       .from(approvals)
@@ -335,7 +358,20 @@ export class RunsService {
         and(
           eq(approvals.status, status),
           runId ? eq(approvals.runId, runId) : undefined,
-          scope === 'all' ? undefined : inArray(approvals.teamId, scope),
+          scope === 'all'
+            ? undefined
+            : or(
+                scope.length ? inArray(approvals.teamId, scope) : undefined,
+                scopedAgents.length
+                  ? inArray(
+                      approvals.runId,
+                      this.ctx.db
+                        .select({ id: runs.id })
+                        .from(runs)
+                        .where(inArray(runs.agentId, scopedAgents)),
+                    )
+                  : undefined,
+              ),
           c
             ? or(
                 lt(approvals.requestedAt, c.t),
@@ -357,11 +393,15 @@ export class RunsService {
     comment?: string,
   ): Promise<ApprovalRow> {
     const [a] = await this.ctx.db.select().from(approvals).where(eq(approvals.id, approvalId));
-    if (!a || !hasPermission(principal, 'runs:approve', a.teamId)) throw notFound('approval');
+    const [run] = a
+      ? await this.ctx.db.select({ agentId: runs.agentId }).from(runs).where(eq(runs.id, a.runId))
+      : [];
+    if (!a || !run || !hasPermission(principal, 'runs:approve', a.teamId, run.agentId))
+      throw notFound('approval');
     const roleOk = principal.bindings.some(
       (b) =>
         a.approverRoles.includes(b.role) &&
-        (b.teamId === null || b.teamId === a.teamId) &&
+        (b.agentId ? b.agentId === run.agentId : b.teamId === null || b.teamId === a.teamId) &&
         ROLE_PERMISSIONS[b.role].includes('runs:approve'),
     );
     if (!roleOk)

@@ -205,7 +205,7 @@ describe('agent registry', () => {
     expect(
       (await n.req({ method: 'GET', url: `/v1/agents/${secAgent.id}`, token: otherEngineer }))
         .statusCode,
-    ).toBe(403);
+    ).toBe(404);
     expect(
       (
         await n.req({
@@ -214,7 +214,7 @@ describe('agent registry', () => {
           token: otherEngineer,
         })
       ).statusCode,
-    ).toBe(403);
+    ).toBe(404);
     expect(
       (await n.req({ method: 'GET', url: '/v1/agents/00000000-0000-4000-8000-000000000000' }))
         .statusCode,
@@ -355,6 +355,92 @@ describe('dry run', () => {
     expect(
       denied.json().steps.map((s: { kind: string; status: string }) => `${s.kind}:${s.status}`),
     ).toContain('approval:rejected');
+    await node.close();
+  });
+});
+
+describe('agent-scoped role bindings', () => {
+  it('limits a user to the agents bound to them (lists filter, direct access 404, denial audited)', async () => {
+    const node = await testNode();
+    await node.req({
+      method: 'POST',
+      url: '/v1/teams',
+      payload: { slug: 'team-ops', name: 'Ops' },
+    });
+    const ids: string[] = [];
+    for (const name of ['one', 'two', 'three']) {
+      const id = (
+        await node.req({
+          method: 'POST',
+          url: '/v1/agents',
+          payload: { source: agentSource(name, 'team-ops') },
+        })
+      ).json().id as string;
+      await node.req({ method: 'POST', url: `/v1/agents/${id}/publish` });
+      await node.req({ method: 'POST', url: `/v1/agents/${id}/runs`, payload: { data: {} } });
+      ids.push(id);
+    }
+    const userId = (
+      await node.req({
+        method: 'POST',
+        url: '/v1/users',
+        payload: { email: 'a@example.org', displayName: 'A', password: 'agent-scoped-pw' },
+      })
+    ).json().id;
+    expect(
+      (
+        await node.req({
+          method: 'PUT',
+          url: `/v1/agents/${ids[0]}/members`,
+          payload: { members: [{ userId, role: 'agent-engineer' }] },
+        })
+      ).statusCode,
+    ).toBe(204);
+    expect(
+      (await node.req({ method: 'GET', url: `/v1/agents/${ids[0]}/members` })).json().items,
+    ).toEqual([{ userId, email: 'a@example.org', displayName: 'A', role: 'agent-engineer' }]);
+    const a = await node.login('a@example.org', 'agent-scoped-pw');
+    expect(
+      (await node.req({ method: 'GET', url: '/v1/agents', token: a }))
+        .json()
+        .items.map((x: { name: string }) => x.name),
+    ).toEqual(['one']);
+    expect(
+      (await node.req({ method: 'GET', url: `/v1/agents/${ids[0]}`, token: a })).statusCode,
+    ).toBe(200);
+    expect(
+      (await node.req({ method: 'GET', url: `/v1/agents/${ids[2]}`, token: a })).statusCode,
+    ).toBe(404);
+    expect(
+      (await node.req({ method: 'POST', url: `/v1/agents/${ids[2]}/publish`, token: a }))
+        .statusCode,
+    ).toBe(404);
+    expect(
+      (await node.req({ method: 'POST', url: `/v1/agents/${ids[0]}/publish`, token: a }))
+        .statusCode,
+    ).toBe(200);
+    const runs = (await node.req({ method: 'GET', url: '/v1/runs', token: a })).json().items;
+    expect(runs.map((r: { agentId: string }) => r.agentId)).toEqual([ids[0]]);
+    const other = (await node.req({ method: 'GET', url: `/v1/runs?agentId=${ids[1]}` })).json()
+      .items[0];
+    expect(
+      (await node.req({ method: 'GET', url: `/v1/runs/${other.id}`, token: a })).statusCode,
+    ).toBe(404);
+    expect((await node.req({ method: 'GET', url: '/v1/stats/runs', token: a })).json().total).toBe(
+      1,
+    );
+    expect(
+      (await node.req({ method: 'GET', url: '/v1/approvals', token: a })).json().items,
+    ).toEqual([]);
+    expect((await node.req({ method: 'GET', url: '/v1/costs/summary', token: a })).statusCode).toBe(
+      200,
+    );
+    const denied = (await node.req({ method: 'GET', url: '/v1/audit?action=access.denied' })).json()
+      .items;
+    expect(denied.length).toBeGreaterThanOrEqual(3);
+    expect(
+      (await node.req({ method: 'GET', url: `/v1/agents/${ids[2]}/members`, token: a })).statusCode,
+    ).toBe(404);
     await node.close();
   });
 });

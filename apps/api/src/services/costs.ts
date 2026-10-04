@@ -1,5 +1,5 @@
-import { visibleTeams, type Principal } from '@openagentix/core';
-import { and, desc, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
+import { visibleAgents, visibleTeams, type Principal } from '@openagentix/core';
+import { and, desc, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import { agents, costLedger, teams } from '../db/schema.js';
@@ -56,8 +56,9 @@ export class CostsService {
     limit = 100,
   ): Promise<CostRow[]> {
     const scope = visibleTeams(principal, 'costs:read');
-    if (Array.isArray(scope) && scope.length === 0) return [];
-    const key = `costs:${groupBy}:${from ?? ''}:${to ?? ''}:${limit}:${scope === 'all' ? 'all' : [...scope].sort().join(',')}`;
+    const scopedAgents = visibleAgents(principal, 'costs:read');
+    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return [];
+    const key = `costs:${groupBy}:${from ?? ''}:${to ?? ''}:${limit}:${scope === 'all' ? 'all' : [...scope, ...scopedAgents.map((a) => `agent:${a}`)].sort().join(',')}`;
     return cached(this.ctx.cache, key, 30_000, async () => {
       const col = COLUMN[groupBy];
       const rows = await this.ctx.db
@@ -72,7 +73,12 @@ export class CostsService {
           and(
             from ? gte(costLedger.month, from) : undefined,
             to ? lte(costLedger.month, to) : undefined,
-            scope === 'all' ? undefined : inArray(costLedger.teamId, scope),
+            scope === 'all'
+              ? undefined
+              : or(
+                  scope.length ? inArray(costLedger.teamId, scope) : undefined,
+                  scopedAgents.length ? inArray(costLedger.agentId, scopedAgents) : undefined,
+                ),
           ),
         )
         .groupBy(col)
