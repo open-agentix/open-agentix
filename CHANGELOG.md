@@ -108,6 +108,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **UI unknown routes**: signed-out visitors opening an unknown path are redirected to `/login` instead of seeing the "Page not found" page; signed-in users still get the not-found page.
 - **Database password override**: `OAX_DATABASE_PASSWORD` / `PGPASSWORD` were ignored with pg 8.23 when the connection string contained no password (SCRAM error "client password must be a string"); the password is now injected into the connection string (URL-encoded).
 
 ## [0.1.0] - 2026-10-04
