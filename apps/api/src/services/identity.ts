@@ -7,6 +7,7 @@ import {
   type Principal,
   type Role,
   type RoleBinding,
+  type TenantActor,
 } from '@openagentix/core';
 import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { hashPassword, verifyPassword } from '../auth/passwords.js';
@@ -17,12 +18,14 @@ import { cached } from '../cache.js';
 import { mapGroupsToBindings, type MappedBinding } from '../config.js';
 import type { AppContext } from '../context.js';
 import {
+  DEFAULT_TENANT_ID,
   agentRoleBindings,
   agents,
   apiTokens,
   oidcStates,
   teamMembers,
   teams,
+  tenants,
   users,
 } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
@@ -31,8 +34,11 @@ import type { AuditService } from './audit.js';
 export type UserRow = typeof users.$inferSelect;
 export type TeamRow = typeof teams.$inferSelect;
 
+export type TenantRow = typeof tenants.$inferSelect;
+
 export interface PublicUser {
   id: string;
+  tenantId: string;
   email: string;
   displayName: string;
   source: string;
@@ -93,9 +99,12 @@ export class IdentityService {
       passwordHash: await hashPassword(admin.password),
       source: 'local',
       globalRoles: ['admin'],
+      tenantId: DEFAULT_TENANT_ID,
+      platformAdmin: true,
     });
     await this.audit.append({
       actor: 'system',
+      tenantId: DEFAULT_TENANT_ID,
       action: 'user.bootstrap',
       target: admin.email.toLowerCase(),
     });
@@ -105,10 +114,12 @@ export class IdentityService {
   // ---------- principals ----------
 
   async bindingsFor(user: UserRow): Promise<RoleBinding[]> {
+    // Memberships and agent bindings only count inside the user's own tenant.
     const memberships = await this.ctx.db
-      .select()
+      .select({ teamId: teamMembers.teamId, role: teamMembers.role })
       .from(teamMembers)
-      .where(eq(teamMembers.userId, user.id));
+      .innerJoin(teams, eq(teams.id, teamMembers.teamId))
+      .where(and(eq(teamMembers.userId, user.id), eq(teams.tenantId, user.tenantId)));
     const bindings: RoleBinding[] = user.globalRoles
       .filter(isRole)
       .map((role) => ({ role, teamId: null }));
@@ -122,7 +133,7 @@ export class IdentityService {
       })
       .from(agentRoleBindings)
       .innerJoin(agents, eq(agents.id, agentRoleBindings.agentId))
-      .where(eq(agentRoleBindings.userId, user.id));
+      .where(and(eq(agentRoleBindings.userId, user.id), eq(agents.tenantId, user.tenantId)));
     for (const b of agentBindings)
       if (isRole(b.role)) bindings.push({ role: b.role, teamId: b.teamId, agentId: b.agentId });
     return bindings;
@@ -130,8 +141,10 @@ export class IdentityService {
 
   /** Users with a role on exactly one agent (resource-scoped bindings). */
   async agentMembers(
+    actor: TenantActor,
     agentId: string,
   ): Promise<{ userId: string; email: string; displayName: string; role: string }[]> {
+    await this.assertAgentInTenant(actor, agentId);
     return this.ctx.db
       .select({
         userId: users.id,
@@ -141,15 +154,39 @@ export class IdentityService {
       })
       .from(agentRoleBindings)
       .innerJoin(users, eq(users.id, agentRoleBindings.userId))
-      .where(eq(agentRoleBindings.agentId, agentId))
+      .where(and(eq(agentRoleBindings.agentId, agentId), eq(users.tenantId, actor.tenantId)))
       .orderBy(users.email);
   }
 
+  private async assertAgentInTenant(actor: TenantActor, agentId: string): Promise<void> {
+    const [a] = await this.ctx.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.tenantId, actor.tenantId)));
+    if (!a) throw notFound('agent');
+  }
+
+  /** Every user id must belong to the actor's tenant (otherwise: 404, nothing is revealed). */
+  private async assertUsersInTenant(actor: TenantActor, userIds: readonly string[]): Promise<void> {
+    const unique = [...new Set(userIds)];
+    if (unique.length === 0) return;
+    const rows = await this.ctx.db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(inArray(users.id, unique), eq(users.tenantId, actor.tenantId)));
+    if (rows.length !== unique.length) throw notFound('user');
+  }
+
   async setAgentMembers(
-    actor: string,
+    actor: TenantActor,
     agentId: string,
     members: { userId: string; role: Role }[],
   ): Promise<void> {
+    await this.assertAgentInTenant(actor, agentId);
+    await this.assertUsersInTenant(
+      actor,
+      members.map((m) => m.userId),
+    );
     const previous = await this.ctx.db
       .select({ userId: agentRoleBindings.userId })
       .from(agentRoleBindings)
@@ -168,7 +205,8 @@ export class IdentityService {
       ),
     );
     await this.audit.append({
-      actor,
+      actor: actor.userId,
+      tenantId: actor.tenantId,
       action: 'agent.members.set',
       target: agentId,
       payload: { members },
@@ -182,10 +220,28 @@ export class IdentityService {
     return {
       kind: 'user',
       userId: user.id,
+      tenantId: user.tenantId,
+      platformAdmin: user.platformAdmin,
       displayName: user.displayName,
       bindings: await this.bindingsFor(user),
       scopes,
     };
+  }
+
+  /**
+   * A platform operator acting inside another tenant (`X-OAX-Tenant: <slug or id>`). Everybody
+   * else asking for a different tenant gets 404, indistinguishable from an unknown tenant.
+   */
+  async actingIn(principal: Principal, tenant: string): Promise<Principal> {
+    const [row] = await this.ctx.db
+      .select()
+      .from(tenants)
+      .where(/^[0-9a-f-]{36}$/i.test(tenant) ? eq(tenants.id, tenant) : eq(tenants.slug, tenant));
+    if (!principal.platformAdmin || !row) {
+      if (row && row.id === principal.tenantId) return principal;
+      throw notFound('tenant');
+    }
+    return { ...principal, tenantId: row.id };
   }
 
   /** Resolves a bearer token to a principal; cached for min(auth cache TTL, token lifetime). */
@@ -210,6 +266,8 @@ export class IdentityService {
     const principal: Principal = {
       kind: row.token.kind === 'session' ? 'user' : 'token',
       userId: row.user.id,
+      tenantId: row.user.tenantId,
+      platformAdmin: row.user.platformAdmin,
       displayName: row.user.displayName,
       bindings: await this.bindingsFor(row.user),
       scopes: (row.token.scopes as Permission[] | null) ?? undefined,
@@ -277,6 +335,7 @@ export class IdentityService {
     });
     await this.audit.append({
       actor: principal.userId,
+      tenantId: principal.tenantId,
       action: 'token.created',
       target: token.id,
       payload: { name, scopes: requested, expiresAt: token.expiresAt },
@@ -284,12 +343,15 @@ export class IdentityService {
     return token;
   }
 
-  async listTokens(userId: string | null): Promise<TokenInfo[]> {
+  /** API tokens of one user, or of every user of the actor's tenant (`userId` null). */
+  async listTokens(actor: TenantActor, userId: string | null): Promise<TokenInfo[]> {
     const rows = await this.ctx.db
-      .select()
+      .select({ token: apiTokens })
       .from(apiTokens)
+      .innerJoin(users, eq(users.id, apiTokens.userId))
       .where(
         and(
+          eq(users.tenantId, actor.tenantId),
           userId ? eq(apiTokens.userId, userId) : undefined,
           eq(apiTokens.kind, 'api'),
           isNull(apiTokens.revokedAt),
@@ -297,18 +359,33 @@ export class IdentityService {
       )
       .orderBy(desc(apiTokens.createdAt))
       .limit(500);
-    return rows.map(toTokenInfo);
+    return rows.map((r) => toTokenInfo(r.token));
   }
 
   async revokeToken(principal: Principal, id: string, allowAny: boolean): Promise<void> {
-    const [row] = await this.ctx.db.select().from(apiTokens).where(eq(apiTokens.id, id));
-    if (!row || (!allowAny && row.userId !== principal.userId)) throw notFound('token');
+    const [found] = await this.ctx.db
+      .select({ token: apiTokens, tenantId: users.tenantId })
+      .from(apiTokens)
+      .innerJoin(users, eq(users.id, apiTokens.userId))
+      .where(eq(apiTokens.id, id));
+    const row = found?.token;
+    if (
+      !found ||
+      found.tenantId !== principal.tenantId ||
+      (!allowAny && row!.userId !== principal.userId)
+    )
+      throw notFound('token');
     await this.ctx.db
       .update(apiTokens)
       .set({ revokedAt: this.ctx.now() })
       .where(eq(apiTokens.id, id));
     await this.ctx.cache.del(`auth:${id}`);
-    await this.audit.append({ actor: principal.userId, action: 'token.revoked', target: id });
+    await this.audit.append({
+      actor: principal.userId,
+      tenantId: principal.tenantId,
+      action: 'token.revoked',
+      target: id,
+    });
   }
 
   async logout(bearer: string): Promise<void> {
@@ -338,6 +415,7 @@ export class IdentityService {
       .where(eq(users.id, user.id));
     await this.audit.append({
       actor: user.id,
+      tenantId: user.tenantId,
       action: 'auth.login',
       target: user.email,
       payload: { method },
@@ -405,6 +483,8 @@ export class IdentityService {
     const globalRoles = mapped.filter((m) => m.teamSlug === null).map((m) => m.role);
     const lower = email.toLowerCase();
     const [existing] = await this.ctx.db.select().from(users).where(eq(users.email, lower));
+    // External identities land in the default tenant (or stay in the tenant they were created in).
+    const tenantId = existing?.tenantId ?? DEFAULT_TENANT_ID;
     if (existing && existing.source !== source)
       throw conflict(`user ${lower} exists with source ${existing.source}`);
     const id = existing?.id ?? randomUUID();
@@ -417,11 +497,14 @@ export class IdentityService {
     } else {
       await this.ctx.db
         .insert(users)
-        .values({ id, email: lower, displayName, source, externalId, globalRoles });
+        .values({ id, email: lower, displayName, source, externalId, globalRoles, tenantId });
     }
     const slugs = [...new Set(mapped.filter((m) => m.teamSlug).map((m) => m.teamSlug!))];
     const teamRows = slugs.length
-      ? await this.ctx.db.select().from(teams).where(inArray(teams.slug, slugs))
+      ? await this.ctx.db
+          .select()
+          .from(teams)
+          .where(and(inArray(teams.slug, slugs), eq(teams.tenantId, tenantId)))
       : [];
     await this.ctx.db.delete(teamMembers).where(eq(teamMembers.userId, id));
     const values = mapped
@@ -497,6 +580,7 @@ export class IdentityService {
       .where(eq(teamMembers.userId, u.id));
     return {
       id: u.id,
+      tenantId: u.tenantId,
       email: u.email,
       displayName: u.displayName,
       source: u.source,
@@ -508,19 +592,28 @@ export class IdentityService {
     };
   }
 
-  async getUser(id: string): Promise<PublicUser> {
-    const [u] = await this.ctx.db.select().from(users).where(eq(users.id, id));
+  /** `tenantId` restricts the lookup to one tenant (omit only for the caller's own record). */
+  async getUser(id: string, tenantId?: string): Promise<PublicUser> {
+    const [u] = await this.ctx.db
+      .select()
+      .from(users)
+      .where(and(eq(users.id, id), tenantId ? eq(users.tenantId, tenantId) : undefined));
     if (!u) throw notFound('user');
     return this.publicUser(u);
   }
 
-  async listUsers(): Promise<PublicUser[]> {
-    const rows = await this.ctx.db.select().from(users).orderBy(users.email).limit(1000);
+  async listUsers(actor: TenantActor): Promise<PublicUser[]> {
+    const rows = await this.ctx.db
+      .select()
+      .from(users)
+      .where(eq(users.tenantId, actor.tenantId))
+      .orderBy(users.email)
+      .limit(1000);
     return Promise.all(rows.map((u) => this.publicUser(u)));
   }
 
   async createLocalUser(
-    actor: string,
+    actor: TenantActor,
     input: { email: string; displayName: string; password: string; globalRoles: Role[] },
   ): Promise<PublicUser> {
     const email = input.email.toLowerCase();
@@ -537,18 +630,20 @@ export class IdentityService {
       passwordHash: await hashPassword(input.password),
       source: 'local',
       globalRoles: input.globalRoles,
+      tenantId: actor.tenantId,
     });
     await this.audit.append({
-      actor,
+      actor: actor.userId,
+      tenantId: actor.tenantId,
       action: 'user.created',
       target: id,
       payload: { email, globalRoles: input.globalRoles },
     });
-    return this.getUser(id);
+    return this.getUser(id, actor.tenantId);
   }
 
   async updateUser(
-    actor: string,
+    actor: TenantActor,
     id: string,
     patch: {
       displayName?: string | undefined;
@@ -560,11 +655,21 @@ export class IdentityService {
     if (patch.displayName !== undefined) set.displayName = patch.displayName;
     if (patch.globalRoles !== undefined) set.globalRoles = patch.globalRoles;
     if (patch.disabled !== undefined) set.disabled = patch.disabled;
-    const updated = await this.ctx.db.update(users).set(set).where(eq(users.id, id)).returning();
+    const updated = await this.ctx.db
+      .update(users)
+      .set(set)
+      .where(and(eq(users.id, id), eq(users.tenantId, actor.tenantId)))
+      .returning();
     if (updated.length === 0) throw notFound('user');
     await this.invalidateUserTokens(id);
-    await this.audit.append({ actor, action: 'user.updated', target: id, payload: patch });
-    return this.getUser(id);
+    await this.audit.append({
+      actor: actor.userId,
+      tenantId: actor.tenantId,
+      action: 'user.updated',
+      target: id,
+      payload: patch,
+    });
+    return this.getUser(id, actor.tenantId);
   }
 
   private async invalidateUserTokens(userId: string): Promise<void> {
@@ -575,63 +680,84 @@ export class IdentityService {
     await Promise.all(tokens.map((t) => this.ctx.cache.del(`auth:${t.id}`)));
   }
 
-  async listTeams(): Promise<TeamRow[]> {
-    return cached(this.ctx.cache, 'teams:all', 60_000, () =>
-      this.ctx.db.select().from(teams).orderBy(teams.slug),
+  async listTeams(actor: TenantActor): Promise<TeamRow[]> {
+    return cached(this.ctx.cache, `teams:${actor.tenantId}`, 60_000, () =>
+      this.ctx.db
+        .select()
+        .from(teams)
+        .where(eq(teams.tenantId, actor.tenantId))
+        .orderBy(teams.slug),
     );
   }
 
-  async getTeam(id: string): Promise<TeamRow> {
-    const [t] = await this.ctx.db.select().from(teams).where(eq(teams.id, id));
+  async getTeam(actor: TenantActor, id: string): Promise<TeamRow> {
+    const [t] = await this.ctx.db
+      .select()
+      .from(teams)
+      .where(and(eq(teams.id, id), eq(teams.tenantId, actor.tenantId)));
     if (!t) throw notFound('team');
     return t;
   }
 
   async createTeam(
-    actor: string,
+    actor: TenantActor,
     input: { slug: string; name: string; monthlyBudgetUsd?: number | undefined },
   ): Promise<TeamRow> {
     const [exists] = await this.ctx.db
       .select({ id: teams.id })
       .from(teams)
-      .where(eq(teams.slug, input.slug));
+      .where(and(eq(teams.slug, input.slug), eq(teams.tenantId, actor.tenantId)));
     if (exists) throw conflict(`team ${input.slug} already exists`);
     const [row] = await this.ctx.db
       .insert(teams)
       .values({
         id: randomUUID(),
+        tenantId: actor.tenantId,
         slug: input.slug,
         name: input.name,
         monthlyBudgetMicros:
           input.monthlyBudgetUsd === undefined ? null : Math.round(input.monthlyBudgetUsd * 1e6),
       })
       .returning();
-    await this.ctx.cache.del('teams:all');
-    await this.audit.append({ actor, action: 'team.created', target: row!.id, payload: input });
+    await this.ctx.cache.del(`teams:${actor.tenantId}`);
+    await this.audit.append({
+      actor: actor.userId,
+      tenantId: actor.tenantId,
+      action: 'team.created',
+      target: row!.id,
+      payload: input,
+    });
     return row!;
   }
 
   async updateTeam(
-    actor: string,
+    actor: TenantActor,
     teamId: string,
     patch: { name?: string | undefined; monthlyBudgetUsd?: number | null | undefined },
   ): Promise<TeamRow> {
-    await this.getTeam(teamId);
+    await this.getTeam(actor, teamId);
     const set: Partial<TeamRow> = {};
     if (patch.name !== undefined) set.name = patch.name;
     if (patch.monthlyBudgetUsd !== undefined)
       set.monthlyBudgetMicros =
         patch.monthlyBudgetUsd === null ? null : Math.round(patch.monthlyBudgetUsd * 1e6);
     const [row] = await this.ctx.db.update(teams).set(set).where(eq(teams.id, teamId)).returning();
-    await this.ctx.cache.del('teams:all');
-    await this.audit.append({ actor, action: 'team.updated', target: teamId, payload: patch });
+    await this.ctx.cache.del(`teams:${actor.tenantId}`);
+    await this.audit.append({
+      actor: actor.userId,
+      tenantId: actor.tenantId,
+      action: 'team.updated',
+      target: teamId,
+      payload: patch,
+    });
     return row!;
   }
 
   async teamMembers(
+    actor: TenantActor,
     teamId: string,
   ): Promise<{ userId: string; email: string; displayName: string; role: string }[]> {
-    await this.getTeam(teamId);
+    await this.getTeam(actor, teamId);
     return this.ctx.db
       .select({
         userId: users.id,
@@ -646,8 +772,8 @@ export class IdentityService {
   }
 
   /** Deletes a team that owns no agents (memberships are removed with it). */
-  async deleteTeam(actor: string, teamId: string): Promise<void> {
-    await this.getTeam(teamId);
+  async deleteTeam(actor: TenantActor, teamId: string): Promise<void> {
+    await this.getTeam(actor, teamId);
     const [owned] = await this.ctx.db
       .select({ id: agents.id })
       .from(agents)
@@ -660,16 +786,25 @@ export class IdentityService {
       .where(eq(teamMembers.teamId, teamId));
     await this.ctx.db.delete(teams).where(eq(teams.id, teamId));
     await Promise.all(members.map((m) => this.invalidateUserTokens(m.userId)));
-    await this.ctx.cache.del('teams:all');
-    await this.audit.append({ actor, action: 'team.deleted', target: teamId });
+    await this.ctx.cache.del(`teams:${actor.tenantId}`);
+    await this.audit.append({
+      actor: actor.userId,
+      tenantId: actor.tenantId,
+      action: 'team.deleted',
+      target: teamId,
+    });
   }
 
   async setTeamMembers(
-    actor: string,
+    actor: TenantActor,
     teamId: string,
     members: { userId: string; role: Role }[],
   ): Promise<void> {
-    await this.getTeam(teamId);
+    await this.getTeam(actor, teamId);
+    await this.assertUsersInTenant(
+      actor,
+      members.map((m) => m.userId),
+    );
     await this.ctx.db.transaction(async (tx) => {
       await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
       if (members.length)
@@ -682,7 +817,8 @@ export class IdentityService {
       [...new Set(members.map((m) => m.userId))].map((u) => this.invalidateUserTokens(u)),
     );
     await this.audit.append({
-      actor,
+      actor: actor.userId,
+      tenantId: actor.tenantId,
       action: 'team.members.set',
       target: teamId,
       payload: { members },

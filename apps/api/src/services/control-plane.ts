@@ -43,9 +43,9 @@ export class ControlPlaneService {
   ) {}
 
   /** Policy bundles + the hardening agent's guideline bundle (stricter only). */
-  private async bundlesFor(definition: AgentDefinition) {
-    const bundles = await this.catalog.enabledBundles();
-    const g = await this.guidelines?.bundleFor(definition);
+  private async bundlesFor(definition: AgentDefinition, tenantId: string) {
+    const bundles = await this.catalog.enabledBundles(tenantId);
+    const g = await this.guidelines?.bundleFor(definition, tenantId);
     return g ? [...bundles, g] : bundles;
   }
 
@@ -120,24 +120,28 @@ export class ControlPlaneService {
         type: 'io.openagentix.manual',
         data: null,
       },
-      policies: await this.bundlesFor(definition),
+      policies: await this.bundlesFor(definition, run.tenantId),
       limits: { maxToolCallsPerMinute: this.ctx.config.control.maxToolCallsPerMinute },
     };
   }
 
   private async definitionForRun(
     runId: string,
-  ): Promise<{ definition: AgentDefinition; teamId: string | null }> {
+  ): Promise<{ definition: AgentDefinition; teamId: string | null; tenantId: string }> {
     const [run] = await this.ctx.db
-      .select({ v: runs.agentVersionId, t: runs.teamId })
+      .select({ v: runs.agentVersionId, t: runs.teamId, tenantId: runs.tenantId })
       .from(runs)
       .where(eq(runs.id, runId));
     if (!run) throw notFound('run');
-    return { definition: (await this.agents.definitionOf(run.v)).definition, teamId: run.t };
+    return {
+      definition: (await this.agents.definitionOf(run.v)).definition,
+      teamId: run.t,
+      tenantId: run.tenantId,
+    };
   }
 
   async decide(runId: string, agentId: string, call: ToolCallRequest): Promise<PolicyDecision> {
-    const { definition } = await this.definitionForRun(runId);
+    const { definition, tenantId } = await this.definitionForRun(runId);
     const agent = definition.agents.find((a) => a.id === agentId) ?? { id: agentId, tools: [] };
     const counts = await this.ctx.db
       .select({ name: runSteps.name, n: sql<number>`count(*)::int` })
@@ -149,7 +153,7 @@ export class ControlPlaneService {
     const decision = evaluateToolCall(call, {
       definition,
       agent,
-      bundles: await this.bundlesFor(definition),
+      bundles: await this.bundlesFor(definition, tenantId),
       callCounts: new Map(counts.map((c) => [c.name, Number(c.n)])),
     });
     this.ctx.metrics.policyDecisions.inc({ effect: decision.effect });
@@ -238,11 +242,12 @@ export class ControlPlaneService {
     call: ToolCallRequest,
     reasons: unknown,
   ): Promise<string> {
-    const { definition, teamId } = await this.definitionForRun(runId);
+    const { definition, teamId, tenantId } = await this.definitionForRun(runId);
     const id = randomUUID();
     const now = this.ctx.now();
     await this.ctx.db.insert(approvals).values({
       id,
+      tenantId,
       runId,
       teamId,
       agentId,

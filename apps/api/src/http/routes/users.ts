@@ -37,8 +37,8 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: z.object({ items: z.array(UserSchema) }) },
       },
     },
-    async () => ({
-      items: (await identity.listUsers()).map(userDto),
+    async (req) => ({
+      items: (await identity.listUsers(principalOf(req))).map(userDto),
     }),
   );
 
@@ -55,9 +55,7 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) =>
-      reply
-        .status(201)
-        .send(userDto(await identity.createLocalUser(principalOf(req).userId, req.body))),
+      reply.status(201).send(userDto(await identity.createLocalUser(principalOf(req), req.body))),
   );
 
   app.get(
@@ -72,7 +70,7 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: UserSchema },
       },
     },
-    async (req) => userDto(await identity.getUser(req.params.id)),
+    async (req) => userDto(await identity.getUser(req.params.id, principalOf(req).tenantId)),
   );
 
   app.get(
@@ -87,7 +85,7 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: z.object({ items: z.array(TeamMemberSchema) }) },
       },
     },
-    async (req) => ({ items: await identity.teamMembers(req.params.id) }),
+    async (req) => ({ items: await identity.teamMembers(principalOf(req), req.params.id) }),
   );
 
   app.patch(
@@ -106,8 +104,7 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: TeamSchema },
       },
     },
-    async (req) =>
-      teamDto(await identity.updateTeam(principalOf(req).userId, req.params.id, req.body)),
+    async (req) => teamDto(await identity.updateTeam(principalOf(req), req.params.id, req.body)),
   );
 
   app.delete(
@@ -123,7 +120,7 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) => {
-      await identity.deleteTeam(principalOf(req).userId, req.params.id);
+      await identity.deleteTeam(principalOf(req), req.params.id);
       return reply.status(204).send(null);
     },
   );
@@ -141,8 +138,7 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: UserSchema },
       },
     },
-    async (req) =>
-      userDto(await identity.updateUser(principalOf(req).userId, req.params.id, req.body)),
+    async (req) => userDto(await identity.updateUser(principalOf(req), req.params.id, req.body)),
   );
 
   app.get(
@@ -156,8 +152,8 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: z.object({ items: z.array(TeamSchema) }) },
       },
     },
-    async () => ({
-      items: (await identity.listTeams()).map((t) =>
+    async (req) => ({
+      items: (await identity.listTeams(principalOf(req))).map((t) =>
         teamDto({ ...t, createdAt: new Date(t.createdAt) }),
       ),
     }),
@@ -176,7 +172,7 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) =>
-      reply.status(201).send(teamDto(await identity.createTeam(principalOf(req).userId, req.body))),
+      reply.status(201).send(teamDto(await identity.createTeam(principalOf(req), req.body))),
   );
 
   app.put(
@@ -192,7 +188,7 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) => {
-      await identity.setTeamMembers(principalOf(req).userId, req.params.id, req.body.members);
+      await identity.setTeamMembers(principalOf(req), req.params.id, req.body.members);
       return reply.status(204).send();
     },
   );
@@ -212,7 +208,7 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
     async (req) => {
       const p = principalOf(req);
       const all = req.query.all && hasPermission(p, 'settings:write');
-      return { items: (await identity.listTokens(all ? null : p.userId)).map(tokenDto) };
+      return { items: (await identity.listTokens(p, all ? null : p.userId)).map(tokenDto) };
     },
   );
 

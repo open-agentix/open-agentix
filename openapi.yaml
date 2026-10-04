@@ -443,6 +443,10 @@ paths:
                         type: string
                         format: uuid
                         pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      tenantId:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                       email:
                         type: string
                       displayName:
@@ -480,6 +484,7 @@ paths:
                           - type: "null"
                     required:
                       - id
+                      - tenantId
                       - email
                       - displayName
                       - source
@@ -615,6 +620,10 @@ paths:
                         type: string
                         format: uuid
                         pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      tenantId:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                       email:
                         type: string
                       displayName:
@@ -652,6 +661,7 @@ paths:
                           - type: "null"
                     required:
                       - id
+                      - tenantId
                       - email
                       - displayName
                       - source
@@ -661,6 +671,24 @@ paths:
                       - createdAt
                       - lastLoginAt
                     additionalProperties: false
+                  tenant:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - name
+                    additionalProperties: false
+                  platformAdmin:
+                    type: boolean
                   kind:
                     type: string
                     enum:
@@ -689,6 +717,8 @@ paths:
                       additionalProperties: false
                 required:
                   - user
+                  - tenant
+                  - platformAdmin
                   - kind
                   - permissions
                   - bindings
@@ -3791,6 +3821,13 @@ paths:
           in: query
           name: to
           required: false
+        - schema:
+            default: false
+            type: boolean
+          in: query
+          name: allTenants
+          required: false
+          description: "platform operators only: span every tenant instead of the acting tenant"
       security:
         - bearer: []
       responses:
@@ -3854,6 +3891,13 @@ paths:
           in: query
           name: limit
           required: false
+        - schema:
+            default: false
+            type: boolean
+          in: query
+          name: allTenants
+          required: false
+          description: "platform operators only: span every tenant instead of the acting tenant"
       security:
         - bearer: []
       responses:
@@ -3942,6 +3986,23 @@ paths:
                           type: string
                           format: uuid
                           pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        tenantId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        scope:
+                          type: string
+                          enum:
+                            - platform
+                            - tenant
+                            - team
+                            - agent
+                        scopeId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
                         name:
                           type: string
                         kind:
@@ -3961,6 +4022,9 @@ paths:
                           description: ISO 8601 timestamp
                       required:
                         - id
+                        - tenantId
+                        - scope
+                        - scopeId
                         - name
                         - kind
                         - config
@@ -4001,6 +4065,22 @@ paths:
                   type: string
                   enum:
                     - mcp
+                scope:
+                  default: tenant
+                  description: "who may use it: platform (operators only), tenant, one team or one agent"
+                  type: string
+                  enum:
+                    - platform
+                    - tenant
+                    - team
+                    - agent
+                scopeId:
+                  description: team or agent id for team/agent scope
+                  anyOf:
+                    - type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    - type: "null"
                 config:
                   type: object
                   propertyNames:
@@ -4024,6 +4104,23 @@ paths:
                     type: string
                     format: uuid
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - platform
+                      - tenant
+                      - team
+                      - agent
+                  scopeId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
                   name:
                     type: string
                   kind:
@@ -4043,6 +4140,9 @@ paths:
                     description: ISO 8601 timestamp
                 required:
                   - id
+                  - tenantId
+                  - scope
+                  - scopeId
                   - name
                   - kind
                   - config
@@ -4104,6 +4204,23 @@ paths:
                     type: string
                     format: uuid
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - platform
+                      - tenant
+                      - team
+                      - agent
+                  scopeId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
                   name:
                     type: string
                   kind:
@@ -4123,6 +4240,9 @@ paths:
                     description: ISO 8601 timestamp
                 required:
                   - id
+                  - tenantId
+                  - scope
+                  - scopeId
                   - name
                   - kind
                   - config
@@ -4187,6 +4307,23 @@ paths:
                     type: string
                     format: uuid
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - platform
+                      - tenant
+                      - team
+                      - agent
+                  scopeId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
                   name:
                     type: string
                   kind:
@@ -4206,6 +4343,9 @@ paths:
                     description: ISO 8601 timestamp
                 required:
                   - id
+                  - tenantId
+                  - scope
+                  - scopeId
                   - name
                   - kind
                   - config
@@ -4289,6 +4429,11 @@ paths:
                           type: string
                           format: uuid
                           pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        scope:
+                          type: string
+                          enum:
+                            - platform
+                            - tenant
                         name:
                           type: string
                         description:
@@ -4311,6 +4456,7 @@ paths:
                           description: ISO 8601 timestamp
                       required:
                         - id
+                        - scope
                         - name
                         - description
                         - bundle
@@ -4344,6 +4490,13 @@ paths:
             schema:
               type: object
               properties:
+                scope:
+                  default: tenant
+                  description: platform bundles apply to every tenant and need platform operator access
+                  type: string
+                  enum:
+                    - platform
+                    - tenant
                 name:
                   type: string
                   pattern: ^[a-z][a-z0-9-]{0,62}$
@@ -4375,6 +4528,11 @@ paths:
                     type: string
                     format: uuid
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - platform
+                      - tenant
                   name:
                     type: string
                   description:
@@ -4397,6 +4555,7 @@ paths:
                     description: ISO 8601 timestamp
                 required:
                   - id
+                  - scope
                   - name
                   - description
                   - bundle
@@ -4475,6 +4634,11 @@ paths:
                     type: string
                     format: uuid
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - platform
+                      - tenant
                   name:
                     type: string
                   description:
@@ -4497,6 +4661,7 @@ paths:
                     description: ISO 8601 timestamp
                 required:
                   - id
+                  - scope
                   - name
                   - description
                   - bundle
@@ -4565,6 +4730,11 @@ paths:
                     type: string
                     format: uuid
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - platform
+                      - tenant
                   name:
                     type: string
                   description:
@@ -4587,6 +4757,7 @@ paths:
                     description: ISO 8601 timestamp
                 required:
                   - id
+                  - scope
                   - name
                   - description
                   - bundle
@@ -4974,6 +5145,13 @@ paths:
           name: cursor
           required: false
         - schema:
+            default: false
+            type: boolean
+          in: query
+          name: allTenants
+          required: false
+          description: "platform operators only: span every tenant instead of the acting tenant"
+        - schema:
             type: string
             format: uuid
             pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
@@ -5163,6 +5341,13 @@ paths:
         - audit
       parameters:
         - schema:
+            default: false
+            type: boolean
+          in: query
+          name: allTenants
+          required: false
+          description: "platform operators only: span every tenant instead of the acting tenant"
+        - schema:
             type: string
             format: uuid
             pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
@@ -5350,6 +5535,10 @@ paths:
                           type: string
                           format: uuid
                           pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        tenantId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                         email:
                           type: string
                         displayName:
@@ -5387,6 +5576,7 @@ paths:
                             - type: "null"
                       required:
                         - id
+                        - tenantId
                         - email
                         - displayName
                         - source
@@ -5464,6 +5654,10 @@ paths:
                     type: string
                     format: uuid
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                   email:
                     type: string
                   displayName:
@@ -5501,6 +5695,7 @@ paths:
                       - type: "null"
                 required:
                   - id
+                  - tenantId
                   - email
                   - displayName
                   - source
@@ -5565,6 +5760,10 @@ paths:
                     type: string
                     format: uuid
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                   email:
                     type: string
                   displayName:
@@ -5602,6 +5801,7 @@ paths:
                       - type: "null"
                 required:
                   - id
+                  - tenantId
                   - email
                   - displayName
                   - source
@@ -5679,6 +5879,10 @@ paths:
                     type: string
                     format: uuid
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                   email:
                     type: string
                   displayName:
@@ -5716,6 +5920,7 @@ paths:
                       - type: "null"
                 required:
                   - id
+                  - tenantId
                   - email
                   - displayName
                   - source
@@ -6367,6 +6572,328 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/tenants:
+    get:
+      summary: List tenants (platform operators see all, everybody else only their own)
+      tags:
+        - tenants
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        slug:
+                          type: string
+                        name:
+                          type: string
+                        monthlyBudgetUsd:
+                          type:
+                            - number
+                            - "null"
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                      required:
+                        - id
+                        - slug
+                        - name
+                        - monthlyBudgetUsd
+                        - createdAt
+                      additionalProperties: false
+                required:
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create a tenant (platform operators only)
+      tags:
+        - tenants
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slug:
+                  type: string
+                  pattern: ^[a-z][a-z0-9-]{0,62}$
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                monthlyBudgetUsd:
+                  type: number
+                  exclusiveMinimum: 0
+                admin:
+                  description: first local administrator of the new tenant
+                  type: object
+                  properties:
+                    email:
+                      type: string
+                      format: email
+                      pattern: ^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$
+                    displayName:
+                      type: string
+                      minLength: 1
+                      maxLength: 200
+                    password:
+                      type: string
+                      minLength: 12
+                      maxLength: 200
+                  required:
+                    - email
+                    - displayName
+                    - password
+              required:
+                - slug
+                - name
+      security:
+        - bearer: []
+      responses:
+        "201":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  slug:
+                    type: string
+                  name:
+                    type: string
+                  monthlyBudgetUsd:
+                    type:
+                      - number
+                      - "null"
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                required:
+                  - id
+                  - slug
+                  - name
+                  - monthlyBudgetUsd
+                  - createdAt
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/tenants/{id}:
+    get:
+      summary: Get a tenant
+      tags:
+        - tenants
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  slug:
+                    type: string
+                  name:
+                    type: string
+                  monthlyBudgetUsd:
+                    type:
+                      - number
+                      - "null"
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                required:
+                  - id
+                  - slug
+                  - name
+                  - monthlyBudgetUsd
+                  - createdAt
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      summary: Rename a tenant or change its monthly budget (platform operators only)
+      tags:
+        - tenants
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                monthlyBudgetUsd:
+                  anyOf:
+                    - type: number
+                      exclusiveMinimum: 0
+                    - type: "null"
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  slug:
+                    type: string
+                  name:
+                    type: string
+                  monthlyBudgetUsd:
+                    type:
+                      - number
+                      - "null"
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                required:
+                  - id
+                  - slug
+                  - name
+                  - monthlyBudgetUsd
+                  - createdAt
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
         "404":
           description: Not found
           content:

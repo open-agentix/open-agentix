@@ -29,7 +29,7 @@ export class CronScheduler {
       timezone: w.timezone,
     }));
     // Cron event sources (kind "cron") bound to an agent.
-    for (const s of await this.services.ingest.listSources()) {
+    for (const s of await this.services.ingest.listAllSources()) {
       const cfg = s.config as { schedule?: unknown; timezone?: unknown };
       if (s.kind !== 'cron' || !s.enabled || !s.agentId || typeof cfg.schedule !== 'string')
         continue;

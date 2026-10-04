@@ -34,8 +34,8 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
         response: { 200: z.object({ items: z.array(SourceSchema) }) },
       },
     },
-    async () => ({
-      items: (await ingest.listSources()).map((s) => sourceDto(s, url)),
+    async (req) => ({
+      items: (await ingest.listSources(principalOf(req))).map((s) => sourceDto(s, url)),
     }),
   );
 
@@ -52,9 +52,7 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
       },
     },
     async (req, reply) =>
-      reply
-        .status(201)
-        .send(sourceDto(await ingest.createSource(principalOf(req).userId, req.body), url)),
+      reply.status(201).send(sourceDto(await ingest.createSource(principalOf(req), req.body), url)),
   );
 
   app.get(
@@ -69,7 +67,7 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
         response: { 200: SourceSchema },
       },
     },
-    async (req) => sourceDto(await ingest.getSource(req.params.id), url),
+    async (req) => sourceDto(await ingest.getSource(req.params.id, principalOf(req).tenantId), url),
   );
 
   app.patch(
@@ -86,7 +84,7 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
       },
     },
     async (req) =>
-      sourceDto(await ingest.updateSource(principalOf(req).userId, req.params.id, req.body), url),
+      sourceDto(await ingest.updateSource(principalOf(req), req.params.id, req.body), url),
   );
 
   app.delete(
@@ -102,7 +100,7 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
       },
     },
     async (req, reply) => {
-      await ingest.deleteSource(principalOf(req).userId, req.params.id);
+      await ingest.deleteSource(principalOf(req), req.params.id);
       return reply.status(204).send(null);
     },
   );
@@ -121,6 +119,7 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
     },
     async (req) => {
       const r = await ingest.listEvents(
+        principalOf(req),
         { sourceId: req.query.sourceId },
         req.query.limit,
         req.query.cursor,
@@ -141,7 +140,7 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
         response: { 200: EventSchema },
       },
     },
-    async (req) => eventDto(await ingest.getEvent(req.params.id)),
+    async (req) => eventDto(await ingest.getEvent(principalOf(req), req.params.id)),
   );
 
   // Ingest endpoints need the raw body for HMAC verification, so they get their own parser.

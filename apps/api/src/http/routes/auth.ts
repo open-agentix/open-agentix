@@ -109,8 +109,11 @@ export function registerAuthRoutes(app: ZApp, { ctx, services }: Deps): void {
     },
     async (req) => {
       const p = principalOf(req);
+      const tenant = await services.tenants.get(p, p.tenantId);
       return {
         user: userDto(await services.identity.getUser(p.userId)),
+        tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name },
+        platformAdmin: p.platformAdmin,
         kind: p.kind,
         permissions: effectivePermissions(p),
         bindings: p.bindings,

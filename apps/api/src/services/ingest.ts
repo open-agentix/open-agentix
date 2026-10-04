@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { OaxEvent } from '@openagentix/core';
+import type { OaxEvent, TenantActor } from '@openagentix/core';
 import {
   ChangeCheckSchema,
   decideChange,
@@ -18,7 +18,7 @@ import {
 import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
-import { changeChecks, eventSources, events, webhookDeliveries } from '../db/schema.js';
+import { agents, changeChecks, eventSources, events, webhookDeliveries } from '../db/schema.js';
 import { createProxyAwareFetch } from '@openagentix/providers';
 import { HttpError, conflict, notFound } from '../errors.js';
 import { decodeTimeCursor, encodeTimeCursor, page } from '../pagination.js';
@@ -86,22 +86,43 @@ export class IngestService {
       .prepare('oax_get_source');
   }
 
-  async listSources(): Promise<SourceRow[]> {
+  async listSources(actor: TenantActor): Promise<SourceRow[]> {
+    return this.ctx.db
+      .select()
+      .from(eventSources)
+      .where(eq(eventSources.tenantId, actor.tenantId))
+      .orderBy(eventSources.name);
+  }
+
+  /** Every source of every tenant: for the worker's schedulers only, never for request handlers. */
+  async listAllSources(): Promise<SourceRow[]> {
     return this.ctx.db.select().from(eventSources).orderBy(eventSources.name);
   }
 
-  async getSource(id: string): Promise<SourceRow> {
+  /** Pass the caller's tenant for request-facing lookups (a foreign source is "not found"). */
+  async getSource(id: string, tenantId?: string): Promise<SourceRow> {
     const row = await cached(
       this.ctx.cache,
       `source:${id}`,
       30_000,
       async () => (await this.sourceQuery.execute({ id }))[0] ?? null,
     );
-    if (!row) throw notFound('event source');
+    if (!row || (tenantId && row.tenantId !== tenantId)) throw notFound('event source');
     return { ...row, createdAt: new Date(row.createdAt) };
   }
 
-  async createSource(actor: string, input: SourceInput): Promise<SourceRow> {
+  /** The bound agent must belong to the same tenant as the source. */
+  private async assertAgent(tenantId: string, agentId: string | null | undefined): Promise<void> {
+    if (!agentId) return;
+    const [a] = await this.ctx.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.tenantId, tenantId)));
+    if (!a) throw notFound('agent');
+  }
+
+  async createSource(actor: TenantActor, input: SourceInput): Promise<SourceRow> {
+    await this.assertAgent(actor.tenantId, input.agentId);
     if (input.config?.changeCheck !== undefined) {
       if (input.kind !== 'cron')
         throw new HttpError(
@@ -123,12 +144,13 @@ export class IngestService {
     const [exists] = await this.ctx.db
       .select({ id: eventSources.id })
       .from(eventSources)
-      .where(eq(eventSources.name, input.name));
+      .where(and(eq(eventSources.name, input.name), eq(eventSources.tenantId, actor.tenantId)));
     if (exists) throw conflict(`event source "${input.name}" already exists`);
     const [row] = await this.ctx.db
       .insert(eventSources)
       .values({
         id: randomUUID(),
+        tenantId: actor.tenantId,
         name: input.name,
         kind: input.kind,
         scheme: input.scheme ?? 'oax-v1',
@@ -139,7 +161,8 @@ export class IngestService {
       })
       .returning();
     await this.audit.append({
-      actor,
+      actor: actor.userId,
+      tenantId: actor.tenantId,
       action: 'source.created',
       target: row!.id,
       payload: { ...input },
@@ -148,11 +171,12 @@ export class IngestService {
   }
 
   async updateSource(
-    actor: string,
+    actor: TenantActor,
     id: string,
     patch: Partial<Omit<SourceInput, 'name' | 'kind'>>,
   ): Promise<SourceRow> {
-    await this.getSource(id);
+    await this.getSource(id, actor.tenantId);
+    await this.assertAgent(actor.tenantId, patch.agentId);
     const set: Partial<SourceRow> = {};
     if (patch.scheme !== undefined) set.scheme = patch.scheme;
     if (patch.secretRefs !== undefined) set.secretRefs = patch.secretRefs;
@@ -165,7 +189,13 @@ export class IngestService {
       .where(eq(eventSources.id, id))
       .returning();
     await this.ctx.cache.del(`source:${id}`);
-    await this.audit.append({ actor, action: 'source.updated', target: id, payload: patch });
+    await this.audit.append({
+      actor: actor.userId,
+      tenantId: actor.tenantId,
+      action: 'source.updated',
+      target: id,
+      payload: patch,
+    });
     return row!;
   }
 
@@ -177,7 +207,7 @@ export class IngestService {
    * changeCheck; otherwise probes, stores the digest and audits the result. No tokens are used.
    */
   async changeGate(
-    source: Pick<SourceRow, 'id' | 'name' | 'config'>,
+    source: Pick<SourceRow, 'id' | 'name' | 'config' | 'tenantId'>,
   ): Promise<ChangeDecision | null> {
     const raw = (source.config as { changeCheck?: unknown }).changeCheck;
     if (raw === undefined) return null;
@@ -198,6 +228,7 @@ export class IngestService {
       });
     await this.audit.append({
       actor: `source:${source.name}`,
+      tenantId: source.tenantId,
       action: decision.changed ? 'change_check.changed' : 'change_check.unchanged',
       target: source.id,
       payload: {
@@ -211,13 +242,18 @@ export class IngestService {
     return decision;
   }
 
-  async deleteSource(actor: string, id: string): Promise<void> {
-    await this.getSource(id);
+  async deleteSource(actor: TenantActor, id: string): Promise<void> {
+    await this.getSource(id, actor.tenantId);
     // Events keep their history; the source reference is cleared.
     await this.ctx.db.update(events).set({ sourceId: null }).where(eq(events.sourceId, id));
     await this.ctx.db.delete(eventSources).where(eq(eventSources.id, id));
     await this.ctx.cache.del(`source:${id}`);
-    await this.audit.append({ actor, action: 'source.deleted', target: id });
+    await this.audit.append({
+      actor: actor.userId,
+      tenantId: actor.tenantId,
+      action: 'source.deleted',
+      target: id,
+    });
   }
 
   /** Verifies, normalises and stores an HTTP-delivered event, then queues the bound agent. */
@@ -274,13 +310,14 @@ export class IngestService {
 
   /** Stores a normalised event for a source and queues a run when an agent is bound. */
   async ingestEvent(
-    source: Pick<SourceRow, 'id' | 'name' | 'agentId'>,
+    source: Pick<SourceRow, 'id' | 'name' | 'agentId' | 'tenantId'>,
     event: OaxEvent,
     triggeredBy: string,
   ): Promise<IngestResult> {
     const eventId = randomUUID();
     await this.ctx.db.insert(events).values({
       id: eventId,
+      tenantId: source.tenantId,
       sourceId: source.id,
       cloudEventId: event.id,
       type: event.type,
@@ -302,13 +339,19 @@ export class IngestService {
     return { eventId, runId, status: 'accepted' };
   }
 
-  async listEvents(filter: { sourceId?: string | undefined }, limit: number, cursor?: string) {
+  async listEvents(
+    actor: TenantActor,
+    filter: { sourceId?: string | undefined },
+    limit: number,
+    cursor?: string,
+  ) {
     const c = decodeTimeCursor(cursor);
     const rows = await this.ctx.db
       .select()
       .from(events)
       .where(
         and(
+          eq(events.tenantId, actor.tenantId),
           filter.sourceId ? eq(events.sourceId, filter.sourceId) : undefined,
           c
             ? or(lt(events.receivedAt, c.t), and(eq(events.receivedAt, c.t), lt(events.id, c.id)))
@@ -320,8 +363,11 @@ export class IngestService {
     return page(rows, limit, (r) => encodeTimeCursor(r.receivedAt, r.id));
   }
 
-  async getEvent(id: string): Promise<EventRow> {
-    const [row] = await this.ctx.db.select().from(events).where(eq(events.id, id));
+  async getEvent(actor: TenantActor, id: string): Promise<EventRow> {
+    const [row] = await this.ctx.db
+      .select()
+      .from(events)
+      .where(and(eq(events.id, id), eq(events.tenantId, actor.tenantId)));
     if (!row) throw notFound('event');
     return row;
   }
