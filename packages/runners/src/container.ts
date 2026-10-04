@@ -1,15 +1,17 @@
 import { OaxError, parseAllowlist, type RunnerKind } from '@openagentix/core';
 import { z } from 'zod';
+import type { EngineHijack } from './container-hijack.js';
 import type { EgressProxy } from './egress-proxy.js';
 import {
   EngineClient,
   isRawDockerSocket,
+  nodeHijack,
   nodeTransport,
   parseEngineUrl,
   type EngineEndpoint,
   type EngineTransport,
+  type StdinHandle,
 } from './container-engine.js';
-import { tarFiles } from './tar.js';
 import type {
   IsolatingRunner,
   PreparedRun,
@@ -65,6 +67,8 @@ export type ContainerRunnerConfigInput = z.input<typeof ContainerRunnerConfigSch
 
 export const NODE_LABEL = 'io.openagentix.run-node';
 const TOKEN_DIR = '/run/oax';
+/** The token arrives on stdin: not env, not a command line, not copyable, not in `inspect`. */
+const TOKEN_STDIN = '/dev/stdin';
 const ID = /^[A-Za-z0-9][A-Za-z0-9-]{7,63}$/;
 const SLUG = /^[a-z][a-z0-9-]{0,62}$/;
 
@@ -152,6 +156,8 @@ export interface ContainerRunnerDeps {
   egressProxy?: EgressProxy;
   /** Injectable transport (tests, custom TLS); defaults to node's http client. */
   transport?: EngineTransport;
+  /** Injectable attach (hijack) function; defaults to node's http client. */
+  hijack?: EngineHijack;
 }
 
 export class ContainerRunner implements IsolatingRunner {
@@ -173,7 +179,10 @@ export class ContainerRunner implements IsolatingRunner {
         'the container runner refuses the raw Docker socket; use a socket proxy, rootless Podman, or set OAX_CONTAINER_ALLOW_RAW_SOCKET=true (unsafe)',
       );
     }
-    this.engine = new EngineClient(deps.transport ?? nodeTransport(this.endpoint));
+    this.engine = new EngineClient(
+      deps.transport ?? nodeTransport(this.endpoint),
+      deps.hijack ?? nodeHijack(this.endpoint),
+    );
     this.proxy = deps.egressProxy;
     if (this.config.egressProxyUrl && !this.proxy)
       throw new OaxError(
@@ -240,7 +249,7 @@ export class ContainerRunner implements IsolatingRunner {
   }
 
   /** The options of the container; exposed for tests and `assertSafeCreateBody`. */
-  buildCreateBody(spec: RunNodeSpec, withProxy: boolean): CreateBody {
+  buildCreateBody(spec: RunNodeSpec): CreateBody {
     const c = this.config;
     const memory = Math.min(spec.limits.memoryMb, c.maxMemoryMb) * 1024 * 1024;
     const tmpfs = (mb: number, mode: string) =>
@@ -256,8 +265,7 @@ export class ContainerRunner implements IsolatingRunner {
         `OAX_RUN_ID=${spec.runId}`,
         `OAX_NODE_ID=${spec.nodeId}`,
         `OAX_STEP_IDS=${spec.steps.join(',')}`,
-        `OAX_RUN_TOKEN_FILE=${TOKEN_DIR}/token`,
-        ...(withProxy ? [`OAX_PROXY_URL_FILE=${TOKEN_DIR}/proxy-url`] : []),
+        `OAX_RUN_TOKEN_FILE=${TOKEN_STDIN}`,
         'NODE_ENV=production',
         'HOME=/tmp',
       ],
@@ -266,7 +274,10 @@ export class ContainerRunner implements IsolatingRunner {
         'io.openagentix.run-id': spec.runId,
         'io.openagentix.node-id': spec.nodeId,
       },
-      AttachStdin: false,
+      // stdin carries the step-scoped run token (and the proxy account) once, then reaches EOF.
+      OpenStdin: true,
+      StdinOnce: true,
+      AttachStdin: true,
       AttachStdout: false,
       AttachStderr: false,
       Tty: false,
@@ -301,7 +312,7 @@ export class ContainerRunner implements IsolatingRunner {
         `network "${this.config.network}" is not an internal network; refusing to start a run node`,
       );
     const withProxy = this.proxy !== undefined && this.config.egressProxyUrl !== undefined;
-    const body = this.buildCreateBody(spec, withProxy);
+    const body = this.buildCreateBody(spec);
     assertSafeCreateBody(body);
     const proxyAccount = withProxy ? this.proxy!.register(spec.nodeId, spec.egress) : undefined;
     let id: string | undefined;
@@ -309,33 +320,28 @@ export class ContainerRunner implements IsolatingRunner {
       this.proxy?.unregister(spec.nodeId);
       if (id) await this.engine.removeContainer(id).catch(() => undefined);
     };
+    let stdin: StdinHandle | undefined;
     try {
       id = await this.engine.createContainer(`oax-node-${spec.nodeId}`, body);
+      // Attach before the start so that the node can never miss its token.
+      stdin = await this.engine.attachStdin(id, ctx.signal);
       await this.engine.startContainer(id);
-      const own = { mode: 0o400, uid: this.config.uid, gid: this.config.uid };
-      await this.engine.putArchive(
-        id,
-        TOKEN_DIR,
-        tarFiles([
-          { name: 'token', content: Buffer.from(spec.runToken), ...own },
-          ...(proxyAccount
-            ? [
-                {
-                  name: 'proxy-url',
-                  content: Buffer.from(
-                    proxyUrlWithCredentials(
-                      this.config.egressProxyUrl!,
-                      spec.nodeId,
-                      proxyAccount.password,
-                    ),
-                  ),
-                  ...own,
-                },
-              ]
-            : []),
-        ]),
-      );
+      // Line 1: the run token. Line 2 (only with egress): the node's account at the egress proxy.
+      const lines = [
+        spec.runToken,
+        ...(proxyAccount
+          ? [
+              proxyUrlWithCredentials(
+                this.config.egressProxyUrl!,
+                spec.nodeId,
+                proxyAccount.password,
+              ),
+            ]
+          : []),
+      ];
+      await stdin.send(Buffer.from(`${lines.join('\n')}\n`));
     } catch (e) {
+      stdin?.abort();
       await cleanup();
       throw e;
     }
@@ -357,13 +363,12 @@ export class ContainerRunner implements IsolatingRunner {
     };
     const wait = async (signal?: AbortSignal): Promise<RunNodeExit> => {
       const ac = new AbortController();
-      let timer: NodeJS.Timeout | undefined;
       let reason: string | undefined;
       const end = (r: string) => {
         reason ??= r;
         ac.abort();
       };
-      timer = setTimeout(() => end('timeout'), spec.limits.timeoutSeconds * 1000);
+      const timer = setTimeout(() => end('timeout'), spec.limits.timeoutSeconds * 1000);
       const onAbort = () => end('cancelled');
       signal?.addEventListener('abort', onAbort, { once: true });
       if (signal?.aborted) onAbort();
@@ -377,7 +382,6 @@ export class ContainerRunner implements IsolatingRunner {
         throw e;
       } finally {
         clearTimeout(timer);
-        timer = undefined;
         signal?.removeEventListener('abort', onAbort);
       }
     };

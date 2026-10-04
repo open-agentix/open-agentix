@@ -1,3 +1,4 @@
+import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
   ContainerRunner,
@@ -5,6 +6,7 @@ import {
   assertSafeCreateBody,
   proxyUrlWithCredentials,
   type ContainerRunnerConfigInput,
+  type EngineHijack,
   type EngineRequest,
   type EngineTransport,
   type RunNodeSpec,
@@ -37,9 +39,12 @@ const spec = (over: Partial<RunNodeSpec> = {}): RunNodeSpec => ({
 
 interface FakeEngine {
   transport: EngineTransport;
+  hijack: EngineHijack;
   calls: EngineRequest[];
   created: Record<string, unknown>[];
-  uploads: Buffer[];
+  /** What was written to the container's stdin, per attach (null while still open). */
+  stdin: (string | null)[];
+  attached: string[];
   /** Resolves the pending `wait` with an exit code. */
   exit(code: number): void;
   removed(): boolean;
@@ -49,7 +54,8 @@ interface FakeEngine {
 function fakeEngine(opts: { internal?: boolean; failOn?: string } = {}): FakeEngine {
   const calls: EngineRequest[] = [];
   const created: Record<string, unknown>[] = [];
-  const uploads: Buffer[] = [];
+  const stdin: (string | null)[] = [];
+  const attached: string[] = [];
   let release: ((code: number) => void) | null = null;
   let removed = false;
   const transport: EngineTransport = (req) => {
@@ -63,10 +69,6 @@ function fakeEngine(opts: { internal?: boolean; failOn?: string } = {}): FakeEng
       created.push(JSON.parse(req.body!.toString()) as Record<string, unknown>);
       return json(201, { Id: CID });
     }
-    if (p.endsWith('/archive?path=%2Frun%2Foax')) {
-      uploads.push(req.body!);
-      return json(200, {});
-    }
     if (p.endsWith('/wait'))
       return new Promise((resolve, reject) => {
         if (req.signal?.aborted) return reject(new Error('aborted'));
@@ -77,11 +79,23 @@ function fakeEngine(opts: { internal?: boolean; failOn?: string } = {}): FakeEng
     if (req.method === 'DELETE') removed = true;
     return json(204, {});
   };
+  const hijack: EngineHijack = async (req) => {
+    if (opts.failOn && req.path.includes(opts.failOn)) throw new Error('attach refused');
+    attached.push(req.path.replace('/v1.43', ''));
+    const idx = stdin.push(null) - 1;
+    const chunks: Buffer[] = [];
+    const sink = new PassThrough();
+    sink.on('data', (c: Buffer) => chunks.push(c));
+    sink.on('end', () => (stdin[idx] = Buffer.concat(chunks).toString()));
+    return sink;
+  };
   return {
     transport,
+    hijack,
     calls,
     created,
-    uploads,
+    stdin,
+    attached,
     exit: (c) => release?.(c),
     removed: () => removed,
   };
@@ -94,7 +108,7 @@ const runner = (
 ) =>
   new ContainerRunner(
     { ...baseConfig, ...cfg },
-    { transport: e.transport, ...(proxy ? { egressProxy: proxy } : {}) },
+    { transport: e.transport, hijack: e.hijack, ...(proxy ? { egressProxy: proxy } : {}) },
   );
 
 const code = async (p: Promise<unknown>) => ((await p.catch((e) => e)) as { code?: string }).code;
@@ -140,7 +154,7 @@ describe('container runner configuration', () => {
 
 describe('create options (hardening)', () => {
   it('builds a hardened container: non-root, read-only, no caps, limits, tmpfs, internal network', () => {
-    const body = runner(fakeEngine()).buildCreateBody(spec(), false);
+    const body = runner(fakeEngine()).buildCreateBody(spec());
     const h = body.HostConfig;
     expect(body.User).toBe('10001:10001');
     expect(h.ReadonlyRootfs).toBe(true);
@@ -161,11 +175,13 @@ describe('create options (hardening)', () => {
     expect(() => assertSafeCreateBody(body)).not.toThrow();
   });
   it('never puts the token or any secret into the environment or the command line', () => {
-    const body = runner(fakeEngine()).buildCreateBody(spec(), true);
+    const body = runner(fakeEngine()).buildCreateBody(spec());
     const dump = JSON.stringify(body);
     expect(dump).not.toContain('oaxrt.');
-    expect(body.Env).toContain('OAX_RUN_TOKEN_FILE=/run/oax/token');
-    expect(body.Env).toContain('OAX_PROXY_URL_FILE=/run/oax/proxy-url');
+    // the node reads the token from stdin, which is not part of the create options
+    expect(body.Env).toContain('OAX_RUN_TOKEN_FILE=/dev/stdin');
+    expect(body.OpenStdin).toBe(true);
+    expect(body.StdinOnce).toBe(true);
     expect(body.Env.some((e) => /SECRET|PASSWORD|API_KEY/i.test(e))).toBe(false);
   });
   it('clamps limits to the configured maxima', () => {
@@ -175,57 +191,61 @@ describe('create options (hardening)', () => {
       maxPids: 32,
     }).buildCreateBody(
       spec({ limits: { cpus: 8, memoryMb: 8192, timeoutSeconds: 5, pids: 9999 } }),
-      false,
     );
     expect(body.HostConfig.Memory).toBe(128 * 1024 * 1024);
     expect(body.HostConfig.NanoCpus).toBe(1e9);
     expect(body.HostConfig.PidsLimit).toBe(32);
   });
 
-  const good = () => runner(fakeEngine()).buildCreateBody(spec(), false);
-  const mutate = (fn: (b: Record<string, any>) => void) => {
-    const b = structuredClone(good()) as Record<string, any>;
+  type Body = {
+    HostConfig: Record<string, unknown>;
+    Env: string[];
+    [k: string]: unknown;
+  };
+  const good = () => runner(fakeEngine()).buildCreateBody(spec());
+  const mutate = (fn: (b: Body) => void) => {
+    const b = structuredClone(good()) as Body;
     fn(b);
     return b;
   };
   it.each([
-    ['privileged', (b: any) => (b.HostConfig.Privileged = true)],
+    ['privileged', (b: Body) => (b.HostConfig.Privileged = true)],
     [
       'bind mount',
-      (b: any) => (b.HostConfig.Binds = ['/var/run/docker.sock:/var/run/docker.sock']),
+      (b: Body) => (b.HostConfig.Binds = ['/var/run/docker.sock:/var/run/docker.sock']),
     ],
     [
       'docker.sock mount',
-      (b: any) => (b.HostConfig.Mounts = [{ Type: 'bind', Source: '/var/run/docker.sock' }]),
+      (b: Body) => (b.HostConfig.Mounts = [{ Type: 'bind', Source: '/var/run/docker.sock' }]),
     ],
-    ['device', (b: any) => (b.HostConfig.Devices = [{ PathOnHost: '/dev/sda' }])],
-    ['capability add', (b: any) => (b.HostConfig.CapAdd = ['SYS_ADMIN'])],
-    ['host network', (b: any) => (b.HostConfig.NetworkMode = 'host')],
-    ['default bridge', (b: any) => (b.HostConfig.NetworkMode = 'bridge')],
-    ['container network', (b: any) => (b.HostConfig.NetworkMode = 'container:abc')],
-    ['host pid', (b: any) => (b.HostConfig.PidMode = 'host')],
-    ['host ipc', (b: any) => (b.HostConfig.IpcMode = 'host')],
-    ['host userns', (b: any) => (b.HostConfig.UsernsMode = 'host')],
-    ['writable rootfs', (b: any) => (b.HostConfig.ReadonlyRootfs = false)],
-    ['caps not dropped', (b: any) => (b.HostConfig.CapDrop = [])],
-    ['no-new-privileges missing', (b: any) => (b.HostConfig.SecurityOpt = [])],
+    ['device', (b: Body) => (b.HostConfig.Devices = [{ PathOnHost: '/dev/sda' }])],
+    ['capability add', (b: Body) => (b.HostConfig.CapAdd = ['SYS_ADMIN'])],
+    ['host network', (b: Body) => (b.HostConfig.NetworkMode = 'host')],
+    ['default bridge', (b: Body) => (b.HostConfig.NetworkMode = 'bridge')],
+    ['container network', (b: Body) => (b.HostConfig.NetworkMode = 'container:abc')],
+    ['host pid', (b: Body) => (b.HostConfig.PidMode = 'host')],
+    ['host ipc', (b: Body) => (b.HostConfig.IpcMode = 'host')],
+    ['host userns', (b: Body) => (b.HostConfig.UsernsMode = 'host')],
+    ['writable rootfs', (b: Body) => (b.HostConfig.ReadonlyRootfs = false)],
+    ['caps not dropped', (b: Body) => (b.HostConfig.CapDrop = [])],
+    ['no-new-privileges missing', (b: Body) => (b.HostConfig.SecurityOpt = [])],
     [
       'seccomp unconfined',
-      (b: any) => (b.HostConfig.SecurityOpt = ['no-new-privileges:true', 'seccomp=unconfined']),
+      (b: Body) => (b.HostConfig.SecurityOpt = ['no-new-privileges:true', 'seccomp=unconfined']),
     ],
-    ['no memory limit', (b: any) => (b.HostConfig.Memory = 0)],
-    ['no cpu limit', (b: any) => delete b.HostConfig.NanoCpus],
-    ['no pids limit', (b: any) => (b.HostConfig.PidsLimit = 0)],
-    ['sysctl', (b: any) => (b.HostConfig.Sysctls = { 'net.ipv4.ip_forward': '1' })],
-    ['volumes', (b: any) => (b.Volumes = { '/data': {} })],
-    ['volumes-from', (b: any) => (b.HostConfig.VolumesFrom = ['other'])],
-    ['root user', (b: any) => (b.User = 'root')],
-    ['uid 0', (b: any) => (b.User = '0:0')],
-    ['empty user', (b: any) => (b.User = '')],
-    ['tag-only image', (b: any) => (b.Image = 'node:latest')],
-    ['token in env', (b: any) => b.Env.push('OAX_RUN_TOKEN=oaxrt.a.b')],
-    ['token value in env', (b: any) => b.Env.push('X=oaxrt.a.b')],
-    ['secret env', (b: any) => b.Env.push('OAX_SECRET_JIRA=abc')],
+    ['no memory limit', (b: Body) => (b.HostConfig.Memory = 0)],
+    ['no cpu limit', (b: Body) => delete b.HostConfig.NanoCpus],
+    ['no pids limit', (b: Body) => (b.HostConfig.PidsLimit = 0)],
+    ['sysctl', (b: Body) => (b.HostConfig.Sysctls = { 'net.ipv4.ip_forward': '1' })],
+    ['volumes', (b: Body) => (b.Volumes = { '/data': {} })],
+    ['volumes-from', (b: Body) => (b.HostConfig.VolumesFrom = ['other'])],
+    ['root user', (b: Body) => (b.User = 'root')],
+    ['uid 0', (b: Body) => (b.User = '0:0')],
+    ['empty user', (b: Body) => (b.User = '')],
+    ['tag-only image', (b: Body) => (b.Image = 'node:latest')],
+    ['token in env', (b: Body) => b.Env.push('OAX_RUN_TOKEN=oaxrt.a.b')],
+    ['token value in env', (b: Body) => b.Env.push('X=oaxrt.a.b')],
+    ['secret env', (b: Body) => b.Env.push('OAX_SECRET_JIRA=abc')],
   ])('refuses %s', (_name, fn) => {
     expect(() => assertSafeCreateBody(mutate(fn))).toThrow(/unsafe options/);
   });
@@ -278,26 +298,18 @@ describe('startNode: validation fails closed before anything is created', () => 
 });
 
 describe('startNode: lifecycle', () => {
-  it('creates, starts, uploads the token as a file and never as env; removes at the end', async () => {
+  it('attaches stdin before the start, sends the token only there, and removes at the end', async () => {
     const e = fakeEngine();
     const handle = await runner(e).startNode(spec());
     expect(handle.nodeId).toBe(NODE);
     const order = e.calls.map((c) => c.path.replace('/v1.43', '').replace(CID, 'ID').split('?')[0]);
-    expect(order).toEqual([
-      '/networks/oax-nodes',
-      '/containers/create',
-      '/containers/ID/start',
-      '/containers/ID/archive',
-    ]);
+    expect(order).toEqual(['/networks/oax-nodes', '/containers/create', '/containers/ID/start']);
     expect(e.calls[1]!.path).toContain(`name=oax-node-${NODE}`);
-    expect(JSON.stringify(e.created[0])).not.toContain('oaxrt.');
-    const tar = e.uploads[0]!;
-    expect(tar.subarray(0, 5).toString()).toBe('token');
-    expect(tar.subarray(512, 512 + 'oaxrt.payload.signature'.length).toString()).toBe(
-      'oaxrt.payload.signature',
-    );
-    expect(parseInt(tar.toString('ascii', 108, 115), 8)).toBe(10001); // owned by the node user
-    expect(parseInt(tar.toString('ascii', 100, 107), 8)).toBe(0o400);
+    // attach happens between create and start, so the node cannot miss its token
+    expect(e.attached).toEqual([`/containers/${CID}/attach?stream=1&stdin=1`]);
+    expect(e.stdin).toEqual(['oaxrt.payload.signature\n']); // written once, then EOF
+    // the token is nowhere in what the engine can show through inspect
+    for (const call of e.calls) expect(String(call.body ?? '')).not.toContain('oaxrt.');
     const waiting = handle.wait();
     e.exit(0);
     expect(await waiting).toEqual({ exitCode: 0 });
@@ -342,21 +354,23 @@ describe('startNode: lifecycle', () => {
     await expect(h2.wait()).rejects.toThrow(/HTTP 500/);
     await handle.stop('step_end');
   });
-  it.each(['/start', '/archive', '/create'])('cleans up when %s fails', async (failOn) => {
+  it.each(['/start', '/attach', '/create'])('cleans up when %s fails', async (failOn) => {
     const e = fakeEngine({ failOn });
-    await expect(runner(e).startNode(spec())).rejects.toThrow(/HTTP 500/);
+    await expect(runner(e).startNode(spec())).rejects.toThrow(/HTTP 500|attach refused/);
     // anything that was created is force-removed again
     expect(e.removed()).toBe(failOn !== '/create');
   });
-  it('registers the node with the egress proxy, hands it credentials as a file, and unregisters', async () => {
+  it('registers the node with the egress proxy, hands it its account on stdin, and unregisters', async () => {
     const e = fakeEngine();
     const proxy = new EgressProxy();
     const r = runner(e, { egressProxyUrl: 'http://worker:3128' }, proxy);
     const handle = await r.startNode(spec({ egress: ['jira.example.com'] }));
     expect(proxy.registered).toBe(1);
-    const tar = e.uploads[0]!;
-    expect(tar.toString('latin1')).toContain('proxy-url');
-    expect(tar.toString('latin1')).toContain(`http://${NODE}:`);
+    const [lines] = e.stdin as string[];
+    const [token, proxyLine] = lines!.split('\n');
+    expect(token).toBe('oaxrt.payload.signature');
+    expect(proxyLine).toMatch(new RegExp(`^http://${NODE}:[A-Za-z0-9_-]{20,}@worker:3128/$`));
+    // the proxy account never appears in the create options either
     expect(JSON.stringify(e.created[0])).not.toMatch(/worker:3128/);
     await handle.stop('step_end');
     expect(proxy.registered).toBe(0);

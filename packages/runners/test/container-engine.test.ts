@@ -7,6 +7,7 @@ import {
   EngineClient,
   EngineError,
   isRawDockerSocket,
+  nodeHijack,
   nodeTransport,
   parseEngineUrl,
   type EngineRequest,
@@ -76,7 +77,6 @@ describe('EngineClient', () => {
     expect((await client.inspectNetwork('oax nodes')).Internal).toBe(true);
     expect(await client.createContainer('oax-node-1', { Image: 'x' })).toBe(id);
     await client.startContainer(id);
-    await client.putArchive(id, '/run/oax', Buffer.from('tar'));
     expect(await client.waitContainer(id)).toBe(3);
     await client.stopContainer(id, 5);
     await client.killContainer(id);
@@ -86,14 +86,12 @@ describe('EngineClient', () => {
       'GET /v1.43/networks/oax%20nodes',
       'POST /v1.43/containers/create?name=oax-node-1',
       'POST /v1.43/containers/ID/start',
-      'PUT /v1.43/containers/ID/archive?path=%2Frun%2Foax',
       'POST /v1.43/containers/ID/wait',
       'POST /v1.43/containers/ID/stop?t=5',
       'POST /v1.43/containers/ID/kill',
       'DELETE /v1.43/containers/ID?force=true&v=true',
       'GET /v1.43/containers/ID/json',
     ]);
-    expect(seen[3]!.headers['content-type']).toBe('application/x-tar');
   });
   it('tolerates already-stopped, already-removed and already-started containers', async () => {
     const { client } = fake((r) => ({ status: r.method === 'DELETE' ? 404 : 304 }));
@@ -157,5 +155,90 @@ describe('nodeTransport', () => {
     const hung = unix({ method: 'GET', path: '/hang', headers: {}, signal: ac.signal });
     setTimeout(() => ac.abort(), 20);
     await expect(hung).rejects.toThrow();
+  });
+});
+
+describe('stdin attach (hijack)', () => {
+  it('delivers the payload and half-closes the stream, over a real unix socket', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oax-attach-'));
+    const sock = join(dir, 'e.sock');
+    const received: string[] = [];
+    let upgraded = '';
+    const server = http.createServer();
+    server.on('upgrade', (req, socket) => {
+      upgraded = `${req.method} ${req.url} ${req.headers.upgrade}`;
+      socket.write('HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n');
+      socket.on('data', (c) => received.push(c.toString()));
+      socket.on('end', () => {
+        received.push('<EOF>');
+        socket.end();
+      });
+    });
+    await new Promise<void>((r) => server.listen(sock, r));
+    cleanups.push(async () => {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const client = new EngineClient(
+      async () => ({ status: 200, body: Buffer.alloc(0) }),
+      nodeHijack({ socketPath: sock }),
+    );
+    const handle = await client.attachStdin('a'.repeat(64));
+    await handle.send(Buffer.from('oaxrt.t\n'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(upgraded).toBe(`POST /v1.43/containers/${'a'.repeat(64)}/attach?stream=1&stdin=1 tcp`);
+    expect(received.join('')).toBe('oaxrt.t\n<EOF>');
+  });
+  it('also accepts a plain 200 raw stream (Podman) and refuses other answers', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oax-attach-'));
+    const sock = join(dir, 'e.sock');
+    let mode: 'raw' | 'deny' = 'raw';
+    const got: string[] = [];
+    const server = http.createServer((req, res) => {
+      if (mode === 'deny') return void res.writeHead(404).end('{}');
+      res.writeHead(200, { 'content-type': 'application/vnd.docker.raw-stream' });
+      res.flushHeaders();
+      req.socket.on('data', (c) => got.push(c.toString()));
+    });
+    await new Promise<void>((r) => server.listen(sock, r));
+    cleanups.push(async () => {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const client = new EngineClient(
+      async () => ({ status: 200, body: Buffer.alloc(0) }),
+      nodeHijack({ socketPath: sock }),
+    );
+    const h = await client.attachStdin('b'.repeat(64));
+    await h.send(Buffer.from('x\n'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(got.join('')).toContain('x\n');
+    mode = 'deny';
+    const err = await client.attachStdin('b'.repeat(64)).catch((e) => e);
+    expect(err).toBeInstanceOf(EngineError);
+    expect((err as EngineError).status).toBe(404);
+  });
+  it('refuses to attach without a hijack function and aborts cleanly', async () => {
+    const plain = new EngineClient(async () => ({ status: 200, body: Buffer.alloc(0) }));
+    await expect(plain.attachStdin('c'.repeat(64))).rejects.toThrow(/cannot attach/);
+    const { PassThrough } = await import('node:stream');
+    const stream = new PassThrough();
+    const c = new EngineClient(
+      async () => ({ status: 200, body: Buffer.alloc(0) }),
+      async () => stream,
+    );
+    const h = await c.attachStdin('d'.repeat(64));
+    h.abort();
+    expect(stream.destroyed).toBe(true);
+    await expect(
+      new EngineClient(
+        async () => ({ status: 200, body: Buffer.alloc(0) }),
+        async () => {
+          throw new Error('socket hang up');
+        },
+      ).attachStdin('e'.repeat(64)),
+    ).rejects.toThrow(/socket hang up/);
   });
 });

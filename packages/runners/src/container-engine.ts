@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import { OaxError } from '@openagentix/core';
+import { HijackError, nodeHijack, type EngineHijack } from './container-hijack.js';
 
 /**
  * Minimal client for the Docker Engine API (also served by Podman's compatible socket). The
@@ -116,6 +117,14 @@ export interface EngineContainerState {
   ExitCode?: number;
 }
 
+function engineMessage(body: Buffer): string {
+  try {
+    return String((JSON.parse(body.toString('utf8')) as { message?: unknown }).message ?? '');
+  } catch {
+    return '';
+  }
+}
+
 export class EngineError extends OaxError {
   constructor(
     readonly status: number,
@@ -125,8 +134,19 @@ export class EngineError extends OaxError {
   }
 }
 
+export interface StdinHandle {
+  /** Writes the payload and closes stdin (EOF for the container process). */
+  send(data: Buffer): Promise<void>;
+  abort(): void;
+}
+
+export { nodeHijack };
+
 export class EngineClient {
-  constructor(private readonly transport: EngineTransport) {}
+  constructor(
+    private readonly transport: EngineTransport,
+    private readonly hijack?: EngineHijack,
+  ) {}
 
   private async call(
     method: EngineRequest['method'],
@@ -147,12 +167,7 @@ export class EngineClient {
     if (res.status >= 200 && res.status < 300) return res;
     if (opts.ok?.includes(res.status)) return res;
     // The engine's message can quote request details; keep it short and never echo bodies we sent.
-    let msg = '';
-    try {
-      msg = String((JSON.parse(res.body.toString('utf8')) as { message?: unknown }).message ?? '');
-    } catch {
-      msg = '';
-    }
+    const msg = engineMessage(res.body);
     throw new EngineError(
       res.status,
       `container engine returned HTTP ${res.status} for ${method} ${path.split('?')[0]}${msg ? `: ${msg.slice(0, 200)}` : ''}`,
@@ -178,11 +193,31 @@ export class EngineClient {
     await this.call('POST', `/containers/${id}/start`, { ok: [304] });
   }
 
-  async putArchive(id: string, dir: string, tar: Buffer): Promise<void> {
-    await this.call('PUT', `/containers/${id}/archive?path=${encodeURIComponent(dir)}`, {
-      raw: tar,
-      type: 'application/x-tar',
-    });
+  /**
+   * Attaches to the container's stdin (before it starts). The returned handle writes the payload
+   * once and half-closes the stream, which the container sees as EOF on its stdin.
+   */
+  async attachStdin(id: string, signal?: AbortSignal): Promise<StdinHandle> {
+    if (!this.hijack) throw new EngineError(0, 'this engine client cannot attach to containers');
+    let sock;
+    try {
+      sock = await this.hijack({
+        path: `/${API_VERSION}/containers/${id}/attach?stream=1&stdin=1`,
+        ...(signal ? { signal } : {}),
+      });
+    } catch (e) {
+      if (e instanceof HijackError) throw new EngineError(e.status, e.message);
+      throw e;
+    }
+    sock.on('error', () => undefined); // a dead container surfaces through wait(), not here
+    return {
+      send: (data: Buffer) =>
+        new Promise<void>((resolve, reject) => {
+          sock.once('error', reject);
+          sock.end(data, () => resolve());
+        }),
+      abort: () => sock.destroy(),
+    };
   }
 
   async waitContainer(id: string, signal?: AbortSignal): Promise<number> {

@@ -15,4 +15,4 @@ export * from './model-proxy.js';
 export * from './container.js';
 export * from './container-engine.js';
 export * from './egress-proxy.js';
-export * from './tar.js';
+export * from './container-hijack.js';
