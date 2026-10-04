@@ -137,7 +137,16 @@
     "available": "Verfügbar",
     "planned": "Geplant",
     "provider": "Provider",
-    "recentAudit": "Letzte Audit-Ereignisse"
+    "recentAudit": "Letzte Audit-Ereignisse",
+    "demo": {
+      "title": "Szenario ausprobieren",
+      "intro": "Wähle eines der festen Szenarien. Der Agent arbeitet mit Fantasiedaten; eigene Prompts sind nicht möglich.",
+      "run": "Szenario starten",
+      "started": "Szenario gestartet",
+      "live": "Echtes Modell: {model}. Verbleibendes Budget heute: {remaining}.",
+      "simulated": "Simuliertes Modell (kein Netzwerk, keine Kosten).",
+      "limit": "Bis zu {runs} Läufe pro {minutes} Minuten und Besucher."
+    }
   },
   "agents": {
     "title": "Agenten",

@@ -23,6 +23,7 @@ import {
   StatusBadge,
 } from '../../components/ui';
 import { useI18n } from '../../i18n/i18n';
+import { DemoScenarios } from './DemoScenarios';
 import { shortId, startOfMonth, startOfToday, useDocumentTitle } from '../../lib/hooks';
 
 const recentRunsQuery = queryOptions({
@@ -86,6 +87,7 @@ export function DashboardPage() {
         title={t('dashboard.greeting', { name: me?.user.displayName ?? '' })}
         description={t('dashboard.subtitle')}
       />
+      {settings.data?.demo && can('runs:read') ? <DemoScenarios /> : null}
       <div className="stats">
         {can('runs:read') ? (
           <>
