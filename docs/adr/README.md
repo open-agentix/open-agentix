@@ -11,5 +11,6 @@ are immutable; a later ADR may supersede one.
 | [0004](0004-provider-abstraction.md) | Provider abstraction incl. Bedrock VPC endpoints and proxies | Accepted |
 | [0005](0005-runners-and-external-harnesses.md) | Runners and external harnesses | Accepted |
 | [0006](0006-control-node-and-worker-nodes.md) | Control node and worker nodes | Accepted |
+| [0007](0007-tenants-as-isolation-boundary.md) | Tenants as the isolation boundary | Accepted |
 
 Template: Context, Decision, Consequences (positive/negative), Alternatives considered.
