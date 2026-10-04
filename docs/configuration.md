@@ -74,6 +74,7 @@ Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
 | `OAX_TOKEN_MAX_TTL_DAYS` | `365` | Upper bound for API token lifetimes. |
 | `OAX_RATE_LIMIT_MAX` | `600` | Requests per minute per token/IP. |
 | `OAX_RATE_LIMIT_LOGIN_MAX` | `10` | Login attempts per minute per IP. |
+| `OAX_RATE_LIMIT_PLAN_MAX` | `30` | Agent plan checks and drafts (`POST /v1/plans/*`) per minute per token/IP. |
 | `OAX_OIDC_ISSUER` | – | Issuer URL (Keycloak realm, Entra ID tenant, Okta). OIDC is enabled when issuer, client id and redirect URI are set. |
 | `OAX_OIDC_CLIENT_ID` | – | Client id. |
 | `OAX_OIDC_CLIENT_SECRET` | – (*secret*) | Client secret (confidential client; PKCE is always used). |

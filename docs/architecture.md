@@ -51,7 +51,8 @@ flowchart TB
 Typed handovers, `when` conditions, tool profiles, per-step credentials and isolated run nodes are
 specified in [ADR 0008](adr/0008-agents-md-data-flow-and-isolation-contract.md); the new
 `agents.md` fields are parsed and validated today and take effect as the wave 1 items land (see
-[agents.md reference](agents-md.md)).
+[agents.md reference](agents-md.md)). The advisory Agent Check lints plans and generates drafts
+([Agent Check](agent-check.md)); it never publishes.
 
 ## Data model (PostgreSQL)
 

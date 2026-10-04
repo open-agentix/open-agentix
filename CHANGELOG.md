@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Agent Check and Agent Plan v1 (advisory)**: strict `AgentPlan` schema, deterministic
+  least-privilege lint `LP001`-`LP008` with a fixed JSON output, optional model-assisted notes that
+  can only add `info`/`warning` findings (untrusted, schema-validated, costed and budget-checked),
+  and a deterministic plan -> `agents.md` draft generator. `POST /v1/plans/check` and
+  `POST /v1/plans/generate` (audited as `plan.checked`/`plan.generated`, rate limit
+  `OAX_RATE_LIMIT_PLAN_MAX`), `oax plan check|generate`, an "Agent plans" page (en, de). Nothing is
+  stored or published automatically. `docs/agent-check.md`.
+- **agents.md data flow fields (parsed and validated, no runtime effect yet)**: `schemas`,
 - **Guided demo tour**: in demo mode the UI offers an 8-step modal tour (welcome, scenarios, run
   view, audit chain, costs, agents/tenants/roles, connections and policies, links) with spotlight,
   progress dots, a "Don't show this again" checkbox (localStorage with a session/memory fallback),

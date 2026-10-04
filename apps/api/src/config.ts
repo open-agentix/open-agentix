@@ -52,6 +52,7 @@ export const EnvSchema = z.object({
 
   OAX_RATE_LIMIT_MAX: int(600),
   OAX_RATE_LIMIT_LOGIN_MAX: int(10),
+  OAX_RATE_LIMIT_PLAN_MAX: int(30),
   OAX_BODY_LIMIT_BYTES: int(1_048_576),
 
   OAX_BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
@@ -158,7 +159,7 @@ export interface Config {
   trustProxy: boolean;
   database: DatabaseConfig;
   cache: { url: string | undefined; maxEntries: number };
-  rateLimit: { max: number; loginMax: number };
+  rateLimit: { max: number; loginMax: number; planMax: number };
   bodyLimit: number;
   auth: {
     bootstrapAdmin: { email: string; password: string } | null;
@@ -302,7 +303,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trustProxy: e.OAX_TRUST_PROXY,
     database,
     cache: { url: e.OAX_CACHE_URL, maxEntries: e.OAX_CACHE_MAX_ENTRIES },
-    rateLimit: { max: e.OAX_RATE_LIMIT_MAX, loginMax: e.OAX_RATE_LIMIT_LOGIN_MAX },
+    rateLimit: {
+      max: e.OAX_RATE_LIMIT_MAX,
+      loginMax: e.OAX_RATE_LIMIT_LOGIN_MAX,
+      planMax: e.OAX_RATE_LIMIT_PLAN_MAX,
+    },
     bodyLimit: e.OAX_BODY_LIMIT_BYTES,
     auth: {
       bootstrapAdmin:

@@ -6799,6 +6799,261 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/plans/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check an AgentPlan with the deterministic least-privilege lint (LP001-LP008) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description The AgentPlan as YAML or JSON text (at most 64 KiB) */
+                        source: string;
+                        /** @description Only offer these connections (names); default: all MCP connections of the tenant */
+                        connections?: string[];
+                        /** @description Optional model-assisted suggestions: the model can only add info/warning findings. Costed, budget-checked and audited; needs agents:write. */
+                        assist?: {
+                            provider: string;
+                            model: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description false when the plan does not parse; then `errors` says why */
+                            valid: boolean;
+                            errors: {
+                                path: string;
+                                message: string;
+                            }[];
+                            plan: {
+                                [key: string]: unknown;
+                            } | null;
+                            lint: {
+                                /** @enum {string} */
+                                kind: "AgentPlanLint";
+                                lintVersion: number;
+                                planDigest: string;
+                                findings: {
+                                    /** @enum {string} */
+                                    code: "LP001" | "LP002" | "LP003" | "LP004" | "LP005" | "LP006" | "LP007" | "LP008" | "MODEL";
+                                    /** @enum {string} */
+                                    severity: "error" | "warning" | "info";
+                                    path: string;
+                                    message: string;
+                                    /** @enum {string} */
+                                    source: "lint" | "model";
+                                }[];
+                                summary: {
+                                    error: number;
+                                    warning: number;
+                                    info: number;
+                                };
+                            } | null;
+                            usage: {
+                                provider: string;
+                                model: string;
+                                inputTokens: number;
+                                outputTokens: number;
+                                /** @description micro-USD (1e-6 USD), 0 when the model is unpriced */
+                                costMicros: number;
+                            } | null;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                402: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/plans/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generate a draft agents.md from an AgentPlan (deterministic, no model) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description The AgentPlan as YAML or JSON text (at most 64 KiB) */
+                        source: string;
+                        /** @description Only offer these connections (names); default: all MCP connections of the tenant */
+                        connections?: string[];
+                        /** @description Provider written to every agent (default `simulated`) */
+                        provider?: string;
+                        /** @description Model written to every agent (default `simulated`) */
+                        model?: string;
+                        /** @description Owner (team) of the draft (default `unassigned`) */
+                        owner?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            valid: boolean;
+                            errors: {
+                                path: string;
+                                message: string;
+                            }[];
+                            plan: {
+                                [key: string]: unknown;
+                            } | null;
+                            lint: {
+                                /** @enum {string} */
+                                kind: "AgentPlanLint";
+                                lintVersion: number;
+                                planDigest: string;
+                                findings: {
+                                    /** @enum {string} */
+                                    code: "LP001" | "LP002" | "LP003" | "LP004" | "LP005" | "LP006" | "LP007" | "LP008" | "MODEL";
+                                    /** @enum {string} */
+                                    severity: "error" | "warning" | "info";
+                                    path: string;
+                                    message: string;
+                                    /** @enum {string} */
+                                    source: "lint" | "model";
+                                }[];
+                                summary: {
+                                    error: number;
+                                    warning: number;
+                                    info: number;
+                                };
+                            } | null;
+                            /** @description Draft agents.md; null when the plan is invalid or has error findings */
+                            draft: string | null;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/ingest/webhook/{sourceId}": {
         parameters: {
             query?: never;

@@ -1,0 +1,11 @@
+[
+  {
+    "name": "jira",
+    "tools": { "get_issue": "read", "search": "read", "add_comment": "write" },
+    "profiles": { "read": ["get_issue", "search"], "write": ["add_comment"] }
+  },
+  {
+    "name": "crm",
+    "tools": { "get_customer": "read", "update_customer": "write" }
+  }
+]

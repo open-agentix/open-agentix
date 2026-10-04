@@ -1,4 +1,5 @@
 import type { AppContext } from '../context.js';
+import { AgentCheckService } from './agent-check.js';
 import { AgentsService } from './agents.js';
 import { AuditService } from './audit.js';
 import { BudgetsService } from './budgets.js';
@@ -25,6 +26,7 @@ export interface Services {
   guidelines: GuidelinesService;
   tenants: TenantsService;
   models: ModelsService;
+  agentCheck: AgentCheckService;
 }
 
 export function createServices(ctx: AppContext): Services {
@@ -40,6 +42,7 @@ export function createServices(ctx: AppContext): Services {
   const costs = new CostsService(ctx);
   const tenants = new TenantsService(ctx, audit, identity);
   const models = new ModelsService(ctx, catalog, audit);
+  const agentCheck = new AgentCheckService(ctx, audit, catalog, models, budgets);
   return {
     audit,
     budgets,
@@ -53,10 +56,12 @@ export function createServices(ctx: AppContext): Services {
     guidelines,
     tenants,
     models,
+    agentCheck,
   };
 }
 
 export {
+  AgentCheckService,
   GuidelinesService,
   AgentsService,
   AuditService,

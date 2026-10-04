@@ -7,6 +7,33 @@ export const api = (path: string) => `${window.location.origin}${path}`;
 
 const json = <T>(body: T, status = 200) => HttpResponse.json(body as never, { status });
 
+const planLint = (
+  withError: boolean,
+): NonNullable<ResponseOf<'/v1/plans/check', 'post'>['lint']> => ({
+  kind: 'AgentPlanLint',
+  lintVersion: 1,
+  planDigest: `sha256:${'a'.repeat(64)}`,
+  findings: withError
+    ? [
+        {
+          code: 'LP006',
+          severity: 'error',
+          path: 'steps.0.capabilities.0',
+          message: 'access is read-only but capability jira:write can write',
+          source: 'lint',
+        },
+        {
+          code: 'MODEL',
+          severity: 'info',
+          path: 'plan',
+          message: 'Looks reasonable.',
+          source: 'model',
+        },
+      ]
+    : [],
+  summary: withError ? { error: 1, warning: 0, info: 1 } : { error: 0, warning: 0, info: 0 },
+});
+
 export const handlers = [
   http.post(api('/v1/models/proposals'), () =>
     json<ResponseOf<'/v1/models/proposals', 'post'>>({
@@ -56,6 +83,37 @@ export const handlers = [
           : f.publishedSource,
     }),
   ),
+  http.post(api('/v1/plans/check'), async ({ request }) => {
+    const { source } = (await request.json()) as { source: string };
+    return json<ResponseOf<'/v1/plans/check', 'post'>>(
+      source.includes('INVALID')
+        ? {
+            valid: false,
+            errors: [{ path: 'steps.0.access', message: 'Required' }],
+            plan: null,
+            lint: null,
+            usage: null,
+          }
+        : {
+            valid: true,
+            errors: [],
+            plan: { kind: 'AgentPlan' },
+            lint: planLint(source.includes('ERRORS')),
+            usage: null,
+          },
+    );
+  }),
+  http.post(api('/v1/plans/generate'), async ({ request }) => {
+    const { source } = (await request.json()) as { source: string };
+    const failing = source.includes('ERRORS');
+    return json<ResponseOf<'/v1/plans/generate', 'post'>>({
+      valid: true,
+      errors: [],
+      plan: { kind: 'AgentPlan' },
+      lint: planLint(failing),
+      draft: failing ? null : '---\napiVersion: openagentix.io/v1alpha1\nname: demo-plan\n---\n',
+    });
+  }),
   http.post(api('/v1/agents/validate'), async ({ request }) => {
     const { source } = (await request.json()) as { source: string };
     const valid = !source.includes('INVALID');

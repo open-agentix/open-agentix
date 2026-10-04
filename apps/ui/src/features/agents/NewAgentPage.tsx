@@ -8,6 +8,7 @@ import { useToast } from '../../components/toast';
 import { Button, EmptyState, PageHeader, Section, errorMessage } from '../../components/ui';
 import { useT } from '../../i18n/i18n';
 import { useDocumentTitle } from '../../lib/hooks';
+import { takeAgentDraft } from '../plans/draft';
 import { AgentEditor } from './AgentEditor';
 import { AGENT_TEMPLATE } from './template';
 
@@ -18,7 +19,7 @@ export function NewAgentPage() {
   const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [source, setSource] = useState(AGENT_TEMPLATE);
+  const [source, setSource] = useState(() => takeAgentDraft() ?? AGENT_TEMPLATE);
   const create = useMutation({
     mutationFn: () => call(api.POST('/v1/agents', { body: { source } })),
     onSuccess: async (agent) => {

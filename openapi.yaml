@@ -8269,6 +8269,455 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/plans/check:
+    post:
+      summary: Check an AgentPlan with the deterministic least-privilege lint (LP001-LP008)
+      tags:
+        - plans
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+                  description: The AgentPlan as YAML or JSON text (at most 64 KiB)
+                connections:
+                  description: "Only offer these connections (names); default: all MCP connections of the tenant"
+                  maxItems: 100
+                  type: array
+                  items:
+                    type: string
+                    pattern: ^[a-z][a-z0-9-]{0,62}$
+                assist:
+                  description: "Optional model-assisted suggestions: the model can only add info/warning findings. Costed, budget-checked and audited; needs agents:write."
+                  type: object
+                  properties:
+                    provider:
+                      type: string
+                      pattern: ^[a-z][a-z0-9-]{0,62}$
+                    model:
+                      type: string
+                      minLength: 1
+                      maxLength: 200
+                  required:
+                    - provider
+                    - model
+              required:
+                - source
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    description: false when the plan does not parse; then `errors` says why
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path:
+                          type: string
+                        message:
+                          type: string
+                      required:
+                        - path
+                        - message
+                      additionalProperties: false
+                  plan:
+                    anyOf:
+                      - type: object
+                        propertyNames:
+                          type: string
+                        additionalProperties: {}
+                        description: The parsed AgentPlan (defaults applied)
+                      - type: "null"
+                  lint:
+                    anyOf:
+                      - type: object
+                        properties:
+                          kind:
+                            type: string
+                            enum:
+                              - AgentPlanLint
+                          lintVersion:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          planDigest:
+                            type: string
+                            pattern: ^sha256:[0-9a-f]{64}$
+                          findings:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                code:
+                                  type: string
+                                  enum:
+                                    - LP001
+                                    - LP002
+                                    - LP003
+                                    - LP004
+                                    - LP005
+                                    - LP006
+                                    - LP007
+                                    - LP008
+                                    - MODEL
+                                severity:
+                                  type: string
+                                  enum:
+                                    - error
+                                    - warning
+                                    - info
+                                path:
+                                  type: string
+                                message:
+                                  type: string
+                                source:
+                                  type: string
+                                  enum:
+                                    - lint
+                                    - model
+                              required:
+                                - code
+                                - severity
+                                - path
+                                - message
+                                - source
+                              additionalProperties: false
+                          summary:
+                            type: object
+                            properties:
+                              error:
+                                type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              warning:
+                                type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              info:
+                                type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                            required:
+                              - error
+                              - warning
+                              - info
+                            additionalProperties: false
+                        required:
+                          - kind
+                          - lintVersion
+                          - planDigest
+                          - findings
+                          - summary
+                        additionalProperties: false
+                      - type: "null"
+                  usage:
+                    anyOf:
+                      - type: object
+                        properties:
+                          provider:
+                            type: string
+                          model:
+                            type: string
+                          inputTokens:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          outputTokens:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          costMicros:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                            description: micro-USD (1e-6 USD), 0 when the model is unpriced
+                        required:
+                          - provider
+                          - model
+                          - inputTokens
+                          - outputTokens
+                          - costMicros
+                        additionalProperties: false
+                      - type: "null"
+                required:
+                  - valid
+                  - errors
+                  - plan
+                  - lint
+                  - usage
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "402":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/plans/generate:
+    post:
+      summary: Generate a draft agents.md from an AgentPlan (deterministic, no model)
+      tags:
+        - plans
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+                  description: The AgentPlan as YAML or JSON text (at most 64 KiB)
+                connections:
+                  description: "Only offer these connections (names); default: all MCP connections of the tenant"
+                  maxItems: 100
+                  type: array
+                  items:
+                    type: string
+                    pattern: ^[a-z][a-z0-9-]{0,62}$
+                provider:
+                  description: Provider written to every agent (default `simulated`)
+                  type: string
+                  pattern: ^[a-z][a-z0-9-]{0,62}$
+                model:
+                  description: Model written to every agent (default `simulated`)
+                  type: string
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$
+                owner:
+                  description: Owner (team) of the draft (default `unassigned`)
+                  type: string
+                  pattern: ^[a-z][a-z0-9-]{0,62}$
+              required:
+                - source
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path:
+                          type: string
+                        message:
+                          type: string
+                      required:
+                        - path
+                        - message
+                      additionalProperties: false
+                  plan:
+                    anyOf:
+                      - type: object
+                        propertyNames:
+                          type: string
+                        additionalProperties: {}
+                        description: The parsed AgentPlan (defaults applied)
+                      - type: "null"
+                  lint:
+                    anyOf:
+                      - type: object
+                        properties:
+                          kind:
+                            type: string
+                            enum:
+                              - AgentPlanLint
+                          lintVersion:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          planDigest:
+                            type: string
+                            pattern: ^sha256:[0-9a-f]{64}$
+                          findings:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                code:
+                                  type: string
+                                  enum:
+                                    - LP001
+                                    - LP002
+                                    - LP003
+                                    - LP004
+                                    - LP005
+                                    - LP006
+                                    - LP007
+                                    - LP008
+                                    - MODEL
+                                severity:
+                                  type: string
+                                  enum:
+                                    - error
+                                    - warning
+                                    - info
+                                path:
+                                  type: string
+                                message:
+                                  type: string
+                                source:
+                                  type: string
+                                  enum:
+                                    - lint
+                                    - model
+                              required:
+                                - code
+                                - severity
+                                - path
+                                - message
+                                - source
+                              additionalProperties: false
+                          summary:
+                            type: object
+                            properties:
+                              error:
+                                type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              warning:
+                                type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              info:
+                                type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                            required:
+                              - error
+                              - warning
+                              - info
+                            additionalProperties: false
+                        required:
+                          - kind
+                          - lintVersion
+                          - planDigest
+                          - findings
+                          - summary
+                        additionalProperties: false
+                      - type: "null"
+                  draft:
+                    description: Draft agents.md; null when the plan is invalid or has error findings
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - valid
+                  - errors
+                  - plan
+                  - lint
+                  - draft
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/ingest/webhook/{sourceId}:
     post:
       summary: Receive a signed webhook (any JSON or CloudEvent)

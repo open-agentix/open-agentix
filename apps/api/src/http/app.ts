@@ -33,6 +33,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerDemoRoutes } from './routes/demo.js';
 import { registerEventRoutes } from './routes/events.js';
+import { registerPlanRoutes } from './routes/plans.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSystemRoutes } from './routes/system.js';
 import { registerBudgetRoutes } from './routes/budgets.js';
@@ -218,6 +219,8 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     'POST /v1/agents/:id/dry-run',
     'POST /v1/policies/evaluate',
     'POST /v1/guidelines/review',
+    'POST /v1/plans/check',
+    'POST /v1/plans/generate',
     'POST /v1/runs/:id/stream-token',
     'POST /v1/audit/verify',
     'POST /v1/demo/scenarios/:scenario/run',
@@ -261,6 +264,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   registerDemoRoutes(typed, deps);
   registerBudgetRoutes(typed, deps);
   registerWorkerRoutes(typed, deps);
+  registerPlanRoutes(typed, deps);
   await app.ready();
   return app;
 }
