@@ -56,6 +56,13 @@ on the control node, which measures usage and reserves budget before every call 
 [ADR 0009](adr/0009-model-proxy.md), plan item W1-3b). The advisory Agent Check lints plans and
 generates drafts ([Agent Check](agent-check.md)); it never publishes.
 
+Proposed next (not implemented): a no-code form builder with a round-trip code view and
+Git-synced agent repositories ([ADR 0010](adr/0010-agent-authoring-builder-and-git-sync.md)), one
+outbound network configuration for proxies, trust stores, mTLS and private model endpoints
+([ADR 0011](adr/0011-outbound-network-proxies-and-private-endpoints.md)), and connection types and
+instances with default-deny central grants and data protection rules
+([ADR 0012](adr/0012-connections-instances-scopes-and-data-protection.md)).
+
 ## Data model (PostgreSQL)
 
 | Table | Notes |
