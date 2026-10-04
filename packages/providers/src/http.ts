@@ -1,4 +1,4 @@
-import { OaxError } from '@openagentix/core';
+import { OaxError, getEgressPolicy } from '@openagentix/core';
 import { createProxyAwareFetch, type Env } from './proxy.js';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -38,6 +38,11 @@ export function createGuardedFetch(opts: GuardedFetchOptions): FetchLike {
       return Promise.reject(
         new OaxError('egress_denied', `outbound request to ${origin} is not a configured endpoint`),
       );
+    }
+    try {
+      getEgressPolicy().assert(input, 'provider');
+    } catch (e) {
+      return Promise.reject(e);
     }
     return base(input, init);
   };

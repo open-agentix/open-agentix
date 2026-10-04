@@ -8,6 +8,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Air-gapped mode** (`OAX_AIRGAPPED`, `OAX_AIRGAPPED_ALLOW`): fail-closed start-up self-check,
+  process-wide egress policy and network guard (TCP, DNS, UDP), vendored model catalog only,
+  `airgapped` state on `/readyz`, tests proving no outbound traffic, and `docs/airgapped.md`.
 - **Budgets with hard stop**: monthly budgets per tenant, use case and team, checked when a run is
   queued and before every step of a running run (also across runs of the same month). A reached
   budget blocks or stops the run (`blocked_by_policy` or `failed` with `control_budget_*`), writes
