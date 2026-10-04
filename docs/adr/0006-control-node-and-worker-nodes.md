@@ -18,7 +18,7 @@ the audit trail, RBAC and policies must not be the one executing untrusted tool 
   token** (`oaxrt.<claims>.<hmac>`; bound to run id and worker id, checked against the run lease)
   and use the worker API: `/v1/worker/runs/{id}/gate|steps|approvals|status|complete`. Every tool
   call is decided by the control node's gate first.
-- The MVP in-process worker already uses this contract (`ControlPlaneService.forToken`), so remote
+- The in-process worker already uses this contract (`ControlPlaneService.forToken`), so remote
   workers are a transport change (`HttpControlPlane`).
 - **Toolbox images**: each agent declares `runtime.toolbox` (e.g. `git+node`, `trivy`,
   `jira-cli`) and `runtime.egress`. Toolboxes are minimal images from the catalog in `toolboxes/`
