@@ -36,17 +36,17 @@ are in [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md). Dates are tar
 
 Wave 0:
 
-- [ ] **ADR 0008: agents.md data flow and isolation contract (handovers, when, tool profiles, per-step credentials, run node)** (W0-1, #23) – *As an agent engineer, I want one reviewed design for the new agents.md fields and the worker contract so that the wave 1 items can be built in parallel without redesigning each other's interfaces.*
+- [x] **ADR 0008: agents.md data flow and isolation contract (handovers, when, tool profiles, per-step credentials, run node)** (W0-1, #23) – *As an agent engineer, I want one reviewed design for the new agents.md fields and the worker contract so that the wave 1 items can be built in parallel without redesigning each other's interfaces.*
 - [ ] **Website and blog wording sync with the code (status badges, released features, planned items)** (W0-2, #24) – *As a reader of openagentix.si and the blog, I want every status claim to match the code so that I can trust what is marked available and what is planned.*
 
 Wave 1:
 
-- [ ] **Typed handovers with JSON Schema validation and conditional steps (`when`)** (W1-1, #25) – *As an agent engineer, I want each step to hand over a schema-validated JSON artifact and to run only when its condition holds so that agents never pass free text between each other and plans can branch without an orchestrator agent.*
-- [ ] **Named read/write tool profiles per MCP server** (W1-2, #26) – *As an integrator, I want to publish named profiles per MCP server (for example `read` and `write`) with each tool classified as read or write so that agent engineers grant `jira:read` instead of hand-picking tools and a read-only step can never receive a write tool.*
+- [x] **Typed handovers with JSON Schema validation and conditional steps (`when`)** (W1-1, #25) – *As an agent engineer, I want each step to hand over a schema-validated JSON artifact and to run only when its condition holds so that agents never pass free text between each other and plans can branch without an orchestrator agent.*
+- [x] **Named read/write tool profiles per MCP server** (W1-2, #26) – *As an integrator, I want to publish named profiles per MCP server (for example `read` and `write`) with each tool classified as read or write so that agent engineers grant `jira:read` instead of hand-picking tools and a read-only step can never receive a write tool.*
 - [ ] **Remote run node, per-step credential broker and the container runner** (W1-3, #10) – *As a platform engineer, I want each run step in a short-lived container that receives only its own credentials and a short-lived run token so that a compromised tool cannot touch other runs or other steps' secrets.*
-- [ ] **Kubernetes Job runner (EKS/IRSA) with per-step credentials** (W1-4, #11) – *As an EKS operator, I want one Job per run step with its own ServiceAccount, IRSA role and NetworkPolicy so that credentials are scoped per agent step and nothing outlives the run.*
-- [ ] **Agent Check and Agent Plan v1 (advisory plan generation with a least-privilege lint)** (W1-5, #27) – *As a business user, I want to describe a process in plain language and get a reviewable Agent Plan that splits it into least-privilege steps so that an agent engineer starts from a safe blueprint instead of a god agent.*
-- [ ] **OpenCode harness adapter behind the policy gate** (W1-6, #28) – *As an agent engineer, I want to run an agent with OpenCode under openagentix so that its tool calls are policy-checked, approved, audited and costed exactly like native runs and like the Claude Code adapter.*
+- [x] **Kubernetes Job runner (EKS/IRSA) with per-step credentials** (W1-4, #11) – *As an EKS operator, I want one Job per run step with its own ServiceAccount, IRSA role and NetworkPolicy so that credentials are scoped per agent step and nothing outlives the run.*
+- [x] **Agent Check and Agent Plan v1 (advisory plan generation with a least-privilege lint)** (W1-5, #27) – *As a business user, I want to describe a process in plain language and get a reviewable Agent Plan that splits it into least-privilege steps so that an agent engineer starts from a safe blueprint instead of a god agent.*
+- [x] **OpenCode harness adapter behind the policy gate** (W1-6, #28) – *As an agent engineer, I want to run an agent with OpenCode under openagentix so that its tool calls are policy-checked, approved, audited and costed exactly like native runs and like the Claude Code adapter.*
 
 Wave 2:
 
