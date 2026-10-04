@@ -201,7 +201,7 @@ describe('API tokens', () => {
     expect((await n.req({ method: 'DELETE', url: `/v1/tokens/${id}` })).statusCode).toBe(204);
     expect((await n.req({ method: 'GET', url: '/v1/runs', token })).statusCode).toBe(401);
     expect(
-      (await n.req({ method: 'DELETE', url: '/v1/tokens/00000000-0000-4000-8000-000000000000' }))
+      (await n.req({ method: 'DELETE', url: '/v1/tokens/abababab-abab-4bab-8bab-abababababab' }))
         .statusCode,
     ).toBe(404);
   });
@@ -334,7 +334,7 @@ describe('LDAP', () => {
       (
         await n.req({
           method: 'PATCH',
-          url: '/v1/users/00000000-0000-4000-8000-000000000000',
+          url: '/v1/users/abababab-abab-4bab-8bab-abababababab',
           payload: { disabled: true },
         })
       ).statusCode,
@@ -503,7 +503,7 @@ describe('users and teams', () => {
       (
         await n.req({
           method: 'PUT',
-          url: '/v1/teams/00000000-0000-4000-8000-000000000000/members',
+          url: '/v1/teams/abababab-abab-4bab-8bab-abababababab/members',
           payload: { members: [] },
         })
       ).statusCode,
@@ -512,7 +512,7 @@ describe('users and teams', () => {
       'eng@example.com',
     );
     expect(
-      (await n.req({ method: 'GET', url: '/v1/users/00000000-0000-4000-8000-000000000000' }))
+      (await n.req({ method: 'GET', url: '/v1/users/abababab-abab-4bab-8bab-abababababab' }))
         .statusCode,
     ).toBe(404);
     const members = (

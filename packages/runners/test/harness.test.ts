@@ -266,16 +266,30 @@ describe('other harnesses are documented stubs', () => {
 
 describe('air-gapped mode', () => {
   it('refuses to start unless the Anthropic endpoint is allowlisted', async () => {
-    const { EgressPolicy, parseAllowlist, setEgressPolicy, resetEgressPolicy } = await import('@openagentix/core');
+    const { EgressPolicy, parseAllowlist, setEgressPolicy, resetEgressPolicy } =
+      await import('@openagentix/core');
     try {
       setEgressPolicy(new EgressPolicy({ airgapped: true, allow: [] }));
       const h = new ClaudeCodeHarness();
-      await expect(h.run(inv('ok'), { cwd: dir })).rejects.toThrow(/Claude Code harness.*OAX_AIRGAPPED_ALLOW/);
-      setEgressPolicy(new EgressPolicy({ airgapped: true, allow: parseAllowlist('api.anthropic.com') }));
+      await expect(h.run(inv('ok'), { cwd: dir })).rejects.toThrow(
+        /Claude Code harness.*OAX_AIRGAPPED_ALLOW/,
+      );
+      setEgressPolicy(
+        new EgressPolicy({ airgapped: true, allow: parseAllowlist('api.anthropic.com') }),
+      );
       expect((await h.run(inv('ok'), { cwd: dir })).isError).toBe(false);
-      setEgressPolicy(new EgressPolicy({ airgapped: true, allow: parseAllowlist('claude-gw.internal') }));
+      setEgressPolicy(
+        new EgressPolicy({ airgapped: true, allow: parseAllowlist('claude-gw.internal') }),
+      );
       await expect(h.run(inv('ok'), { cwd: dir })).rejects.toThrow(/OAX_AIRGAPPED_ALLOW/);
-      expect((await new ClaudeCodeHarness({ anthropicUrl: 'https://claude-gw.internal' }).run(inv('ok'), { cwd: dir })).isError).toBe(false);
+      expect(
+        (
+          await new ClaudeCodeHarness({ anthropicUrl: 'https://claude-gw.internal' }).run(
+            inv('ok'),
+            { cwd: dir },
+          )
+        ).isError,
+      ).toBe(false);
     } finally {
       resetEgressPolicy();
     }
