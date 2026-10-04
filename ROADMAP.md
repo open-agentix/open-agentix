@@ -3,7 +3,7 @@
 Milestones are mirrored as GitHub milestones/issues. Every item has a one-line user story. Dates
 are targets, not promises.
 
-## v0.1 – MVP (this release)
+## v0.1 – Foundations (released)
 
 - [x] `agents.md` format: versioned, immutable once published, pipelines of 1..n agents, budgets,
   tool allowlists with argument constraints, approvals, data classification, runtime/toolbox.
@@ -21,7 +21,8 @@ are targets, not promises.
 Concept v2 follow-ups (data model already in place since v0.1.0)
 - **Budgets per run, use case and tenant** – *As a finance owner, I want hard-stop budgets per run, agent, use case, tenant and month with alerts.* (v0.1.0: agent and team budgets, cost lines carry tenant/use case/step.)
 - **More change-gate probes (API with secrets, SQL query, MCP read)** – *As an integrator, I want schedules to run only when a database query or an MCP resource changes.* (v0.1.0: HTTP and file probes.)
-- **Dark software factory pipeline template** – *As a founder, I want a spec -> code -> tests -> PR pipeline for MVPs with the fixed "MVP/PoC only" notice and merge/deploy approvals kept for production.*
+- **Model catalog refresh job** – *As a maintainer, I want a scheduled PR that refreshes the pinned models.dev snapshot so that prices stay current without run-time fetches.*
+- **Dark software factory pipeline template** – *As a founder, I want a spec -> code -> tests -> PR pipeline for prototypes with the fixed "prototypes and proofs of concept only" notice and merge/deploy approvals kept for production.*
 - **LLM second opinion for the hardening agent** – *As a security lead, I want an optional model review of pull requests that can only add findings to the deterministic guideline review.*
 - **Guideline evaluation in agent eval suites** – *As an agent engineer, I want guideline compliance measured in every eval run.*
 - **Demo resets** – *As the demo operator, I want the public demo data to be rebuilt on a schedule so that it always looks fresh.* (v0.1.0: read-only demo mode.)

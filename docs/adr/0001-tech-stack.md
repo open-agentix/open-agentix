@@ -18,7 +18,7 @@ backend, UI, Helm chart and agent definitions.
   `openapi.yaml`; a test fails when it is stale.
 - **PostgreSQL 16 + Drizzle ORM** with SQL migrations (drizzle-kit) plus hand-written SQL for
   triggers. The run queue is a Postgres table claimed with `FOR UPDATE SKIP LOCKED` – no extra
-  broker for the MVP.
+  broker yet.
 - **Tests**: vitest, **PGlite** (embedded Postgres in WASM) so the full suite runs without Docker;
   coverage gate >= 80 % for lines, branches, functions and statements.
 - **Observability**: pino JSON logs with run-id correlation, prom-client `/metrics`,
@@ -31,7 +31,7 @@ backend, UI, Helm chart and agent definitions.
   document and `docs/configuration.md` as contracts.
 - PGlite differs slightly from server Postgres (single connection, no roles); role grants and
   pooling are documented and exercised in compose/Helm, not in unit tests.
-- Postgres as queue limits throughput to thousands of runs per minute, which is far above MVP needs;
+- Postgres as queue limits throughput to thousands of runs per minute, which is far above the needs of a first release;
   Kafka/NATS can be added behind the same `RunQueue` contract later.
 
 ## Alternatives considered
