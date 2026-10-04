@@ -68,4 +68,39 @@ export const ALWAYS_DENIED_CIDRS: readonly string[] = [
   '::1/128',
   'fe80::/10',
   'fd00:ec2::254/128', // AWS IMDS over IPv6
+  'fd20:ce::254/128', // GCP IMDS over IPv6
+  '168.63.129.16/32', // Azure wire server
+  '100.100.100.200/32', // Alibaba Cloud metadata
+  // IPv4-mapped (::ffff:a.b.c.d) and NAT64 (64:ff9b::a.b.c.d) forms of link-local and loopback
+  '::ffff:a9fe:0/112',
+  '::ffff:7f00:0/104',
+  '64:ff9b::a9fe:0/112',
+  '64:ff9b::7f00:0/104',
 ];
+
+/** Canonical text of a CIDR (host bits cleared, IPv6 zero run compressed). */
+export function formatCidr(c: Cidr): string {
+  if (c.version === 4) {
+    const o = [24n, 16n, 8n, 0n].map((sh) => Number((c.base >> sh) & 255n));
+    return `${o.join('.')}/${c.bits}`;
+  }
+  const g = Array.from({ length: 8 }, (_, i) => Number((c.base >> BigInt((7 - i) * 16)) & 0xffffn));
+  let best = -1;
+  let bestLen = 1;
+  for (let i = 0; i < 8;) {
+    if (g[i] !== 0) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < 8 && g[j] === 0) j++;
+    if (j - i > bestLen) {
+      best = i;
+      bestLen = j - i;
+    }
+    i = j;
+  }
+  const hex = (xs: number[]) => xs.map((x) => x.toString(16)).join(':');
+  const text = best < 0 ? hex(g) : `${hex(g.slice(0, best))}::${hex(g.slice(best + bestLen))}`;
+  return `${text}/${c.bits}`;
+}

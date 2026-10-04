@@ -54,6 +54,8 @@ export interface KubeClient {
   createSecret(namespace: string, secret: KubeObject): Promise<{ uid: string }>;
   deleteSecret(namespace: string, name: string, uid?: string): Promise<void>;
   createNetworkPolicy(namespace: string, policy: KubeObject): Promise<{ uid: string }>;
+  /** Reads one NetworkPolicy (only the namespace default-deny policy is ever read). */
+  getNetworkPolicy(namespace: string, name: string): Promise<KubeObject | null>;
   deleteNetworkPolicy(namespace: string, name: string, uid?: string): Promise<void>;
 }
 
@@ -61,6 +63,8 @@ export interface RbacRule {
   apiGroups: string[];
   resources: string[];
   verbs: string[];
+  /** Restricts the rule to these object names. */
+  resourceNames?: string[];
 }
 
 /** Namespaced Role rules for the run namespace; mirrored by docs/examples/kubernetes-job-runner-rbac.yaml. */
@@ -68,6 +72,13 @@ export const REQUIRED_RBAC: readonly RbacRule[] = [
   { apiGroups: ['batch'], resources: ['jobs'], verbs: ['create', 'get', 'patch', 'delete'] },
   { apiGroups: [''], resources: ['secrets'], verbs: ['create', 'delete'] },
   { apiGroups: ['networking.k8s.io'], resources: ['networkpolicies'], verbs: ['create', 'delete'] },
+  // Read access to exactly the namespace default-deny policy (checked before every start).
+  {
+    apiGroups: ['networking.k8s.io'],
+    resources: ['networkpolicies'],
+    resourceNames: ['default-deny-all'],
+    verbs: ['get'],
+  },
 ];
 
 export interface HttpResponse {
@@ -246,6 +257,16 @@ export class InClusterKubeClient implements KubeClient {
     });
     if (res.status !== 201 && res.status !== 200) throw failure('create NetworkPolicy', res);
     return { uid: uidOf(res) };
+  }
+
+  async getNetworkPolicy(namespace: string, name: string): Promise<KubeObject | null> {
+    const res = await this.transport({
+      method: 'GET',
+      path: `/apis/networking.k8s.io/v1/namespaces/${this.ns(namespace)}/networkpolicies/${encodeURIComponent(name)}`,
+    });
+    if (res.status === 404) return null;
+    if (res.status !== 200) throw failure('get NetworkPolicy', res);
+    return res.body as KubeObject;
   }
 
   async deleteNetworkPolicy(namespace: string, name: string, uid?: string): Promise<void> {

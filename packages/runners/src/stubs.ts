@@ -63,6 +63,8 @@ export const KubernetesJobRunnerConfigSchema = z.strictObject({
   airgapped: z.boolean().default(false),
   /** UID/GID the step container runs as; must match the image's non-root user. */
   runAsUser: z.number().int().min(1).default(65532),
+  /** Name of the static namespace-wide default-deny NetworkPolicy that must exist before a step starts. */
+  defaultDenyPolicy: z.string().default('default-deny-all'),
   /** Allow DNS to kube-dns in `kube-system` (needed to resolve the control node). */
   dnsEgress: z.boolean().default(true),
   /** Where the control node lives; the only cluster-internal destination a step may reach. */

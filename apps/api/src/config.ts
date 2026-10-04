@@ -8,7 +8,7 @@ import {
   type RoleBinding,
 } from '@openagentix/core';
 import { parseProviderConfigs, type ProviderConfig } from '@openagentix/providers';
-import { KubernetesJobRunnerConfigSchema } from '@openagentix/runners';
+import { KubernetesJobRunnerConfigSchema, validateResourceCeiling } from '@openagentix/runners';
 import { z } from 'zod';
 import { loadDatabaseConfig, type DatabaseConfig } from './db/settings.js';
 
@@ -461,6 +461,14 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
     resources: { cpu: e.OAX_K8S_RESOURCES_CPU, memory: e.OAX_K8S_RESOURCES_MEMORY },
     nodeSelector: e.OAX_K8S_NODE_SELECTOR ?? {},
   });
+  try {
+    validateResourceCeiling(job.resources);
+  } catch (err) {
+    throw new OaxError(
+      'config_invalid',
+      `invalid configuration: OAX_K8S_RESOURCES_*: ${(err as Error).message}`,
+    );
+  }
   if (enabled.includes('kubernetes-job') && !e.OAX_K8S_JOB_ENABLED) {
     throw new OaxError(
       'config_invalid',

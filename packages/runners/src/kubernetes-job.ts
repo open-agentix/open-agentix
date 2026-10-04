@@ -1,6 +1,13 @@
 import { NotImplementedError, OaxError, type RunnerKind } from '@openagentix/core';
 import type { z } from 'zod';
-import { ALWAYS_DENIED_CIDRS, cidrContains, minPrefix, parseCidr, type Cidr } from './cidr.js';
+import {
+  ALWAYS_DENIED_CIDRS,
+  cidrContains,
+  formatCidr,
+  minPrefix,
+  parseCidr,
+  type Cidr,
+} from './cidr.js';
 import type {
   IsolatingRunner,
   RunNodeExit,
@@ -64,8 +71,9 @@ export function validateImage(image: string, cfg: KubernetesJobRunnerConfig): vo
   if (!lower.startsWith(`${registry}/`)) {
     throw bad(`image "${image}" is not under the configured registry "${registry}"`);
   }
-  if (!IMAGE_DIGEST.test(lower))
-    throw bad(`image "${image}" must be pinned by digest (@sha256:...)`);
+  if (!IMAGE_DIGEST.test(lower) || lower.split('@').length !== 2) {
+    throw bad(`image "${image}" must be pinned by digest (exactly one @sha256:...)`);
+  }
   const repo = lower.slice(0, lower.indexOf('@'));
   const rel = repo.slice(registry.length + 1);
   if (/\s/.test(image) || rel.includes(':') || !/^[a-z0-9][a-z0-9._/-]*$/.test(rel)) {
@@ -123,7 +131,7 @@ export function planEgress(
   const denied = [...ALWAYS_DENIED_CIDRS, ...cfg.denyCidrs].map((d) => {
     const c = parseCidr(d);
     if (!c) throw bad(`deny CIDR "${d}" is not a valid CIDR`);
-    return c;
+    return { ...c, text: formatCidr(c) };
   });
   const cidrs = new Map<string, EgressCidr>();
   const hosts = new Set<string>();
@@ -136,8 +144,9 @@ export function planEgress(
       if (denied.some((d) => cidrContains(d, c))) {
         throw bad(`egress entry "${e}" is inside an always-denied range`);
       }
-      cidrs.set(e, {
-        cidr: e,
+      const canonical = formatCidr(c);
+      cidrs.set(canonical, {
+        cidr: canonical,
         except: denied
           .filter((d) => d.version === c.version && cidrContains(c, d))
           .map((d) => d.text),
@@ -176,6 +185,14 @@ export function parseMemoryMb(q: string): number {
     G: 1e9 / (1024 * 1024),
   };
   return Number(m[1]) * mult[m[2] ?? '']!;
+}
+
+/** Rejects operator ceilings that would round to 0 / below the floor (which would mean "no limit"). */
+export function validateResourceCeiling(r: { cpu: string; memory: string }): void {
+  if (parseCpu(r.cpu) < MIN_CPU) throw bad(`resources.cpu "${r.cpu}" is below the minimum of 50m`);
+  if (Math.floor(parseMemoryMb(r.memory)) < MIN_MEMORY_MB) {
+    throw bad(`resources.memory "${r.memory}" is below the minimum of 32Mi`);
+  }
 }
 
 /** Step limits clamped into [floor, operator ceiling] (`resources`); never zero or unbounded. */
@@ -401,7 +418,8 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
 /**
  * Runs one run node per step as a Kubernetes Job (ADR 0008 3.5). Per step it creates, in the run
  * namespace only: a suspended Job, a NetworkPolicy (deny all ingress, egress allowlist) and a
- * Secret with the run token only (both owner-referenced to the Job), then unsuspends the Job.
+ * Secret with the run token only (the Secret is owner-referenced to the Job, the policy is not), then
+ * unsuspends the Job.
  * Everything this call created (and nothing else) is deleted when the node stops.
  *
  * Prerequisites: a CNI that enforces NetworkPolicy and a namespace-wide default-deny policy
@@ -427,6 +445,7 @@ export class KubernetesJobRunner implements IsolatingRunner {
     if (this.config.workerNamespace && this.config.namespace === this.config.workerNamespace) {
       throw bad('the run namespace must differ from the worker namespace');
     }
+    validateResourceCeiling(this.config.resources);
     this.client = opts.client;
     this.pollMs = opts.pollMs ?? 2000;
     this.cleanupPolls = Math.max(1, Math.ceil((opts.cleanupTimeoutMs ?? 60_000) / this.pollMs));
@@ -439,6 +458,36 @@ export class KubernetesJobRunner implements IsolatingRunner {
       'Runner "kubernetes-job" whole-run execution',
       'It runs single steps as run nodes through startNode(); the orchestrator dispatches isolated steps (ADR 0008, section 3).',
     );
+  }
+
+  /**
+   * Per-step policies are only additive on top of the namespace default-deny policy; if it is
+   * missing (or not a real deny-all) nothing is started (fail closed).
+   */
+  private async requireDefaultDeny(): Promise<void> {
+    const name = this.config.defaultDenyPolicy;
+    const p = (await this.client.getNetworkPolicy(this.config.namespace, name)) as {
+      spec?: {
+        podSelector?: { matchLabels?: unknown; matchExpressions?: unknown };
+        policyTypes?: string[];
+        ingress?: unknown[];
+        egress?: unknown[];
+      };
+    } | null;
+    const sp = p?.spec;
+    const ok =
+      !!sp &&
+      !sp.podSelector?.matchLabels &&
+      !sp.podSelector?.matchExpressions &&
+      (sp.policyTypes ?? []).includes('Ingress') &&
+      (sp.policyTypes ?? []).includes('Egress') &&
+      !(sp.ingress && sp.ingress.length > 0) &&
+      !(sp.egress && sp.egress.length > 0);
+    if (!ok) {
+      throw bad(
+        `namespace "${this.config.namespace}" has no default-deny NetworkPolicy "${name}" (ingress+egress, empty podSelector); refusing to start a step`,
+      );
+    }
   }
 
   async startNode(spec: RunNodeSpec, ctx: { signal?: AbortSignal } = {}): Promise<RunNodeHandle> {
@@ -464,6 +513,7 @@ export class KubernetesJobRunner implements IsolatingRunner {
       this.cleanupPolls,
       this.sleep,
     );
+    await this.requireDefaultDeny();
     // A failed createJob (e.g. 409 for an existing name) created nothing: nothing is deleted.
     const { uid } = await this.client.createJob(ns, job);
     handle.created.job = uid;
@@ -477,7 +527,10 @@ export class KubernetesJobRunner implements IsolatingRunner {
         // No blockOwnerDeletion: it would need `jobs/finalizers` RBAC under
         // OwnerReferencesPermissionEnforcement.
       };
-      policy.metadata.ownerReferences = [owner];
+      // Only the Secret is owned by the Job. The NetworkPolicy deliberately has NO owner reference:
+      // with Foreground deletion the GC would remove an owned policy in parallel with the Pods'
+      // termination. It is deleted explicitly, after the Pods are confirmed gone (labels let a
+      // future sweeper find leftovers).
       secret.metadata.ownerReferences = [owner];
       handle.created.policy = (await this.client.createNetworkPolicy(ns, policy)).uid;
       handle.created.secret = (await this.client.createSecret(ns, secret)).uid;
@@ -543,9 +596,11 @@ class JobHandle implements RunNodeHandle {
 
   /**
    * Order matters: the Job goes first with Foreground propagation (its Pods are gone before it
-   * disappears), the NetworkPolicy last and only once the Pods are gone, so a terminating Pod is
-   * never without its policy. If the Pods do not vanish in time the policy is left in place for
-   * the owner garbage collection and the error is reported.
+   * disappears), the NetworkPolicy last and only once the Pods are confirmed gone. The policy has
+   * no owner reference, so the garbage collector never removes it in parallel with the Pods'
+   * termination. If the Pods do not vanish in time the policy stays, the error is reported and a
+   * retry of stop() (or a sweeper, via the labels) removes it; the namespace default-deny policy
+   * is the fallback for everything in between.
    */
   private async cleanup(): Promise<void> {
     const errors: string[] = [];
@@ -574,7 +629,9 @@ class JobHandle implements RunNodeHandle {
           errors.push(msg(e));
         }
       } else {
-        errors.push('NetworkPolicy kept: the Pods are not confirmed gone (left to owner GC)');
+        errors.push(
+          'NetworkPolicy kept: the Pods are not confirmed gone (retry stop() or sweep by label)',
+        );
       }
     }
     if (errors.length > 0) {
