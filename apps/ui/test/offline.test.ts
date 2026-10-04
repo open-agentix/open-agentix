@@ -17,6 +17,10 @@ describe('no third-party requests', () => {
     }
   });
 
+  it('source strings reference no third-party hosts (runs without a build)', () => {
+    expect(scanDist(join(root, 'src'), ['.ts', '.tsx'])).toEqual([]);
+  });
+
   it.skipIf(!existsSync(join(root, 'dist')))(
     'the built dist/ contains no third-party references',
     () => {

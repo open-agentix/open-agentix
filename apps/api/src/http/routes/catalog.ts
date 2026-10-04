@@ -1,3 +1,4 @@
+import { CATALOG_PROVIDER_FOR, listProposals, proposeModels } from '@openagentix/providers';
 import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
@@ -5,11 +6,15 @@ import { connectionDto, policyDto } from '../dto.js';
 import {
   ConnectionCreateBody,
   ConnectionSchema,
+  ConnectionTestBody,
+  ConnectionTestResultSchema,
   ConnectionUpdateBody,
   DecisionSchema,
   ErrorSchema,
   EvaluateBody,
   IdParams,
+  ModelProposalQuery,
+  ModelProposalSchema,
   PolicyCreateBody,
   PolicySchema,
   PolicyUpdateBody,
@@ -18,7 +23,7 @@ import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
 
-export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
+export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void {
   const { catalog } = services;
 
   app.get(
@@ -53,6 +58,53 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
       reply
         .status(201)
         .send(connectionDto(await catalog.createConnection(principalOf(req), req.body))),
+  );
+
+  app.post(
+    '/v1/models/proposals',
+    {
+      config: { access: 'connections:read' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'Propose limits and USD prices per model from the pinned model catalog (before creating a model connection; every value can be overridden)',
+        security: sec,
+        body: ModelProposalQuery,
+        response: {
+          200: z.object({
+            catalogProvider: z.string().nullable(),
+            snapshotDate: z.string(),
+            items: z.array(ModelProposalSchema),
+          }),
+        },
+      },
+    },
+    async (req) => {
+      const catalogProvider = req.body.catalogProvider ?? CATALOG_PROVIDER_FOR[req.body.provider];
+      const items = req.body.models
+        ? proposeModels(ctx.modelCatalog, catalogProvider, req.body.models)
+        : catalogProvider
+          ? listProposals(ctx.modelCatalog, catalogProvider)
+          : [];
+      return { catalogProvider, snapshotDate: ctx.modelCatalog.snapshotDate, items };
+    },
+  );
+
+  app.post(
+    '/v1/connections/:id/test',
+    {
+      config: { access: 'connections:write' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'Send one tiny completion through a model connection (audited, costs a few tokens)',
+        security: sec,
+        params: IdParams,
+        body: ConnectionTestBody,
+        response: { 200: ConnectionTestResultSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => services.models.test(principalOf(req), req.params.id, req.body.model),
   );
 
   app.get(

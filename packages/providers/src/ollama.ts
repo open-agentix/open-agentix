@@ -23,6 +23,8 @@ interface OllamaResponse {
 /** Ollama `/api/chat` (non-streaming). Local models default to clearance `restricted`. */
 export class OllamaProvider implements ModelProvider {
   readonly kind = 'ollama' as const;
+  readonly family = 'ollama';
+  readonly catalogProvider = 'ollama';
   readonly name: string;
   readonly clearance: Classification;
   private readonly baseUrl: string;
