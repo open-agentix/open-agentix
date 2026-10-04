@@ -6,6 +6,7 @@ import {
   type AuditEntry,
   type BudgetVerdict,
   type PolicyBundle,
+  type PublishedDefinition,
   type PolicyDecision,
   type ToolCallRequest,
   type VerifyResult,
@@ -65,6 +66,7 @@ export class LocalControlPlane implements ControlPlane {
     const decision = evaluateToolCall(call, {
       definition: this.opts.definition,
       agent,
+      toolAccess: (this.opts.definition as PublishedDefinition).toolAccess,
       bundles: this.opts.policies ?? [],
       callCounts: counts,
     });
