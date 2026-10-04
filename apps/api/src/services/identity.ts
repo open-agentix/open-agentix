@@ -16,7 +16,7 @@ import { newToken, parseToken, secretMatches } from '../auth/tokens.js';
 import { cached } from '../cache.js';
 import { mapGroupsToBindings, type MappedBinding } from '../config.js';
 import type { AppContext } from '../context.js';
-import { apiTokens, oidcStates, teamMembers, teams, users } from '../db/schema.js';
+import { agents, apiTokens, oidcStates, teamMembers, teams, users } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
 
@@ -543,6 +543,42 @@ export class IdentityService {
     await this.ctx.cache.del('teams:all');
     await this.audit.append({ actor, action: 'team.created', target: row!.id, payload: input });
     return row!;
+  }
+
+  async teamMembers(
+    teamId: string,
+  ): Promise<{ userId: string; email: string; displayName: string; role: string }[]> {
+    await this.getTeam(teamId);
+    return this.ctx.db
+      .select({
+        userId: users.id,
+        email: users.email,
+        displayName: users.displayName,
+        role: teamMembers.role,
+      })
+      .from(teamMembers)
+      .innerJoin(users, eq(users.id, teamMembers.userId))
+      .where(eq(teamMembers.teamId, teamId))
+      .orderBy(users.email);
+  }
+
+  /** Deletes a team that owns no agents (memberships are removed with it). */
+  async deleteTeam(actor: string, teamId: string): Promise<void> {
+    await this.getTeam(teamId);
+    const [owned] = await this.ctx.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(eq(agents.teamId, teamId))
+      .limit(1);
+    if (owned) throw conflict('team still owns agents; move or archive them first');
+    const members = await this.ctx.db
+      .select({ userId: teamMembers.userId })
+      .from(teamMembers)
+      .where(eq(teamMembers.teamId, teamId));
+    await this.ctx.db.delete(teams).where(eq(teams.id, teamId));
+    await Promise.all(members.map((m) => this.invalidateUserTokens(m.userId)));
+    await this.ctx.cache.del('teams:all');
+    await this.audit.append({ actor, action: 'team.deleted', target: teamId });
   }
 
   async setTeamMembers(

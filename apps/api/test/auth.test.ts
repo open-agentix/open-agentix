@@ -492,8 +492,50 @@ describe('users and teams', () => {
         })
       ).statusCode,
     ).toBe(404);
+    expect((await n.req({ method: 'GET', url: `/v1/users/${eng.id}` })).json().email).toBe(
+      'eng@example.com',
+    );
+    expect(
+      (await n.req({ method: 'GET', url: '/v1/users/00000000-0000-4000-8000-000000000000' }))
+        .statusCode,
+    ).toBe(404);
+    const members = (
+      await n.req({ method: 'GET', url: `/v1/teams/${team.json().id}/members` })
+    ).json().items;
+    expect(members).toEqual([
+      { userId: eng.id, email: 'eng@example.com', displayName: 'Eng', role: 'operator' },
+    ]);
+    const tmp = (
+      await n.req({ method: 'POST', url: '/v1/teams', payload: { slug: 'team-tmp', name: 'Tmp' } })
+    ).json();
+    await n.req({
+      method: 'PUT',
+      url: `/v1/teams/${tmp.id}/members`,
+      payload: { members: [{ userId: eng.id, role: 'viewer' }] },
+    });
+    expect((await n.req({ method: 'DELETE', url: `/v1/teams/${tmp.id}` })).statusCode).toBe(204);
+    expect((await n.req({ method: 'GET', url: `/v1/teams/${tmp.id}/members` })).statusCode).toBe(
+      404,
+    );
+    const owner = (
+      await n.req({
+        method: 'POST',
+        url: '/v1/teams',
+        payload: { slug: 'team-owner', name: 'Owner' },
+      })
+    ).json();
+    const src =
+      '---\napiVersion: openagentix.io/v1alpha1\nkind: Agent\nname: owned\nversion: 1.0.0\nowner: team-owner\nagents:\n  - { id: a, provider: simulated, model: m, instructions: x }\n---\n';
+    expect(
+      (await n.req({ method: 'POST', url: '/v1/agents', payload: { source: src } })).statusCode,
+    ).toBe(201);
+    expect((await n.req({ method: 'DELETE', url: `/v1/teams/${owner.id}` })).statusCode).toBe(409);
     const teams = (await n.req({ method: 'GET', url: '/v1/teams' })).json().items;
-    expect(teams.map((t: { slug: string }) => t.slug)).toEqual(['team-ops', 'team-security']);
+    expect(teams.map((t: { slug: string }) => t.slug)).toEqual([
+      'team-ops',
+      'team-owner',
+      'team-security',
+    ]);
   });
 
   it('rate-limits login attempts', async () => {
