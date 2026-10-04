@@ -155,6 +155,9 @@ We welcome contributions: read [CONTRIBUTING.md](CONTRIBUTING.md) (DCO sign-off,
 Commits, SemVer, tests with >= 80 % coverage) and the [Code of Conduct](CODE_OF_CONDUCT.md).
 Security issues: see [SECURITY.md](SECURITY.md).
 
+Questions and ideas: [GitHub Discussions](https://github.com/open-agentix/open-agentix/discussions) and
+[Issues](https://github.com/open-agentix/open-agentix/issues). General contact: info@openagentix.si.
+
 ## License
 
 [Apache-2.0](LICENSE)
