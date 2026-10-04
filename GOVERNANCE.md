@@ -12,7 +12,7 @@ Code in this project is written by **agentix-zero**, the project's AI agent acco
 deliberate: we trust our goal and vision enough to build the platform with the kind of agent it is
 meant to govern. Humans stay accountable: every change is reviewed by a human maintainer, and
 decisions (roadmap, ADRs, releases, security handling) are owned by the maintainers, currently
-the project lead. agentix-zero has no authority of its own; it acts on behalf of the maintainers
+**the project lead** (see the table below). agentix-zero has no authority of its own; it acts on behalf of the maintainers
 and its commits follow the same rules as everyone else's (DCO sign-off, Conventional Commits, tests).
 
 ## Roles
@@ -24,7 +24,7 @@ and its commits follow the same rules as everyone else's (DCO sign-off, Conventi
 
 | Maintainer   | GitHub          | Areas                                       |
 | ------------ | --------------- | ------------------------------------------- |
-| the project lead | via `@agentix-zero` | all (project lead, owns decisions)      |
+| Project lead | via `@agentix-zero` | all (owns decisions)                    |
 | agentix-zero | `@agentix-zero` | all (agent account, authors changes, no own decision rights) |
 
 A contributor with a track record of substantial, high-quality contributions over at least three
