@@ -28,7 +28,9 @@ describe('executePipeline budgets', () => {
   };
 
   it('stops before the first model call when a monthly budget is already reached', async () => {
-    const { ctx, control } = env(def);
+    const { ctx, control } = env(def, {
+      control: { checkBudget: async () => ({ blocked: true, breaches: [breach] }) },
+    });
     let model = 0;
     const base = ctx.providers.get('simulated');
     ctx.providers.get = () => ({
@@ -38,7 +40,6 @@ describe('executePipeline budgets', () => {
       clearance: base.clearance,
       complete: async (...a: Parameters<typeof base.complete>) => (model++, base.complete(...a)),
     });
-    control.checkBudget = async () => ({ blocked: true, breaches: [breach] });
     const r = await executePipeline(prepared(def), ctx);
     expect(r.status).toBe('failed');
     expect(r.error?.code).toBe('control_budget_use_case');
@@ -53,12 +54,17 @@ describe('executePipeline budgets', () => {
       responses:
         - toolCalls: [{ server: tickets, tool: list_tickets, args: {} }]
         - text: never reached`);
-    const { ctx, control } = env(def2);
     // Another run spends the rest of the budget after this run's first model call.
-    control.checkBudget = async () =>
-      control.steps.some((st) => st.kind === 'model_call')
-        ? { blocked: true, breaches: [breach] }
-        : { blocked: false, breaches: [] };
+    let seen: StepInput[] = [];
+    const { ctx, control } = env(def2, {
+      control: {
+        checkBudget: async () =>
+          seen.some((st) => st.kind === 'model_call')
+            ? { blocked: true, breaches: [breach] }
+            : { blocked: false, breaches: [] },
+      },
+    });
+    seen = control.steps;
     const r = await executePipeline(prepared(def2), ctx);
     expect(r.status).toBe('failed');
     expect(r.error?.code).toBe('control_budget_use_case');
@@ -67,8 +73,9 @@ describe('executePipeline budgets', () => {
   });
 
   it('runs normally while the budget has headroom', async () => {
-    const { ctx, control } = env(def);
-    control.checkBudget = async () => ({ blocked: false, breaches: [] });
+    const { ctx } = env(def, {
+      control: { checkBudget: async () => ({ blocked: false, breaches: [] }) },
+    });
     expect((await executePipeline(prepared(def), ctx)).status).toBe('succeeded');
   });
 });
