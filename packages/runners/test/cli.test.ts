@@ -130,7 +130,7 @@ describe('oax CLI', () => {
         h.cli,
       ),
     ).toBe(1);
-    expect(h.out.join('\n')).toMatch(/error=harness_error|error=not_implemented/);
+    expect(h.out.join('\n')).toMatch(/error=harness_provider_unsupported/);
     const b = io();
     expect(await runCli(['run', 'examples/cve-triage.agents.md'], b.cli)).toBe(2);
     expect(b.err[0]).toMatch(/usage/);

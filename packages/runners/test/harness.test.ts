@@ -252,7 +252,7 @@ describe('ClaudeCodeHarness.run (fake binary)', () => {
 
 describe('other harnesses are documented stubs', () => {
   it('shares the interface and throws NotImplementedError', async () => {
-    for (const name of ['opencode', 'hermes', 'openclaw'] as const) {
+    for (const name of ['hermes', 'openclaw'] as const) {
       const h = createHarness(name);
       expect(h.name).toBe(name);
       await expect(h.run(inv('x'), { cwd: dir })).rejects.toThrow(NotImplementedError);
