@@ -217,6 +217,9 @@
       "approval": "Human approval",
       "approvalRequired": "Required",
       "approvalNone": "No",
+      "access": "Step access",
+      "accessValues": { "read-only": "Read-only (no write tools)", "write": "Write" },
+      "via": "(from profile {profile})",
       "noTools": "This agent has no tools."
     },
     "publish": {
@@ -446,7 +449,16 @@
     "outputs": "Outputs",
     "noOutputs": "This run produced no output.",
     "outputsPending": "Outputs appear when the run finishes.",
-    "stream": { "live": "Live", "reconnecting": "Reconnecting…", "failed": "Live updates lost" }
+    "stream": { "live": "Live", "reconnecting": "Reconnecting…", "failed": "Live updates lost" },
+    "handover": {
+      "skipped": "Step skipped, condition is false: {detail}",
+      "conditionError": "Condition could not be evaluated: {detail}",
+      "invalid": "The {direction} does not match its schema ({count} violations). Values are never logged.",
+      "missing": "The {direction} needs the output of a step that did not run.",
+      "retry": "The output was invalid; asking the agent once more.",
+      "input": "input",
+      "output": "output"
+    }
   },
   "steps": {
     "kinds": {
@@ -456,6 +468,8 @@
       "approval": "Approval",
       "control": "Control agent",
       "output": "Output",
+      "condition": "Condition",
+      "handover": "Handover",
       "error": "Error"
     },
     "status": {
@@ -464,7 +478,8 @@
       "denied": "Denied",
       "pending": "Pending",
       "approved": "Approved",
-      "rejected": "Rejected"
+      "rejected": "Rejected",
+      "skipped": "Skipped"
     },
     "effects": { "allow": "Allowed", "deny": "Denied", "require_approval": "Needs approval" },
     "gate": "Audit gate: {effect}",
@@ -518,6 +533,27 @@
     "scope": "Who may use it",
     "scopeHint": "Platform connections are available to every tenant and managed by the platform operator.",
     "scopes": { "platform": "Platform", "tenant": "Tenant", "team": "Team", "agent": "Agent" },
+    "profiles": {
+      "title": "Tool access and profiles",
+      "hint": "Classify each tool as read or write (undeclared tools count as write), then group tools into named profiles such as read or write. Agents grant a profile (for example jira:read); read-only steps can never receive a write tool.",
+      "summary": {
+        "one": "{count} tool classified, profiles",
+        "other": "{count} tools classified, profiles"
+      },
+      "tools": "Classified tools",
+      "tool": "Tool",
+      "access": "Access",
+      "read": "Read",
+      "write": "Write",
+      "accessOf": "Access of {tool}",
+      "newTool": "New tool name",
+      "addTool": "Add tool",
+      "removeTool": "Remove tool {tool}",
+      "newProfile": "New profile name",
+      "addProfile": "Add profile",
+      "removeProfile": "Remove profile {profile}",
+      "problems": "These profile entries will be refused: {items}"
+    },
     "modelsCount": { "one": "{count} model with price", "other": "{count} models with prices" },
     "proposeHint": "Bring your own key: reference the key by secret name. Prices are proposed from the pinned model catalog and can be overridden per model.",
     "propose": "Propose models and prices",

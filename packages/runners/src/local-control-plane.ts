@@ -1,11 +1,13 @@
 import {
   createAuditEntry,
   evaluateToolCall,
+  stepAuditEntry,
   verifyAuditChain,
   type AgentDefinition,
   type AuditEntry,
   type BudgetVerdict,
   type PolicyBundle,
+  type PublishedDefinition,
   type PolicyDecision,
   type ToolCallRequest,
   type VerifyResult,
@@ -24,6 +26,8 @@ export interface LocalControlPlaneOptions {
   /** Monthly budget verdict; local runs have no ledger, so the default never blocks. */
   checkBudget?: (runId: string) => BudgetVerdict | Promise<BudgetVerdict>;
   actor?: string;
+  /** Tool classes (`server/tool`) for read-only steps; defaults to the definition's own. */
+  toolAccess?: Readonly<Record<string, 'read' | 'write'>>;
 }
 
 /**
@@ -65,6 +69,7 @@ export class LocalControlPlane implements ControlPlane {
     const decision = evaluateToolCall(call, {
       definition: this.opts.definition,
       agent,
+      toolAccess: this.opts.toolAccess ?? (this.opts.definition as PublishedDefinition).toolAccess,
       bundles: this.opts.policies ?? [],
       callCounts: counts,
     });
@@ -83,7 +88,8 @@ export class LocalControlPlane implements ControlPlane {
 
   async recordStep(runId: string, step: StepInput): Promise<void> {
     this.steps.push(step);
-    this.append(`step.${step.kind}`, runId, step.name, step);
+    const special = stepAuditEntry(step);
+    this.append(special?.action ?? `step.${step.kind}`, runId, step.name, special?.payload ?? step);
     this.opts.onStep?.(runId, step);
   }
 

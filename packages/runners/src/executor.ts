@@ -19,6 +19,7 @@ import {
 } from '@openagentix/core';
 import type { ExposedTool } from '@openagentix/mcp';
 import type { ChatMessage, ChatResponse, ModelProvider, ToolSpec } from '@openagentix/providers';
+import { HandoverFailure, StepFlow, buildHandoverPrompt } from './handover-flow.js';
 import type { AgentOutput, PreparedRun, RunResult, RunnerContext, StepInput } from './types.js';
 
 const INJECTION_GUARD =
@@ -145,16 +146,20 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
 
   try {
     let previous: AgentOutput | null = null;
+    const flow = new StepFlow(run, step);
     for (const agentId of def.pipeline) {
       const agent = def.agents.find((a) => a.id === agentId);
       if (!agent) throw new OaxError('agent_unknown', `agent "${agentId}" not found`);
+      // Condition and input handover run before anything else: a skipped step touches nothing.
+      const start = await flow.begin(agent, previous);
+      if (start.skipped) continue;
       const provider = ctx.providers.get(agent.provider);
-      const flow = controller.checkDataFlow(def.classification, provider.clearance);
-      if (flow.action === 'kill') {
-        await step({ kind: 'control', agentId, name: 'kill', status: 'error', output: flow });
+      const dataFlow = controller.checkDataFlow(def.classification, provider.clearance);
+      if (dataFlow.action === 'kill') {
+        await step({ kind: 'control', agentId, name: 'kill', status: 'error', output: dataFlow });
         throw new RunAborted({
           status: 'blocked_by_policy',
-          error: { code: 'control_classification', message: flow.reasons[0]?.message ?? '' },
+          error: { code: 'control_classification', message: dataFlow.reasons[0]?.message ?? '' },
         });
       }
       const exposed: ExposedTool[] = await ctx.tools.exposedTools(agent);
@@ -165,10 +170,18 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
         inputSchema: t.inputSchema,
       }));
       const agentBudget = effectiveBudget(def.budget, agent.budget);
-      const messages: ChatMessage[] = [{ role: 'user', content: buildUserPrompt(run, previous) }];
+      const messages: ChatMessage[] = [
+        {
+          role: 'user',
+          content: start.explicit
+            ? buildHandoverPrompt(start.value)
+            : buildUserPrompt(run, previous),
+        },
+      ];
       const system = buildSystemPrompt(agent);
       let agentSteps = 0;
       let finalText: string | null = null;
+      let outputAttempts = 0;
 
       while (finalText === null) {
         await enforce(agentId);
@@ -195,7 +208,12 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
               ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
               hints: {
                 ...(agent.simulation ? { simulation: agent.simulation.responses } : {}),
-                context: { event: run.event, input: previous?.json ?? previous?.content ?? null },
+                context: {
+                  event: run.event,
+                  input: start.explicit
+                    ? start.value
+                    : (previous?.json ?? previous?.content ?? null),
+                },
               },
             },
             signal ? { signal } : {},
@@ -260,8 +278,28 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
           });
         }
         if (res.toolCalls.length === 0) {
-          finalText = res.text;
-          break;
+          outputAttempts++;
+          const invalid = flow.checkOutput(agent, res.text);
+          if (!invalid) {
+            finalText = res.text;
+            break;
+          }
+          await flow.recordInvalid(
+            agentId,
+            'output',
+            outputAttempts,
+            invalid.schemaDigest,
+            invalid.errors,
+          );
+          if (agent.output?.onInvalid === 'retry' && outputAttempts === 1) {
+            await flow.recordRetry(agentId, invalid);
+            messages.push({ role: 'user', content: flow.retryMessage(invalid) });
+            continue;
+          }
+          throw new HandoverFailure(
+            'handover_invalid',
+            `output of agent "${agentId}" does not match its output schema`,
+          );
         }
         for (const tc of res.toolCalls) {
           const target = byName.get(tc.name);
@@ -407,11 +445,20 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
         }
       }
       outputs.push(out);
+      flow.complete(out);
       await step({ kind: 'output', agentId, name: format, status: 'ok', output: out });
       previous = out;
     }
     return { status: 'succeeded', outputs, usage: usage() };
   } catch (e) {
+    if (e instanceof HandoverFailure) {
+      return {
+        status: 'failed',
+        outputs,
+        usage: usage(),
+        error: { code: e.code, message: e.message },
+      };
+    }
     if (e instanceof RunAborted) {
       return {
         status: e.result.status,

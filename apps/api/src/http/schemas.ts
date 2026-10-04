@@ -54,9 +54,24 @@ export const VersionSchema = z.object({
   publishedBy: Id.nullable(),
   publishedAt: Iso,
 });
+export const ExpansionRecordSchema = z.object({
+  agentId: z.string(),
+  server: z.string(),
+  profile: z.string(),
+  tools: z.array(z.string()),
+  connectionVersion: z.string(),
+});
 export const VersionDetailSchema = VersionSchema.extend({
   source: z.string(),
   definition: z.record(z.string(), z.unknown()),
+  expansion: z
+    .array(ExpansionRecordSchema)
+    .optional()
+    .describe('profile grants as expanded at publish (also inside `definition`)'),
+  expansionDigest: z
+    .string()
+    .optional()
+    .describe('SHA-256 over the expanded grants and the tool classification at publish'),
 });
 export const PublishResultSchema = z.object({ version: VersionSchema, created: z.boolean() });
 
@@ -106,7 +121,15 @@ export const ManualRunBody = z.object({
   version: z.string().optional(),
 });
 
-export const STEP_STATUSES = ['ok', 'error', 'denied', 'pending', 'approved', 'rejected'] as const;
+export const STEP_STATUSES = [
+  'ok',
+  'error',
+  'denied',
+  'pending',
+  'approved',
+  'rejected',
+  'skipped',
+] as const;
 export const StepSchema = z.object({
   seq: z.number().int(),
   kind: z.enum(STEP_KINDS),
@@ -525,18 +548,10 @@ export const ReadySchema = HealthSchema.extend({
 export const RunIdParams = z.object({ id: Id });
 export const GateBody = z.object({ agentId: z.string(), call: ToolCallSchema });
 export const StepBody = z.object({
-  kind: z.enum([
-    'model_call',
-    'tool_call',
-    'policy_decision',
-    'approval',
-    'control',
-    'output',
-    'error',
-  ]),
+  kind: z.enum(STEP_KINDS),
   agentId: z.string().nullable(),
   name: z.string().max(500),
-  status: z.enum(['ok', 'error', 'denied', 'pending', 'approved', 'rejected']),
+  status: z.enum(STEP_STATUSES),
   input: Json.optional(),
   output: Json.optional(),
   tokensIn: z.number().int().nonnegative().optional(),

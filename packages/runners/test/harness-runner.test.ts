@@ -352,3 +352,115 @@ describe('runLocal with a harness', () => {
     expect(report.audit.valid).toBe(true);
   });
 });
+
+describe('executeWithHarness typed handovers', () => {
+  const def = loadAgentDefinition(`---
+apiVersion: openagentix.io/v1alpha1
+kind: AgentPipeline
+name: typed
+version: 1.0.0
+owner: team
+schemas:
+  Finding:
+    type: object
+    required: [severity]
+    properties: { severity: { enum: [low, high] } }
+agents:
+  - id: a
+    provider: simulated
+    model: sim-1
+    instructions: First.
+    outputs: [{ format: json }]
+    output: { schema: { $ref: "#/schemas/Finding" }, onInvalid: retry }
+  - id: b
+    provider: simulated
+    model: sim-1
+    instructions: Second.
+    when: 'steps.a.output.severity == "high"'
+    input: { from: [a] }
+  - id: c
+    provider: simulated
+    model: sim-1
+    instructions: Third.
+    input: { from: [event] }
+---
+`);
+
+  it('skips a step whose condition is false and hands over only the selected JSON', async () => {
+    const prompts: string[] = [];
+    const harness = new ScriptedHarness(async () => ({ text: '{"severity":"low"}' }));
+    const orig = harness.buildInvocation.bind(harness);
+    harness.buildInvocation = (...args) => {
+      prompts.push(args[2]);
+      return orig(...args);
+    };
+    const { ctx, control, tools } = setup(def);
+    const r = await executeWithHarness(prepared(def, { ticket: 'SEC-9' }), ctx, harness, {});
+    await tools.close();
+    expect(r.status).toBe('succeeded');
+    expect(r.outputs.map((o) => o.agentId)).toEqual(['a', 'c']);
+    expect(control.steps.some((s) => s.kind === 'condition' && s.status === 'skipped')).toBe(true);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('"ticket": "SEC-9"');
+    expect(prompts[1]).not.toContain('previous agent');
+  });
+
+  it('fails with handover_invalid on an invalid output (retry is not possible)', async () => {
+    const harness = new ScriptedHarness(async () => ({ text: '{"severity":"VALUE"}' }));
+    const { ctx, control, tools } = setup(def);
+    const r = await executeWithHarness(prepared(def), ctx, harness, {});
+    await tools.close();
+    expect(r.status).toBe('failed');
+    expect(r.error?.code).toBe('handover_invalid');
+    expect(control.audit.some((a) => a.action === 'handover.invalid')).toBe(true);
+    expect(JSON.stringify(control.audit)).not.toContain('"VALUE"');
+  });
+
+  it('fails with condition_error and handover_missing', async () => {
+    const bad = loadAgentDefinition(`---
+apiVersion: openagentix.io/v1alpha1
+kind: AgentPipeline
+name: typed2
+version: 1.0.0
+owner: team
+agents:
+  - id: a
+    provider: simulated
+    model: sim-1
+    instructions: First.
+    when: 'event.data.nope == 1'
+---
+`);
+    const h1 = new ScriptedHarness(async () => ({ text: 'x' }));
+    const s1 = setup(bad);
+    const r1 = await executeWithHarness(prepared(bad), s1.ctx, h1, {});
+    await s1.tools.close();
+    expect(r1.error?.code).toBe('condition_error');
+    expect(h1.invocations).toHaveLength(0);
+
+    const missing = loadAgentDefinition(`---
+apiVersion: openagentix.io/v1alpha1
+kind: AgentPipeline
+name: typed3
+version: 1.0.0
+owner: team
+agents:
+  - id: a
+    provider: simulated
+    model: sim-1
+    instructions: First.
+    when: 'false'
+  - id: b
+    provider: simulated
+    model: sim-1
+    instructions: Second.
+    input: { from: [a] }
+---
+`);
+    const h2 = new ScriptedHarness(async () => ({ text: 'x' }));
+    const s2 = setup(missing);
+    const r2 = await executeWithHarness(prepared(missing), s2.ctx, h2, {});
+    await s2.tools.close();
+    expect(r2.error?.code).toBe('handover_missing');
+  });
+});

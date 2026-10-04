@@ -16,6 +16,23 @@ All notable changes to this project are documented here. The format follows
   `OAX_RATE_LIMIT_PLAN_MAX`), `oax plan check|generate`, an "Agent plans" page (en, de). Nothing is
   stored or published automatically. `docs/agent-check.md`.
 - **agents.md data flow fields (parsed and validated, no runtime effect yet)**: `schemas`,
+- **Named read/write tool profiles per MCP connection**: an `mcp` connection declares
+  `tools: { <name>: { access: read | write } }` and `profiles: { <name>: [tool, ...] }` (unknown tools
+  in a profile are refused when it is saved). `agents[].tools[].profile` grants such a profile; it is
+  expanded into concrete grants when a version is published and stored in the immutable version
+  (`expansion`, `toolAccess`, `expansionDigest`), so later profile edits never widen a published
+  version. A step with `access: read-only` can never receive a write tool: refused at publish and
+  denied by the policy gate at run time (`profile_write_denied`). Expansion and refusals are audited
+  (`agent.profiles.expanded`, `agent.publish.denied`). Connections page and agent overview show
+  classes, profiles and where a grant came from. `docs/mcp.md`.
+- **Typed handovers and conditional steps (W1-1)**: `output.schema` / `input.schema` are validated at
+  runtime (ajv 8, strict, JSON Schema subset, size and depth limits) with `onInvalid: fail|retry`,
+  `input.from` gives a step only the JSON it names, and `when` is evaluated by a strictly typed,
+  non-`eval` evaluator (false skips the step, an error fails the run). New run steps `condition` and
+  `handover` (status `skipped`), audit entries `step.skipped`, `condition.error`, `handover.invalid`,
+  `handover.retry` (never with the offending values), error codes `handover_invalid`,
+  `handover_missing`, `condition_error`. `examples/ticket-triage.agents.md`, `docs/pipelines.md`.
+- **agents.md data flow fields (parsed and validated; `schemas`, `input`, `output` and `when` now run, see above)**: `schemas`,
   `agents[].input`/`output` (JSON Schema subset with size, depth and safe-regex limits), `when`
   (bounded expression grammar, parsed at publish), `access`, `tools[].profile`, `credentials`
   (secret references per step) and `runtime` per step. Existing files parse unchanged.
@@ -82,6 +99,10 @@ All notable changes to this project are documented here. The format follows
 - **Breaking (API/DB, pre-1.0)**: `Principal` carries `tenantId` and `platformAdmin`; migration
   `0003` makes names unique per tenant, adds `users.tenant_id`, `users.platform_admin` and
   `policies.scope`, and marks existing `admin` users as platform operators.
+
+### Fixed
+
+- **Database password override**: `OAX_DATABASE_PASSWORD` / `PGPASSWORD` were ignored with pg 8.23 when the connection string contained no password (SCRAM error "client password must be a string"); the password is now injected into the connection string (URL-encoded).
 
 ## [0.1.0] - 2026-10-04
 

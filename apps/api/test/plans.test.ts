@@ -136,6 +136,9 @@ describe('offeredFromConnection', () => {
       profiles: { p: ['r'] },
     });
     expect(offeredFromConnection({ name: 'a', config: { profiles: [] } })).toEqual({ name: 'a' });
+    expect(offeredFromConnection({ name: 'a', config: { tools: {}, profiles: {} } })).toEqual({
+      name: 'a',
+    });
   });
 });
 

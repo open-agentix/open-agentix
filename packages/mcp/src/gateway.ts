@@ -1,9 +1,11 @@
 import {
   OaxError,
+  classifyTool,
   evaluateToolCall,
   findGrant,
   type PolicyContext,
   type PolicyDecision,
+  type ToolAccess,
   type ToolCallRequest,
 } from '@openagentix/core';
 import type { ConnectDeps, McpTool, ToolResult } from './connection.js';
@@ -33,6 +35,8 @@ export interface ExposedTool {
   tool: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** Declared class of the tool, else derived from the MCP annotations (default `write`). */
+  access?: ToolAccess | undefined;
 }
 
 export type GatewayCallResult =
@@ -68,6 +72,7 @@ export class ToolGateway {
     const out: ExposedTool[] = [];
     for (const server of servers) {
       const tools: McpTool[] = await (await this.connection(server)).listTools();
+      const declared = this.configs.find((c) => c.name === server)?.tools ?? {};
       for (const t of tools) {
         if (!findGrant(agent.tools, server, t.name)) continue;
         out.push({
@@ -76,6 +81,10 @@ export class ToolGateway {
           tool: t.name,
           description: t.description ?? '',
           inputSchema: t.inputSchema,
+          access: classifyTool(
+            Object.hasOwn(declared, t.name) ? declared[t.name]!.access : undefined,
+            t.annotations,
+          ),
         });
       }
     }

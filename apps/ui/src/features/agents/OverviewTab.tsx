@@ -90,6 +90,16 @@ export function OverviewTab({
                     ],
                   ]
                 : []),
+              ...(spec.access
+                ? [
+                    [
+                      t('agents.overview.access'),
+                      <Badge key="acc" tone={spec.access === 'read-only' ? 'info' : 'warning'}>
+                        {t(`agents.overview.accessValues.${spec.access}`)}
+                      </Badge>,
+                    ] as [string, ReactNode],
+                  ]
+                : []),
               [t('agents.overview.outputs'), spec.outputs.join(', ')],
             ]}
           />
@@ -109,6 +119,12 @@ export function OverviewTab({
                     <tr key={`${tool.server}/${tool.tool}`}>
                       <td className="mono">
                         {tool.server}/{tool.tool}
+                        {tool.via ? (
+                          <span className="muted">
+                            {' '}
+                            {t('agents.overview.via', { profile: tool.via })}
+                          </span>
+                        ) : null}
                         {tool.maxCallsPerRun ? (
                           <span className="muted"> ≤{tool.maxCallsPerRun}×</span>
                         ) : null}

@@ -23,6 +23,33 @@ components:
       name: x-oax-signature
       description: HMAC-SHA256 signature
   schemas:
+    McpToolAccess:
+      type: object
+      required:
+        - access
+      additionalProperties: false
+      properties:
+        access:
+          type: string
+          enum:
+            - read
+            - write
+    McpConnectionAccess:
+      type: object
+      description: Tool classes and named profiles inside the config of an `mcp` connection (alongside transport, url, ...). A tool that is not declared counts as `write`; profile members must be declared tools; a profile named `read` may only hold read tools.
+      properties:
+        tools:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/McpToolAccess"
+        profiles:
+          type: object
+          description: profile name (slug) -> declared tool names
+          additionalProperties:
+            type: array
+            items:
+              type: string
+            minItems: 1
     Error:
       type: object
       required:
@@ -1581,6 +1608,34 @@ paths:
                     propertyNames:
                       type: string
                     additionalProperties: {}
+                  expansion:
+                    description: profile grants as expanded at publish (also inside `definition`)
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agentId:
+                          type: string
+                        server:
+                          type: string
+                        profile:
+                          type: string
+                        tools:
+                          type: array
+                          items:
+                            type: string
+                        connectionVersion:
+                          type: string
+                      required:
+                        - agentId
+                        - server
+                        - profile
+                        - tools
+                        - connectionVersion
+                      additionalProperties: false
+                  expansionDigest:
+                    description: SHA-256 over the expanded grants and the tool classification at publish
+                    type: string
                 required:
                   - id
                   - agentId
@@ -3207,6 +3262,8 @@ paths:
                             - approval
                             - control
                             - output
+                            - condition
+                            - handover
                             - error
                         agentId:
                           type:
@@ -3223,6 +3280,7 @@ paths:
                             - pending
                             - approved
                             - rejected
+                            - skipped
                         input: {}
                         output: {}
                         tokensIn:
@@ -7770,6 +7828,8 @@ paths:
                     - approval
                     - control
                     - output
+                    - condition
+                    - handover
                     - error
                 agentId:
                   type:
@@ -7787,6 +7847,7 @@ paths:
                     - pending
                     - approved
                     - rejected
+                    - skipped
                 input: {}
                 output: {}
                 tokensIn:

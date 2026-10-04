@@ -8,10 +8,12 @@ import {
 } from '@openagentix/core';
 import { createEvent } from '@openagentix/events';
 import {
+  DEMO_TOOL_ACCESS,
   McpServerConfigSchema,
   ToolGateway,
   demoServerFactories,
   inMemoryServers,
+  toolAccessOfConfigs,
   type Ticket,
 } from '@openagentix/mcp';
 import { ProviderRegistry, SimulatedProvider, type ModelProvider } from '@openagentix/providers';
@@ -36,14 +38,18 @@ export function setup(
   } = {},
 ) {
   const store = opts.store ?? new Map<string, Ticket>();
-  const tools = new ToolGateway(
-    [
-      McpServerConfigSchema.parse({ name: 'cve-db', transport: 'in-memory' }),
-      McpServerConfigSchema.parse({ name: 'tickets', transport: 'in-memory' }),
-    ],
-    { secrets, inMemory: inMemoryServers(demoServerFactories(store)) },
+  const demoConfigs = ['cve-db', 'tickets'].map((name) =>
+    McpServerConfigSchema.parse({ name, transport: 'in-memory', tools: DEMO_TOOL_ACCESS[name] }),
   );
-  const control = new LocalControlPlane({ definition: def, ...opts.control });
+  const tools = new ToolGateway([...demoConfigs], {
+    secrets,
+    inMemory: inMemoryServers(demoServerFactories(store)),
+  });
+  const control = new LocalControlPlane({
+    definition: def,
+    toolAccess: toolAccessOfConfigs(demoConfigs),
+    ...opts.control,
+  });
   const ctx: RunnerContext = {
     providers: ProviderRegistry.of(
       opts.providers ?? [new SimulatedProvider({ name: 'simulated' })],

@@ -80,7 +80,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      const r = agents.validate(req.body.source);
+      const r = await agents.validateFor(principalOf(req), req.body.source);
       return {
         valid: r.valid,
         errors: r.errors,
@@ -284,6 +284,11 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
         req.body.data,
         await services.catalog.enabledBundles(principalOf(req).tenantId),
         req.body.approve,
+        await services.catalog.accessCatalog({
+          tenantId: agent.tenantId,
+          teamId: agent.teamId,
+          agentId: agent.id,
+        }),
       );
       return {
         status: r.result.status,

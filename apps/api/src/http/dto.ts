@@ -1,4 +1,4 @@
-import type { AuditCheckpoint } from '@openagentix/core';
+import type { AuditCheckpoint, PublishedExpansion } from '@openagentix/core';
 import type { AgentRow, AgentVersionRow, VersionSummary } from '../services/agents.js';
 import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
 import type { PublicUser, TeamRow, TenantRow, TokenInfo } from '../services/identity.js';
@@ -32,7 +32,21 @@ export const versionDetailDto = (v: AgentVersionRow) => ({
   publishedAt: iso(v.publishedAt),
   source: v.source,
   definition: v.definition as Record<string, unknown>,
+  ...expansionOf(v.definition),
 });
+
+/** Profile expansion stored with a version (absent for versions published before profiles). */
+function expansionOf(
+  definition: unknown,
+): Partial<Pick<PublishedExpansion, 'expansion' | 'expansionDigest'>> {
+  const d = (definition ?? {}) as { expansion?: unknown; expansionDigest?: unknown };
+  return {
+    ...(Array.isArray(d.expansion)
+      ? { expansion: d.expansion as PublishedExpansion['expansion'] }
+      : {}),
+    ...(typeof d.expansionDigest === 'string' ? { expansionDigest: d.expansionDigest } : {}),
+  };
+}
 
 export const runDto = (r: RunRow, agentName: string | null = null) => ({
   id: r.id,

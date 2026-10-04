@@ -11,6 +11,8 @@ export interface MockTool {
   /** Return a string (text) or any JSON value; throwing produces an `isError` result. */
   handler: (args: Record<string, unknown>) => unknown;
   delayMs?: number;
+  /** MCP tool annotations advertised by `tools/list` (e.g. `{ readOnlyHint: true }`). */
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
 }
 
 /** A small in-process MCP server (tests, the demo and the local CLI). */
@@ -21,6 +23,7 @@ export function createMockMcpServer(name: string, tools: readonly MockTool[]): S
       name: t.name,
       description: t.description ?? '',
       inputSchema: (t.inputSchema ?? { type: 'object' }) as { type: 'object' },
+      ...(t.annotations ? { annotations: t.annotations } : {}),
     })),
   }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => {

@@ -45,6 +45,8 @@ export const STEP_KINDS = [
   'approval',
   'control',
   'output',
+  'condition',
+  'handover',
   'error',
 ] as const;
 export type StepKind = (typeof STEP_KINDS)[number];

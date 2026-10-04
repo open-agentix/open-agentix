@@ -85,7 +85,7 @@ const accessOf = (v: unknown): AccessClass =>
 /**
  * What a stored MCP connection offers, reduced to names and access classes. `tools` may be a list
  * of names (every tool counts as write) or `{ name: { access } }`; `profiles` maps a profile name
- * to tool names. Anything else is ignored, so a connection that declares nothing is "not
+ * to tool names. Anything else is ignored, so a connection that declares nothing (also empty `tools`/`profiles`, the stored defaults) is "not
  * declared" (conventional `read`/`write` profiles, every tool write) and never grants more.
  */
 export function offeredFromConnection(
@@ -107,7 +107,7 @@ export function offeredFromConnection(
         .slice(0, 1000)
         .map((n) => [n, 'write' as const]),
     );
-  } else if (t && typeof t === 'object') {
+  } else if (t && typeof t === 'object' && Object.keys(t).length > 0) {
     out.tools = Object.fromEntries(
       Object.entries(t)
         .slice(0, 1000)
@@ -115,7 +115,7 @@ export function offeredFromConnection(
     );
   }
   const p = cfg.profiles;
-  if (p && typeof p === 'object' && !Array.isArray(p)) {
+  if (p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).length > 0) {
     out.profiles = Object.fromEntries(
       Object.entries(p)
         .slice(0, 100)
