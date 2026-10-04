@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CVE_TRIAGE, agentSource } from './fixtures.js';
+import { CVE_TRIAGE, JIRA_EVENT, TICKET_UPDATER, TRIVY_EVENT, agentSource } from './fixtures.js';
 import { testNode, type TestNode } from './helpers.js';
 
 let n: TestNode;
@@ -308,5 +308,48 @@ describe('runtime constraints at publish', () => {
       201,
     );
     await strict.close();
+  });
+});
+
+describe('dry run', () => {
+  it('runs a draft with the simulated provider and policy gate without side effects', async () => {
+    const node = await testNode();
+    await node.req({
+      method: 'POST',
+      url: '/v1/teams',
+      payload: { slug: 'team-security', name: 'Security' },
+    });
+    await node.req({
+      method: 'POST',
+      url: '/v1/policies',
+      payload: { name: 'p', bundle: { forbiddenTools: ['*/delete_*'] } },
+    });
+    const id = (
+      await node.req({ method: 'POST', url: '/v1/agents', payload: { source: CVE_TRIAGE } })
+    ).json().id;
+    const res = await node.req({
+      method: 'POST',
+      url: `/v1/agents/${id}/dry-run`,
+      payload: { data: TRIVY_EVENT },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({ status: 'succeeded', auditValid: true, error: null });
+    expect(
+      body.steps
+        .filter((s: { kind: string }) => s.kind === 'tool_call')
+        .every((s: { output: { text: string } }) => s.output.text.includes('"dryRun":true')),
+    ).toBe(true);
+    expect((await node.req({ method: 'GET', url: '/v1/runs' })).json().items).toEqual([]);
+    const denied = await node.req({
+      method: 'POST',
+      url: `/v1/agents/${id}/dry-run`,
+      payload: { approve: 'none', source: TICKET_UPDATER, data: JIRA_EVENT },
+    });
+    expect(denied.json().status).toBe('succeeded');
+    expect(
+      denied.json().steps.map((s: { kind: string; status: string }) => `${s.kind}:${s.status}`),
+    ).toContain('approval:rejected');
+    await node.close();
   });
 });

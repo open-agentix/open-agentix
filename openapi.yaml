@@ -1413,6 +1413,136 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/agents/{id}/dry-run:
+    post:
+      summary: Dry-run the draft (or a given source) with the simulated provider; tool calls are policy-checked but not executed, nothing is stored
+      tags:
+        - agents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  description: event payload or CloudEvent
+                source:
+                  description: agents.md to test instead of the stored draft
+                  type: string
+                  maxLength: 512000
+                approve:
+                  default: all
+                  type: string
+                  enum:
+                    - all
+                    - none
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  outputs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agentId:
+                          type: string
+                        format:
+                          type: string
+                        content:
+                          type: string
+                      required:
+                        - agentId
+                        - format
+                        - content
+                      additionalProperties: false
+                  usage:
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties:
+                      type: number
+                  error:
+                    anyOf:
+                      - type: object
+                        properties:
+                          code:
+                            type: string
+                          message:
+                            type: string
+                        required:
+                          - code
+                          - message
+                        additionalProperties: false
+                      - type: "null"
+                  steps:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind:
+                          type: string
+                        agentId:
+                          type:
+                            - string
+                            - "null"
+                        name:
+                          type: string
+                        status:
+                          type: string
+                        output: {}
+                      required:
+                        - kind
+                        - agentId
+                        - name
+                        - status
+                        - output
+                      additionalProperties: false
+                  auditValid:
+                    type: boolean
+                required:
+                  - status
+                  - outputs
+                  - usage
+                  - error
+                  - steps
+                  - auditValid
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/agents/{id}/runs:
     post:
       summary: Trigger a run manually
