@@ -288,7 +288,10 @@ describe('ADR 0008 fields', () => {
 
 describe('backward compatibility', () => {
   const examplesDir = fileURLToPath(new URL('../../../examples/', import.meta.url));
-  const examples = readdirSync(examplesDir).filter((f) => f.endsWith('.agents.md'));
+  // Examples written for W1-1 use the new keys on purpose; every other example must stay unchanged.
+  const NEW_KEY_EXAMPLES = ['ticket-triage.agents.md'];
+  const all = readdirSync(examplesDir).filter((f) => f.endsWith('.agents.md'));
+  const examples = all.filter((f) => !NEW_KEY_EXAMPLES.includes(f));
   const NEW_KEYS = ['input', 'output', 'when', 'access', 'credentials', 'runtime', 'profileGrants'];
 
   it.each(examples)('example %s still validates without new keys', (file) => {
@@ -297,6 +300,11 @@ describe('backward compatibility', () => {
     expect(r.definition?.schemas).toBeUndefined();
     for (const a of r.definition?.agents ?? [])
       for (const key of NEW_KEYS) expect(a).not.toHaveProperty(key);
+  });
+
+  it.each(NEW_KEY_EXAMPLES)('example %s validates', (file) => {
+    const r = validateAgentSource(readFileSync(`${examplesDir}${file}`, 'utf8'));
+    expect(r.errors).toEqual([]);
   });
 
   it.each(Object.entries(demoAgents))('demo agent %s still validates', (_name, source) => {

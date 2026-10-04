@@ -1,6 +1,7 @@
 import {
   createAuditEntry,
   evaluateToolCall,
+  stepAuditEntry,
   verifyAuditChain,
   type AgentDefinition,
   type AuditEntry,
@@ -83,7 +84,8 @@ export class LocalControlPlane implements ControlPlane {
 
   async recordStep(runId: string, step: StepInput): Promise<void> {
     this.steps.push(step);
-    this.append(`step.${step.kind}`, runId, step.name, step);
+    const special = stepAuditEntry(step);
+    this.append(special?.action ?? `step.${step.kind}`, runId, step.name, special?.payload ?? step);
     this.opts.onStep?.(runId, step);
   }
 

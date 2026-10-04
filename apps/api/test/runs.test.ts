@@ -11,7 +11,7 @@ import { HttpControlPlane, InProcessRunner } from '@openagentix/runners';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runs } from '../src/db/schema.js';
-import { CVE_TRIAGE, JIRA_EVENT, TICKET_UPDATER, TRIVY_EVENT } from './fixtures.js';
+import { CVE_TRIAGE, JIRA_EVENT, TICKET_UPDATER, TRIVY_EVENT, example } from './fixtures.js';
 import { injectFetch, testNode, testSecrets, type TestNode } from './helpers.js';
 
 const keys = generateAuditKeyPair();
@@ -33,9 +33,13 @@ async function claim(runId: string, worker = 'w1') {
     .where(eq(runs.id, runId));
 }
 
-async function execute(runId: string) {
+async function execute(
+  runId: string,
+  mutate?: (prepared: Awaited<ReturnType<typeof n.services.control.prepare>>) => void,
+) {
   await claim(runId);
   const prepared = await n.services.control.prepare(runId);
+  mutate?.(prepared);
   const control = new HttpControlPlane({
     baseUrl: 'http://localhost:8080',
     runToken: n.services.control.issueToken(runId, 'w1'),
@@ -584,5 +588,83 @@ describe('audit API', () => {
     await expect(n.services.control.authorize('oaxrt.x.y', 'r')).rejects.toSatisfy(
       (e: OaxError) => e.code === 'run_token_invalid',
     );
+  });
+});
+
+describe('typed handovers over the worker contract', () => {
+  // Owned by team-ops: the budget test above leaves team-security without budget.
+  const TRIAGE = example('ticket-triage.agents.md').replace(
+    'owner: team-security',
+    'owner: team-ops',
+  );
+  const publish = async (source: string): Promise<string> => {
+    const id = (await n.req({ method: 'POST', url: '/v1/agents', payload: { source } })).json()
+      .id as string;
+    const res = await n.req({ method: 'POST', url: `/v1/agents/${id}/publish` });
+    expect(res.statusCode).toBeLessThan(300);
+    return id;
+  };
+  const stepsOf = async (runId: string) =>
+    (await n.req({ method: 'GET', url: `/v1/runs/${runId}/steps?limit=200` })).json().items as {
+      kind: string;
+      status: string;
+      name: string;
+    }[];
+  const auditOf = async (runId: string) =>
+    (await n.req({ method: 'GET', url: `/v1/audit?runId=${runId}&limit=200` })).json().items as {
+      action: string;
+      payload: unknown;
+    }[];
+
+  it('runs the ticket-triage example end to end', async () => {
+    const id = await publish(TRIAGE);
+    const runId = await manualRun(id, TRIVY_EVENT);
+    const result = await execute(runId);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe('succeeded');
+    expect(result.outputs.map((o) => o.agentId)).toEqual(['research', 'analysis', 'action']);
+    const run = (await n.req({ method: 'GET', url: `/v1/runs/${runId}` })).json();
+    expect(run.status).toBe('succeeded');
+  });
+
+  it('records a skipped step and the step.skipped audit entry', async () => {
+    const source = TRIAGE.replace('name: ticket-triage', 'name: ticket-triage-skip').replace(
+      '["HIGH", "CRITICAL"]',
+      '["CRITICAL"]',
+    );
+    const id = await publish(source);
+    const runId = await manualRun(id, {
+      ...TRIVY_EVENT,
+      finding: { cveId: 'CVE-2023-44487', package: 'nghttp2', installed: '1.0' },
+    });
+    const result = await execute(runId);
+    expect(result.status).toBe('succeeded');
+    const steps = await stepsOf(runId);
+    expect(steps).toContainEqual(expect.objectContaining({ kind: 'condition', status: 'skipped' }));
+    const skipped = (await auditOf(runId)).find((a) => a.action === 'step.skipped');
+    expect(skipped?.payload).toMatchObject({ agentId: 'action' });
+  });
+
+  it('fails with handover_invalid and audits it without the offending value', async () => {
+    const source = TRIAGE.replace('name: ticket-triage', 'name: ticket-triage-bad').replace(
+      'onInvalid: retry',
+      'onInvalid: fail',
+    );
+    const id = await publish(source);
+    const runId = await manualRun(id, TRIVY_EVENT);
+    const result = await execute(runId, (prepared) => {
+      const bad = prepared.definition.agents.find((a) => a.id === 'research')!;
+      bad.simulation = { responses: [{ text: '{"severity":"SECRET-LEAK-CHECK"}' }] };
+    });
+    expect(result.error?.code).toBe('handover_invalid');
+    const steps = await stepsOf(runId);
+    expect(steps).toContainEqual(
+      expect.objectContaining({ kind: 'handover', status: 'error', name: 'output' }),
+    );
+    const audit = await auditOf(runId);
+    const entry = audit.find((a) => a.action === 'handover.invalid');
+    expect(entry?.payload).toMatchObject({ agentId: 'research', direction: 'output' });
+    // The model call keeps its text as before (redacted); the handover entry never has the value.
+    expect(JSON.stringify(entry)).not.toContain('SECRET-LEAK-CHECK');
   });
 });

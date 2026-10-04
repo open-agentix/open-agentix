@@ -8,6 +8,8 @@ export * from './agents/parser.js';
 export * from './agents/validate.js';
 export * from './agents/when.js';
 export * from './agents/json-schema.js';
+export * from './agents/conditions.js';
+export * from './agents/handover.js';
 export * from './policy/engine.js';
 export * from './control/controller.js';
 export * from './redact.js';

@@ -449,6 +449,15 @@
       "live": "Live",
       "reconnecting": "Verbinde neu …",
       "failed": "Live-Updates verloren"
+    },
+    "handover": {
+      "skipped": "Schritt übersprungen, Bedingung ist falsch: {detail}",
+      "conditionError": "Bedingung konnte nicht ausgewertet werden: {detail}",
+      "invalid": "Die {direction} passt nicht zum Schema ({count} Verstöße). Werte werden nie protokolliert.",
+      "missing": "Die {direction} braucht die Ausgabe eines Schritts, der nicht lief.",
+      "retry": "Die Ausgabe war ungültig; der Agent wird noch einmal gefragt.",
+      "input": "Eingabe",
+      "output": "Ausgabe"
     }
   },
   "steps": {
@@ -459,6 +468,8 @@
       "approval": "Freigabe",
       "control": "Kontroll-Agent",
       "output": "Ausgabe",
+      "condition": "Bedingung",
+      "handover": "Übergabe",
       "error": "Fehler"
     },
     "status": {
@@ -467,7 +478,8 @@
       "denied": "Abgelehnt",
       "pending": "Offen",
       "approved": "Freigegeben",
-      "rejected": "Abgelehnt"
+      "rejected": "Abgelehnt",
+      "skipped": "Übersprungen"
     },
     "effects": { "allow": "Erlaubt", "deny": "Abgelehnt", "require_approval": "Braucht Freigabe" },
     "gate": "Audit-Gate: {effect}",

@@ -12,6 +12,8 @@ const KIND_ICON: Record<string, IconName> = {
   approval: 'hand',
   control: 'policies',
   output: 'output',
+  condition: 'info',
+  handover: 'shield',
   error: 'alert',
 };
 
@@ -22,6 +24,7 @@ const STATUS_TONE: Record<string, Tone> = {
   denied: 'danger',
   rejected: 'danger',
   pending: 'warning',
+  skipped: 'neutral',
 };
 
 export function policyOutcome(step: RunStep): { effect: string; reasons: string[] } | null {
@@ -31,12 +34,50 @@ export function policyOutcome(step: RunStep): { effect: string; reasons: string[
   return { effect: String(out.effect ?? step.status), reasons: reasonsText(out.reasons) };
 }
 
+export interface HandoverSummary {
+  /** `skipped`, `conditionError`, `invalid`, `missing` or `retry`. */
+  outcome: 'skipped' | 'conditionError' | 'invalid' | 'missing' | 'retry';
+  direction: 'input' | 'output' | null;
+  /** The `when` expression, or the evaluation reason for condition errors. */
+  detail: string;
+  violations: number;
+}
+
+/** Reads the `condition` and `handover` steps (ADR 0008); never shows values, only paths. */
+export function handoverSummary(step: RunStep): HandoverSummary | null {
+  const out =
+    step.output && typeof step.output === 'object' && !Array.isArray(step.output)
+      ? (step.output as Record<string, unknown>)
+      : {};
+  if (step.kind === 'condition') {
+    if (step.status === 'skipped')
+      return { outcome: 'skipped', direction: null, detail: String(out.when ?? ''), violations: 0 };
+    return {
+      outcome: 'conditionError',
+      direction: null,
+      detail: String(out.reason ?? ''),
+      violations: 0,
+    };
+  }
+  if (step.kind !== 'handover') return null;
+  const errors = Array.isArray(out.errors) ? (out.errors as { keyword?: unknown }[]) : [];
+  const direction = out.direction === 'input' ? 'input' : 'output';
+  const missing = errors.some((e) => e.keyword === 'missing');
+  return {
+    outcome: step.name === 'retry' ? 'retry' : missing ? 'missing' : 'invalid',
+    direction,
+    detail: '',
+    violations: errors.length,
+  };
+}
+
 export function StepTimeline({ steps }: { steps: RunStep[] }) {
   const { t, fmt } = useI18n();
   return (
     <ol className="timeline steps">
       {steps.map((s) => {
         const policy = policyOutcome(s);
+        const handover = handoverSummary(s);
         const tone = STATUS_TONE[s.status] ?? 'neutral';
         return (
           <li key={s.seq} className={`timeline-item step step-${tone}`}>
@@ -56,6 +97,20 @@ export function StepTimeline({ steps }: { steps: RunStep[] }) {
                   <span>
                     {t('steps.gate', { effect: t(`steps.effects.${policy.effect}` as TKey) })}
                     {policy.reasons.length ? `: ${policy.reasons.join('; ')}` : ''}
+                  </span>
+                </p>
+              ) : null}
+              {handover ? (
+                <p className={handover.outcome === 'skipped' ? 'muted' : 'policy policy-deny'}>
+                  <Icon name={handover.outcome === 'skipped' ? 'info' : 'alert'} size={14} />
+                  <span>
+                    {t(`runs.handover.${handover.outcome}` as TKey, {
+                      direction: handover.direction
+                        ? t(`runs.handover.${handover.direction}` as TKey)
+                        : '',
+                      count: String(handover.violations),
+                      detail: handover.detail,
+                    })}
                   </span>
                 </p>
               ) : null}

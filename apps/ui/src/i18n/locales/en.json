@@ -445,7 +445,16 @@
     "outputs": "Outputs",
     "noOutputs": "This run produced no output.",
     "outputsPending": "Outputs appear when the run finishes.",
-    "stream": { "live": "Live", "reconnecting": "Reconnecting…", "failed": "Live updates lost" }
+    "stream": { "live": "Live", "reconnecting": "Reconnecting…", "failed": "Live updates lost" },
+    "handover": {
+      "skipped": "Step skipped, condition is false: {detail}",
+      "conditionError": "Condition could not be evaluated: {detail}",
+      "invalid": "The {direction} does not match its schema ({count} violations). Values are never logged.",
+      "missing": "The {direction} needs the output of a step that did not run.",
+      "retry": "The output was invalid; asking the agent once more.",
+      "input": "input",
+      "output": "output"
+    }
   },
   "steps": {
     "kinds": {
@@ -455,6 +464,8 @@
       "approval": "Approval",
       "control": "Control agent",
       "output": "Output",
+      "condition": "Condition",
+      "handover": "Handover",
       "error": "Error"
     },
     "status": {
@@ -463,7 +474,8 @@
       "denied": "Denied",
       "pending": "Pending",
       "approved": "Approved",
-      "rejected": "Rejected"
+      "rejected": "Rejected",
+      "skipped": "Skipped"
     },
     "effects": { "allow": "Allowed", "deny": "Denied", "require_approval": "Needs approval" },
     "gate": "Audit gate: {effect}",

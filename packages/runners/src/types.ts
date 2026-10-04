@@ -25,7 +25,8 @@ export interface PreparedRun {
   limits?: Partial<ControlLimits>;
 }
 
-export type StepStatus = 'ok' | 'error' | 'denied' | 'pending' | 'approved' | 'rejected';
+export type StepStatus =
+  'ok' | 'error' | 'denied' | 'pending' | 'approved' | 'rejected' | 'skipped';
 
 export interface StepInput {
   kind: StepKind;
