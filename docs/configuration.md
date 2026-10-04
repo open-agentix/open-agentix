@@ -130,22 +130,32 @@ Roles: `admin`, `agent-engineer`, `integrator`, `operator`, `auditor`, `viewer`
 | `OAX_SECRET_<NAME>` | – (*secret*) | Value of the secret reference `<name>` (upper case, non-alphanumerics -> `_`; `<NAME>` must match `[A-Z0-9_]+`, validated at start-up). |
 | `OAX_SECRETS_DIR` | – | Directory with one file per secret reference (e.g. a mounted Kubernetes Secret). |
 
-Provider entries (`clearance` = highest data classification the provider may receive:
-`public|internal|confidential|restricted`; `proxyUrl`, `timeoutMs`, `maxRetries` are optional on all):
+Provider entries use the same settings as model connections, plus a `name` agents reference.
+`kind` is one of `anthropic`, `bedrock`, `openai`, `azure-openai`, `openrouter`, `vllm`, `lmstudio`,
+`ollama`, `openai-compatible`, `simulated`; see [Models, providers and keys](providers.md) for every
+field. `clearance` = highest data classification the provider may receive
+(`public|internal|confidential|restricted`); `proxyUrl`, `timeoutMs`, `maxRetries` and `models`
+(price overrides) are optional on all:
 
 ```json
 [
   { "kind": "simulated", "name": "simulated" },
   { "kind": "ollama", "name": "ollama", "baseUrl": "http://ollama:11434", "clearance": "restricted" },
-  { "kind": "openai", "name": "openai", "baseUrl": "https://api.openai.com/v1", "apiKeySecret": "openai-key" },
-  { "kind": "openai", "name": "azure", "baseUrl": "https://res.openai.azure.com/openai/deployments/gpt",
-    "query": "api-version=2024-10-21", "headerSecrets": { "api-key": "azure-openai-key" } },
+  { "kind": "openai", "name": "openai", "apiKeySecret": "openai-key" },
+  { "kind": "azure-openai", "name": "azure", "endpoint": "https://res.openai.azure.com",
+    "apiKeySecret": "azure-openai-key" },
+  { "kind": "openrouter", "name": "router", "apiKeySecret": "openrouter-key" },
+  { "kind": "vllm", "name": "vllm", "baseUrl": "http://vllm:8000/v1" },
   { "kind": "anthropic", "name": "anthropic", "apiKeySecret": "anthropic-key" },
   { "kind": "bedrock", "name": "bedrock", "region": "eu-central-1",
     "endpoint": "https://vpce-0abc.bedrock-runtime.eu-central-1.vpce.amazonaws.com",
     "proxyUrl": "http://egress-proxy:3128", "clearance": "confidential" }
 ]
 ```
+
+Prices come from the pinned model catalog; `OAX_PRICE_TABLE` overrides them. Tenants and teams add
+their own providers and keys at run time through model connections (BYOK), see
+[Models, providers and keys](providers.md).
 
 Bedrock uses the AWS default credential chain: on EKS annotate the ServiceAccount with
 `eks.amazonaws.com/role-arn` (IRSA); no keys in configuration. Standard AWS variables

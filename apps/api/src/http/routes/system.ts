@@ -5,7 +5,7 @@ import {
   ROLE_PERMISSIONS,
   RUNNER_KINDS,
 } from '@openagentix/core';
-import { catalogModels, loadModelCatalog } from '@openagentix/providers';
+import { catalogModels } from '@openagentix/providers';
 import { z } from 'zod';
 import { HttpError } from '../../errors.js';
 import { VERSION } from '../../version.js';
@@ -108,10 +108,22 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
         tags: ['system'],
         summary: 'Model catalog (pinned snapshot + local overrides from OAX_PRICE_TABLE)',
         security: [{ bearer: [] }],
+        querystring: z.object({
+          provider: z
+            .string()
+            .max(100)
+            .optional()
+            .describe('models.dev provider id, e.g. anthropic'),
+          q: z.string().max(100).optional().describe('substring of the model id or name'),
+        }),
         response: {
           200: z.object({
             source: z.string(),
             snapshotDate: z.string(),
+            sha256: z
+              .string()
+              .nullable()
+              .describe('hash of the models.dev document of the snapshot'),
             items: z.array(
               z.object({
                 provider: z.string(),
@@ -122,6 +134,7 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
                 outputTokens: z.number().int().nullable(),
                 inputPerMTok: z.number().nullable(),
                 outputPerMTok: z.number().nullable(),
+                toolCall: z.boolean().nullable(),
                 source: z.enum(['catalog', 'override']),
               }),
             ),
@@ -129,12 +142,18 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
         },
       },
     },
-    async () => {
-      const catalog = loadModelCatalog();
+    async (req) => {
+      const catalog = ctx.modelCatalog;
+      const q = req.query.q?.toLowerCase();
       return {
         source: catalog.source,
         snapshotDate: catalog.snapshotDate,
-        items: catalogModels(catalog, ctx.config.priceTable),
+        sha256: catalog.sha256 ?? null,
+        items: catalogModels(catalog, ctx.config.priceTable).filter(
+          (m) =>
+            (!req.query.provider || m.provider === req.query.provider) &&
+            (!q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)),
+        ),
       };
     },
   );

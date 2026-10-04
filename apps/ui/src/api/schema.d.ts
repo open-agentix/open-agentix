@@ -250,7 +250,12 @@ export interface paths {
         /** Model catalog (pinned snapshot + local overrides from OAX_PRICE_TABLE) */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description models.dev provider id, e.g. anthropic */
+                    provider?: string;
+                    /** @description substring of the model id or name */
+                    q?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -266,6 +271,8 @@ export interface paths {
                         "application/json": {
                             source: string;
                             snapshotDate: string;
+                            /** @description hash of the models.dev document of the snapshot */
+                            sha256: string | null;
                             items: {
                                 provider: string;
                                 providerName: string;
@@ -275,6 +282,7 @@ export interface paths {
                                 outputTokens: number | null;
                                 inputPerMTok: number | null;
                                 outputPerMTok: number | null;
+                                toolCall: boolean | null;
                                 /** @enum {string} */
                                 source: "catalog" | "override";
                             }[];
@@ -3194,7 +3202,7 @@ export interface paths {
                                 scopeId: string | null;
                                 name: string;
                                 /** @enum {string} */
-                                kind: "mcp";
+                                kind: "mcp" | "model";
                                 config: {
                                     [key: string]: unknown;
                                 };
@@ -3243,7 +3251,7 @@ export interface paths {
                          * @default mcp
                          * @enum {string}
                          */
-                        kind?: "mcp";
+                        kind?: "mcp" | "model";
                         /**
                          * @description who may use it: platform (operators only), tenant, one team or one agent
                          * @default tenant
@@ -3252,7 +3260,7 @@ export interface paths {
                         scope?: "platform" | "tenant" | "team" | "agent";
                         /** @description team or agent id for team/agent scope */
                         scopeId?: string | null;
-                        /** @description MCP server config; secrets only as references (envSecrets/headerSecrets) */
+                        /** @description kind mcp: MCP server config (secrets only as references: envSecrets/headerSecrets). kind model: provider settings (`kind`: anthropic, openai, azure-openai, openrouter, vllm, lmstudio, ollama, openai-compatible, bedrock, simulated; keys as `*Secret` references; optional `models` with price overrides - missing prices are proposed from the model catalog) */
                         config: {
                             [key: string]: unknown;
                         };
@@ -3276,7 +3284,7 @@ export interface paths {
                             scopeId: string | null;
                             name: string;
                             /** @enum {string} */
-                            kind: "mcp";
+                            kind: "mcp" | "model";
                             config: {
                                 [key: string]: unknown;
                             };
@@ -3307,6 +3315,175 @@ export interface paths {
                 };
                 /** @description Default Response */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Propose limits and USD prices per model from the pinned model catalog (before creating a model connection; every value can be overridden) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /**
+                         * @description provider kind of the connection to create
+                         * @enum {string}
+                         */
+                        provider: "anthropic" | "openai" | "azure-openai" | "openrouter" | "vllm" | "lmstudio" | "ollama" | "openai-compatible" | "bedrock" | "simulated";
+                        /** @description models.dev provider id override */
+                        catalogProvider?: string;
+                        /** @description models to price; all catalog models of the provider when omitted */
+                        models?: {
+                            id: string;
+                            catalogModel?: string;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            catalogProvider: string | null;
+                            snapshotDate: string;
+                            items: {
+                                id: string;
+                                catalogModel: string | null;
+                                name: string | null;
+                                contextTokens: number | null;
+                                outputTokens: number | null;
+                                /** @description USD per million input tokens */
+                                inputPerMTok: number | null;
+                                outputPerMTok: number | null;
+                                toolCall: boolean | null;
+                                /** @enum {string} */
+                                priceSource: "catalog" | "local" | "unknown";
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send one tiny completion through a model connection (audited, costs a few tokens) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        model: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            latencyMs: number;
+                            inputTokens: number;
+                            outputTokens: number;
+                            costMicros: number;
+                            error: string | null;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -3361,7 +3538,7 @@ export interface paths {
                             scopeId: string | null;
                             name: string;
                             /** @enum {string} */
-                            kind: "mcp";
+                            kind: "mcp" | "model";
                             config: {
                                 [key: string]: unknown;
                             };
@@ -3437,7 +3614,7 @@ export interface paths {
                             scopeId: string | null;
                             name: string;
                             /** @enum {string} */
-                            kind: "mcp";
+                            kind: "mcp" | "model";
                             config: {
                                 [key: string]: unknown;
                             };

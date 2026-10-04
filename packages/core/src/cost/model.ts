@@ -37,6 +37,8 @@ export interface CostBreakdown {
   priced: boolean;
 }
 
+const GEO_PREFIX = /^(us|eu|apac|global|us-gov|jp|au|ca)\./;
+
 export class CostModel {
   private readonly table: PriceEntry[];
 
@@ -56,7 +58,11 @@ export class CostModel {
       (e) => e.provider === provider && globMatch(e.model, model),
     );
     const exact = candidates.filter((e) => e.model === model);
-    return (exact.length > 0 ? exact : candidates).at(-1);
+    const hit = (exact.length > 0 ? exact : candidates).at(-1);
+    if (hit) return hit;
+    // Bedrock inference profiles carry a geography prefix (`eu.anthropic.claude-...`).
+    const bare = model.replace(GEO_PREFIX, '');
+    return bare === model ? undefined : this.find(provider, bare);
   }
 
   modelCall(provider: string, model: string, usage: Usage): CostBreakdown {

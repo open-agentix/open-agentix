@@ -44,8 +44,13 @@ function costOf(
   model: string,
   res: ChatResponse,
 ): number {
-  const byName = costModel.modelCall(provider.name, model, res.usage);
-  if (byName.priced) return byName.totalMicros;
+  // Most specific first: a price under the instance (connection) name, then the models.dev
+  // provider of the catalog snapshot, then the adapter kind.
+  for (const key of [provider.name, provider.catalogProvider]) {
+    if (!key) continue;
+    const priced = costModel.modelCall(key, model, res.usage);
+    if (priced.priced) return priced.totalMicros;
+  }
   return costModel.modelCall(provider.kind, model, res.usage).totalMicros;
 }
 

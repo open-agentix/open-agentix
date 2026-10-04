@@ -60,6 +60,10 @@ export interface CompleteOptions {
 export interface ModelProvider {
   readonly name: string;
   readonly kind: ProviderKind;
+  /** Configured provider family (`azure-openai`, `openrouter`, `vllm`, ...); defaults to `kind`. */
+  readonly family?: string;
+  /** Model catalog provider id used for price lookups when no price exists under `name`. */
+  readonly catalogProvider?: string;
   /** Highest data classification that may be sent to this provider. */
   readonly clearance: Classification;
   complete(req: ChatRequest, opts?: CompleteOptions): Promise<ChatResponse>;

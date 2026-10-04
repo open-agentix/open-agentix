@@ -18,6 +18,19 @@ All notable changes to this project are documented here. The format follows
   connection scopes (platform, tenant, team, agent), platform vs tenant policies, tenant partition
   key on audit entries, and `docs/tenancy.md` with isolation tests.
 
+- **Every regular provider as a model connection** (BYOK): Claude API (Anthropic), AWS Bedrock
+  (default chain or key references), OpenAI (GPT), Azure OpenAI, OpenRouter, vLLM, LM Studio, Ollama
+  and any OpenAI-compatible server. Connections of kind `model` hold secret references scoped to
+  platform, tenant, team or agent (most specific wins), resolve per run, can be tested
+  (`POST /v1/connections/{id}/test`) and fail with the real reason when broken. Pasted API keys are
+  refused; tenant connections must use the tenant's secret namespace.
+- **Model catalog from a pinned models.dev snapshot** (726 models, MIT, provenance with SHA-256),
+  local models in `local.json`, `GET /v1/models?provider=&q=`, `POST /v1/models/proposals` and price
+  proposals when a connection is created (explicit prices stay as overrides), Bedrock inference
+  profile pricing, import script with a field whitelist and a weekly reviewed refresh PR job
+  (`.github/workflows/catalog-refresh.yml`). Docs: `docs/providers.md`.
+- UI: model connections with provider presets, scope and catalog price proposals.
+
 ### Changed
 
 - **Breaking (API/DB, pre-1.0)**: `Principal` carries `tenantId` and `platformAdmin`; migration

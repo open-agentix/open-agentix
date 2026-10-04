@@ -22,23 +22,38 @@ export interface AirgapEndpoint {
 type Env = Record<string, string | undefined>;
 
 /** Every outbound endpoint that the static configuration enables. */
+/** Public endpoints of provider kinds that are used when no URL is configured. */
+const DEFAULT_ENDPOINT: Record<string, (p: Record<string, unknown>) => string | null> = {
+  openai: () => 'https://api.openai.com/v1',
+  openrouter: () => 'https://openrouter.ai/api/v1',
+  anthropic: () => 'https://api.anthropic.com',
+  ollama: () => 'http://localhost:11434',
+  lmstudio: () => 'http://localhost:1234/v1',
+  bedrock: (p) =>
+    typeof p.region === 'string' ? `https://bedrock-runtime.${p.region}.amazonaws.com` : null,
+  simulated: () => null,
+};
+
+/**
+ * Every endpoint an LLM provider setting (an `OAX_PROVIDERS` entry or the body of a `model`
+ * connection) can contact: its base URL / endpoint (or the public default of that kind) and its proxy.
+ */
+export function providerEndpoints(settings: unknown, purpose: string): AirgapEndpoint[] {
+  const p = settings as Record<string, unknown>;
+  const kind = String(p.kind ?? '');
+  const out: AirgapEndpoint[] = [];
+  const explicit = [p.baseUrl, p.endpoint].find((u): u is string => typeof u === 'string');
+  const url = explicit ?? DEFAULT_ENDPOINT[kind]?.(p) ?? null;
+  if (url) out.push({ purpose, url });
+  if (kind !== 'simulated' && typeof p.proxyUrl === 'string')
+    out.push({ purpose: `${purpose} proxy`, url: p.proxyUrl });
+  return out;
+}
+
+/** Every outbound endpoint that the static configuration enables. */
 export function configuredEndpoints(config: Config, env: Env = process.env): AirgapEndpoint[] {
   const out: AirgapEndpoint[] = [];
-  for (const p of config.providers) {
-    const name = `provider "${p.name}"`;
-    if (p.kind === 'openai') out.push({ purpose: name, url: p.baseUrl });
-    if (p.kind === 'ollama')
-      out.push({ purpose: name, url: p.baseUrl ?? 'http://localhost:11434' });
-    if (p.kind === 'anthropic')
-      out.push({ purpose: name, url: p.baseUrl ?? 'https://api.anthropic.com' });
-    if (p.kind === 'bedrock')
-      out.push({
-        purpose: name,
-        url: p.endpoint ?? `https://bedrock-runtime.${p.region}.amazonaws.com`,
-      });
-    if (p.kind !== 'simulated' && p.proxyUrl)
-      out.push({ purpose: `${name} proxy`, url: p.proxyUrl });
-  }
+  for (const p of config.providers) out.push(...providerEndpoints(p, `provider "${p.name}"`));
   const a = config.auth;
   if (a.oidc) out.push({ purpose: 'OIDC issuer', url: a.oidc.issuer });
   if (a.ldap) out.push({ purpose: 'LDAP', url: a.ldap.url });
@@ -114,22 +129,33 @@ function portOf(u: URL): number | null {
   );
 }
 
-/** Violations among stored MCP connections (streamable HTTP servers). */
-export function checkMcpConnections(
-  rows: ReadonlyArray<{ name: string; config: unknown }>,
+/** Endpoints a stored connection (`mcp` streamable HTTP server or `model` provider) contacts. */
+export function connectionEndpoints(kind: string, name: string, config: unknown): AirgapEndpoint[] {
+  const cfg = (config ?? {}) as { transport?: string; url?: string };
+  if (kind === 'mcp')
+    return cfg.transport === 'streamable-http' && cfg.url
+      ? [{ purpose: `MCP connection "${name}"`, url: cfg.url }]
+      : [];
+  if (kind === 'model') return providerEndpoints(config, `model connection "${name}"`);
+  return [];
+}
+
+/** Violations among stored connections (MCP servers and BYOK model connections). */
+export function checkStoredConnections(
+  rows: ReadonlyArray<{ name: string; kind: string; config: unknown }>,
   policy: EgressPolicy,
 ): string[] {
   if (!policy.airgapped) return [];
   const problems: string[] = [];
   for (const r of rows) {
-    const cfg = r.config as { transport?: string; url?: string };
-    if (cfg.transport !== 'streamable-http' || !cfg.url) continue;
-    try {
-      const u = new URL(cfg.url);
-      if (!policy.isAllowed(u.hostname, portOf(u)))
-        problems.push(`MCP connection "${r.name}": ${u.host} is not on OAX_AIRGAPPED_ALLOW`);
-    } catch {
-      problems.push(`MCP connection "${r.name}": invalid URL`);
+    for (const ep of connectionEndpoints(r.kind, r.name, r.config)) {
+      try {
+        const u = new URL(ep.url);
+        if (!policy.isAllowed(u.hostname, portOf(u)))
+          problems.push(`${ep.purpose}: ${u.host} is not on OAX_AIRGAPPED_ALLOW`);
+      } catch {
+        problems.push(`${ep.purpose}: invalid URL`);
+      }
     }
   }
   return problems;
@@ -163,9 +189,8 @@ export function deactivateAirgap(): void {
   resetEgressPolicy();
 }
 
-/** Refuses a new/changed MCP connection whose endpoint is outside the allowlist (air-gapped only). */
-export function assertConnectionAllowed(config: unknown): void {
-  const cfg = config as { transport?: string; url?: string };
-  if (cfg.transport === 'streamable-http' && cfg.url)
-    getEgressPolicy().assert(cfg.url, 'MCP connection');
+/** Refuses a new/changed connection whose endpoint is outside the allowlist (air-gapped only). */
+export function assertConnectionAllowed(kind: string, name: string, config: unknown): void {
+  for (const ep of connectionEndpoints(kind, name, config))
+    getEgressPolicy().assert(ep.url, ep.purpose);
 }
