@@ -577,7 +577,9 @@
       "month": "Month",
       "model": "Model",
       "provider": "Provider",
-      "run": "Run"
+      "run": "Run",
+      "tenant": "Tenant",
+      "use_case": "Use case"
     },
     "tableCaption": "Costs by {group}",
     "tokensIn": "Tokens in",

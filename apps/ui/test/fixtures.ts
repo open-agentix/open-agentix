@@ -74,6 +74,7 @@ export const meViewer: Me = {
 
 export const settings: Settings = {
   version: '0.1.0',
+  demo: false,
   providers: [
     { name: 'simulated', kind: 'simulated', clearance: null },
     { name: 'bedrock', kind: 'bedrock', clearance: 'confidential' },

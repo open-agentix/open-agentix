@@ -581,7 +581,9 @@
       "month": "Monat",
       "model": "Modell",
       "provider": "Provider",
-      "run": "Lauf"
+      "run": "Lauf",
+      "tenant": "Mandant",
+      "use_case": "Anwendungsfall"
     },
     "tableCaption": "Kosten nach {group}",
     "tokensIn": "Tokens rein",
