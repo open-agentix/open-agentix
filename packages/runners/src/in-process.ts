@@ -1,7 +1,7 @@
 import { executePipeline } from './executor.js';
 import type { PreparedRun, RunResult, Runner, RunnerContext } from './types.js';
 
-/** Default runner: executes the run inside the worker process (MVP). */
+/** Default runner: executes the run inside the worker process (default). */
 export class InProcessRunner implements Runner {
   readonly kind = 'in-process' as const;
 

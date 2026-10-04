@@ -158,4 +158,4 @@ export function reviewChange(rules: GuidelineRules, change: ChangeArtifact): Gui
 
 /** Fixed label of the dark software factory mode (UI, docs and CLI show it verbatim). */
 export const DARK_FACTORY_NOTICE =
-  'Recommended for MVP and proof-of-concept development only. Not for production changes without review.';
+  'Recommended for prototypes and proof-of-concept development only. Not for production changes without review.';
