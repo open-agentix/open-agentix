@@ -1,0 +1,35 @@
+{
+  "$comment": "Local and private models that models.dev does not list (self-hosted, free of charge). Maintained by hand; prices are overridable per connection.",
+  "providers": {
+    "ollama": {
+      "name": "Ollama (local)",
+      "models": {
+        "llama3.2": {
+          "name": "Llama 3.2 (local)",
+          "limit": { "context": 128000, "output": 8192 },
+          "cost": { "input": 0, "output": 0 },
+          "toolCall": true
+        },
+        "qwen3": {
+          "name": "Qwen3 (local)",
+          "limit": { "context": 32768, "output": 8192 },
+          "cost": { "input": 0, "output": 0 },
+          "toolCall": true
+        }
+      }
+    },
+    "vllm": { "name": "vLLM (self-hosted)", "models": {} },
+    "lmstudio": { "name": "LM Studio (local)", "models": {} },
+    "simulated": {
+      "name": "Simulated (deterministic, no network)",
+      "models": {
+        "sim-1": {
+          "name": "Simulated model",
+          "limit": { "context": 1000000, "output": 100000 },
+          "cost": { "input": 0, "output": 0 },
+          "toolCall": true
+        }
+      }
+    }
+  }
+}

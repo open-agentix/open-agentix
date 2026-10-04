@@ -197,21 +197,70 @@ export const ConnectionSchema = z.object({
   scope: ConnectionScopeSchema,
   scopeId: Id.nullable(),
   name: z.string(),
-  kind: z.literal('mcp'),
+  kind: z.enum(['mcp', 'model']),
   config: z.record(z.string(), z.unknown()),
   createdAt: Iso,
   updatedAt: Iso,
 });
 export const ConnectionCreateBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
-  kind: z.literal('mcp').default('mcp'),
+  kind: z.enum(['mcp', 'model']).default('mcp'),
   scope: ConnectionScopeSchema.default('tenant').describe(
     'who may use it: platform (operators only), tenant, one team or one agent',
   ),
   scopeId: Id.nullable().optional().describe('team or agent id for team/agent scope'),
   config: z
     .record(z.string(), z.unknown())
-    .describe('MCP server config; secrets only as references (envSecrets/headerSecrets)'),
+    .describe(
+      'kind mcp: MCP server config (secrets only as references: envSecrets/headerSecrets). ' +
+        'kind model: provider settings (`kind`: anthropic, openai, azure-openai, openrouter, vllm, ' +
+        'lmstudio, ollama, openai-compatible, bedrock, simulated; keys as `*Secret` references; ' +
+        'optional `models` with price overrides - missing prices are proposed from the model catalog)',
+    ),
+});
+export const ModelProposalQuery = z.object({
+  provider: z
+    .enum([
+      'anthropic',
+      'openai',
+      'azure-openai',
+      'openrouter',
+      'vllm',
+      'lmstudio',
+      'ollama',
+      'openai-compatible',
+      'bedrock',
+      'simulated',
+    ])
+    .describe('provider kind of the connection to create'),
+  catalogProvider: z.string().max(100).optional().describe('models.dev provider id override'),
+  models: z
+    .array(
+      z.object({ id: z.string().min(1).max(200), catalogModel: z.string().max(200).optional() }),
+    )
+    .max(500)
+    .optional()
+    .describe('models to price; all catalog models of the provider when omitted'),
+});
+export const ModelProposalSchema = z.object({
+  id: z.string(),
+  catalogModel: z.string().nullable(),
+  name: z.string().nullable(),
+  contextTokens: z.number().int().nullable(),
+  outputTokens: z.number().int().nullable(),
+  inputPerMTok: z.number().nullable().describe('USD per million input tokens'),
+  outputPerMTok: z.number().nullable(),
+  toolCall: z.boolean().nullable(),
+  priceSource: z.enum(['catalog', 'local', 'unknown']),
+});
+export const ConnectionTestBody = z.object({ model: z.string().min(1).max(200) });
+export const ConnectionTestResultSchema = z.object({
+  ok: z.boolean(),
+  latencyMs: z.number().int(),
+  inputTokens: z.number().int(),
+  outputTokens: z.number().int(),
+  costMicros: z.number().int(),
+  error: z.string().nullable(),
 });
 export const ConnectionUpdateBody = z.object({ config: z.record(z.string(), z.unknown()) });
 

@@ -53,6 +53,8 @@ export function renderTemplate(value: unknown, ctx: Record<string, unknown>): un
  */
 export class SimulatedProvider implements ModelProvider {
   readonly kind = 'simulated' as const;
+  readonly family = 'simulated';
+  readonly catalogProvider = 'simulated';
   readonly name: string;
   readonly clearance: Classification;
 

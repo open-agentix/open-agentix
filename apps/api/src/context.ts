@@ -1,6 +1,12 @@
 import { CostModel, DefaultSecretResolver, type SecretResolver } from '@openagentix/core';
 import pino, { type Logger } from 'pino';
-import { catalogPriceTable, loadModelCatalog } from '@openagentix/providers';
+import {
+  catalogPriceTable,
+  loadModelCatalog,
+  modelPriceEntries,
+  type FetchLike,
+  type ModelCatalog,
+} from '@openagentix/providers';
 import { createCache, type Cache } from './cache.js';
 import type { Config } from './config.js';
 import { createDatabase, waitForDatabase, type Database, type Db } from './db/client.js';
@@ -18,6 +24,10 @@ export interface AppContext {
   logger: Logger;
   secrets: SecretResolver;
   costModel: CostModel;
+  /** Pinned model catalog snapshot (loaded from disk once, never fetched). */
+  modelCatalog: ModelCatalog;
+  /** Outbound HTTP for model providers (tests inject a fake; defaults to proxy-aware fetch). */
+  fetchImpl?: FetchLike;
   now: () => Date;
   ldapFactory?: LdapClientFactory;
   oidcClient?: OidcClient;
@@ -58,6 +68,7 @@ export async function createContext(
     );
     if (db.migrateOnStart) await database.migrate();
   }
+  const modelCatalog = overrides.modelCatalog ?? loadModelCatalog();
   return {
     config,
     database,
@@ -69,8 +80,14 @@ export async function createContext(
     // Prices: pinned model catalog snapshot, overridden by OAX_PRICE_TABLE.
     costModel:
       overrides.costModel ??
-      new CostModel([...catalogPriceTable(loadModelCatalog()), ...config.priceTable]),
+      new CostModel([
+        ...catalogPriceTable(modelCatalog),
+        ...config.providers.flatMap((p) => modelPriceEntries(p.name, p.models)),
+        ...config.priceTable,
+      ]),
+    modelCatalog,
     now: overrides.now ?? (() => new Date()),
+    ...(overrides.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {}),
     ...(overrides.ldapFactory ? { ldapFactory: overrides.ldapFactory } : {}),
     ...(overrides.oidcClient ? { oidcClient: overrides.oidcClient } : {}),
   };

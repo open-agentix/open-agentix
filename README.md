@@ -28,8 +28,10 @@ part of the platform instead of part of the prompt:
 - **Revision-safe audit trail** – SHA-256 hash chain with Ed25519-signed checkpoints and a
   `verify` endpoint; the table is append-only.
 - **Costs** – tokens and tool calls priced per step, budgets per agent, use case, team and tenant with a hard stop and alerts.
-- **Bring your own model** – OpenAI-compatible (OpenAI, Azure, vLLM, LM Studio), Ollama, AWS
-  Bedrock (VPC endpoints, proxies, IRSA), Anthropic, or the deterministic `simulated` provider.
+- **Bring your own model and key** – Claude API, AWS Bedrock (VPC endpoints, proxies, IRSA), OpenAI,
+  Azure OpenAI, OpenRouter, vLLM, Ollama, LM Studio or any OpenAI-compatible server, as connections
+  with keys as secret references scoped to platform, tenant, team or agent. Models and prices come
+  from a pinned models.dev snapshot with per-connection overrides.
 - **Agents as code** – one versioned, immutable `agents.md` per agent or pipeline.
 
 ## Quickstart (docker compose)
@@ -129,7 +131,7 @@ flowchart LR
 | Package | Purpose |
 | --- | --- |
 | `packages/core` | domain model, `agents.md` parser/validator, policy engine, control agent, audit chain, cost model, redaction, RBAC |
-| `packages/providers` | LLM adapters behind one interface (OpenAI-compatible, Ollama, Bedrock, Anthropic, simulated) |
+| `packages/providers` | LLM adapters behind one interface (Anthropic, Bedrock, OpenAI, Azure OpenAI, OpenRouter, vLLM, Ollama, OpenAI-compatible, simulated) and the model catalog |
 | `packages/events` | webhook (HMAC, replay protection), Kafka, cron, mail-in; CloudEvents 1.0 envelope |
 | `packages/mcp` | MCP client gateway with allowlists, timeouts, size limits; policy gate as MCP proxy |
 | `packages/runners` | runner contract, step executor, `oax` CLI, remote runner and external harness stubs |
@@ -140,6 +142,7 @@ flowchart LR
 ## Documentation
 
 - [Configuration (environment contract)](docs/configuration.md)
+- [Models, providers and keys](docs/providers.md)
 - [Tenants and access](docs/tenancy.md)
 - [Architecture](docs/architecture.md) and [ADRs](docs/adr/)
 - [Performance and benchmark](docs/performance.md)

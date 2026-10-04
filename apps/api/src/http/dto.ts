@@ -123,7 +123,7 @@ export const connectionDto = (c: ConnectionRow) => ({
   scope: c.scope as 'platform' | 'tenant' | 'team' | 'agent',
   scopeId: c.scopeId,
   name: c.name,
-  kind: c.kind as 'mcp',
+  kind: c.kind as 'mcp' | 'model',
   config: c.config as Record<string, unknown>,
   createdAt: iso(c.createdAt),
   updatedAt: iso(c.updatedAt),

@@ -8,6 +8,7 @@ import { CostsService } from './costs.js';
 import { GuidelinesService } from './guidelines.js';
 import { IdentityService } from './identity.js';
 import { IngestService } from './ingest.js';
+import { ModelsService } from './models.js';
 import { RunsService } from './runs.js';
 import { TenantsService } from './tenants.js';
 
@@ -23,6 +24,7 @@ export interface Services {
   costs: CostsService;
   guidelines: GuidelinesService;
   tenants: TenantsService;
+  models: ModelsService;
 }
 
 export function createServices(ctx: AppContext): Services {
@@ -37,6 +39,7 @@ export function createServices(ctx: AppContext): Services {
   const control = new ControlPlaneService(ctx, audit, agents, catalog, budgets, guidelines);
   const costs = new CostsService(ctx);
   const tenants = new TenantsService(ctx, audit, identity);
+  const models = new ModelsService(ctx, catalog, audit);
   return {
     audit,
     budgets,
@@ -49,6 +52,7 @@ export function createServices(ctx: AppContext): Services {
     costs,
     guidelines,
     tenants,
+    models,
   };
 }
 
@@ -62,6 +66,7 @@ export {
   CostsService,
   IdentityService,
   IngestService,
+  ModelsService,
   RunsService,
   TenantsService,
 };
