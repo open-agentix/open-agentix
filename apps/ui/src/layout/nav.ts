@@ -7,6 +7,7 @@ export interface NavItem {
     | '/'
     | '/agents'
     | '/wizard'
+    | '/plans'
     | '/events'
     | '/runs'
     | '/connections'
@@ -35,6 +36,7 @@ export const NAV: NavGroup[] = [
     label: 'nav.groups.build',
     items: [
       { to: '/wizard', label: 'nav.wizard', icon: 'wizard', perm: 'agents:read' },
+      { to: '/plans', label: 'nav.plans', icon: 'shield', perm: 'agents:read' },
       { to: '/agents', label: 'nav.agents', icon: 'agents', perm: 'agents:read' },
       {
         to: '/connections',

@@ -77,6 +77,7 @@
     },
     "dashboard": "Dashboard",
     "wizard": "Workflow-Assistent",
+    "plans": "Agent-Pläne",
     "agents": "Agenten",
     "connections": "Verbindungen",
     "events": "Ereignisse & Quellen",
@@ -734,5 +735,44 @@
       "copy": "Provider-Konfiguration kopieren",
       "credentials": "Zugangsdaten kommen aus der AWS-Standardkette (IRSA auf EKS, Instanzrolle) – nie von dieser Seite."
     }
+  },
+  "plans": {
+    "title": "Agent-Pläne",
+    "subtitle": "Plan einfügen oder hochladen und auf geringste Rechte prüfen. Das Ergebnis ist ein Hinweis: Hier wird nichts gespeichert oder veröffentlicht.",
+    "input": "Plan",
+    "source": "Agent-Plan (YAML oder JSON)",
+    "sourceHint": "Höchstens 64 KiB. Der Plan sind Daten und wird nie ausgeführt.",
+    "upload": "Datei hochladen",
+    "tooLarge": "Die Datei ist größer als 64 KiB.",
+    "check": "Plan prüfen",
+    "generate": "agents.md-Entwurf erzeugen",
+    "invalid": "Der Plan ist nicht gültig",
+    "findings": "Befunde",
+    "summary": "{error} Fehler, {warning} Warnungen, {info} Hinweise",
+    "noFindings": "Keine Befunde. Der Plan hält die Regeln für geringste Rechte ein.",
+    "advisory": "Die Prüfungen sind Hinweise. Ein Agent-Engineer prüft jeden Entwurf weiterhin, bevor er veröffentlicht wird.",
+    "col": {
+      "severity": "Schwere",
+      "code": "Code",
+      "path": "Pfad",
+      "message": "Meldung",
+      "source": "Quelle"
+    },
+    "severity": {
+      "error": "Fehler",
+      "warning": "Warnung",
+      "info": "Hinweis"
+    },
+    "origin": {
+      "lint": "Prüfregel",
+      "model": "Modell"
+    },
+    "draft": "Entwurf agents.md",
+    "draftNote": "Nur ein Entwurf. Gespeichert wird er erst, wenn Sie den Agenten im Editor anlegen.",
+    "draftText": "Erzeugter Text",
+    "copyDraft": "Entwurf kopieren",
+    "openEditor": "Im Editor für neue Agenten öffnen",
+    "noDraft": "Es wurde kein Entwurf erzeugt",
+    "noDraftText": "Der Plan hat Fehler-Befunde. Beheben Sie sie und erzeugen Sie den Entwurf erneut."
   }
 }

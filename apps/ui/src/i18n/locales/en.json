@@ -77,6 +77,7 @@
     },
     "dashboard": "Dashboard",
     "wizard": "Workflow wizard",
+    "plans": "Agent plans",
     "agents": "Agents",
     "connections": "Connections",
     "events": "Events & sources",
@@ -729,6 +730,45 @@
       "proxyHint": "For environments without direct egress.",
       "copy": "Copy provider configuration",
       "credentials": "Credentials come from the AWS default chain (IRSA on EKS, instance role) – never from this page."
+    }
+  },
+  "plans": {
+    "title": "Agent plans",
+    "subtitle": "Paste or upload a plan and check it for least privilege. The result is advisory: nothing is saved or published here.",
+    "input": "Plan",
+    "source": "Agent plan (YAML or JSON)",
+    "sourceHint": "At most 64 KiB. The plan is data and is never executed.",
+    "upload": "Upload a file",
+    "tooLarge": "The file is larger than 64 KiB.",
+    "check": "Check plan",
+    "generate": "Generate agents.md draft",
+    "invalid": "The plan is not valid",
+    "findings": "Findings",
+    "summary": "{error} errors, {warning} warnings, {info} notes",
+    "noFindings": "No findings. The plan follows the least-privilege rules.",
+    "advisory": "The checks are advisory. An agent engineer still reviews every draft before it is published.",
+    "col": {
+      "severity": "Severity",
+      "code": "Code",
+      "path": "Path",
+      "message": "Message",
+      "source": "Source"
+    },
+    "severity": {
+      "error": "Error",
+      "warning": "Warning",
+      "info": "Note"
+    },
+    "draft": "Draft agents.md",
+    "draftNote": "A draft only. It is saved when you create the agent in the editor.",
+    "draftText": "Generated text",
+    "copyDraft": "Copy the draft",
+    "openEditor": "Open in the new agent editor",
+    "noDraft": "No draft was generated",
+    "noDraftText": "The plan has error findings. Fix them and generate the draft again.",
+    "origin": {
+      "lint": "Lint",
+      "model": "Model"
     }
   }
 }

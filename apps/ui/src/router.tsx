@@ -128,6 +128,11 @@ const wizardRoute = createRoute({
   component: lazyRouteComponent(() => import('./features/wizard/WizardPage'), 'WizardPage'),
 });
 
+const plansRoute = createRoute({
+  ...child('/plans'),
+  component: lazyRouteComponent(() => import('./features/plans/PlansPage'), 'PlansPage'),
+});
+
 const eventsRoute = createRoute({
   ...child('/events'),
   loader: ({ context }) => void context.queryClient.prefetchQuery(eventSourcesQuery),
@@ -232,6 +237,7 @@ export const routeTree = rootRoute.addChildren([
     agentNewRoute,
     agentDetailRoute,
     wizardRoute,
+    plansRoute,
     eventsRoute,
     runsRoute,
     runDetailRoute,
