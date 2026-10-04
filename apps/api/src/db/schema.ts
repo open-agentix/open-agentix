@@ -19,8 +19,22 @@ const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' 
 const created = () => ts('created_at').notNull().defaultNow();
 const micros = (name: string) => bigint(name, { mode: 'number' });
 
+/** Id of the tenant every row belongs to until multi-tenancy is configured. */
+export const DEFAULT_TENANT_ID = '00000000-0000-4000-8000-000000000001';
+const tenant = () => uuid('tenant_id').notNull().default(DEFAULT_TENANT_ID);
+
+/** Tenant = isolation boundary for agents, runs, connections, keys, audit partition and costs. */
+export const tenants = pgTable('tenants', {
+  id: uuid('id').primaryKey(),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull(),
+  monthlyBudgetMicros: micros('monthly_budget_micros'),
+  createdAt: created(),
+});
+
 export const teams = pgTable('teams', {
   id: uuid('id').primaryKey(),
+  tenantId: tenant(),
   slug: text('slug').notNull().unique(),
   name: text('name').notNull(),
   monthlyBudgetMicros: micros('monthly_budget_micros'),
@@ -90,6 +104,7 @@ export const agents = pgTable(
   'agents',
   {
     id: uuid('id').primaryKey(),
+    tenantId: tenant(),
     name: text('name').notNull().unique(),
     teamId: uuid('team_id').references(() => teams.id),
     description: text('description'),
@@ -126,6 +141,7 @@ export const agentVersions = pgTable(
 
 export const eventSources = pgTable('event_sources', {
   id: uuid('id').primaryKey(),
+  tenantId: tenant(),
   name: text('name').notNull().unique(),
   kind: text('kind').notNull(),
   scheme: text('scheme').notNull().default('oax-v1'),
@@ -143,6 +159,7 @@ export const events = pgTable(
   'events',
   {
     id: uuid('id').primaryKey(),
+    tenantId: tenant(),
     sourceId: uuid('source_id').references(() => eventSources.id),
     cloudEventId: text('cloud_event_id').notNull(),
     type: text('type').notNull(),
@@ -174,6 +191,7 @@ export const runs = pgTable(
   'runs',
   {
     id: uuid('id').primaryKey(),
+    tenantId: tenant(),
     agentId: uuid('agent_id')
       .notNull()
       .references(() => agents.id),
@@ -206,6 +224,7 @@ export const runs = pgTable(
     index('runs_status_created_idx').on(t.status, t.createdAt.desc(), t.id.desc()),
     index('runs_team_created_idx').on(t.teamId, t.createdAt.desc(), t.id.desc()),
     index('runs_created_idx').on(t.createdAt.desc(), t.id.desc()),
+    index('runs_tenant_created_idx').on(t.tenantId, t.createdAt.desc(), t.id.desc()),
     index('runs_queue_idx')
       .on(t.availableAt, t.createdAt)
       .where(sql`status = 'queued'`),
@@ -246,6 +265,7 @@ export const approvals = pgTable(
   'approvals',
   {
     id: uuid('id').primaryKey(),
+    tenantId: tenant(),
     runId: uuid('run_id')
       .notNull()
       .references(() => runs.id),
@@ -270,6 +290,10 @@ export const approvals = pgTable(
 
 export const connections = pgTable('connections', {
   id: uuid('id').primaryKey(),
+  tenantId: tenant(),
+  /** Scope of a key/connection: platform, tenant, team or agent (BYOK). */
+  scope: text('scope').notNull().default('platform'),
+  scopeId: uuid('scope_id'),
   name: text('name').notNull().unique(),
   kind: text('kind').notNull(),
   config: jsonb('config').notNull(),
@@ -280,6 +304,7 @@ export const connections = pgTable('connections', {
 
 export const policies = pgTable('policies', {
   id: uuid('id').primaryKey(),
+  tenantId: tenant(),
   name: text('name').notNull().unique(),
   description: text('description'),
   bundle: jsonb('bundle').notNull(),
@@ -294,6 +319,8 @@ export const auditLog = pgTable(
   'audit_log',
   {
     seq: bigint('seq', { mode: 'number' }).primaryKey(),
+    /** Partition key for per-tenant views and exports (the chain itself is global in v0.x). */
+    tenantId: uuid('tenant_id'),
     ts: ts('ts').notNull(),
     actor: text('actor').notNull(),
     action: text('action').notNull(),
@@ -323,7 +350,11 @@ export const costLedger = pgTable(
   'cost_ledger',
   {
     id: bigserial('id', { mode: 'number' }).primaryKey(),
+    tenantId: tenant(),
     runId: uuid('run_id').notNull(),
+    stepSeq: integer('step_seq'),
+    /** `labels.useCase` of the agent definition (cost attribution). */
+    useCase: text('use_case'),
     agentId: uuid('agent_id').notNull(),
     teamId: uuid('team_id'),
     provider: text('provider'),
@@ -339,6 +370,8 @@ export const costLedger = pgTable(
     index('cost_agent_month_idx').on(t.agentId, t.month),
     index('cost_month_idx').on(t.month),
     index('cost_run_idx').on(t.runId),
+    index('cost_tenant_month_idx').on(t.tenantId, t.month),
+    index('cost_use_case_month_idx').on(t.useCase, t.month),
   ],
 );
 
@@ -351,4 +384,51 @@ export const cronTicks = pgTable(
     tickAt: ts('tick_at').notNull(),
   },
   (t) => [primaryKey({ columns: [t.agentId, t.schedule, t.tickAt] })],
+);
+
+/** Resource-scoped role bindings: a role for exactly one agent (no team-wide visibility). */
+export const agentRoleBindings = pgTable(
+  'agent_role_bindings',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    role: text('role').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.agentId, t.role] }),
+    index('agent_role_bindings_agent_idx').on(t.agentId),
+  ],
+);
+
+/** Deterministic change gate of schedule sources: last digest of the probe. */
+export const changeChecks = pgTable('change_checks', {
+  sourceId: uuid('source_id').primaryKey(),
+  digest: text('digest').notNull(),
+  checkedAt: ts('checked_at').notNull(),
+  changedAt: ts('changed_at').notNull(),
+});
+
+/** Versioned development guidelines (global, tenant or agent scope; stricter wins). */
+export const guidelines = pgTable(
+  'guidelines',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id'),
+    scope: text('scope').notNull(),
+    scopeId: uuid('scope_id'),
+    name: text('name').notNull(),
+    version: text('version').notNull(),
+    content: text('content').notNull(),
+    rules: jsonb('rules').notNull().default({}),
+    createdBy: uuid('created_by'),
+    createdAt: created(),
+  },
+  (t) => [
+    uniqueIndex('guidelines_scope_name_version_uq').on(t.scope, t.name, t.version),
+    index('guidelines_scope_idx').on(t.scope, t.scopeId),
+  ],
 );

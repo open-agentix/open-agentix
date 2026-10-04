@@ -15,6 +15,13 @@
       "when": 1791041646280,
       "tag": "0001_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791085527416,
+      "tag": "0002_tenants_and_scoped_access",
+      "breakpoints": true
     }
   ]
 }

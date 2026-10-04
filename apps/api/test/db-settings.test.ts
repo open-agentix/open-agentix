@@ -58,7 +58,11 @@ describe('migrations and readiness', () => {
     });
     await db.migrate();
     await db.migrate();
-    expect(await db.schemaStatus()).toEqual({ expected: 2, applied: 2, ok: true });
+    expect(await db.schemaStatus()).toEqual({
+      expected: expectedMigrations(),
+      applied: expectedMigrations(),
+      ok: true,
+    });
     await db.close();
   });
 
