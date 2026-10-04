@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { effectiveBudget, type Budget } from '@openagentix/core';
+import {
+  effectiveBudget,
+  estimateOutputTokensFromBytes,
+  outputFloorFromBytes,
+  type Budget,
+} from '@openagentix/core';
 import type { StepInput } from '@openagentix/runners';
 import { and, asc, eq, inArray, lt, lte, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
@@ -131,9 +136,8 @@ export interface Settlement {
 export type ReservationRow = typeof modelReservations.$inferSelect;
 
 // ---------------------------------------------------------------------------------------------
-// Integer money arithmetic. Integration point (W1-3b-1): `PriceEntry` gains `cacheReadPerMTok` and
-// `cacheWritePerMTok` and `CostModel.modelCall` prices cache tokens; these local types read them
-// when present so this service works before and after that change.
+// Integer money arithmetic. The price entries are those of `CostModel` (including the optional
+// cache prices of W1-3b-1).
 
 interface PriceLike {
   inputPerMTok: number;
@@ -190,10 +194,6 @@ export function priceMicros(rates: Rates, t: Tokens): number {
 /** Worst-case input rate: the cache-write rate when it is higher and the request caches. */
 const inputRate = (r: Rates, cacheWrite: boolean) =>
   cacheWrite && r.cacheWrite > r.input ? r.cacheWrite : r.input;
-
-// Integration point (W1-3b-1): `estimateOutputTokens` / `outputFloor` in packages/core.
-const estimateOutput = (bytes: number) => Math.ceil(bytes / 3);
-const outputFloor = (bytes: number) => Math.ceil(bytes / 8);
 
 const isCount = (v: unknown): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_TOKENS;
@@ -315,7 +315,7 @@ export class ModelAccountingService {
     }
     const useCase = definition.labels.useCase ?? null;
     const price = this.ctx.costModel.find(agent.provider, agent.model);
-    const rates = price ? ratesOf(price as PriceLike) : null;
+    const rates = price ? ratesOf(price) : null;
     const runBudget = definition.budget as Budget;
     const stepBudget = effectiveBudget(runBudget, agent.budget);
 
@@ -593,7 +593,7 @@ export class ModelAccountingService {
       };
     }
     const price = this.ctx.costModel.find(r.provider, r.model);
-    const rates = price ? ratesOf(price as PriceLike) : null;
+    const rates = price ? ratesOf(price) : null;
     const reserved = Number(r.reservedMicros);
     const via = req.via ?? (r.sessionId ? 'proxy' : 'in-process');
     const outBytes = req.output ? req.output.textBytes + (req.output.toolArgBytes ?? 0) : null;
@@ -619,8 +619,8 @@ export class ModelAccountingService {
       };
       source = 'provider';
       // Lower bound against an endpoint that reports implausibly little (ADR 0009 4.1, A5).
-      if (outBytes !== null && t.output < outputFloor(outBytes)) {
-        t.output = clampTokens(outputFloor(outBytes));
+      if (outBytes !== null && t.output < outputFloorFromBytes(outBytes)) {
+        t.output = clampTokens(outputFloorFromBytes(outBytes));
         source = 'floor';
         floorHit = true;
       }
@@ -628,7 +628,10 @@ export class ModelAccountingService {
       // Nothing usable reported: input as reserved, output measured, or as reserved if unmeasured.
       t = {
         input: r.reservedInputTokens,
-        output: outBytes === null ? r.reservedOutputTokens : clampTokens(estimateOutput(outBytes)),
+        output:
+          outBytes === null
+            ? r.reservedOutputTokens
+            : clampTokens(estimateOutputTokensFromBytes(outBytes)),
         cacheRead: 0,
         cacheWrite: 0,
       };
