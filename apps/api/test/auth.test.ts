@@ -200,9 +200,9 @@ describe('API tokens', () => {
     ).toBeGreaterThanOrEqual(1);
     expect((await n.req({ method: 'DELETE', url: `/v1/tokens/${id}` })).statusCode).toBe(204);
     expect((await n.req({ method: 'GET', url: '/v1/runs', token })).statusCode).toBe(401);
-    expect(
-      (await n.req({ method: 'DELETE', url: `/v1/tokens/${id.replace(/./, 'f')}` })).statusCode,
-    ).toBe(404);
+    // an id that differs from the revoked one (the first character is not always "f")
+    const unknown = `${id[0] === 'f' ? '0' : 'f'}${id.slice(1)}`;
+    expect((await n.req({ method: 'DELETE', url: `/v1/tokens/${unknown}` })).statusCode).toBe(404);
   });
 
   it('refuses scopes beyond the principal', async () => {
@@ -333,7 +333,7 @@ describe('LDAP', () => {
       (
         await n.req({
           method: 'PATCH',
-          url: '/v1/users/00000000-0000-4000-8000-000000000000',
+          url: '/v1/users/abababab-abab-4bab-8bab-abababababab',
           payload: { disabled: true },
         })
       ).statusCode,
@@ -502,7 +502,7 @@ describe('users and teams', () => {
       (
         await n.req({
           method: 'PUT',
-          url: '/v1/teams/00000000-0000-4000-8000-000000000000/members',
+          url: '/v1/teams/abababab-abab-4bab-8bab-abababababab/members',
           payload: { members: [] },
         })
       ).statusCode,
@@ -511,7 +511,7 @@ describe('users and teams', () => {
       'eng@example.com',
     );
     expect(
-      (await n.req({ method: 'GET', url: '/v1/users/00000000-0000-4000-8000-000000000000' }))
+      (await n.req({ method: 'GET', url: '/v1/users/abababab-abab-4bab-8bab-abababababab' }))
         .statusCode,
     ).toBe(404);
     const members = (

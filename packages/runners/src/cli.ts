@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { PolicyBundleSchema, PriceTableSchema, validateAgentSource } from '@openagentix/core';
 import { parseProviderConfigs } from '@openagentix/providers';
+import { createHarness } from './harness.js';
 import { runLocal } from './local.js';
 import type { StepInput } from './types.js';
 
@@ -30,6 +31,9 @@ Options for "run":
   --policy <file>      JSON policy bundle applied on top of the agent file
   --prices <file>      JSON price table for cost calculation
   --approve <all|none> answer to approval requests (default: none = reject)
+  --harness <name>     run through an external harness instead of the built-in loop
+                       (claude-code; opencode, hermes and openclaw are documented stubs)
+  --harness-token-file <file>  token from "claude setup-token" (default: login of this user)
   --json               print steps and the result as JSON lines
 `;
 
@@ -112,6 +116,15 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       ...(flags.mcp ? { mcpServers: (await readJson('mcp')) as never } : {}),
       ...(policy ? { policies: [PolicyBundleSchema.parse(policy)] } : {}),
       ...(prices ? { prices: PriceTableSchema.parse(prices) } : {}),
+      ...(typeof flags.harness === 'string'
+        ? {
+            harness: createHarness(flags.harness as never, {
+              ...(typeof flags['harness-token-file'] === 'string'
+                ? { oauthTokenFile: flags['harness-token-file'] }
+                : {}),
+            }),
+          }
+        : {}),
       approve: flags.approve === 'all' ? 'all' : 'none',
       onStep: (s) => io.out(json ? JSON.stringify({ type: 'step', step: s }) : formatStep(s)),
     });

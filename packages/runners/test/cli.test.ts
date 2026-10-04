@@ -114,6 +114,23 @@ describe('oax CLI', () => {
       ),
     ).toBe(1);
     expect(a.out.join('\n')).toMatch(/error=control_classification/);
+    const h = io();
+    expect(
+      await runCli(
+        [
+          'run',
+          'examples/cve-triage.agents.md',
+          '--event',
+          'examples/events/trivy-finding.json',
+          '--harness',
+          'opencode',
+          '--harness-token-file',
+          'x',
+        ],
+        h.cli,
+      ),
+    ).toBe(1);
+    expect(h.out.join('\n')).toMatch(/error=harness_error|error=not_implemented/);
     const b = io();
     expect(await runCli(['run', 'examples/cve-triage.agents.md'], b.cli)).toBe(2);
     expect(b.err[0]).toMatch(/usage/);

@@ -18,6 +18,8 @@ import {
 } from '@openagentix/mcp';
 import { DEFAULT_PROVIDERS, ProviderRegistry, type ProviderConfig } from '@openagentix/providers';
 import { executePipeline } from './executor.js';
+import { executeWithHarness, type HarnessExecutionOptions } from './harness-runner.js';
+import type { ExternalHarness } from './harness.js';
 import { LocalControlPlane } from './local-control-plane.js';
 import type { PreparedRun, RunResult, Runner, RunnerContext, StepInput } from './types.js';
 
@@ -45,6 +47,9 @@ export interface LocalRunOptions {
   secrets?: SecretResolver;
   onStep?: (step: StepInput) => void;
   signal?: AbortSignal;
+  /** Run the agents through an external harness (the policy gate stays its only tool source). */
+  harness?: ExternalHarness;
+  harnessOptions?: HarnessExecutionOptions;
 }
 
 export interface LocalRunReport {
@@ -77,16 +82,19 @@ export async function runLocal(opts: LocalRunOptions): Promise<LocalRunReport> {
   });
   const runId = randomUUID();
   try {
-    const result = await new LocalRunner().execute(
-      { runId, definition, event: toEvent(opts.event), policies: opts.policies ?? [] },
-      {
-        providers,
-        tools,
-        control,
-        costModel: new CostModel(opts.prices ?? []),
-        ...(opts.signal ? { signal: opts.signal } : {}),
-      },
-    );
+    const run = { runId, definition, event: toEvent(opts.event), policies: opts.policies ?? [] };
+    const ctx = {
+      providers,
+      tools,
+      control,
+      costModel: new CostModel(opts.prices ?? []),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    };
+    let result: RunResult;
+    if (opts.harness) {
+      result = await executeWithHarness(run, ctx, opts.harness, opts.harnessOptions);
+      await control.completeRun(runId, result);
+    } else result = await new LocalRunner().execute(run, ctx);
     return { runId, result, steps: control.steps, audit: control.verifyAudit() };
   } finally {
     await tools.close();
