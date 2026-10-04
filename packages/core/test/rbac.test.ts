@@ -15,6 +15,8 @@ import {
 const user = (bindings: Principal['bindings'], scopes?: Principal['scopes']): Principal => ({
   kind: 'user',
   userId: 'u1',
+  tenantId: 't1',
+  platformAdmin: false,
   displayName: 'U',
   bindings,
   scopes,
