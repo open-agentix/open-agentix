@@ -47,6 +47,7 @@ export const handlers = [
       name: 'ticket-updater',
       version: /version: ([\d.]+)/.exec(source)?.[1] ?? null,
       digest: 'sha256:abc',
+      definition: valid ? { name: 'ticket-updater' } : null,
     });
   }),
   http.post(api('/v1/agents'), async ({ request }) => {

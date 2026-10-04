@@ -356,7 +356,7 @@
     "recent": "Recent events",
     "noEvents": "No events received yet",
     "noEventsText": "Send a signed test request to an ingest URL to see it here.",
-    "kinds": { "webhook": "Webhook", "mail": "Mail-in", "kafka": "Kafka" },
+    "kinds": { "webhook": "Webhook", "mail": "Mail-in", "kafka": "Kafka", "cron": "Cron" },
     "ingestUrl": "Ingest URL",
     "copyUrl": "Copy ingest URL",
     "topic": "Topic",

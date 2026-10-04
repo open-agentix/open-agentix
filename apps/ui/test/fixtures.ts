@@ -85,6 +85,10 @@ export const settings: Settings = {
   auth: { local: true, ldap: true, oidc: false },
   roles: ['admin', 'agent-engineer', 'integrator', 'operator', 'auditor', 'viewer'],
   permissions: [...PERMISSIONS],
+  rolePermissions: {
+    admin: [...PERMISSIONS],
+    viewer: ['agents:read', 'runs:read', 'events:read', 'costs:read'],
+  },
 };
 
 export const draftSource = `---
@@ -189,6 +193,7 @@ export const versionDetail: AgentVersionDetail = {
 export const run: Run = {
   id: ids.run,
   agentId: ids.agent,
+  agentName: 'ticket-updater',
   agentVersionId: ids.version,
   teamId: ids.team,
   eventId: ids.event,
@@ -276,6 +281,7 @@ export const steps: RunStep[] = [
 export const approval: Approval = {
   id: ids.approval,
   runId: ids.run,
+  pipelineName: 'ticket-updater',
   teamId: ids.team,
   agentId: ids.agent,
   tool: 'tickets/update_ticket',
