@@ -1,6 +1,7 @@
 import { canonicalJson } from '../canonical.js';
 import { mayFlow, type Classification } from '../classification.js';
 import type { Budget } from '../agents/schema.js';
+import type { BudgetBreach } from '../budget/budget.js';
 
 /**
  * The global "control agent": deterministic guardrails that watch a run and can pause or kill it.
@@ -15,6 +16,9 @@ export interface ControlReason {
     | 'budget_cost'
     | 'budget_steps'
     | 'budget_tool_calls'
+    | 'budget_tenant'
+    | 'budget_use_case'
+    | 'budget_team'
     | 'timeout'
     | 'rate'
     | 'loop'
@@ -83,6 +87,8 @@ export interface RunMetrics {
   consecutiveErrors: number;
   policyDenials: number;
   forbiddenAttempts: number;
+  /** Monthly tenant/use-case/team budgets reported as reached by the control node. */
+  budgetBreaches: BudgetBreach[];
 }
 
 export function newRunMetrics(startedAt: number): RunMetrics {
@@ -97,7 +103,13 @@ export function newRunMetrics(startedAt: number): RunMetrics {
     consecutiveErrors: 0,
     policyDenials: 0,
     forbiddenAttempts: 0,
+    budgetBreaches: [],
   };
+}
+
+/** Replaces the known breaches with the latest verdict of the control node. */
+export function recordBudgetBreaches(m: RunMetrics, breaches: readonly BudgetBreach[]): void {
+  m.budgetBreaches = [...breaches];
 }
 
 export function recordModelCall(m: RunMetrics, tokens: number, costMicros: number): void {
@@ -191,6 +203,9 @@ export class ControlAgent {
         rule: 'budget_tool_calls',
         message: `tool call budget exceeded (${m.toolCalls} > ${l.maxToolCalls})`,
       });
+    }
+    for (const b of m.budgetBreaches) {
+      kill.push({ rule: `budget_${b.scope}`, message: b.message });
     }
     if (l.timeoutMs !== undefined && now - m.startedAt > l.timeoutMs) {
       kill.push({ rule: 'timeout', message: `run exceeded its timeout of ${l.timeoutMs} ms` });

@@ -11,6 +11,7 @@ export * from './control/controller.js';
 export * from './redact.js';
 export * from './audit/chain.js';
 export * from './cost/model.js';
+export * from './budget/budget.js';
 export * from './domain.js';
 export * from './secrets.js';
 export * from './run-token.js';
