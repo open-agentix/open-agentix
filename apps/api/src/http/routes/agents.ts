@@ -83,6 +83,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
         name: r.definition?.name ?? null,
         version: r.definition?.version ?? null,
         digest: r.definition?.digest ?? null,
+        definition: (r.definition as unknown as Record<string, unknown> | null) ?? null,
       };
     },
   );

@@ -2,13 +2,14 @@ import { visibleTeams, type Principal } from '@openagentix/core';
 import { and, desc, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
-import { costLedger } from '../db/schema.js';
+import { agents, costLedger, teams } from '../db/schema.js';
 
 export const COST_GROUPS = ['run', 'agent', 'team', 'month', 'provider', 'model'] as const;
 export type CostGroup = (typeof COST_GROUPS)[number];
 
 export interface CostRow {
   key: string | null;
+  label: string | null;
   tokensIn: number;
   tokensOut: number;
   costMicros: number;
@@ -27,6 +28,25 @@ const COLUMN: Record<CostGroup, SQL> = {
 /** Cost aggregation from the ledger (cached briefly, invalidated when runs finish). */
 export class CostsService {
   constructor(private readonly ctx: AppContext) {}
+
+  private async labels(groupBy: CostGroup, keys: string[]): Promise<Map<string, string>> {
+    if (keys.length === 0) return new Map();
+    if (groupBy === 'agent') {
+      const rows = await this.ctx.db
+        .select({ id: agents.id, name: agents.name })
+        .from(agents)
+        .where(inArray(agents.id, keys));
+      return new Map(rows.map((r) => [r.id, r.name]));
+    }
+    if (groupBy === 'team') {
+      const rows = await this.ctx.db
+        .select({ id: teams.id, slug: teams.slug })
+        .from(teams)
+        .where(inArray(teams.id, keys));
+      return new Map(rows.map((r) => [r.id, r.slug]));
+    }
+    return new Map();
+  }
 
   async summary(
     principal: Principal,
@@ -58,8 +78,13 @@ export class CostsService {
         .groupBy(col)
         .orderBy(desc(sql`4`))
         .limit(limit);
+      const labels = await this.labels(
+        groupBy,
+        rows.map((r) => r.key).filter((k): k is string => !!k),
+      );
       return rows.map((r) => ({
         key: r.key,
+        label: (r.key && labels.get(r.key)) ?? null,
         tokensIn: Number(r.tokensIn),
         tokensOut: Number(r.tokensOut),
         costMicros: Number(r.costMicros),

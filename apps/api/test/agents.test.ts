@@ -50,6 +50,7 @@ describe('agent registry', () => {
       await n.req({ method: 'POST', url: '/v1/agents/validate', payload: { source: CVE_TRIAGE } })
     ).json();
     expect(ok).toMatchObject({ valid: true, name: 'cve-triage', version: '1.0.0' });
+    expect(ok.definition.pipeline).toEqual(['triage', 'notify']);
     const bad = (
       await n.req({
         method: 'POST',
@@ -57,7 +58,7 @@ describe('agent registry', () => {
         payload: { source: 'no front matter' },
       })
     ).json();
-    expect(bad).toMatchObject({ valid: false, name: null });
+    expect(bad).toMatchObject({ valid: false, name: null, definition: null });
   });
 
   it('creates, drafts, publishes immutable versions and lists them', async () => {

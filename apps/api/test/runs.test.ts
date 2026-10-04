@@ -357,6 +357,44 @@ describe('runs API', () => {
     ).toBe(404);
   });
 
+  it('adds names, time filters and dashboard stats', async () => {
+    const [first] = (
+      await n.req({ method: 'GET', url: `/v1/runs?agentId=${triageId}&limit=1` })
+    ).json().items;
+    expect(first.agentName).toBe('cve-triage');
+    const future = (
+      await n.req({ method: 'GET', url: '/v1/runs?from=2100-01-01T00:00:00Z' })
+    ).json().items;
+    expect(future).toEqual([]);
+    const past = (await n.req({ method: 'GET', url: '/v1/runs?to=2000-01-01T00:00:00Z' })).json()
+      .items;
+    expect(past).toEqual([]);
+    const stats = (
+      await n.req({
+        method: 'GET',
+        url: `/v1/stats/runs?agentId=${triageId}&from=2000-01-01T00:00:00Z&to=2100-01-01T00:00:00Z`,
+      })
+    ).json();
+    expect(stats.total).toBeGreaterThan(2);
+    expect(stats.byStatus.succeeded).toBeGreaterThanOrEqual(1);
+    expect(stats.costMicros).toBeGreaterThan(0);
+    expect(stats.avgDurationMs).not.toBeNull();
+    expect(
+      (await n.req({ method: 'GET', url: '/v1/stats/runs', token: viewerOther })).json(),
+    ).toMatchObject({ total: 0, avgDurationMs: null });
+    const approved = (await n.req({ method: 'GET', url: '/v1/approvals?status=approved' })).json()
+      .items[0];
+    expect(approved.pipelineName).toBe('ticket-updater');
+    const byRun = (
+      await n.req({ method: 'GET', url: `/v1/approvals?status=approved&runId=${approved.runId}` })
+    ).json().items;
+    expect(byRun).toHaveLength(1);
+    const none = (
+      await n.req({ method: 'GET', url: `/v1/approvals?status=approved&runId=${first.id}` })
+    ).json().items;
+    expect(none).toEqual([]);
+  });
+
   it('cancels queued runs and refuses to cancel finished ones', async () => {
     const runId = await manualRun(triageId, TRIVY_EVENT);
     const cancelled = await n.req({
@@ -426,7 +464,9 @@ describe('runs API', () => {
 
   it('summarises costs and enforces team budgets', async () => {
     const byAgent = (await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=agent' })).json();
-    expect(byAgent.items[0]).toMatchObject({ key: triageId });
+    expect(byAgent.items[0]).toMatchObject({ key: triageId, label: 'cve-triage' });
+    const byTeam = (await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=team' })).json();
+    expect(byTeam.items[0].label).toBe('team-security');
     expect(byAgent.items[0].costMicros).toBeGreaterThan(0);
     for (const g of ['run', 'team', 'month', 'provider', 'model']) {
       expect(
