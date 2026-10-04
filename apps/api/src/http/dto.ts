@@ -103,7 +103,8 @@ export const sourceDto = (s: SourceRow, publicUrl: string) => ({
   config: s.config as Record<string, unknown>,
   enabled: s.enabled,
   createdAt: iso(s.createdAt),
-  ingestUrl: s.kind === 'kafka' ? null : `${publicUrl}/v1/ingest/${s.kind}/${s.id}`,
+  ingestUrl:
+    s.kind === 'kafka' || s.kind === 'cron' ? null : `${publicUrl}/v1/ingest/${s.kind}/${s.id}`,
 });
 
 export const eventDto = (e: EventRow) => ({

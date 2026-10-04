@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { OaxEvent } from '@openagentix/core';
 import {
   WebhookError,
+  validateCronExpression,
   mailToEvent,
   verifyWebhook,
   webhookToEvent,
@@ -49,7 +50,7 @@ export class DbReplayGuard implements ReplayGuard {
 
 export interface SourceInput {
   name: string;
-  kind: 'webhook' | 'mail' | 'kafka';
+  kind: 'webhook' | 'mail' | 'kafka' | 'cron';
   scheme?: WebhookScheme | undefined;
   secretRefs?: string[] | undefined;
   agentId?: string | null | undefined;
@@ -95,6 +96,15 @@ export class IngestService {
   }
 
   async createSource(actor: string, input: SourceInput): Promise<SourceRow> {
+    if (input.kind === 'cron') {
+      const schedule = input.config?.schedule;
+      if (typeof schedule !== 'string')
+        throw new HttpError(400, 'validation_failed', 'cron sources need config.schedule');
+      validateCronExpression(
+        schedule,
+        typeof input.config?.timezone === 'string' ? input.config.timezone : undefined,
+      );
+    }
     const [exists] = await this.ctx.db
       .select({ id: eventSources.id })
       .from(eventSources)
@@ -142,6 +152,15 @@ export class IngestService {
     await this.ctx.cache.del(`source:${id}`);
     await this.audit.append({ actor, action: 'source.updated', target: id, payload: patch });
     return row!;
+  }
+
+  async deleteSource(actor: string, id: string): Promise<void> {
+    await this.getSource(id);
+    // Events keep their history; the source reference is cleared.
+    await this.ctx.db.update(events).set({ sourceId: null }).where(eq(events.sourceId, id));
+    await this.ctx.db.delete(eventSources).where(eq(eventSources.id, id));
+    await this.ctx.cache.del(`source:${id}`);
+    await this.audit.append({ actor, action: 'source.deleted', target: id });
   }
 
   /** Verifies, normalises and stores an HTTP-delivered event, then queues the bound agent. */

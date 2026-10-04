@@ -209,3 +209,44 @@ describe('KafkaSources', () => {
     await k.stop();
   });
 });
+
+describe('cron event sources', () => {
+  it('schedules cron sources bound to an agent and dedupes ticks', async () => {
+    const bad = await n.req({
+      method: 'POST',
+      url: '/v1/event-sources',
+      payload: { name: 'bad-cron', kind: 'cron', agentId, config: {} },
+    });
+    expect(bad.statusCode).toBe(400);
+    const src = await n.req({
+      method: 'POST',
+      url: '/v1/event-sources',
+      payload: {
+        name: 'nightly',
+        kind: 'cron',
+        agentId,
+        config: { schedule: '30 2 * * *', timezone: 'UTC' },
+      },
+    });
+    expect(src.json()).toMatchObject({ kind: 'cron', ingestUrl: null });
+    const s = new CronScheduler(n.ctx, n.services);
+    const keys = await s.reload();
+    expect(keys.some((k) => k.startsWith(`source|${src.json().id}`))).toBe(true);
+    const event = createEvent({
+      source: '/sources/cron/nightly',
+      type: 'io.openagentix.cron.tick',
+      time: new Date('2026-10-05T02:30:00Z'),
+    });
+    const runId = await s.fire(agentId, '30 2 * * *', event, src.json().id);
+    expect(runId).toBeTruthy();
+    expect(await s.fire(agentId, '30 2 * * *', event, src.json().id)).toBeNull();
+    expect(
+      (await n.req({ method: 'DELETE', url: `/v1/event-sources/${src.json().id}` })).statusCode,
+    ).toBe(204);
+    expect((await s.reload()).some((k) => k.startsWith('source|'))).toBe(false);
+    expect(
+      (await n.req({ method: 'DELETE', url: `/v1/event-sources/${src.json().id}` })).statusCode,
+    ).toBe(404);
+    s.stop();
+  });
+});

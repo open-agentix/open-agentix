@@ -1740,6 +1740,7 @@ paths:
                             - webhook
                             - mail
                             - kafka
+                            - cron
                         scheme:
                           type: string
                           enum:
@@ -1816,6 +1817,7 @@ paths:
                     - webhook
                     - mail
                     - kafka
+                    - cron
                 scheme:
                   type: string
                   enum:
@@ -1865,6 +1867,7 @@ paths:
                       - webhook
                       - mail
                       - kafka
+                      - cron
                   scheme:
                     type: string
                     enum:
@@ -1969,6 +1972,7 @@ paths:
                       - webhook
                       - mail
                       - kafka
+                      - cron
                   scheme:
                     type: string
                     enum:
@@ -2093,6 +2097,7 @@ paths:
                       - webhook
                       - mail
                       - kafka
+                      - cron
                   scheme:
                     type: string
                     enum:
@@ -2134,6 +2139,41 @@ paths:
                   - createdAt
                   - ingestUrl
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete an event source (its events are kept)
+      tags:
+        - events
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "204":
+          description: Default Response
         "401":
           description: Missing or invalid credentials
           content:
