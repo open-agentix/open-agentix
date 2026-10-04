@@ -1,6 +1,6 @@
 {
   "name": "@openagentix/runners",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Runner abstraction and agent step executor: in-process and local runners, the oax CLI, stubs for container/Kubernetes/Lambda/CI runners and external harness adapters",
   "license": "Apache-2.0",
   "type": "module",

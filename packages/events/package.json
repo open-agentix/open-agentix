@@ -1,6 +1,6 @@
 {
   "name": "@openagentix/events",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Event source adapters: HMAC webhooks with replay protection, Kafka, cron and mail-in, normalised to CloudEvents 1.0",
   "license": "Apache-2.0",
   "type": "module",
