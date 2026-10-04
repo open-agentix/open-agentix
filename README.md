@@ -27,7 +27,7 @@ part of the platform instead of part of the prompt:
   and pauses or kills it.
 - **Revision-safe audit trail** – SHA-256 hash chain with Ed25519-signed checkpoints and a
   `verify` endpoint; the table is append-only.
-- **Costs** – tokens and tool calls priced per step, budgets per agent and team with a hard stop.
+- **Costs** – tokens and tool calls priced per step, budgets per agent, use case, team and tenant with a hard stop and alerts.
 - **Bring your own model** – OpenAI-compatible (OpenAI, Azure, vLLM, LM Studio), Ollama, AWS
   Bedrock (VPC endpoints, proxies, IRSA), Anthropic, or the deterministic `simulated` provider.
 - **Agents as code** – one versioned, immutable `agents.md` per agent or pipeline.

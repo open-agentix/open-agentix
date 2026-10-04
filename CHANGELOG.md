@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Budgets with hard stop**: monthly budgets per tenant, use case and team, checked when a run is
+  queued and before every step of a running run (also across runs of the same month). A reached
+  budget blocks or stops the run (`blocked_by_policy` or `failed` with `control_budget_*`), writes
+  `run.blocked` / `budget.blocked` audit entries and raises alerts at 50, 80 and 100 % as events
+  (`io.openagentix.budget.alert`) plus `budget.alert` audit entries. New API: `GET /v1/budgets`,
+  `PUT`/`DELETE /v1/budgets/use-cases/{useCase}`, worker route `GET /v1/worker/runs/{id}/budget`;
+  costs page shows and manages the budgets; migration `0004` adds `use_case_budgets` and
+  `budget_alerts`; `docs/budgets.md`.
 - **Tenant isolation**: every request-facing query is filtered by the caller's tenant; other
   tenants' resources answer 404 (denied agent/run access is audited), names are unique per tenant,
   workers resolve tool servers per run and tenant, cross-tenant references are refused. Tenants API
@@ -17,6 +25,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The tenant limit `tenants.monthly_budget_micros`, stored but not enforced before, is now a hard
+  stop. Runs refused at admission by a tenant or use case budget carry the error codes
+  `tenant_budget_exceeded` and `use_case_budget_exceeded` (team budgets keep
+  `team_budget_exceeded`).
 - **Breaking (API/DB, pre-1.0)**: `Principal` carries `tenantId` and `platformAdmin`; migration
   `0003` makes names unique per tenant, adds `users.tenant_id`, `users.platform_admin` and
   `policies.scope`, and marks existing `admin` users as platform operators.
