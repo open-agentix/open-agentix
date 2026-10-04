@@ -1273,9 +1273,9 @@ Milestone: **v0.3** (W9-3: v0.4). Design: [ADR 0010](adr/0010-agent-authoring-bu
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W9-1 | No-code agent builder with a round-trip code view and live Agent Check lint | L (6 tasks) | sonnet (design: opus, ADR 0010) | yes | W1-5 (lint), W1-1, W1-2 (fields); W12-1 optional (instance pickers) | packages/core/src/agents/edit.ts (new), packages/core/src/plan/from-definition.ts (new), apps/api/src/http/routes/agents.ts (validate response), apps/ui/src/features/agents/builder/* (new), apps/ui/src/features/agents/{AgentEditor,EditorTab,NewAgentPage}.tsx, apps/ui/src/i18n/locales/*.json | - |
-| W9-2 | Git-synced agent repositories (GitOps): bindings, sync, review and publish, drift | L (7 tasks) | sonnet (design: opus, ADR 0010) | yes | W9-1-2 (lint), W10-1-1 (outbound resolver; before it: environment proxies) | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/services/repositories/* (new), apps/api/src/http/routes/{repositories,repo-hooks}.ts (new), apps/worker/src/repo-sync.ts (new), packages/core/src/rbac.ts, apps/ui/src/features/repositories/* (new) | - |
-| W9-3 | PR-back: propose console edits of Git-managed agents as pull requests | M (1 task) | sonnet | yes | W9-2 | apps/api/src/services/repositories/pr-back.ts (new), forge adapters, apps/ui/src/features/agents/EditorTab.tsx | - |
+| W9-1 | No-code agent builder with a round-trip code view and live Agent Check lint | L (6 tasks) | sonnet (design: opus, ADR 0010) | yes | W1-5 (lint), W1-1, W1-2 (fields); W12-1 optional (instance pickers) | packages/core/src/agents/edit.ts (new), packages/core/src/plan/from-definition.ts (new), apps/api/src/http/routes/agents.ts (validate response), apps/ui/src/features/agents/builder/* (new), apps/ui/src/features/agents/{AgentEditor,EditorTab,NewAgentPage}.tsx, apps/ui/src/i18n/locales/*.json | #84, #85, #86, #87, #88, #89 |
+| W9-2 | Git-synced agent repositories (GitOps): bindings, sync, review and publish, drift | L (7 tasks) | sonnet (design: opus, ADR 0010) | yes | W9-1-2 (lint), W10-1-1 (outbound resolver; before it: environment proxies) | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/services/repositories/* (new), apps/api/src/http/routes/{repositories,repo-hooks}.ts (new), apps/worker/src/repo-sync.ts (new), packages/core/src/rbac.ts, apps/ui/src/features/repositories/* (new) | #90, #91, #92, #93, #94, #95, #96 |
+| W9-3 | PR-back: propose console edits of Git-managed agents as pull requests | M (1 task) | sonnet | yes | W9-2 | apps/api/src/services/repositories/pr-back.ts (new), forge adapters, apps/ui/src/features/agents/EditorTab.tsx | #97 |
 
 #### W9-1 No-code agent builder with a round-trip code view and live Agent Check lint
 
@@ -1292,12 +1292,12 @@ Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W9-1-1 | Source edit model for agents.md (round-trip safe patches) | M | sonnet | v0.3 | - | packages/core/src/agents/edit.ts (new), packages/core/src/agents/parser.ts (shared split helpers), packages/core/test/agents-edit.test.ts (new) | - |
-| W9-1-2 | Agent Check lint on agents.md in validate and publish | S | sonnet | v0.3 | - | packages/core/src/plan/from-definition.ts (new), apps/api/src/services/agents.ts, apps/api/src/http/routes/agents.ts, apps/api/src/http/schemas.ts, openapi.yaml (regenerate), apps/ui/src/features/agents/PublishDialog.tsx | - |
-| W9-1-3 | Builder shell: Form/Code switch, pipeline sections, live issues panel | M | sonnet | v0.3 | W9-1-1, W9-1-2 | apps/ui/src/features/agents/builder/{Builder,FormView,IssuesPanel,descriptor}.tsx (new), apps/ui/src/features/agents/{EditorTab,AgentEditor}.tsx, apps/ui/src/i18n/locales/{en,de}.json | - |
-| W9-1-4 | Builder step editor: models, tools by profile, access, credentials, outputs | M | sonnet | v0.3 | W9-1-3 | apps/ui/src/features/agents/builder/{StepList,StepEditor,ToolPicker,CredentialPicker}.tsx (new), apps/ui/src/features/connections/profiles.ts | - |
-| W9-1-5 | Builder handover and condition editors (schemas, input.from, when) | M | sonnet | v0.3 | W9-1-4 | apps/ui/src/features/agents/builder/{SchemaBuilder,InputFrom,WhenBuilder}.tsx (new), packages/core/src/agents/when.ts (export a printer for the grammar) | - |
-| W9-1-6 | Builder as default for new agents, wizard and plan hand-off, end-to-end tests | S | sonnet | v0.3 | W9-1-5 | apps/ui/src/features/agents/NewAgentPage.tsx, apps/ui/src/features/wizard/WizardPage.tsx, apps/ui/src/features/plans/PlansPage.tsx, apps/ui/test/e2e/* (new Playwright specs), docs/authoring.md (new) | - |
+| W9-1-1 | Source edit model for agents.md (round-trip safe patches) | M | sonnet | v0.3 | - | packages/core/src/agents/edit.ts (new), packages/core/src/agents/parser.ts (shared split helpers), packages/core/test/agents-edit.test.ts (new) | #84 |
+| W9-1-2 | Agent Check lint on agents.md in validate and publish | S | sonnet | v0.3 | - | packages/core/src/plan/from-definition.ts (new), apps/api/src/services/agents.ts, apps/api/src/http/routes/agents.ts, apps/api/src/http/schemas.ts, openapi.yaml (regenerate), apps/ui/src/features/agents/PublishDialog.tsx | #85 |
+| W9-1-3 | Builder shell: Form/Code switch, pipeline sections, live issues panel | M | sonnet | v0.3 | W9-1-1, W9-1-2 | apps/ui/src/features/agents/builder/{Builder,FormView,IssuesPanel,descriptor}.tsx (new), apps/ui/src/features/agents/{EditorTab,AgentEditor}.tsx, apps/ui/src/i18n/locales/{en,de}.json | #86 |
+| W9-1-4 | Builder step editor: models, tools by profile, access, credentials, outputs | M | sonnet | v0.3 | W9-1-3 | apps/ui/src/features/agents/builder/{StepList,StepEditor,ToolPicker,CredentialPicker}.tsx (new), apps/ui/src/features/connections/profiles.ts | #87 |
+| W9-1-5 | Builder handover and condition editors (schemas, input.from, when) | M | sonnet | v0.3 | W9-1-4 | apps/ui/src/features/agents/builder/{SchemaBuilder,InputFrom,WhenBuilder}.tsx (new), packages/core/src/agents/when.ts (export a printer for the grammar) | #88 |
+| W9-1-6 | Builder as default for new agents, wizard and plan hand-off, end-to-end tests | S | sonnet | v0.3 | W9-1-5 | apps/ui/src/features/agents/NewAgentPage.tsx, apps/ui/src/features/wizard/WizardPage.tsx, apps/ui/src/features/plans/PlansPage.tsx, apps/ui/test/e2e/* (new Playwright specs), docs/authoring.md (new) | #89 |
 
 ##### W9-1-1 Source edit model for agents.md (round-trip safe patches)
 
@@ -1375,13 +1375,13 @@ Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W9-2-1 | Repository bindings: migration 0011, permissions, GitHub adapter, URL and SSRF checks | M | sonnet | v0.3 | - | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/db/schema.ts, apps/api/src/services/repositories/{bindings,forge-github}.ts (new), apps/api/src/http/routes/repositories.ts (new), packages/core/src/rbac.ts (repos:read/write/sync), openapi.yaml | - |
-| W9-2-2 | Sync engine: fetch with limits, secret scan, validation, ceiling, lint, candidates | M | sonnet | v0.3 | W9-2-1, W9-1-2 | apps/worker/src/repo-sync.ts (new), apps/api/src/services/repositories/{sync,secret-scan,ceiling}.ts (new), apps/worker/src/queue.ts (job kind) | - |
-| W9-2-3 | Webhook poke endpoint for forge push events | S | sonnet | v0.3 | W9-2-2 | apps/api/src/http/routes/repo-hooks.ts (new), apps/api/src/services/repositories/webhooks.ts (new) | - |
-| W9-2-4 | Review and publish flow, Git-managed lock, drift, adopt and detach | M | sonnet | v0.3 | W9-2-2 | apps/api/src/services/agents.ts (source_kind checks), apps/api/src/services/repositories/publish.ts (new), apps/api/src/http/routes/agents.ts (adopt, detach), apps/ui/src/features/agents/{EditorTab,PublishDialog,OverviewTab}.tsx | - |
-| W9-2-5 | GitLab and Gitea forge adapters | S | sonnet | v0.3 | W9-2-1 | apps/api/src/services/repositories/{forge-gitlab,forge-gitea}.ts (new) | - |
-| W9-2-6 | Console: repositories page, sync reports, candidates | S | sonnet | v0.3 | W9-2-4 | apps/ui/src/features/repositories/* (new), apps/ui/src/router.tsx, apps/ui/src/i18n/locales/{en,de}.json, docs/git-sync.md (new) | - |
-| W9-2-7 | Hostile repository test suite for Git sync | S | haiku (tests; must run them and report real results) | v0.3 | W9-2-3, W9-2-4 | apps/worker/test/repo-sync.hostile.test.ts (new), test fixtures | - |
+| W9-2-1 | Repository bindings: migration 0011, permissions, GitHub adapter, URL and SSRF checks | M | sonnet | v0.3 | - | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/db/schema.ts, apps/api/src/services/repositories/{bindings,forge-github}.ts (new), apps/api/src/http/routes/repositories.ts (new), packages/core/src/rbac.ts (repos:read/write/sync), openapi.yaml | #90 |
+| W9-2-2 | Sync engine: fetch with limits, secret scan, validation, ceiling, lint, candidates | M | sonnet | v0.3 | W9-2-1, W9-1-2 | apps/worker/src/repo-sync.ts (new), apps/api/src/services/repositories/{sync,secret-scan,ceiling}.ts (new), apps/worker/src/queue.ts (job kind) | #91 |
+| W9-2-3 | Webhook poke endpoint for forge push events | S | sonnet | v0.3 | W9-2-2 | apps/api/src/http/routes/repo-hooks.ts (new), apps/api/src/services/repositories/webhooks.ts (new) | #92 |
+| W9-2-4 | Review and publish flow, Git-managed lock, drift, adopt and detach | M | sonnet | v0.3 | W9-2-2 | apps/api/src/services/agents.ts (source_kind checks), apps/api/src/services/repositories/publish.ts (new), apps/api/src/http/routes/agents.ts (adopt, detach), apps/ui/src/features/agents/{EditorTab,PublishDialog,OverviewTab}.tsx | #93 |
+| W9-2-5 | GitLab and Gitea forge adapters | S | sonnet | v0.3 | W9-2-1 | apps/api/src/services/repositories/{forge-gitlab,forge-gitea}.ts (new) | #94 |
+| W9-2-6 | Console: repositories page, sync reports, candidates | S | sonnet | v0.3 | W9-2-4 | apps/ui/src/features/repositories/* (new), apps/ui/src/router.tsx, apps/ui/src/i18n/locales/{en,de}.json, docs/git-sync.md (new) | #95 |
+| W9-2-7 | Hostile repository test suite for Git sync | S | haiku (tests; must run them and report real results) | v0.3 | W9-2-3, W9-2-4 | apps/worker/test/repo-sync.hostile.test.ts (new), test fixtures | #96 |
 
 ##### W9-2-1 Repository bindings: migration 0011, permissions, GitHub adapter, URL and SSRF checks
 
@@ -1462,7 +1462,7 @@ Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W9-3-1 | PR-back from the console to the bound repository | M | sonnet | v0.4 | W9-2-4 | apps/api/src/services/repositories/pr-back.ts (new), apps/api/src/http/routes/agents.ts (`propose`), forge adapters, apps/ui/src/features/agents/EditorTab.tsx | - |
+| W9-3-1 | PR-back from the console to the bound repository | M | sonnet | v0.4 | W9-2-4 | apps/api/src/services/repositories/pr-back.ts (new), apps/api/src/http/routes/agents.ts (`propose`), forge adapters, apps/ui/src/features/agents/EditorTab.tsx | #97 |
 
 ##### W9-3-1 PR-back from the console to the bound repository
 
@@ -1481,9 +1481,9 @@ Milestone: **v0.3** (W10-3: v1.0). Design: [ADR 0011](adr/0011-outbound-network-
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W10-1 | Central outbound network configuration: per-destination proxies, trust store, mTLS, safe connectivity tests | L (8 tasks) | sonnet (design: opus, ADR 0011) | yes | W1-3b (model proxy, tasks 3 and 5), W1-3a (egress proxy, merged) | packages/core/src/network/* (new), packages/providers/src/network/* (new), packages/providers/src/{proxy,http,bedrock,anthropic,openai,ollama}.ts, packages/mcp/src/connection.ts, apps/api/src/{auth,config}.ts, apps/api/src/http/routes/network.ts (new), packages/runners/src/egress-proxy.ts, apps/ui/src/features/settings/network/* (new) | - |
-| W10-2 | Private model endpoints: Bedrock PrivateLink and Azure OpenAI private endpoints | M (2 tasks) | sonnet | yes | W10-1-2, W1-3b-5 | packages/providers/src/{bedrock,openai,registry}.ts, packages/providers/src/stream/bedrock.ts, docs/providers.md, docs/verification/* | - |
-| W10-3 | Google Vertex AI provider with Private Service Connect | M (1 task) | sonnet (short opus design comment first) | yes | W10-1, W1-3b | packages/providers/src/vertex.ts (new), packages/providers/src/stream/*, registry, catalog mapping | - |
+| W10-1 | Central outbound network configuration: per-destination proxies, trust store, mTLS, safe connectivity tests | L (8 tasks) | sonnet (design: opus, ADR 0011) | yes | W1-3b (model proxy, tasks 3 and 5), W1-3a (egress proxy, merged) | packages/core/src/network/* (new), packages/providers/src/network/* (new), packages/providers/src/{proxy,http,bedrock,anthropic,openai,ollama}.ts, packages/mcp/src/connection.ts, apps/api/src/{auth,config}.ts, apps/api/src/http/routes/network.ts (new), packages/runners/src/egress-proxy.ts, apps/ui/src/features/settings/network/* (new) | #98, #99, #100, #101, #102, #103, #104, #105 |
+| W10-2 | Private model endpoints: Bedrock PrivateLink and Azure OpenAI private endpoints | M (2 tasks) | sonnet | yes | W10-1-2, W1-3b-5 | packages/providers/src/{bedrock,openai,registry}.ts, packages/providers/src/stream/bedrock.ts, docs/providers.md, docs/verification/* | #106, #107 |
+| W10-3 | Google Vertex AI provider with Private Service Connect | M (1 task) | sonnet (short opus design comment first) | yes | W10-1, W1-3b | packages/providers/src/vertex.ts (new), packages/providers/src/stream/*, registry, catalog mapping | #108 |
 
 #### W10-1 Central outbound network configuration: per-destination proxies, trust store, mTLS, safe connectivity tests
 
@@ -1499,14 +1499,14 @@ Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W10-1-1 | Network configuration contract and pure route resolver | S | sonnet | v0.3 | - | packages/core/src/network/{config,resolve}.ts (new), packages/core/src/egress.ts (shared host matcher), apps/api/src/config.ts, apps/worker/src/config.ts | - |
-| W10-1-2 | Dispatcher factory: trust store, client certificates, DNS pinning | M | sonnet | v0.3 | W10-1-1 | packages/providers/src/network/{dispatcher,trust,pinning}.ts (new), packages/providers/src/proxy.ts (delegates), packages/providers/src/bedrock.ts (NodeHttpHandler) | - |
-| W10-1-3 | Route every outbound client through the resolver | M | sonnet | v0.3 | W10-1-2, W1-3b-5 | packages/providers/src/*.ts and stream/*, packages/mcp/src/connection.ts, apps/api/src/auth/*, change-gate probes, outbound webhooks, catalog refresh, apps/api/src/telemetry.ts, eslint rule or test `no-raw-egress` (new) | - |
-| W10-1-4 | Tenant proxy selection and hardening of the BYOK proxyUrl | S | sonnet | v0.3 | W10-1-1 | apps/api/src/services/catalog.ts, packages/providers/src/registry.ts (`network` field), docs/providers.md | - |
-| W10-1-5 | Network admin page and safe connectivity test API | M | sonnet | v0.3 | W10-1-3 | apps/api/src/http/routes/network.ts (new), apps/api/src/services/network-test.ts (new), apps/ui/src/features/settings/network/* (new), openapi.yaml | - |
-| W10-1-6 | Upstream proxy for the run-node egress proxy | S | sonnet | v0.3 | W10-1-2 | packages/runners/src/{egress-proxy,egress-rules}.ts, apps/worker/src/egress-proxy-cli.ts, docs/runners.md | - |
-| W10-1-7 | Helm, Compose and docs for the network configuration | S | sonnet | v0.3 | W10-1-3 | docker-compose.yml, docs/{network,configuration,airgapped,providers,runners}.md (network.md new), CHANGELOG.md; open-agentix-helm mirror issue | - |
-| W10-1-8 | Network abuse test suite (SSRF, rebinding, credential leakage, TLS) | S | haiku (tests; must run them and report real results) | v0.3 | W10-1-5, W10-1-6 | packages/providers/test/network.abuse.test.ts (new), apps/api/test/network-test.abuse.test.ts (new) | - |
+| W10-1-1 | Network configuration contract and pure route resolver | S | sonnet | v0.3 | - | packages/core/src/network/{config,resolve}.ts (new), packages/core/src/egress.ts (shared host matcher), apps/api/src/config.ts, apps/worker/src/config.ts | #98 |
+| W10-1-2 | Dispatcher factory: trust store, client certificates, DNS pinning | M | sonnet | v0.3 | W10-1-1 | packages/providers/src/network/{dispatcher,trust,pinning}.ts (new), packages/providers/src/proxy.ts (delegates), packages/providers/src/bedrock.ts (NodeHttpHandler) | #99 |
+| W10-1-3 | Route every outbound client through the resolver | M | sonnet | v0.3 | W10-1-2, W1-3b-5 | packages/providers/src/*.ts and stream/*, packages/mcp/src/connection.ts, apps/api/src/auth/*, change-gate probes, outbound webhooks, catalog refresh, apps/api/src/telemetry.ts, eslint rule or test `no-raw-egress` (new) | #100 |
+| W10-1-4 | Tenant proxy selection and hardening of the BYOK proxyUrl | S | sonnet | v0.3 | W10-1-1 | apps/api/src/services/catalog.ts, packages/providers/src/registry.ts (`network` field), docs/providers.md | #101 |
+| W10-1-5 | Network admin page and safe connectivity test API | M | sonnet | v0.3 | W10-1-3 | apps/api/src/http/routes/network.ts (new), apps/api/src/services/network-test.ts (new), apps/ui/src/features/settings/network/* (new), openapi.yaml | #102 |
+| W10-1-6 | Upstream proxy for the run-node egress proxy | S | sonnet | v0.3 | W10-1-2 | packages/runners/src/{egress-proxy,egress-rules}.ts, apps/worker/src/egress-proxy-cli.ts, docs/runners.md | #103 |
+| W10-1-7 | Helm, Compose and docs for the network configuration | S | sonnet | v0.3 | W10-1-3 | docker-compose.yml, docs/{network,configuration,airgapped,providers,runners}.md (network.md new), CHANGELOG.md; open-agentix-helm mirror issue | #104 |
+| W10-1-8 | Network abuse test suite (SSRF, rebinding, credential leakage, TLS) | S | haiku (tests; must run them and report real results) | v0.3 | W10-1-5, W10-1-6 | packages/providers/test/network.abuse.test.ts (new), apps/api/test/network-test.abuse.test.ts (new) | #105 |
 
 ##### W10-1-1 Network configuration contract and pure route resolver
 
@@ -1597,8 +1597,8 @@ Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W10-2-1 | Bedrock over PrivateLink: signing region, control endpoint, STS | S | sonnet | v0.3 | W10-1-2 | packages/providers/src/{bedrock,registry}.ts, packages/providers/src/stream/bedrock.ts, docs/providers.md, docs/verification/bedrock-privatelink.md (new) | - |
-| W10-2-2 | Azure OpenAI private endpoints and Entra workload identity | M | sonnet | v0.3 | W10-1-2 | packages/providers/src/{openai,registry}.ts, packages/providers/src/azure-auth.ts (new), docs/providers.md | - |
+| W10-2-1 | Bedrock over PrivateLink: signing region, control endpoint, STS | S | sonnet | v0.3 | W10-1-2 | packages/providers/src/{bedrock,registry}.ts, packages/providers/src/stream/bedrock.ts, docs/providers.md, docs/verification/bedrock-privatelink.md (new) | #106 |
+| W10-2-2 | Azure OpenAI private endpoints and Entra workload identity | M | sonnet | v0.3 | W10-1-2 | packages/providers/src/{openai,registry}.ts, packages/providers/src/azure-auth.ts (new), docs/providers.md | #107 |
 
 ##### W10-2-1 Bedrock over PrivateLink: signing region, control endpoint, STS
 
@@ -1633,7 +1633,7 @@ Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W10-3-1 | Vertex AI provider with Private Service Connect endpoints | M | sonnet | v1.0 | W10-1-3, W1-3b-6 | packages/providers/src/vertex.ts (new), packages/providers/src/stream/vertex.ts (new), packages/providers/src/registry.ts, docs/providers.md | - |
+| W10-3-1 | Vertex AI provider with Private Service Connect endpoints | M | sonnet | v1.0 | W10-1-3, W1-3b-6 | packages/providers/src/vertex.ts (new), packages/providers/src/stream/vertex.ts (new), packages/providers/src/registry.ts, docs/providers.md | #108 |
 
 ##### W10-3-1 Vertex AI provider with Private Service Connect endpoints
 
@@ -1651,7 +1651,7 @@ Milestone: **v0.3**. Design: [docs/demo-repo-agent.md](demo-repo-agent.md). Inde
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W11-1 | Real read-only demo agent that answers questions about the project from its public repository | M (4 tasks) | sonnet | yes | demo profile and Claude Code demo mode (done); W12-1-1 optional (instance type `github`) | apps/api/src/demo/*, apps/api/src/http/routes/demo.ts, apps/worker/src/demo-runner.ts, Dockerfile (`worker-demo-repo` target), docker-compose.demo-repo.yml (new), apps/ui/src/features/dashboard/DemoScenarios.tsx | - |
+| W11-1 | Real read-only demo agent that answers questions about the project from its public repository | M (4 tasks) | sonnet | yes | demo profile and Claude Code demo mode (done); W12-1-1 optional (instance type `github`) | apps/api/src/demo/*, apps/api/src/http/routes/demo.ts, apps/worker/src/demo-runner.ts, Dockerfile (`worker-demo-repo` target), docker-compose.demo-repo.yml (new), apps/ui/src/features/dashboard/DemoScenarios.tsx | #109, #110, #111, #112 |
 
 #### W11-1 Real read-only demo agent that answers questions about the project from its public repository
 
@@ -1667,10 +1667,10 @@ Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W11-1-1 | Pinned read-only GitHub MCP server for the demo with a repository allowlist | M | sonnet | v0.3 | - | Dockerfile (`worker-demo-repo` target, pinned version and SHA-256), apps/worker/src/demo-runner.ts (allowlist wrapper), apps/api/src/demo/seed.ts (connection instance and profile), docker-compose.demo-repo.yml (new), docs/verification/demo-repo-agent.md (new) | - |
-| W11-1-2 | Demo ask endpoint and the project-guide agent with caps | M | sonnet | v0.3 | W11-1-1 | apps/api/src/http/routes/demo.ts, apps/api/src/demo/{agents,scenario-service}.ts, apps/worker/src/demo-runner.ts, docs/{demo,configuration}.md | - |
-| W11-1-3 | Ask box and safe answer rendering in the demo console | S | sonnet | v0.3 | W11-1-2 | apps/ui/src/features/dashboard/AskProject.tsx (new), apps/ui/src/components/SafeMarkdown.tsx (new, no HTML), apps/ui/src/i18n/locales/{en,de}.json | - |
-| W11-1-4 | Demo repo agent abuse and acceptance suite | S | haiku (tests; must run them and report real results) | v0.3 | W11-1-3 | apps/worker/test/demo-repo.abuse.test.ts (new), apps/api/test/demo-ask.test.ts | - |
+| W11-1-1 | Pinned read-only GitHub MCP server for the demo with a repository allowlist | M | sonnet | v0.3 | - | Dockerfile (`worker-demo-repo` target, pinned version and SHA-256), apps/worker/src/demo-runner.ts (allowlist wrapper), apps/api/src/demo/seed.ts (connection instance and profile), docker-compose.demo-repo.yml (new), docs/verification/demo-repo-agent.md (new) | #109 |
+| W11-1-2 | Demo ask endpoint and the project-guide agent with caps | M | sonnet | v0.3 | W11-1-1 | apps/api/src/http/routes/demo.ts, apps/api/src/demo/{agents,scenario-service}.ts, apps/worker/src/demo-runner.ts, docs/{demo,configuration}.md | #110 |
+| W11-1-3 | Ask box and safe answer rendering in the demo console | S | sonnet | v0.3 | W11-1-2 | apps/ui/src/features/dashboard/AskProject.tsx (new), apps/ui/src/components/SafeMarkdown.tsx (new, no HTML), apps/ui/src/i18n/locales/{en,de}.json | #111 |
+| W11-1-4 | Demo repo agent abuse and acceptance suite | S | haiku (tests; must run them and report real results) | v0.3 | W11-1-3 | apps/worker/test/demo-repo.abuse.test.ts (new), apps/api/test/demo-ask.test.ts | #112 |
 
 ##### W11-1-1 Pinned read-only GitHub MCP server for the demo with a repository allowlist
 
@@ -1716,8 +1716,8 @@ Milestone: **v0.3** (W12-2-5 and W12-2-6: v0.4). Design: [ADR 0012](adr/0012-con
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W12-1 | Connections: MCP servers and model providers as separate areas, typed instances, central grants | L (4 tasks) | sonnet (design: opus, ADR 0012) | yes | W1-2 (profiles), W1-3b-2/3 (reservations, admission) | apps/api/drizzle/0012_connection_instances.sql (new), packages/core/src/connections/* (new), apps/api/src/services/{catalog,models,model-accounting,run-nodes}.ts, apps/ui/src/features/{mcp-servers,model-providers}/* (new) | - |
-| W12-2 | Data protection: data flow rules, retention, PII hooks, processing record, export and erasure, operator separation | L (8 tasks) | sonnet (design: opus, ADR 0012) | yes | W12-1-1; W3-3 (RE2 patterns) for tenant PII patterns; W7-1 for per-tenant chains (later) | packages/core/src/{classification,redact}.ts, packages/core/src/pii/* (new), apps/api/src/services/{agents,runs,audit,tenants}.ts, apps/api/src/services/data-protection/* (new), apps/worker/src/retention.ts (new), docs/data-protection.md (new) | - |
+| W12-1 | Connections: MCP servers and model providers as separate areas, typed instances, central grants | L (4 tasks) | sonnet (design: opus, ADR 0012) | yes | W1-2 (profiles), W1-3b-2/3 (reservations, admission) | apps/api/drizzle/0012_connection_instances.sql (new), packages/core/src/connections/* (new), apps/api/src/services/{catalog,models,model-accounting,run-nodes}.ts, apps/ui/src/features/{mcp-servers,model-providers}/* (new) | #113, #114, #115, #116 |
+| W12-2 | Data protection: data flow rules, retention, PII hooks, processing record, export and erasure, operator separation | L (8 tasks) | sonnet (design: opus, ADR 0012) | yes | W12-1-1; W3-3 (RE2 patterns) for tenant PII patterns; W7-1 for per-tenant chains (later) | packages/core/src/{classification,redact}.ts, packages/core/src/pii/* (new), apps/api/src/services/{agents,runs,audit,tenants}.ts, apps/api/src/services/data-protection/* (new), apps/worker/src/retention.ts (new), docs/data-protection.md (new) | #117, #118, #119, #120, #121, #122, #123, #124 |
 
 #### W12-1 Connections: MCP servers and model providers as separate areas, typed instances, central grants
 
@@ -1732,10 +1732,10 @@ Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W12-1-1 | Connection types and instances: migration 0012, grants, namespace rules | M | sonnet | v0.3 | - | apps/api/drizzle/0012_connection_instances.sql (new), apps/api/src/db/schema.ts, packages/core/src/connections/{types,grants}.ts (new), packages/core/src/connections/types/*.json (built-in types), apps/api/src/services/catalog.ts, apps/api/src/http/routes/{catalog,connection-types,connection-grants}.ts, openapi.yaml | - |
-| W12-1-2 | Enforcement on central connections: quotas, budgets, cache isolation, broker and proxy rules | M | sonnet | v0.3 | W12-1-1, W1-3b-3 | apps/api/src/services/{model-accounting,model-proxy,run-nodes,agents}.ts, apps/api/drizzle/0012_connection_instances.sql (ledger and reservation columns), packages/mcp/src/gateway.ts (session keys) | - |
-| W12-1-3 | Console: separate MCP servers and Model providers areas | M | sonnet | v0.3 | W12-1-1 | apps/ui/src/features/{mcp-servers,model-providers}/* (new, from features/connections), apps/ui/src/router.tsx (redirect from /connections), apps/ui/src/layout/*, apps/ui/src/i18n/locales/{en,de}.json | - |
-| W12-1-4 | Per-instance policies and budgets | S | sonnet | v0.3 | W12-1-2 | apps/api/src/services/{budgets,catalog}.ts, packages/core/src/policy/engine.ts (instance binding), docs/budgets.md | - |
+| W12-1-1 | Connection types and instances: migration 0012, grants, namespace rules | M | sonnet | v0.3 | - | apps/api/drizzle/0012_connection_instances.sql (new), apps/api/src/db/schema.ts, packages/core/src/connections/{types,grants}.ts (new), packages/core/src/connections/types/*.json (built-in types), apps/api/src/services/catalog.ts, apps/api/src/http/routes/{catalog,connection-types,connection-grants}.ts, openapi.yaml | #113 |
+| W12-1-2 | Enforcement on central connections: quotas, budgets, cache isolation, broker and proxy rules | M | sonnet | v0.3 | W12-1-1, W1-3b-3 | apps/api/src/services/{model-accounting,model-proxy,run-nodes,agents}.ts, apps/api/drizzle/0012_connection_instances.sql (ledger and reservation columns), packages/mcp/src/gateway.ts (session keys) | #114 |
+| W12-1-3 | Console: separate MCP servers and Model providers areas | M | sonnet | v0.3 | W12-1-1 | apps/ui/src/features/{mcp-servers,model-providers}/* (new, from features/connections), apps/ui/src/router.tsx (redirect from /connections), apps/ui/src/layout/*, apps/ui/src/i18n/locales/{en,de}.json | #115 |
+| W12-1-4 | Per-instance policies and budgets | S | sonnet | v0.3 | W12-1-2 | apps/api/src/services/{budgets,catalog}.ts, packages/core/src/policy/engine.ts (instance binding), docs/budgets.md | #116 |
 
 ##### W12-1-1 Connection types and instances: migration 0012, grants, namespace rules
 
@@ -1789,14 +1789,14 @@ Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W12-2-1 | Data flow rules: connection clearance, source classification, regions, personal data | M | sonnet | v0.3 | W12-1-1 | packages/core/src/{classification,policy/engine}.ts, apps/api/src/services/agents.ts (publish checks), apps/api/src/services/model-proxy.ts (admission), packages/mcp/src/gateway.ts | - |
-| W12-2-2 | Retention per tenant and the purge job | M | sonnet | v0.3 | W12-1-1 | apps/api/src/services/tenants.ts (retention), apps/worker/src/retention.ts (new), apps/api/src/services/runs.ts (metadata-only capture), apps/ui/src/features/settings/* | - |
-| W12-2-3 | PII redaction hooks before storage, logging and optionally before model or tool calls | M | sonnet | v0.3 | W12-2-1 | packages/core/src/pii/{detectors,chain}.ts (new), packages/core/src/redact.ts, apps/api/src/services/{step-writer,audit,model-proxy}.ts, packages/mcp/src/gateway.ts | - |
-| W12-2-4 | Record of processing and sub-processor view per tenant | S | sonnet | v0.3 | W12-1-1 | apps/api/src/services/data-protection/processing.ts (new), apps/api/src/http/routes/data-protection.ts (new), apps/ui/src/features/settings/DataProtection*.tsx (new), docs/data-protection.md (new) | - |
-| W12-2-5 | Tenant data export | S | sonnet | v0.4 | W12-2-2 | apps/api/src/services/data-protection/export.ts (new), apps/worker/src/jobs/tenant-export.ts (new), openapi.yaml | - |
-| W12-2-6 | Erasure: pseudonymisation, audit payload tombstones, salted digests, per-tenant data keys | M | sonnet (design review by opus before merge) | v0.4 | W12-2-2 | packages/core/src/audit/*.ts (salted digest, tombstone verify), apps/api/src/services/{audit,users,tenants}.ts, apps/api/src/services/data-protection/{erase,keys}.ts (new), apps/api/drizzle/0012_connection_instances.sql (audit and tenant columns) | - |
-| W12-2-7 | Operator separation and break-glass support access | M | sonnet | v0.3 | W12-1-1 | apps/api/src/http/app.ts and apps/api/src/services/identity.ts (X-OAX-Tenant handling), apps/api/src/services/tenants.ts (`operatorAccess`, support access), apps/api/src/services/{runs,events}.ts (content stripping), apps/ui/src/features/settings/* | - |
-| W12-2-8 | Tenant isolation suite for central connections and data protection | S | haiku (tests; must run them and report real results) | v0.3 | W12-1-2, W12-2-7 | apps/api/test/central-connections.isolation.test.ts (new), apps/worker/test/central-connections.e2e.test.ts (new) | - |
+| W12-2-1 | Data flow rules: connection clearance, source classification, regions, personal data | M | sonnet | v0.3 | W12-1-1 | packages/core/src/{classification,policy/engine}.ts, apps/api/src/services/agents.ts (publish checks), apps/api/src/services/model-proxy.ts (admission), packages/mcp/src/gateway.ts | #117 |
+| W12-2-2 | Retention per tenant and the purge job | M | sonnet | v0.3 | W12-1-1 | apps/api/src/services/tenants.ts (retention), apps/worker/src/retention.ts (new), apps/api/src/services/runs.ts (metadata-only capture), apps/ui/src/features/settings/* | #118 |
+| W12-2-3 | PII redaction hooks before storage, logging and optionally before model or tool calls | M | sonnet | v0.3 | W12-2-1 | packages/core/src/pii/{detectors,chain}.ts (new), packages/core/src/redact.ts, apps/api/src/services/{step-writer,audit,model-proxy}.ts, packages/mcp/src/gateway.ts | #119 |
+| W12-2-4 | Record of processing and sub-processor view per tenant | S | sonnet | v0.3 | W12-1-1 | apps/api/src/services/data-protection/processing.ts (new), apps/api/src/http/routes/data-protection.ts (new), apps/ui/src/features/settings/DataProtection*.tsx (new), docs/data-protection.md (new) | #120 |
+| W12-2-5 | Tenant data export | S | sonnet | v0.4 | W12-2-2 | apps/api/src/services/data-protection/export.ts (new), apps/worker/src/jobs/tenant-export.ts (new), openapi.yaml | #121 |
+| W12-2-6 | Erasure: pseudonymisation, audit payload tombstones, salted digests, per-tenant data keys | M | sonnet (design review by opus before merge) | v0.4 | W12-2-2 | packages/core/src/audit/*.ts (salted digest, tombstone verify), apps/api/src/services/{audit,users,tenants}.ts, apps/api/src/services/data-protection/{erase,keys}.ts (new), apps/api/drizzle/0012_connection_instances.sql (audit and tenant columns) | #122 |
+| W12-2-7 | Operator separation and break-glass support access | M | sonnet | v0.3 | W12-1-1 | apps/api/src/http/app.ts and apps/api/src/services/identity.ts (X-OAX-Tenant handling), apps/api/src/services/tenants.ts (`operatorAccess`, support access), apps/api/src/services/{runs,events}.ts (content stripping), apps/ui/src/features/settings/* | #123 |
+| W12-2-8 | Tenant isolation suite for central connections and data protection | S | haiku (tests; must run them and report real results) | v0.3 | W12-1-2, W12-2-7 | apps/api/test/central-connections.isolation.test.ts (new), apps/worker/test/central-connections.e2e.test.ts (new) | #124 |
 
 ##### W12-2-1 Data flow rules: connection clearance, source classification, regions, personal data
 
@@ -2020,47 +2020,47 @@ work is mirrored in `open-agentix/open-agentix-helm`.
 | W8-3 | #61 | v1.0 | open-agentix-helm#18 |
 | W8-4 | #62 | v1.0 | - |
 <!-- issues-9-12:start -->
-| W9-1-1 | - | v0.3 | - |
-| W9-1-2 | - | v0.3 | - |
-| W9-1-3 | - | v0.3 | - |
-| W9-1-4 | - | v0.3 | - |
-| W9-1-5 | - | v0.3 | - |
-| W9-1-6 | - | v0.3 | - |
-| W9-2-1 | - | v0.3 | - |
-| W9-2-2 | - | v0.3 | - |
-| W9-2-3 | - | v0.3 | open-agentix-helm (to be filed with the task) |
-| W9-2-4 | - | v0.3 | - |
-| W9-2-5 | - | v0.3 | - |
-| W9-2-6 | - | v0.3 | - |
-| W9-2-7 | - | v0.3 | - |
-| W9-3-1 | - | v0.4 | - |
-| W10-1-1 | - | v0.3 | - |
-| W10-1-2 | - | v0.3 | - |
-| W10-1-3 | - | v0.3 | - |
-| W10-1-4 | - | v0.3 | - |
-| W10-1-5 | - | v0.3 | - |
-| W10-1-6 | - | v0.3 | - |
-| W10-1-7 | - | v0.3 | open-agentix-helm (to be filed with the task) |
-| W10-1-8 | - | v0.3 | - |
-| W10-2-1 | - | v0.3 | - |
-| W10-2-2 | - | v0.3 | - |
-| W10-3-1 | - | v1.0 | - |
-| W11-1-1 | - | v0.3 | open-agentix-helm (to be filed with the task) |
-| W11-1-2 | - | v0.3 | - |
-| W11-1-3 | - | v0.3 | - |
-| W11-1-4 | - | v0.3 | - |
-| W12-1-1 | - | v0.3 | - |
-| W12-1-2 | - | v0.3 | - |
-| W12-1-3 | - | v0.3 | - |
-| W12-1-4 | - | v0.3 | - |
-| W12-2-1 | - | v0.3 | - |
-| W12-2-2 | - | v0.3 | - |
-| W12-2-3 | - | v0.3 | - |
-| W12-2-4 | - | v0.3 | - |
-| W12-2-5 | - | v0.4 | - |
-| W12-2-6 | - | v0.4 | open-agentix-helm (to be filed with the task) |
-| W12-2-7 | - | v0.3 | - |
-| W12-2-8 | - | v0.3 | - |
+| W9-1-1 | #84 | v0.3 | - |
+| W9-1-2 | #85 | v0.3 | - |
+| W9-1-3 | #86 | v0.3 | - |
+| W9-1-4 | #87 | v0.3 | - |
+| W9-1-5 | #88 | v0.3 | - |
+| W9-1-6 | #89 | v0.3 | - |
+| W9-2-1 | #90 | v0.3 | - |
+| W9-2-2 | #91 | v0.3 | - |
+| W9-2-3 | #92 | v0.3 | open-agentix-helm (to be filed with the task) |
+| W9-2-4 | #93 | v0.3 | - |
+| W9-2-5 | #94 | v0.3 | - |
+| W9-2-6 | #95 | v0.3 | - |
+| W9-2-7 | #96 | v0.3 | - |
+| W9-3-1 | #97 | v0.4 | - |
+| W10-1-1 | #98 | v0.3 | - |
+| W10-1-2 | #99 | v0.3 | - |
+| W10-1-3 | #100 | v0.3 | - |
+| W10-1-4 | #101 | v0.3 | - |
+| W10-1-5 | #102 | v0.3 | - |
+| W10-1-6 | #103 | v0.3 | - |
+| W10-1-7 | #104 | v0.3 | open-agentix-helm (to be filed with the task) |
+| W10-1-8 | #105 | v0.3 | - |
+| W10-2-1 | #106 | v0.3 | - |
+| W10-2-2 | #107 | v0.3 | - |
+| W10-3-1 | #108 | v1.0 | - |
+| W11-1-1 | #109 | v0.3 | open-agentix-helm (to be filed with the task) |
+| W11-1-2 | #110 | v0.3 | - |
+| W11-1-3 | #111 | v0.3 | - |
+| W11-1-4 | #112 | v0.3 | - |
+| W12-1-1 | #113 | v0.3 | - |
+| W12-1-2 | #114 | v0.3 | - |
+| W12-1-3 | #115 | v0.3 | - |
+| W12-1-4 | #116 | v0.3 | - |
+| W12-2-1 | #117 | v0.3 | - |
+| W12-2-2 | #118 | v0.3 | - |
+| W12-2-3 | #119 | v0.3 | - |
+| W12-2-4 | #120 | v0.3 | - |
+| W12-2-5 | #121 | v0.4 | - |
+| W12-2-6 | #122 | v0.4 | open-agentix-helm (to be filed with the task) |
+| W12-2-7 | #123 | v0.3 | - |
+| W12-2-8 | #124 | v0.3 | - |
 <!-- issues-9-12:end -->
 
 #7 (LLM second opinion) stays open as part of W6-4 next to #6.
