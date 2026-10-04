@@ -138,6 +138,13 @@ export const EnvSchema = z.object({
   OAX_TOOLBOX_REQUIRE_SIGNATURE: bool.default(true),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
   OTEL_SERVICE_NAME: z.string().optional(),
+
+  // Air-gapped mode (docs/airgapped.md): fail-closed egress allowlist.
+  OAX_AIRGAPPED: bool.default(false),
+  OAX_AIRGAPPED_ALLOW: z.string().default(''),
+  /** Reserved outbound features; refused while air-gapped, checked so they cannot be enabled by mistake. */
+  OAX_CATALOG_REFRESH_URL: z.string().url().optional(),
+  OAX_WEBHOOK_OUT_URLS: z.string().default(''),
 });
 
 export interface Config {
@@ -227,6 +234,13 @@ export interface Config {
       };
   };
   toolboxes: { registry: string; allowlist: string[]; requireSignature: boolean };
+  airgap: {
+    enabled: boolean;
+    /** Raw `OAX_AIRGAPPED_ALLOW` (hosts, suffixes, CIDRs). */
+    allow: string;
+    catalogRefreshUrl: string | undefined;
+    webhookOutUrls: string[];
+  };
 }
 
 /** Group/claim value -> role bindings; values are `role` (global) or `role@team-slug`. */
@@ -378,6 +392,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       registry: e.OAX_TOOLBOX_REGISTRY,
       allowlist: list(e.OAX_TOOLBOX_ALLOWLIST),
       requireSignature: e.OAX_TOOLBOX_REQUIRE_SIGNATURE,
+    },
+    airgap: {
+      enabled: e.OAX_AIRGAPPED,
+      allow: e.OAX_AIRGAPPED_ALLOW,
+      catalogRefreshUrl: e.OAX_CATALOG_REFRESH_URL,
+      webhookOutUrls: list(e.OAX_WEBHOOK_OUT_URLS),
     },
   };
 }

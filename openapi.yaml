@@ -105,9 +105,31 @@ paths:
                       - applied
                       - ok
                     additionalProperties: false
+                  airgapped:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                      allowlist:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                        description: Number of entries on OAX_AIRGAPPED_ALLOW (not their values)
+                      blockedAttempts:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                        description: Outbound attempts refused since start
+                    required:
+                      - enabled
+                      - allowlist
+                      - blockedAttempts
+                    additionalProperties: false
+                    description: Air-gapped (fail-closed egress) state of this process
                 required:
                   - status
                   - schema
+                  - airgapped
                 additionalProperties: false
         "503":
           description: Default Response
@@ -145,9 +167,31 @@ paths:
                       - applied
                       - ok
                     additionalProperties: false
+                  airgapped:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                      allowlist:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                        description: Number of entries on OAX_AIRGAPPED_ALLOW (not their values)
+                      blockedAttempts:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                        description: Outbound attempts refused since start
+                    required:
+                      - enabled
+                      - allowlist
+                      - blockedAttempts
+                    additionalProperties: false
+                    description: Air-gapped (fail-closed egress) state of this process
                 required:
                   - status
                   - schema
+                  - airgapped
                 additionalProperties: false
   /metrics:
     get:

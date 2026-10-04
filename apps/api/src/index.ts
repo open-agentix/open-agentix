@@ -12,3 +12,4 @@ export { createControlNode, type ControlNode } from './bootstrap.js';
 export * from './db/settings.js';
 export * from './demo/scenarios.js';
 export { DemoScenarioService, visitorKey } from './demo/scenario-service.js';
+export * from './airgap.js';

@@ -19,6 +19,7 @@ describe('system endpoints', () => {
       status: 'ok',
       checks: { database: true, schema: true },
       schema: { expected: 5, applied: 5, ok: true },
+      airgapped: { enabled: false, allowlist: 0, blockedAttempts: 0 },
     });
     expect((await n.req({ method: 'GET', url: '/v1/version', token: null })).json()).toMatchObject({
       name: 'openagentix',

@@ -5,6 +5,7 @@ import {
   NotImplementedError,
   OaxError,
   effectiveBudget,
+  getEgressPolicy,
   redactString,
   type AgentDefinition,
   type AgentSpec,
@@ -212,6 +213,8 @@ export interface ClaudeCodeOptions {
   oauthTokenFile?: string;
   /** HOME of the existing login (default: the current user's). Ignored with `oauthTokenFile`. */
   home?: string;
+  /** Endpoint the CLI contacts (default https://api.anthropic.com); checked in air-gapped mode. */
+  anthropicUrl?: string;
   /** Platform default when the agent sets no step budget. */
   defaultMaxTurns?: number;
 }
@@ -302,6 +305,12 @@ export class ClaudeCodeHarness implements ExternalHarness {
   }
 
   async run(inv: HarnessInvocation, opts: HarnessRunOptions): Promise<HarnessResult> {
+    // The CLI is a separate process that talks to the Anthropic API itself, so the in-process
+    // network guard cannot see it: in air-gapped mode refuse unless that endpoint is allowlisted.
+    getEgressPolicy().assert(
+      this.options.anthropicUrl ?? 'https://api.anthropic.com',
+      'Claude Code harness (Anthropic API)',
+    );
     const cwd = resolve(opts.cwd);
     await mkdir(cwd, { recursive: true, mode: 0o700 });
     for (const [rel, content] of Object.entries(inv.files)) {

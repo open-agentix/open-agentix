@@ -77,6 +77,14 @@ export interface paths {
                                 applied: number;
                                 ok: boolean;
                             };
+                            /** @description Air-gapped (fail-closed egress) state of this process */
+                            airgapped: {
+                                enabled: boolean;
+                                /** @description Number of entries on OAX_AIRGAPPED_ALLOW (not their values) */
+                                allowlist: number;
+                                /** @description Outbound attempts refused since start */
+                                blockedAttempts: number;
+                            };
                         };
                     };
                 };
@@ -96,6 +104,14 @@ export interface paths {
                                 expected: number;
                                 applied: number;
                                 ok: boolean;
+                            };
+                            /** @description Air-gapped (fail-closed egress) state of this process */
+                            airgapped: {
+                                enabled: boolean;
+                                /** @description Number of entries on OAX_AIRGAPPED_ALLOW (not their values) */
+                                allowlist: number;
+                                /** @description Outbound attempts refused since start */
+                                blockedAttempts: number;
                             };
                         };
                     };
