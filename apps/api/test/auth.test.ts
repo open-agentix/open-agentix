@@ -200,10 +200,9 @@ describe('API tokens', () => {
     ).toBeGreaterThanOrEqual(1);
     expect((await n.req({ method: 'DELETE', url: `/v1/tokens/${id}` })).statusCode).toBe(204);
     expect((await n.req({ method: 'GET', url: '/v1/runs', token })).statusCode).toBe(401);
-    expect(
-      (await n.req({ method: 'DELETE', url: '/v1/tokens/abababab-abab-4bab-8bab-abababababab' }))
-        .statusCode,
-    ).toBe(404);
+    // an id that differs from the revoked one (the first character is not always "f")
+    const unknown = `${id[0] === 'f' ? '0' : 'f'}${id.slice(1)}`;
+    expect((await n.req({ method: 'DELETE', url: `/v1/tokens/${unknown}` })).statusCode).toBe(404);
   });
 
   it('refuses scopes beyond the principal', async () => {
