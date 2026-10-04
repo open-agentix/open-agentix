@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { CLASSIFICATIONS, mayFlow, type Classification } from '../classification.js';
 import type { AgentDefinition, AgentSpec } from '../agents/parser.js';
+import type { ToolAccess } from '../agents/profiles.js';
 import type { ArgConstraint, ToolGrant } from '../agents/schema.js';
 
 /**
@@ -53,6 +54,7 @@ export interface PolicyReason {
     | 'arg_denied'
     | 'arg_forbidden_pattern'
     | 'call_limit'
+    | 'profile_write_denied'
     | 'classification'
     | 'approval_required';
   message: string;
@@ -67,7 +69,12 @@ export interface PolicyDecision {
 
 export interface PolicyContext {
   definition: Pick<AgentDefinition, 'classification'>;
-  agent: Pick<AgentSpec, 'id' | 'tools'>;
+  agent: Pick<AgentSpec, 'id' | 'tools' | 'access'>;
+  /**
+   * Classification of the tools (`server/tool`) as of publish. For an agent with
+   * `access: read-only` only tools classified `read` pass; unknown tools count as `write`.
+   */
+  toolAccess?: Readonly<Record<string, ToolAccess>> | undefined;
   bundles?: readonly PolicyBundle[];
   /** Number of calls already made in this run, keyed by `server/tool`. */
   callCounts?: ReadonlyMap<string, number>;
@@ -241,6 +248,12 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
         reasons.push({ code: 'arg_forbidden_pattern', message: `${f.reason} (${f.pattern})` });
       }
     }
+  }
+  if (ctx.agent.access === 'read-only' && ctx.toolAccess?.[key] !== 'read') {
+    reasons.push({
+      code: 'profile_write_denied',
+      message: `agent "${ctx.agent.id}" is read-only; tool "${key}" is not classified as read`,
+    });
   }
   const used = ctx.callCounts?.get(key) ?? 0;
   if (grant.maxCallsPerRun !== undefined && used >= grant.maxCallsPerRun) {
