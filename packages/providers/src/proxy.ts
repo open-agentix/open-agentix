@@ -1,3 +1,4 @@
+import { getEgressPolicy } from '@openagentix/core';
 import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 
 /**
@@ -67,6 +68,12 @@ export function createProxyAwareFetch(opts: ProxyAwareFetchOptions = {}): FetchF
     ((i: string | URL, init: Omit<RequestInit, 'dispatcher'> & { dispatcher: Dispatcher }) =>
       undiciFetch(i, init as never) as unknown as Promise<Response>);
   return (input, init) => {
+    // Air-gapped mode: the TARGET must be allowlisted, whether or not a proxy is used.
+    try {
+      getEgressPolicy().assert(input, 'http');
+    } catch (e) {
+      return Promise.reject(e);
+    }
     const proxy = proxyFor(input, opts.env ?? process.env, opts.proxyUrl);
     if (!proxy) return direct(input, init);
     let agent = agents.get(proxy);

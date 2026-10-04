@@ -96,4 +96,4 @@ Answer (sanitized): (none)
 - The check that no built-in tool was used relies on the stream the CLI reports; `--tools ""`
   already removes the built-in tools, so the check is a second line of defence.
 - The harness needs its own network access to the Anthropic API; it is not usable in air-gapped
-  mode (see `docs/airgapped.md`).
+  mode (see `docs/airgapped.md`): in air-gapped mode the harness refuses to start unless `api.anthropic.com` (or `anthropicUrl`) is on `OAX_AIRGAPPED_ALLOW`.

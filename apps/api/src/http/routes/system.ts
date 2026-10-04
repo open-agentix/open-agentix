@@ -1,4 +1,10 @@
-import { PERMISSIONS, ROLES, ROLE_PERMISSIONS, RUNNER_KINDS } from '@openagentix/core';
+import {
+  getEgressPolicy,
+  PERMISSIONS,
+  ROLES,
+  ROLE_PERMISSIONS,
+  RUNNER_KINDS,
+} from '@openagentix/core';
 import { catalogModels } from '@openagentix/providers';
 import { z } from 'zod';
 import { HttpError } from '../../errors.js';
@@ -7,6 +13,11 @@ import type { Deps } from '../app.js';
 import { bearerOf } from '../app.js';
 import { HealthSchema, ReadySchema, SettingsSchema, VersionInfoSchema } from '../schemas.js';
 import type { ZApp } from '../zapp.js';
+
+export function airgapState(): { enabled: boolean; allowlist: number; blockedAttempts: number } {
+  const s = getEgressPolicy().status();
+  return { enabled: s.airgapped, allowlist: s.allowlist, blockedAttempts: s.blocked };
+}
 
 export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
   const ops = ['ops'];
@@ -37,6 +48,7 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
         status: ok ? 'ok' : 'unavailable',
         checks: { database: db, schema: !!schema?.ok },
         schema: schema ?? { expected: 0, applied: 0, ok: false },
+        airgapped: airgapState(),
       });
     },
   );

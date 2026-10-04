@@ -10,6 +10,7 @@ import {
   type ToolCallRequest,
 } from '@openagentix/core';
 import { McpServerConfigSchema, type McpServerConfig } from '@openagentix/mcp';
+import { assertConnectionAllowed } from '../airgap.js';
 import {
   CATALOG_PROVIDER_FOR,
   ProviderSettingsSchema,
@@ -228,6 +229,8 @@ export class CatalogService {
           `secret references of tenant connections must start with "${prefix}" (got: ${foreign.join(', ')})`,
         );
     }
+    // Air-gapped mode: the endpoint must be on the allowlist before the connection is stored.
+    assertConnectionAllowed(kind, name, stored);
     return stored;
   }
 

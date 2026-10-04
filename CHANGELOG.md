@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format follows
   approved, audited and costed; agent limits map to `--max-turns`/`--max-budget-usd` and are enforced
   by the platform. `oax run --harness claude-code`, opt-in real-run test (`OAX_TEST_CLAUDE=1`),
   `docs/harnesses.md`, `docs/verification/claude-code-harness.md`. Other harnesses stay documented stubs.
+- **Air-gapped mode** (`OAX_AIRGAPPED`, `OAX_AIRGAPPED_ALLOW`): fail-closed start-up self-check,
+  process-wide egress policy and network guard (TCP, DNS, UDP), vendored model catalog only,
+  `airgapped` state on `/readyz`, tests proving no outbound traffic, and `docs/airgapped.md`.
 - **Budgets with hard stop**: monthly budgets per tenant, use case and team, checked when a run is
   queued and before every step of a running run (also across runs of the same month). A reached
   budget blocks or stops the run (`blocked_by_policy` or `failed` with `control_budget_*`), writes

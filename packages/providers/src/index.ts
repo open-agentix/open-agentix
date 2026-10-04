@@ -8,4 +8,5 @@ export * from './bedrock.js';
 export * from './simulated.js';
 export * from './registry.js';
 export * from './catalog.js';
+export * from './network-guard.js';
 export * from './unavailable.js';
