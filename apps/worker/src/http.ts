@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AppContext } from '@openagentix/api';
+import { getEgressPolicy } from '@openagentix/core';
 
 export interface WorkerProbe {
   id: string;
@@ -34,6 +35,11 @@ export function createWorkerHttpServer(ctx: AppContext, worker: WorkerProbe): Se
           status: ok ? 'ok' : 'unavailable',
           checks: { database: db, schema: !!schema?.ok, loop: worker.running },
           activeRuns: worker.activeRuns,
+          airgapped: {
+            enabled: getEgressPolicy().airgapped,
+            allowlist: getEgressPolicy().status().allowlist,
+            blockedAttempts: getEgressPolicy().status().blocked,
+          },
         });
       }
       if (path === '/metrics') {

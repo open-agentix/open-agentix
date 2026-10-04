@@ -7,6 +7,8 @@ import {
   type FetchLike,
   type ModelCatalog,
 } from '@openagentix/providers';
+import { activateAirgap, checkStoredConnections, failClosed } from './airgap.js';
+import { connections } from './db/schema.js';
 import { createCache, type Cache } from './cache.js';
 import type { Config } from './config.js';
 import { createDatabase, waitForDatabase, type Database, type Db } from './db/client.js';
@@ -53,6 +55,8 @@ export async function createContext(
   overrides: Partial<AppContext> = {},
 ): Promise<AppContext> {
   const logger = overrides.logger ?? createLogger(config.logLevel);
+  // Air-gapped mode is fail-closed: invalid endpoints abort start-up before anything connects.
+  const egress = activateAirgap(config);
   const db = config.database;
   const database =
     overrides.database ??
@@ -67,6 +71,15 @@ export async function createContext(
       logger.warn({ attempt, err: (err as Error).message }, 'database not reachable yet, retrying'),
     );
     if (db.migrateOnStart) await database.migrate();
+  }
+  if (egress.airgapped) {
+    const rows = await database.db.select().from(connections);
+    const problems = checkStoredConnections(rows, egress);
+    if (problems.length > 0) failClosed(problems);
+    logger.info(
+      { allowlist: egress.status().allowlist },
+      'air-gapped mode: egress allowlist active',
+    );
   }
   const modelCatalog = overrides.modelCatalog ?? loadModelCatalog();
   return {
