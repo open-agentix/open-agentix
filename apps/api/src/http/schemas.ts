@@ -237,8 +237,12 @@ export const DecisionSchema = z.object({
   reasons: z.array(z.object({ code: z.string(), message: z.string() })),
 });
 export const EvaluateBody = z.object({
-  source: z.string().min(1),
-  agentId: z.string(),
+  source: z.string().min(1).describe('agents.md source to evaluate against'),
+  agentId: z
+    .string()
+    .describe(
+      'id of the agent inside the agents.md pipeline (`agents[].id`), not the registry UUID',
+    ),
   call: ToolCallSchema,
 });
 

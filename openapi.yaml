@@ -4357,8 +4357,10 @@ paths:
                 source:
                   type: string
                   minLength: 1
+                  description: agents.md source to evaluate against
                 agentId:
                   type: string
+                  description: id of the agent inside the agents.md pipeline (`agents[].id`), not the registry UUID
                 call:
                   type: object
                   properties:
