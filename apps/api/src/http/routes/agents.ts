@@ -1,5 +1,6 @@
 import { createEvent, isCloudEvent, parseCloudEvent } from '@openagentix/events';
 import { z } from 'zod';
+import { dryRunAgent } from '../../services/dry-run.js';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import { agentDetailDto, agentDto, runDto, versionDetailDto, versionDto } from '../dto.js';
@@ -177,6 +178,77 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
     async (req) => {
       agents.assertAccess(principalOf(req), await agents.get(req.params.id), 'agents:read');
       return versionDetailDto(await agents.getVersion(req.params.id, req.params.version));
+    },
+  );
+
+  app.post(
+    '/v1/agents/:id/dry-run',
+    {
+      config: { access: 'agents:write' },
+      schema: {
+        tags,
+        summary:
+          'Dry-run the draft (or a given source) with the simulated provider; tool calls are policy-checked but not executed, nothing is stored',
+        security: sec,
+        params: IdParams,
+        body: z.object({
+          data: z.unknown().optional().describe('event payload or CloudEvent'),
+          source: z
+            .string()
+            .max(512_000)
+            .optional()
+            .describe('agents.md to test instead of the stored draft'),
+          approve: z.enum(['all', 'none']).default('all'),
+        }),
+        response: {
+          200: z.object({
+            status: z.string(),
+            outputs: z.array(
+              z.object({ agentId: z.string(), format: z.string(), content: z.string() }),
+            ),
+            usage: z.record(z.string(), z.number()),
+            error: z.object({ code: z.string(), message: z.string() }).nullable(),
+            steps: z.array(
+              z.object({
+                kind: z.string(),
+                agentId: z.string().nullable(),
+                name: z.string(),
+                status: z.string(),
+                output: z.unknown(),
+              }),
+            ),
+            auditValid: z.boolean(),
+          }),
+        },
+      },
+    },
+    async (req) => {
+      const agent = await agents.get(req.params.id);
+      agents.assertAccess(principalOf(req), agent, 'agents:write');
+      const r = await dryRunAgent(
+        req.body.source ?? agent.draftSource,
+        req.body.data,
+        await services.catalog.enabledBundles(),
+        req.body.approve,
+      );
+      return {
+        status: r.result.status,
+        outputs: r.result.outputs.map((o) => ({
+          agentId: o.agentId,
+          format: o.format,
+          content: o.content,
+        })),
+        usage: { ...r.result.usage },
+        error: r.result.error ?? null,
+        steps: r.steps.map((s) => ({
+          kind: s.kind,
+          agentId: s.agentId,
+          name: s.name,
+          status: s.status,
+          output: s.output ?? null,
+        })),
+        auditValid: r.auditValid,
+      };
     },
   );
 
