@@ -43,6 +43,13 @@
       "when": 1791124330265,
       "tag": "0009_run_node_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791125184587,
+      "tag": "0010_model_proxy",
+      "breakpoints": true
     }
   ]
 }

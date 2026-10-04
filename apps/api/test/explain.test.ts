@@ -12,6 +12,14 @@ const ID = '00000000-0000-4000-8000-000000000001';
 beforeAll(async () => {
   database = await createDatabase({ url: 'memory://' });
   await database.migrate();
+  // Planner statistics of a realistic ledger: on an empty table (estimated from the row width)
+  // two indexes can tie and the winner changes whenever a column is added.
+  await database.db.execute(sql`
+    insert into cost_ledger (tenant_id, run_id, agent_id, team_id, month, cost_micros)
+    select '00000000-0000-4000-8000-000000000001', gen_random_uuid(), gen_random_uuid(),
+           gen_random_uuid(), date '2026-09-01' + (i % 12) * 30, 1
+    from generate_series(1, 3000) as i`);
+  await database.db.execute(sql`analyze cost_ledger`);
   await database.db.execute(sql`set enable_seqscan = off`);
 });
 afterAll(async () => database.close());

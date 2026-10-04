@@ -3,6 +3,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -333,6 +334,8 @@ export const runNodeSessions = pgTable(
     expiresAt: ts('expires_at').notNull(),
     revokedAt: ts('revoked_at'),
     revokeReason: text('revoke_reason'),
+    /** `jti` of the model token issued for this session (ADR 0009; written by the model proxy). */
+    modelTokenJti: text('model_token_jti'),
     /** Agent ids whose credentials were already issued (once per step and session). */
     credentialsIssued: jsonb('credentials_issued').$type<string[]>().notNull().default([]),
     /** What the node may fetch: its step's spec, input, output schema (no other step's data). */
@@ -344,6 +347,50 @@ export const runNodeSessions = pgTable(
   (t) => [
     uniqueIndex('run_node_sessions_node_uq').on(t.nodeId),
     index('run_node_sessions_run_idx').on(t.runId),
+  ],
+);
+
+/**
+ * Worst-case cost of a model call, held from before the call until it is settled (ADR 0009 4.3).
+ * Active rows count against every budget scope, so concurrent calls cannot overshoot a limit.
+ */
+export const modelReservations = pgTable(
+  'model_reservations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: tenant(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => runs.id),
+    /** Run node session of a proxied call; null for in-process calls. */
+    sessionId: uuid('session_id'),
+    /** Id of the step agent inside the published definition (not the agent row). */
+    agentId: text('agent_id').notNull(),
+    teamId: uuid('team_id'),
+    useCase: text('use_case'),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    reservedMicros: micros('reserved_micros').notNull(),
+    reservedInputTokens: integer('reserved_input_tokens').notNull(),
+    reservedOutputTokens: integer('reserved_output_tokens').notNull(),
+    /** `active`, `settled` or `expired`. */
+    status: text('status').notNull().default('active'),
+    actualMicros: micros('actual_micros'),
+    createdAt: created(),
+    expiresAt: ts('expires_at').notNull(),
+    settledAt: ts('settled_at'),
+  },
+  (t) => [
+    check('model_reservations_status', sql`${t.status} in ('active', 'settled', 'expired')`),
+    check(
+      'model_reservations_nonneg',
+      sql`${t.reservedMicros} >= 0 and ${t.reservedInputTokens} >= 0 and ${t.reservedOutputTokens} >= 0 and (${t.actualMicros} is null or ${t.actualMicros} >= 0)`,
+    ),
+    index('model_reservations_tenant_status_idx').on(t.tenantId, t.status),
+    index('model_reservations_run_status_idx').on(t.runId, t.status),
+    index('model_reservations_active_expiry_idx')
+      .on(t.expiresAt)
+      .where(sql`status = 'active'`),
   ],
 );
 
@@ -435,15 +482,29 @@ export const costLedger = pgTable(
     tokensIn: integer('tokens_in').notNull().default(0),
     tokensOut: integer('tokens_out').notNull().default(0),
     costMicros: micros('cost_micros').notNull().default(0),
+    /** `provider` (reported by the provider), `estimated`, `floor` or `reservation` (ADR 0009 4.1). */
+    usageSource: text('usage_source').notNull().default('provider'),
+    /** Cache tokens are part of `tokens_in`; these columns hold the breakdown. */
+    cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
+    cacheWriteTokens: integer('cache_write_tokens').notNull().default(0),
+    /** The reservation this line settled, if any. */
+    reservationId: uuid('reservation_id'),
+    /** `in-process`, `proxy` or `harness-report`. */
+    via: text('via').notNull().default('in-process'),
     createdAt: created(),
   },
   (t) => [
+    check('cost_ledger_cost_nonneg', sql`${t.costMicros} >= 0`),
     index('cost_team_month_idx').on(t.teamId, t.month),
     index('cost_agent_month_idx').on(t.agentId, t.month),
     index('cost_month_idx').on(t.month),
     index('cost_run_idx').on(t.runId),
     index('cost_tenant_month_idx').on(t.tenantId, t.month),
     index('cost_use_case_month_idx').on(t.useCase, t.month),
+    // A reservation settles into at most one ledger line (settlement idempotency).
+    uniqueIndex('cost_ledger_reservation_uq')
+      .on(t.reservationId)
+      .where(sql`reservation_id is not null`),
   ],
 );
 
