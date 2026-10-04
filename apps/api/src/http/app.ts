@@ -34,6 +34,7 @@ import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSystemRoutes } from './routes/system.js';
+import { registerBudgetRoutes } from './routes/budgets.js';
 import { registerTenantRoutes } from './routes/tenants.js';
 import { registerUserRoutes } from './routes/users.js';
 import { registerWorkerRoutes } from './routes/worker.js';
@@ -255,6 +256,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   registerAuditRoutes(typed, deps);
   registerUserRoutes(typed, deps);
   registerTenantRoutes(typed, deps);
+  registerBudgetRoutes(typed, deps);
   registerWorkerRoutes(typed, deps);
   await app.ready();
   return app;
