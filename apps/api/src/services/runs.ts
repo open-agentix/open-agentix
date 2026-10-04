@@ -98,6 +98,7 @@ export class RunsService {
       eventRowId = randomUUID();
       await db.insert(events).values({
         id: eventRowId,
+        tenantId: latest.tenantId,
         sourceId: null,
         cloudEventId: input.event.id,
         type: input.event.type,
@@ -112,6 +113,7 @@ export class RunsService {
       .insert(runs)
       .values({
         id,
+        tenantId: latest.tenantId,
         agentId: input.agentId,
         agentVersionId: versionId,
         teamId: latest.teamId,
@@ -128,6 +130,7 @@ export class RunsService {
     this.ctx.metrics.runsCreated.inc({ trigger: input.triggeredBy.split(':')[0] ?? 'unknown' });
     await this.audit.append({
       actor: input.triggeredBy,
+      tenantId: latest.tenantId,
       action: budget ? 'run.blocked' : 'run.queued',
       target: input.agentId,
       runId: id,
@@ -166,9 +169,13 @@ export class RunsService {
     permission: 'runs:read' | 'runs:cancel' | 'runs:approve' | 'costs:read' = 'runs:read',
   ): Promise<RunRow> {
     const run = await this.get(id);
-    if (!hasPermission(principal, permission, run.teamId, run.agentId)) {
+    if (
+      run.tenantId !== principal.tenantId ||
+      !hasPermission(principal, permission, run.teamId, run.agentId)
+    ) {
       await this.audit.append({
         actor: principal.userId,
+        tenantId: principal.tenantId,
         action: 'access.denied',
         target: id,
         runId: id,
@@ -190,6 +197,7 @@ export class RunsService {
       .from(runs)
       .where(
         and(
+          eq(runs.tenantId, principal.tenantId),
           filter.agentId ? eq(runs.agentId, filter.agentId) : undefined,
           filter.status ? eq(runs.status, filter.status) : undefined,
           filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
@@ -235,6 +243,7 @@ export class RunsService {
       .from(runs)
       .where(
         and(
+          eq(runs.tenantId, principal.tenantId),
           filter.agentId ? eq(runs.agentId, filter.agentId) : undefined,
           filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
           filter.from ? gte(runs.createdAt, filter.from) : undefined,
@@ -330,6 +339,7 @@ export class RunsService {
       .where(and(eq(approvals.runId, id), eq(approvals.status, 'pending')));
     await this.audit.append({
       actor: principal.userId,
+      tenantId: principal.tenantId,
       action: 'run.cancel_requested',
       target: id,
       runId: id,
@@ -356,6 +366,7 @@ export class RunsService {
       .from(approvals)
       .where(
         and(
+          eq(approvals.tenantId, principal.tenantId),
           eq(approvals.status, status),
           runId ? eq(approvals.runId, runId) : undefined,
           scope === 'all'
@@ -396,7 +407,12 @@ export class RunsService {
     const [run] = a
       ? await this.ctx.db.select({ agentId: runs.agentId }).from(runs).where(eq(runs.id, a.runId))
       : [];
-    if (!a || !run || !hasPermission(principal, 'runs:approve', a.teamId, run.agentId))
+    if (
+      !a ||
+      !run ||
+      a.tenantId !== principal.tenantId ||
+      !hasPermission(principal, 'runs:approve', a.teamId, run.agentId)
+    )
       throw notFound('approval');
     const roleOk = principal.bindings.some(
       (b) =>
@@ -423,6 +439,7 @@ export class RunsService {
     if (!row) throw new HttpError(409, 'invalid_state', 'approval was decided concurrently');
     await this.audit.append({
       actor: principal.userId,
+      tenantId: principal.tenantId,
       action: `approval.${row.status}`,
       target: approvalId,
       runId: a.runId,

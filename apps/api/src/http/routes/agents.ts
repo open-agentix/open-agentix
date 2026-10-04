@@ -106,7 +106,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      const a = await agents.get(req.params.id);
+      const a = await agents.get(req.params.id, principalOf(req));
       await agents.assertAccess(principalOf(req), a, 'agents:read');
       return agentDetailDto(a);
     },
@@ -162,7 +162,11 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      await agents.assertAccess(principalOf(req), await agents.get(req.params.id), 'agents:read');
+      await agents.assertAccess(
+        principalOf(req),
+        await agents.get(req.params.id, principalOf(req)),
+        'agents:read',
+      );
       return { items: (await agents.versions(req.params.id)).map(versionDto) };
     },
   );
@@ -180,7 +184,11 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      await agents.assertAccess(principalOf(req), await agents.get(req.params.id), 'agents:read');
+      await agents.assertAccess(
+        principalOf(req),
+        await agents.get(req.params.id, principalOf(req)),
+        'agents:read',
+      );
       return versionDetailDto(await agents.getVersion(req.params.id, req.params.version));
     },
   );
@@ -198,8 +206,12 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      await agents.assertAccess(principalOf(req), await agents.get(req.params.id), 'agents:read');
-      return { items: await services.identity.agentMembers(req.params.id) };
+      await agents.assertAccess(
+        principalOf(req),
+        await agents.get(req.params.id, principalOf(req)),
+        'agents:read',
+      );
+      return { items: await services.identity.agentMembers(principalOf(req), req.params.id) };
     },
   );
 
@@ -217,12 +229,8 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) => {
-      await agents.get(req.params.id);
-      await services.identity.setAgentMembers(
-        principalOf(req).userId,
-        req.params.id,
-        req.body.members,
-      );
+      await agents.get(req.params.id, principalOf(req));
+      await services.identity.setAgentMembers(principalOf(req), req.params.id, req.body.members);
       return reply.status(204).send(null);
     },
   );
@@ -269,12 +277,12 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      const agent = await agents.get(req.params.id);
+      const agent = await agents.get(req.params.id, principalOf(req));
       await agents.assertAccess(principalOf(req), agent, 'agents:write');
       const r = await dryRunAgent(
         req.body.source ?? agent.draftSource,
         req.body.data,
-        await services.catalog.enabledBundles(),
+        await services.catalog.enabledBundles(principalOf(req).tenantId),
         req.body.approve,
       );
       return {
@@ -313,7 +321,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req, reply) => {
       const p = principalOf(req);
-      const agent = await agents.get(req.params.id);
+      const agent = await agents.get(req.params.id, principalOf(req));
       await agents.assertAccess(p, agent, 'runs:execute');
       const event = isCloudEvent(req.body.data)
         ? parseCloudEvent(req.body.data)
