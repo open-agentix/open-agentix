@@ -67,7 +67,7 @@ generates drafts ([Agent Check](agent-check.md)); it never publishes.
 | `runs`, `run_steps`, `approvals` | queue + execution record |
 | `connections`, `policies` | MCP servers (secret references only) and policy bundles |
 | `audit_log`, `audit_checkpoints` | append-only hash chain and signed checkpoints |
-| `cost_ledger`, `cron_ticks` | cost aggregation and cluster-wide cron de-duplication |
+| `cost_ledger`, `model_reservations`, `cron_ticks` | cost aggregation, worst-case model call reservations (per-tenant advisory lock) and cluster-wide cron de-duplication |
 
 Hot-path indexes (verified by `apps/api/test/explain.test.ts`): runs by agent/status/team/time,
 partial queue and lease indexes, audit by run and by time, events by source and time, pending

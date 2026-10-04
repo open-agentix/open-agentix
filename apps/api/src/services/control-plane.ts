@@ -22,7 +22,7 @@ import type {
 import { and, eq, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { approvals, costLedger, events, runSteps, runs } from '../db/schema.js';
+import { approvals, events, runSteps, runs } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
@@ -30,7 +30,7 @@ import type { BudgetsService } from './budgets.js';
 import type { CatalogService } from './catalog.js';
 import type { GuidelinesService } from './guidelines.js';
 import type { RunNodesService } from './run-nodes.js';
-import { monthOf } from './runs.js';
+import { writeStepRows } from './step-writer.js';
 
 const ACTIVE = ['running', 'awaiting_approval'];
 /** Largest input or output a run node may attach to one step record. */
@@ -267,75 +267,20 @@ export class ControlPlaneService {
     if (node && !NODE_STEP_KINDS.has(rawStep.kind)) return;
     // Values the broker handed out for this run never reach step rows or audit payloads.
     const step = await this.nodes.scrub(runId, node ? this.sanitizeNodeStep(rawStep) : rawStep);
-    await this.ctx.db.transaction(async (tx) => {
-      const [run] = await tx
-        .update(runs)
-        .set({
-          lastSeq: sql`${runs.lastSeq} + 1`,
-          tokensIn: sql`${runs.tokensIn} + ${step.tokensIn ?? 0}`,
-          tokensOut: sql`${runs.tokensOut} + ${step.tokensOut ?? 0}`,
-          costMicros: sql`${runs.costMicros} + ${step.costMicros ?? 0}`,
-          toolCalls: sql`${runs.toolCalls} + ${step.kind === 'tool_call' ? 1 : 0}`,
-        })
-        .where(eq(runs.id, runId))
-        .returning({
-          seq: runs.lastSeq,
-          agentId: runs.agentId,
-          teamId: runs.teamId,
-          tenantId: runs.tenantId,
-          versionId: runs.agentVersionId,
-        });
-      if (!run) throw notFound('run');
-      await tx.insert(runSteps).values({
+    const written = await this.ctx.db.transaction((tx) =>
+      writeStepRows(
+        { ctx: this.ctx, agents: this.agents, budgets: this.budgets },
+        tx as unknown as Db,
         runId,
-        seq: run.seq,
-        kind: step.kind,
-        agentId: step.agentId,
-        name: step.name,
-        status: step.status,
-        input: (step.input ?? null) as object,
-        output: (step.output ?? null) as object,
-        tokensIn: step.tokensIn ?? 0,
-        tokensOut: step.tokensOut ?? 0,
-        costMicros: step.costMicros ?? 0,
-        durationMs: step.durationMs ?? null,
-        provider: step.provider ?? null,
-        model: step.model ?? null,
-        reportedBy: node ? `node:${node.id}` : null,
-        createdAt: this.ctx.now(),
-      });
-      if ((step.costMicros ?? 0) > 0 || (step.tokensIn ?? 0) > 0 || (step.tokensOut ?? 0) > 0) {
-        const { definition } = await this.agents.definitionOf(run.versionId);
-        await tx.insert(costLedger).values({
-          runId,
-          stepSeq: run.seq,
-          tenantId: run.tenantId,
-          useCase: definition.labels.useCase ?? null,
-          agentId: run.agentId,
-          teamId: run.teamId,
-          provider: step.provider ?? null,
-          model: step.model ?? null,
-          month: monthOf(this.ctx.now()),
-          tokensIn: step.tokensIn ?? 0,
-          tokensOut: step.tokensOut ?? 0,
-          costMicros: step.costMicros ?? 0,
-        });
-        this.ctx.metrics.costMicros.inc(
-          { provider: step.provider ?? 'tool' },
-          step.costMicros ?? 0,
-        );
-        // Alerts at 50/80/100 % of every budget this cost line counts against.
-        await this.budgets.raiseAlerts(
-          tx as unknown as Db,
-          {
-            tenantId: run.tenantId,
-            teamId: run.teamId,
-            useCase: definition.labels.useCase ?? null,
-          },
-          step.costMicros ?? 0,
-        );
-      }
-    });
+        step,
+        { reportedBy: node ? `node:${node.id}` : null },
+      ),
+    );
+    if (written.metric)
+      this.ctx.metrics.costMicros.inc(
+        { provider: written.metric.provider },
+        written.metric.costMicros,
+      );
     // Redaction of secrets happens inside the audit entry creation.
     const special = node ? undefined : stepAuditEntry(step);
     await this.audit.append({

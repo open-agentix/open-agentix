@@ -144,6 +144,10 @@ export class Worker {
   /** One scheduling round: recover expired leases and fill free slots. Returns the claimed ids. */
   async tick(): Promise<string[]> {
     await this.queue.reapExpired();
+    // Reservations nobody settled (crashed worker or node) are charged in full (ADR 0009 4.3).
+    await this.services.modelAccounting
+      .expire()
+      .catch((err: unknown) => this.ctx.logger.warn({ err }, 'model reservation reaper failed'));
     const free = this.ctx.config.worker.concurrency - this.active.size;
     const claimed = await this.queue.claim(free);
     for (const c of claimed) void this.execute(c.id);

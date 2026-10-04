@@ -3,7 +3,8 @@ import { createEvent, type ConsumerLike, type KafkaMessageLike } from '@openagen
 import { demoServerFactories, inMemoryServers } from '@openagentix/mcp';
 import type { Runner } from '@openagentix/runners';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { agentSource } from '../../api/test/fixtures.js';
 import { testNode, type TestNode } from '../../api/test/helpers.js';
 import { CronScheduler, KafkaSources, RunQueue, Worker } from '../src/index.js';
@@ -87,6 +88,34 @@ describe('Worker', () => {
     await w.drain();
     expect(await status(id)).toBe('succeeded');
     expect(w.activeRuns).toBe(0);
+  });
+
+  it('settles overdue model reservations at the reserved amount on every tick', async () => {
+    const id = await enqueue();
+    const reservation = randomUUID();
+    await n.ctx.db.insert(schema.modelReservations).values({
+      id: reservation,
+      runId: id,
+      agentId: 'a',
+      provider: 'simulated',
+      model: 'sim-1',
+      reservedMicros: 1234,
+      reservedInputTokens: 10,
+      reservedOutputTokens: 10,
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    const w = new Worker(n.ctx, { workerId: 'w-expire' });
+    await w.tick();
+    await w.drain();
+    const [row] = await n.ctx.db
+      .select()
+      .from(schema.modelReservations)
+      .where(eq(schema.modelReservations.id, reservation));
+    expect(row).toMatchObject({ status: 'expired', actualMicros: 1234 });
+    // A failing reaper never stops the scheduling round.
+    vi.spyOn(w.services.modelAccounting, 'expire').mockRejectedValueOnce(new Error('db down'));
+    await expect(w.tick()).resolves.toBeDefined();
+    vi.restoreAllMocks();
   });
 
   it('runs the polling loop and stops gracefully', async () => {

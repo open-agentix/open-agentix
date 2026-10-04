@@ -45,6 +45,32 @@ steps, so one model call can overshoot the limit by its own cost. Runs that star
 moment all pass admission and are stopped at their next step, so a burst can also overshoot.
 Size the limit with that margin in mind.
 
+### Reservations (model accounting)
+
+The control node also has a reservation service for model calls (`ModelAccountingService`, ADR 0009
+section 4). Before a call it holds the worst-case cost (input bound plus the largest output, at the
+model's price) against every limit that applies to the call, and after the call it replaces the
+reservation with the measured cost. Limits checked, all under one per-tenant lock:
+
+| Limit | Counted from | Refusal code |
+| --- | --- | --- |
+| Run `maxCostUsd`, `maxTokens` | run counters plus active reservations of the run | `control_budget_cost`, `control_budget_tokens` |
+| Step (`agents[].budget`, merged with the pipeline budget) cost, tokens | recorded steps of that agent plus its active reservations | `control_budget_cost`, `control_budget_tokens` |
+| Step model calls (`maxSteps`) | recorded model calls of that agent plus active reservations | `control_budget_steps` |
+| Monthly tenant, use case, team | cost ledger of the month plus active reservations of the scope | `control_budget_tenant`, `control_budget_use_case`, `control_budget_team` |
+
+A reservation that lands exactly on a limit is granted; one micro-USD more is refused. A model
+without a price is refused (`model_unpriced`) whenever any cost limit applies; give self-hosted
+models an explicit price of `0`. A reservation nobody settles (crashed worker or node) is charged at
+the reserved amount once its deadline plus 60 seconds has passed. The ledger records where a line
+came from (`usage_source`: `provider`, `estimated`, `floor`, `reservation`), the cache token
+breakdown, the reservation and the path (`via`).
+
+With the model proxy (W1-3b-3 and later) every model call goes through this service and the
+overshoot described above no longer applies to model calls (it still applies to priced tool calls).
+The service itself is available now; until the executor and the proxy call it, the checks above
+remain after-the-fact.
+
 ## Alerts
 
 When a recorded cost line makes the spend cross 50, 80 or 100 % of a budget, the cost recorder

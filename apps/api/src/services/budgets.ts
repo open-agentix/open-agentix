@@ -36,7 +36,7 @@ export interface BudgetTarget {
 }
 
 /** A usage row plus what the control node needs to address it (alerts, API). */
-interface ScopedUsage extends BudgetUsage {
+export interface ScopedUsage extends BudgetUsage {
   /** Stable key for alert de-duplication: team id or use case, empty for the tenant. */
   scopeKey: string;
 }
@@ -135,6 +135,14 @@ export class BudgetsService {
       }
     }
     return out;
+  }
+
+  /**
+   * Monthly budgets that apply to a spend target with this month's ledger spend, for the model
+   * accounting reservations (which add their active reservations on top).
+   */
+  async scopeUsages(db: Db, target: BudgetTarget): Promise<ScopedUsage[]> {
+    return this.usages(db, target, monthOf(this.ctx.now()));
   }
 
   /** Which use case a run is attributed to (label of the pinned agent version). */
