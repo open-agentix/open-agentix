@@ -1,0 +1,47 @@
+{
+  "$comment": "Pinned model catalog snapshot in the models.dev schema subset (providers -> models -> limit/cost in USD per 1M tokens). Never fetched at run time. Refresh: download https://models.dev/api.json in a reviewed PR and run `node scripts/import-models-dev.mjs <api.json>`. This seed snapshot contains only entries verified by the maintainers; add others through the importer.",
+  "source": "models.dev (schema), curated seed",
+  "snapshotDate": "2026-10-04",
+  "providers": {
+    "anthropic": {
+      "name": "Anthropic",
+      "models": {
+        "claude-opus-5-5": {
+          "name": "Claude Opus 5.5",
+          "limit": { "context": 1000000, "output": 128000 },
+          "cost": { "input": 4, "output": 20 }
+        },
+        "claude-sonnet-5-5": {
+          "name": "Claude Sonnet 5.5",
+          "limit": { "context": 1000000, "output": 128000 },
+          "cost": { "input": 2, "output": 10 }
+        },
+        "claude-haiku-4-5": {
+          "name": "Claude Haiku 4.5",
+          "limit": { "context": 200000, "output": 64000 },
+          "cost": { "input": 1, "output": 5 }
+        }
+      }
+    },
+    "ollama": {
+      "name": "Ollama (local)",
+      "models": {
+        "llama3.2": {
+          "name": "Llama 3.2 (local)",
+          "limit": { "context": 128000, "output": 8192 },
+          "cost": { "input": 0, "output": 0 }
+        }
+      }
+    },
+    "simulated": {
+      "name": "Simulated (deterministic, no network)",
+      "models": {
+        "sim-1": {
+          "name": "Simulated model",
+          "limit": { "context": 1000000, "output": 100000 },
+          "cost": { "input": 0, "output": 0 }
+        }
+      }
+    }
+  }
+}
