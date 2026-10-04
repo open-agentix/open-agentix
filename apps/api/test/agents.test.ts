@@ -236,6 +236,11 @@ describe('agent registry', () => {
     expect(second.items).toHaveLength(2);
     expect(second.items[0].id).not.toBe(first.items[1].id);
     expect((await n.req({ method: 'GET', url: '/v1/agents?cursor=bogus' })).statusCode).toBe(400);
+    const found = (await n.req({ method: 'GET', url: '/v1/agents?q=bulk-1' }))
+      .json()
+      .items.map((a: { name: string }) => a.name);
+    expect(found).toEqual(['bulk-1']);
+    expect((await n.req({ method: 'GET', url: '/v1/agents?q=%25' })).json().items).toEqual([]);
   });
 
   it('triggers manual runs only for published agents', async () => {
