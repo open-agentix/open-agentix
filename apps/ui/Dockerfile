@@ -23,6 +23,9 @@ COPY apps/ui apps/ui
 # Optional absolute API origin (default: same origin, routed by the ingress).
 ARG VITE_OAX_API_URL=
 ENV VITE_OAX_API_URL=${VITE_OAX_API_URL}
+# "true" for the public demo image: the sign-in page shows the demo hint and the tour link.
+ARG VITE_OAX_DEMO=
+ENV VITE_OAX_DEMO=${VITE_OAX_DEMO}
 RUN pnpm --filter @openagentix/ui build
 
 FROM ${NGINX_IMAGE} AS ui

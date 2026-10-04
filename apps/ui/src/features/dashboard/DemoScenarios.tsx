@@ -35,7 +35,7 @@ export function DemoScenarios() {
   if (overview.isError) return <ErrorState error={overview.error} />;
   const { llm, rateLimit, scenarios } = overview.data;
   return (
-    <Section title={t('dashboard.demo.title')} id="demo-scenarios">
+    <Section title={t('dashboard.demo.title')} id="demo-scenarios" tour="demo-scenarios">
       <p className="muted">{t('dashboard.demo.intro')}</p>
       <p className="muted">
         {llm.mode === 'claude-code'

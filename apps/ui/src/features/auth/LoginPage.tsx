@@ -9,6 +9,7 @@ import { useI18n } from '../../i18n/i18n';
 import { Logo } from '../../layout/AppShell';
 import { PreferencesControls } from '../../layout/PreferencesControls';
 import { useDocumentTitle } from '../../lib/hooks';
+import { TourHint, isDemoBuild } from '../tour/TourHint';
 
 const route = getRouteApi('/login');
 type Method = 'auto' | 'ldap' | 'local';
@@ -67,6 +68,14 @@ export function LoginPage() {
         </div>
         <h1>{t('login.title')}</h1>
         <p className="muted">{t('login.subtitle')}</p>
+        {isDemoBuild() ? (
+          <TourHint
+            onFill={(u, p) => {
+              setUsername(u);
+              setPassword(p);
+            }}
+          />
+        ) : null}
         {search.expired ? (
           <p className="notice notice-warning" role="status">
             <Icon name="clock" size={16} /> {t('login.expired')}

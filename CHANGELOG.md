@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Guided demo tour**: in demo mode the UI offers an 8-step modal tour (welcome, scenarios, run
+  view, audit chain, costs, agents/tenants/roles, connections and policies, links) with spotlight,
+  progress dots, a "Don't show this again" checkbox (localStorage with a session/memory fallback),
+  a "Take the tour" entry in the sidebar and a hint box with the shared fake credentials on the
+  sign-in page (`VITE_OAX_DEMO=true` build argument). English and German, own lazy-loaded component,
+  no third-party code or requests, no API change. `docs/demo.md` ("Guided tour").
 - **Named read/write tool profiles per MCP connection**: an `mcp` connection declares
   `tools: { <name>: { access: read | write } }` and `profiles: { <name>: [tool, ...] }` (unknown tools
   in a profile are refused when it is saved). `agents[].tools[].profile` grants such a profile; it is
