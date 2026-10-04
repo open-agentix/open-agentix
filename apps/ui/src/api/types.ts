@@ -40,6 +40,7 @@ export type CostGroupBy = NonNullable<
   NonNullable<paths['/v1/costs/summary']['get']['parameters']['query']>['groupBy']
 >;
 export type Connection = ResponseOf<'/v1/connections', 'get'>['items'][number];
+export type ModelProposal = ResponseOf<'/v1/models/proposals', 'post'>['items'][number];
 export type Policy = ResponseOf<'/v1/policies', 'get'>['items'][number];
 export type PolicyEvaluation = ResponseOf<'/v1/policies/evaluate', 'post'>;
 export type AuditEntry = ResponseOf<'/v1/audit', 'get'>['items'][number];
