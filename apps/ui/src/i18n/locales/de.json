@@ -356,7 +356,7 @@
     "recent": "Letzte Ereignisse",
     "noEvents": "Noch keine Ereignisse empfangen",
     "noEventsText": "Sende eine signierte Testanfrage an eine Ingest-URL, um sie hier zu sehen.",
-    "kinds": { "webhook": "Webhook", "mail": "Mail-in", "kafka": "Kafka" },
+    "kinds": { "webhook": "Webhook", "mail": "Mail-in", "kafka": "Kafka", "cron": "Cron" },
     "ingestUrl": "Ingest-URL",
     "copyUrl": "Ingest-URL kopieren",
     "topic": "Topic",
