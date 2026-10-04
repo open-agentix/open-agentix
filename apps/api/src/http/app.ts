@@ -6,7 +6,9 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import {
+  MODEL_TOKEN_PREFIX,
   hasPermission,
+  verifyModelToken,
   verifyRunToken,
   type OaxError,
   type Permission,
@@ -42,7 +44,8 @@ import { registerUserRoutes } from './routes/users.js';
 import { registerWorkerRoutes } from './routes/worker.js';
 
 /** How a route authenticates: an RBAC permission, any signed-in principal, or a special scheme. */
-export type RouteAccess = Permission | 'authenticated' | 'public' | 'run-token' | 'webhook';
+export type RouteAccess =
+  Permission | 'authenticated' | 'public' | 'run-token' | 'model-token' | 'webhook';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
@@ -153,6 +156,12 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
             scheme: 'bearer',
             description: 'Signed run token (`oaxrt....`) of a worker node',
           },
+          modelToken: {
+            type: 'http',
+            scheme: 'bearer',
+            description:
+              'Model token (`oaxmt....`) of one step of a run node session (ADR 0009); opens the model endpoint only',
+          },
           webhookSignature: {
             type: 'apiKey',
             in: 'header',
@@ -192,6 +201,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       if (
         access !== 'authenticated' &&
         access !== 'run-token' &&
+        access !== 'model-token' &&
         !hasPermission(req.principal, access)
       )
         throw forbidden(`missing permission ${access}`);
@@ -203,6 +213,19 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
         verifyRunToken(ctx.config.runToken.secret, token ?? '', ctx.now().getTime());
       } catch (e) {
         throw new HttpError(401, (e as OaxError).code, 'valid run token required');
+      }
+      return;
+    }
+    if (access === 'model-token') {
+      // The model endpoint takes the node's step-scoped run token or its model token (different
+      // prefixes and keys, so neither verifies as the other). Session and binding checks follow in
+      // the handler; here only the signature and expiry are checked before the body is parsed.
+      try {
+        if (token?.startsWith(`${MODEL_TOKEN_PREFIX}.`))
+          verifyModelToken(ctx.config.runToken.secret, token, ctx.now().getTime());
+        else verifyRunToken(ctx.config.runToken.secret, token ?? '', ctx.now().getTime());
+      } catch {
+        throw new HttpError(401, 'unauthenticated', 'valid model or run token required');
       }
       return;
     }
