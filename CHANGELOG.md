@@ -121,6 +121,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Release workflow**: the api image is built for linux/amd64 only; the QEMU arm64 build exceeded the 60 minute job timeout and the api image was never published (worker and ui keep amd64 and arm64).
+
 - **Costs page "request validation failed"**: `GET /v1/costs/summary` and `/v1/costs/export` now accept
   `from`/`to` as a date (`YYYY-MM-DD`) or a full ISO 8601 timestamp and round it down to the first
   day of its month (UTC); the UI sends plain `YYYY-MM-DD` dates (local calendar, no timezone shift on
