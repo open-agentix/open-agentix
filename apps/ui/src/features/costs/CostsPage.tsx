@@ -20,6 +20,7 @@ import {
 } from '../../components/ui';
 import { useI18n } from '../../i18n/i18n';
 import { shortId, startOfMonth, useDocumentTitle } from '../../lib/hooks';
+import { BudgetsSection } from './BudgetsSection';
 
 const route = getRouteApi('/_app/costs');
 const GROUPS: CostGroupBy[] = ['agent', 'team', 'month', 'model', 'provider', 'run'];
@@ -85,6 +86,7 @@ export function CostsPage() {
         <Stat label={t('costs.tokens')} value={costs.data ? fmt.number(tokens) : '…'} />
       </div>
       {can('users:read') ? <TeamBudgets /> : null}
+      <BudgetsSection />
       <Tabs
         items={GROUPS.map((g) => ({ key: g, label: t(`costs.groups.${g}`) }))}
         value={groupBy}

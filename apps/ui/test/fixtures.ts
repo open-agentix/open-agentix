@@ -4,6 +4,7 @@ import type {
   AgentVersion,
   AgentVersionDetail,
   ApiToken,
+  BudgetOverview,
   Approval,
   AuditEntry,
   Connection,
@@ -429,3 +430,35 @@ export const tokens: ApiToken[] = [
     createdAt: iso(-86_400_000 * 40),
   },
 ];
+
+export const budgets: BudgetOverview = {
+  month: '2026-10-01',
+  tenant: {
+    scope: 'tenant',
+    key: 'default',
+    limitUsd: 100,
+    spentUsd: 12,
+    percentUsed: 12,
+    alerts: [],
+  },
+  useCases: [
+    {
+      scope: 'use_case',
+      key: 'vulnerability-management',
+      limitUsd: 10,
+      spentUsd: 8.5,
+      percentUsed: 85,
+      alerts: [50, 80],
+    },
+    {
+      scope: 'use_case',
+      key: 'governance',
+      limitUsd: 5,
+      spentUsd: 5,
+      percentUsed: 100,
+      alerts: [50, 80, 100],
+    },
+    { scope: 'use_case', key: 'ops', limitUsd: 5, spentUsd: 1, percentUsed: 20, alerts: [] },
+  ],
+  teams: [],
+};
