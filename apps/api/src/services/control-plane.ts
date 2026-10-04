@@ -19,10 +19,12 @@ import type {
 } from '@openagentix/runners';
 import { and, eq, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
+import type { Db } from '../db/client.js';
 import { approvals, costLedger, events, runSteps, runs } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
+import type { BudgetsService } from './budgets.js';
 import type { CatalogService } from './catalog.js';
 import type { GuidelinesService } from './guidelines.js';
 import { monthOf } from './runs.js';
@@ -39,6 +41,7 @@ export class ControlPlaneService {
     private readonly audit: AuditService,
     private readonly agents: AgentsService,
     private readonly catalog: CatalogService,
+    private readonly budgets: BudgetsService,
     private readonly guidelines?: GuidelinesService,
   ) {}
 
@@ -93,6 +96,10 @@ export class ControlPlaneService {
         return this.awaitApproval(runId, claims.workerId, agentId, call, decision, signal);
       },
       isCancelled: async (runId) => (await this.authorize(token, runId), this.isCancelled(runId)),
+      checkBudget: async (runId) => (
+        await this.authorize(token, runId),
+        this.budgets.verdictForRun(runId)
+      ),
       completeRun: async (runId, result) => (
         await this.authorize(token, runId),
         this.completeRun(runId, result)
@@ -222,6 +229,16 @@ export class ControlPlaneService {
         });
         this.ctx.metrics.costMicros.inc(
           { provider: step.provider ?? 'tool' },
+          step.costMicros ?? 0,
+        );
+        // Alerts at 50/80/100 % of every budget this cost line counts against.
+        await this.budgets.raiseAlerts(
+          tx as unknown as Db,
+          {
+            tenantId: run.tenantId,
+            teamId: run.teamId,
+            useCase: definition.labels.useCase ?? null,
+          },
           step.costMicros ?? 0,
         );
       }

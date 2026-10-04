@@ -15,6 +15,71 @@ function env(...args: Parameters<typeof setup>) {
 }
 const kinds = (steps: StepInput[]) => steps.map((s) => `${s.kind}:${s.status}`);
 
+describe('executePipeline budgets', () => {
+  const def = agentFile(`    simulation:
+      responses:
+        - text: done`);
+  const breach = {
+    scope: 'use_case' as const,
+    key: 'triage',
+    limitMicros: 100,
+    spentMicros: 100,
+    message: 'use case "triage" reached its monthly budget (0.00 of 0.00 USD)',
+  };
+
+  it('stops before the first model call when a monthly budget is already reached', async () => {
+    const { ctx, control } = env(def, {
+      control: { checkBudget: async () => ({ blocked: true, breaches: [breach] }) },
+    });
+    let model = 0;
+    const base = ctx.providers.get('simulated');
+    ctx.providers.get = () => ({
+      ...base,
+      name: base.name,
+      kind: base.kind,
+      clearance: base.clearance,
+      complete: async (...a: Parameters<typeof base.complete>) => (model++, base.complete(...a)),
+    });
+    const r = await executePipeline(prepared(def), ctx);
+    expect(r.status).toBe('failed');
+    expect(r.error?.code).toBe('control_budget_use_case');
+    expect(model).toBe(0);
+    expect(kinds(control.steps)).toEqual(['control:error']);
+  });
+
+  it('stops mid-run when another run exhausts the budget between two steps', async () => {
+    const def2 = agentFile(`    tools:
+      - { server: tickets, tool: "*", allowAdditionalArgs: true }
+    simulation:
+      responses:
+        - toolCalls: [{ server: tickets, tool: list_tickets, args: {} }]
+        - text: never reached`);
+    // Another run spends the rest of the budget after this run's first model call.
+    let seen: StepInput[] = [];
+    const { ctx, control } = env(def2, {
+      control: {
+        checkBudget: async () =>
+          seen.some((st) => st.kind === 'model_call')
+            ? { blocked: true, breaches: [breach] }
+            : { blocked: false, breaches: [] },
+      },
+    });
+    seen = control.steps;
+    const r = await executePipeline(prepared(def2), ctx);
+    expect(r.status).toBe('failed');
+    expect(r.error?.code).toBe('control_budget_use_case');
+    expect(kinds(control.steps)).toContain('model_call:ok');
+    expect(kinds(control.steps).at(-1)).toBe('control:error');
+  });
+
+  it('runs normally while the budget has headroom', async () => {
+    const { ctx } = env(def, {
+      control: { checkBudget: async () => ({ blocked: false, breaches: [] }) },
+    });
+    expect((await executePipeline(prepared(def), ctx)).status).toBe('succeeded');
+  });
+});
+
 describe('executePipeline', () => {
   it('runs the cve-triage example end to end', async () => {
     const def = loadAgentDefinition(example('cve-triage.agents.md'));

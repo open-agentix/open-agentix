@@ -576,3 +576,32 @@ export const RunResultBody = z.object({
   }),
   error: z.object({ code: z.string(), message: z.string() }).optional(),
 });
+
+export const BudgetLineSchema = z.object({
+  scope: z.enum(['tenant', 'use_case', 'team']),
+  key: z.string().nullable().describe('tenant slug, use case label or team slug'),
+  limitUsd: z.number().nullable().describe('monthly limit, null when no budget is set'),
+  spentUsd: z.number().describe('spend of the current UTC month'),
+  percentUsed: z.number().nullable(),
+  alerts: z.array(z.number()).describe('alert thresholds (50, 80, 100) raised this month'),
+});
+export const BudgetOverviewSchema = z.object({
+  month: z.string().describe('first day of the current month'),
+  tenant: BudgetLineSchema,
+  useCases: z.array(BudgetLineSchema),
+  teams: z.array(BudgetLineSchema),
+});
+export const UseCaseParams = z.object({ useCase: z.string().min(1).max(200) });
+export const UseCaseBudgetBody = z.object({ monthlyBudgetUsd: z.number().min(0).max(1e9) });
+export const BudgetVerdictSchema = z.object({
+  blocked: z.boolean(),
+  breaches: z.array(
+    z.object({
+      scope: z.enum(['tenant', 'use_case', 'team']),
+      key: z.string(),
+      limitMicros: z.number(),
+      spentMicros: z.number(),
+      message: z.string(),
+    }),
+  ),
+});

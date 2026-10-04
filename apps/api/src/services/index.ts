@@ -1,6 +1,7 @@
 import type { AppContext } from '../context.js';
 import { AgentsService } from './agents.js';
 import { AuditService } from './audit.js';
+import { BudgetsService } from './budgets.js';
 import { CatalogService } from './catalog.js';
 import { ControlPlaneService } from './control-plane.js';
 import { CostsService } from './costs.js';
@@ -13,6 +14,7 @@ import { TenantsService } from './tenants.js';
 
 export interface Services {
   audit: AuditService;
+  budgets: BudgetsService;
   identity: IdentityService;
   agents: AgentsService;
   catalog: CatalogService;
@@ -30,15 +32,17 @@ export function createServices(ctx: AppContext): Services {
   const identity = new IdentityService(ctx, audit);
   const agents = new AgentsService(ctx, audit);
   const catalog = new CatalogService(ctx, audit);
-  const runs = new RunsService(ctx, audit, agents);
+  const budgets = new BudgetsService(ctx, audit, agents);
+  const runs = new RunsService(ctx, audit, agents, budgets);
   const ingest = new IngestService(ctx, audit, runs);
   const guidelines = new GuidelinesService(ctx, audit);
-  const control = new ControlPlaneService(ctx, audit, agents, catalog, guidelines);
+  const control = new ControlPlaneService(ctx, audit, agents, catalog, budgets, guidelines);
   const costs = new CostsService(ctx);
   const tenants = new TenantsService(ctx, audit, identity);
   const models = new ModelsService(ctx, catalog, audit);
   return {
     audit,
+    budgets,
     identity,
     agents,
     catalog,
@@ -56,6 +60,7 @@ export {
   GuidelinesService,
   AgentsService,
   AuditService,
+  BudgetsService,
   CatalogService,
   ControlPlaneService,
   CostsService,

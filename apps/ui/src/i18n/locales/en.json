@@ -617,7 +617,19 @@
     "budgetOf": "Budget used by {team}",
     "exceeded": "Budget exceeded",
     "nearLimit": "Above 80 %",
-    "onTrack": "On track"
+    "onTrack": "On track",
+    "monthlyBudgets": "Monthly budgets",
+    "monthlyBudgetsText": "Runs stop hard as soon as a budget is reached, also in the middle of a run. Alerts are raised at 50, 80 and 100 %.",
+    "tenantBudget": "Whole tenant",
+    "stopped": "Runs stopped",
+    "alertAt": "Alert at {percent} %",
+    "useCase": "Use case",
+    "monthlyLimit": "Monthly limit (USD)",
+    "setBudget": "Set budget",
+    "removeBudget": "Remove the budget of {useCase}",
+    "budgetSaved": "Budget of {useCase} saved",
+    "budgetRemoved": "Budget of {useCase} removed",
+    "budgetInvalid": "Enter a use case and a limit of 0 or more."
   },
   "users": {
     "title": "Users & teams",

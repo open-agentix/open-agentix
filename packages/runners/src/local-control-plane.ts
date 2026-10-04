@@ -4,6 +4,7 @@ import {
   verifyAuditChain,
   type AgentDefinition,
   type AuditEntry,
+  type BudgetVerdict,
   type PolicyBundle,
   type PolicyDecision,
   type ToolCallRequest,
@@ -20,6 +21,8 @@ export interface LocalControlPlaneOptions {
     decision: PolicyDecision,
   ) => ApprovalOutcome | Promise<ApprovalOutcome>;
   onStep?: (runId: string, step: StepInput) => void;
+  /** Monthly budget verdict; local runs have no ledger, so the default never blocks. */
+  checkBudget?: (runId: string) => BudgetVerdict | Promise<BudgetVerdict>;
   actor?: string;
 }
 
@@ -101,6 +104,10 @@ export class LocalControlPlane implements ControlPlane {
 
   async isCancelled(runId: string): Promise<boolean> {
     return this.cancelled.has(runId);
+  }
+
+  async checkBudget(runId: string): Promise<BudgetVerdict> {
+    return (await this.opts.checkBudget?.(runId)) ?? { blocked: false, breaches: [] };
   }
 
   async completeRun(runId: string, result: RunResult): Promise<void> {
