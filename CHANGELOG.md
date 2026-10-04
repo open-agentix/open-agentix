@@ -46,6 +46,20 @@ First MVP release of the openagentix platform (control node, worker, packages).
 - **worker**: Postgres `FOR UPDATE SKIP LOCKED` queue with leases, heartbeats and retries,
   configurable concurrency, approval waits, cancellation, cron scheduler with cluster-wide
   de-duplication and Kafka sources.
+- **Operations**: standalone database settings (`OAX_DATABASE_URL` or `PG*` variables, separate
+  `OAX_DATABASE_PASSWORD`), migrations under a Postgres advisory lock with wait-for-DB backoff,
+  `/readyz` reports schema status, migration job needs only DB settings; worker HTTP server with
+  `/healthz`, `/readyz`, `/metrics`; explicit `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` support for
+  providers, AWS SDK, OIDC and MCP over HTTP; env contract for the v0.2 Kubernetes Job runner and
+  toolbox allowlist (feature-flagged off, enforced at publish); release workflow publishing signed
+  multi-arch images with SBOM attestations.
+- **API for the UI**: stream tokens for EventSource, documented SSE/NDJSON media types, standard
+  401/403/404 responses and OIDC redirects in OpenAPI, `GET /v1/auth/methods`, OIDC expiry in the
+  UI redirect, role permissions in settings, step kind/status enums, agent/pipeline/team names in
+  runs, approvals and costs, run time filters and `GET /v1/stats/runs`, `runId` filter for
+  approvals, parsed definition from validation, dry runs of drafts with the simulated provider,
+  cron event sources, source deletion, user detail, team members, team update and deletion,
+  agent search.
 - Examples `cve-triage` and `ticket-updater` with an end-to-end integration test; Dockerfile
   (api/worker targets, non-root, read-only rootfs friendly), docker compose stack, demo script,
   toolbox catalog skeleton, ADRs 0001-0006, configuration contract, performance baseline, CI with
