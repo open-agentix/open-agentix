@@ -7,6 +7,7 @@ import { logout, meQuery, useCan, versionQuery } from '../auth/auth';
 import { session } from '../auth/session';
 import { Icon } from '../components/Icon';
 import { useI18n } from '../i18n/i18n';
+import { TourLauncher } from '../features/tour/TourHost';
 import { PreferencesControls } from './PreferencesControls';
 import { NAV } from './nav';
 
@@ -85,6 +86,7 @@ export function AppShell() {
                     <li key={item.to}>
                       <Link
                         to={item.to}
+                        data-tour={`nav-${item.to}`}
                         className="nav-link"
                         activeOptions={{ exact: item.to === '/' }}
                         activeProps={{ className: 'nav-link active', 'aria-current': 'page' }}
@@ -108,9 +110,10 @@ export function AppShell() {
           })}
         </nav>
         <div className="sidebar-foot">
+          <TourLauncher />
           <PreferencesControls />
           {me ? (
-            <div className="whoami">
+            <div className="whoami" data-tour="whoami">
               <span className="avatar" aria-hidden="true">
                 {me.user.displayName.slice(0, 1).toUpperCase()}
               </span>

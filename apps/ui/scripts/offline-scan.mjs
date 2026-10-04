@@ -6,6 +6,9 @@ import { extname, join } from 'node:path';
 const ALLOWED_HOSTS = [
   /^www\.w3\.org$/,
   /^react\.dev$/,
+  // Guided-tour links in the demo (plain <a href>, followed only when a visitor clicks them).
+  /^github\.com$/,
+  /^(blog\.)?openagentix\.si$/,
   /\.internal$/,
   /\.vpce\.amazonaws\.com$/,
   // Documented placeholder shown as an input example in the model connection form.
