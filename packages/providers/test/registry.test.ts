@@ -23,7 +23,7 @@ describe('provider config', () => {
     expect(parseProviderConfigs(undefined)).toEqual(DEFAULT_PROVIDERS);
   });
   it('validates configs and rejects duplicates', () => {
-    expect(() => parseProviderConfigs('[{"kind":"openai","name":"x"}]')).toThrow();
+    expect(() => parseProviderConfigs('[{"kind":"openai-compatible","name":"x"}]')).toThrow();
     expect(() =>
       parseProviderConfigs('[{"kind":"simulated","name":"a"},{"kind":"simulated","name":"a"}]'),
     ).toThrow(/duplicate/);
