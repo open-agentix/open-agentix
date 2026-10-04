@@ -60,6 +60,7 @@ describe('HttpControlPlane', () => {
       { status: 'pending' },
       { status: 'approved' },
       { cancelled: true },
+      { blocked: false, breaches: [] },
       null,
     ];
     const cp = new HttpControlPlane({
@@ -89,6 +90,7 @@ describe('HttpControlPlane', () => {
       }),
     ).toBe('approved');
     expect(await cp.isCancelled('r1')).toBe(true);
+    expect(await cp.checkBudget('r1')).toEqual({ blocked: false, breaches: [] });
     await cp.completeRun('r1', {
       status: 'failed',
       outputs: [],
@@ -101,6 +103,7 @@ describe('HttpControlPlane', () => {
       'GET https://control.example/v1/worker/runs/r1/approvals/ap1',
       'GET https://control.example/v1/worker/runs/r1/approvals/ap1',
       'GET https://control.example/v1/worker/runs/r1/status',
+      'GET https://control.example/v1/worker/runs/r1/budget',
       'POST https://control.example/v1/worker/runs/r1/complete',
     ]);
     expect(calls.every((c) => c.auth === 'Bearer oaxrt.x.y')).toBe(true);

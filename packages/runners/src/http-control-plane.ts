@@ -1,4 +1,9 @@
-import { OaxError, type PolicyDecision, type ToolCallRequest } from '@openagentix/core';
+import {
+  OaxError,
+  type BudgetVerdict,
+  type PolicyDecision,
+  type ToolCallRequest,
+} from '@openagentix/core';
 import type { ApprovalOutcome, ControlPlane, RunResult, StepInput } from './types.js';
 
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
@@ -84,6 +89,10 @@ export class HttpControlPlane implements ControlPlane {
   async isCancelled(runId: string): Promise<boolean> {
     return (await this.request<{ cancelled: boolean }>('GET', `/v1/worker/runs/${runId}/status`))
       .cancelled;
+  }
+
+  checkBudget(runId: string): Promise<BudgetVerdict> {
+    return this.request('GET', `/v1/worker/runs/${runId}/budget`);
   }
 
   async completeRun(runId: string, result: RunResult): Promise<void> {
