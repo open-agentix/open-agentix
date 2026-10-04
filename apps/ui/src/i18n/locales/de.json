@@ -746,5 +746,65 @@
       "copy": "Provider-Konfiguration kopieren",
       "credentials": "Zugangsdaten kommen aus der AWS-Standardkette (IRSA auf EKS, Instanzrolle) – nie von dieser Seite."
     }
+  },
+  "tour": {
+    "launch": "Tour starten",
+    "step": "Schritt {current} von {total}",
+    "progress": "Fortschritt der Tour",
+    "goTo": "Zu Schritt {step}",
+    "back": "Zurück",
+    "next": "Weiter",
+    "skip": "Tour überspringen",
+    "done": "Fertig",
+    "close": "Tour schließen",
+    "dontShow": "Nicht mehr anzeigen",
+    "steps": {
+      "welcome": {
+        "title": "Willkommen in der open-agentix-Demo",
+        "body": "Du bist als fiktiver Demo-Admin angemeldet. Alle Daten sind erfunden und schreibgeschützt, Läufe nutzen einen simulierten Provider, und nichts, was du eingibst, erreicht ein Modell. Die Demo wird nachts zurückgesetzt."
+      },
+      "scenario": {
+        "title": "Szenario ausprobieren",
+        "body": "Diese Karte startet eines von wenigen festen Szenarien: Ein CVE-Triage-Agent arbeitet einen Scanner-Fund ab. Schließe die Tour und klicke jederzeit auf \"Szenario starten\"; Prompts kannst du nicht eingeben."
+      },
+      "runs": {
+        "title": "Einen Lauf beobachten",
+        "body": "Jeder Lauf zeigt seine Schritte, die Richtlinien-Entscheidung zu jedem Tool-Aufruf, Freigaben, die auf einen Menschen warten, und die Kosten je Schritt. Öffne einen Lauf für den vollen Ablauf."
+      },
+      "audit": {
+        "title": "Ein manipulationssicheres Audit-Protokoll",
+        "body": "Jede Aktion landet in einer Hash-Kette: Jeder Eintrag enthält den Hash des vorherigen. Die Prüfen-Schaltfläche berechnet die Kette neu, geänderte oder gelöschte Einträge fallen auf."
+      },
+      "costs": {
+        "title": "Zurechenbare Kosten",
+        "body": "Ausgaben werden je Agent, je Anwendungsfall und je Mandant erfasst, mit Budgets und Export. Die Demo-Preise sind beispielhaft; der simulierte Provider kostet nichts."
+      },
+      "agents": {
+        "title": "Agenten, Mandanten und Rollen",
+        "body": "Agenten gehören zu Teams innerhalb von Mandanten. Rollen gibt es je Mandant, je Team oder sogar je einzelnem Agenten, sodass ein Externer nur einen Agenten sieht und sonst nichts."
+      },
+      "connections": {
+        "title": "Verbindungen, Tool-Profile und Richtlinien",
+        "body": "MCP-Verbindungen legen fest, welche Tools es gibt, Tool-Profile wählen die wenigen aus, die ein Agent nutzen darf, und Richtlinien entscheiden jeden Aufruf. Standard ist minimale Berechtigung: Was nicht erlaubt ist, wird abgelehnt."
+      },
+      "links": {
+        "title": "Wie geht es weiter?",
+        "body": "Lies die Dokumentation, stöbere im Code oder stelle Fragen unter info@openagentix.si oder in den GitHub Discussions. Du kannst die Tour jederzeit über \"Tour starten\" in der Seitenleiste neu starten."
+      }
+    },
+    "links": {
+      "docs": "Dokumentation",
+      "github": "GitHub",
+      "discussions": "GitHub Discussions",
+      "blog": "Blog",
+      "mail": "info@openagentix.si"
+    },
+    "hint": {
+      "title": "Öffentliche Demo",
+      "credentials": "Melde dich mit dem gemeinsamen Fake-Konto an:",
+      "reset": "Alle Daten sind erfunden und werden nachts zurückgesetzt. Gib keine echten Zugangsdaten ein.",
+      "fill": "Eintragen",
+      "afterSignIn": "Die Tour startet, sobald du angemeldet bist."
+    }
   }
 }

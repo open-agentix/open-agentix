@@ -742,5 +742,65 @@
       "copy": "Copy provider configuration",
       "credentials": "Credentials come from the AWS default chain (IRSA on EKS, instance role) – never from this page."
     }
+  },
+  "tour": {
+    "launch": "Take the tour",
+    "step": "Step {current} of {total}",
+    "progress": "Tour progress",
+    "goTo": "Go to step {step}",
+    "back": "Back",
+    "next": "Next",
+    "skip": "Skip tour",
+    "done": "Finish",
+    "close": "Close the tour",
+    "dontShow": "Don't show this again",
+    "steps": {
+      "welcome": {
+        "title": "Welcome to the open-agentix demo",
+        "body": "You are signed in as the fictional demo admin. All data is fake and read-only, runs use a simulated provider, and nothing you type ever reaches a model. The demo resets nightly."
+      },
+      "scenario": {
+        "title": "Try a scenario",
+        "body": "This card starts one of a few fixed scenarios: a CVE-triage agent works through a scanner finding. Close the tour and press \"Run scenario\" whenever you like; you cannot type prompts."
+      },
+      "runs": {
+        "title": "Watch a run",
+        "body": "Every run lists its steps, the policy decision for each tool call, approvals that wait for a human and the cost of each step. Open any run to see the full timeline."
+      },
+      "audit": {
+        "title": "A tamper-evident audit trail",
+        "body": "Every action is written to a hash chain: each entry contains the hash of the one before it. The verify button re-computes the chain, so a changed or deleted entry is detected."
+      },
+      "costs": {
+        "title": "Costs you can attribute",
+        "body": "Spend is tracked per agent, per use case and per tenant, with budgets and an export. The demo prices are illustrative; the simulated provider is free."
+      },
+      "agents": {
+        "title": "Agents, tenants and roles",
+        "body": "Agents belong to teams inside tenants. People get roles per tenant, per team or even per single agent, so a contractor can see one agent and nothing else."
+      },
+      "connections": {
+        "title": "Connections, tool profiles and policies",
+        "body": "MCP connections define which tools exist, tool profiles pick the few an agent may use, and policies decide each call. The default is least privilege: what is not allowed is denied."
+      },
+      "links": {
+        "title": "Where to go next",
+        "body": "Read the docs, browse the code or ask questions at info@openagentix.si or in GitHub Discussions. You can restart this tour any time with \"Take the tour\" in the sidebar."
+      }
+    },
+    "links": {
+      "docs": "Documentation",
+      "github": "GitHub",
+      "discussions": "GitHub Discussions",
+      "blog": "Blog",
+      "mail": "info@openagentix.si"
+    },
+    "hint": {
+      "title": "Public demo",
+      "credentials": "Sign in with the shared fake account:",
+      "reset": "All data is fake and resets nightly. Do not enter real credentials.",
+      "fill": "Fill in",
+      "afterSignIn": "The tour starts as soon as you have signed in."
+    }
   }
 }
