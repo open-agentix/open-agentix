@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **agents.md data flow fields (parsed and validated, no runtime effect yet)**: `schemas`,
+  `agents[].input`/`output` (JSON Schema subset with size, depth and safe-regex limits), `when`
+  (bounded expression grammar, parsed at publish), `access`, `tools[].profile`, `credentials`
+  (secret references per step) and `runtime` per step. Existing files parse unchanged.
+  [ADR 0008](docs/adr/0008-agents-md-data-flow-and-isolation-contract.md) fixes the contract for
+  handovers, tool profiles, the credential broker, run nodes and Agent Plan v1;
+  `docs/agents-md.md`.
 - **Demo profile**: `docker-compose.demo.yml` is a standalone, working stack (api, worker, ui,
   postgres) with the simulated provider. Fixed demo scenarios (`GET /v1/demo/scenarios`,
   `POST /v1/demo/scenarios/{id}/run`), a dashboard card, per-visitor and daily limits and the optional

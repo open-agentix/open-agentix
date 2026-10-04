@@ -48,6 +48,11 @@ flowchart TB
 5. **Complete**: status, outputs, usage and errors are stored; costs caches are invalidated;
    SSE subscribers receive the `end` event.
 
+Typed handovers, `when` conditions, tool profiles, per-step credentials and isolated run nodes are
+specified in [ADR 0008](adr/0008-agents-md-data-flow-and-isolation-contract.md); the new
+`agents.md` fields are parsed and validated today and take effect as the wave 1 items land (see
+[agents.md reference](agents-md.md)).
+
 ## Data model (PostgreSQL)
 
 | Table | Notes |

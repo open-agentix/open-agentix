@@ -43,6 +43,75 @@ export const ToolGrantSchema = z.strictObject({
 });
 export type ToolGrant = z.infer<typeof ToolGrantSchema>;
 
+/**
+ * Grant of a named tool profile of a connection (e.g. `{ server: jira, profile: read }`).
+ * Expanded into concrete {@link ToolGrant}s when a version is published (ADR 0008); until then a
+ * profile grant grants nothing. Argument constraints belong on concrete tool grants.
+ */
+export const ProfileGrantSchema = z.strictObject({
+  server: slug,
+  profile: slug,
+  approval: z.enum(['none', 'required']).default('none'),
+  maxCallsPerRun: z.number().int().positive().optional(),
+  classification: ClassificationSchema.optional(),
+});
+export type ProfileGrant = z.infer<typeof ProfileGrantSchema>;
+
+/** One entry of `agents[].tools`: a concrete tool grant or a profile grant (has `profile`). */
+export const ToolEntrySchema = z.unknown().transform((value, ctx): ToolGrant | ProfileGrant => {
+  const isProfile = typeof value === 'object' && value !== null && 'profile' in value;
+  const result = (isProfile ? ProfileGrantSchema : ToolGrantSchema).safeParse(value);
+  if (!result.success) {
+    for (const issue of result.error.issues) ctx.addIssue({ ...issue });
+    return z.NEVER;
+  }
+  return result.data;
+});
+
+export function isProfileGrant(entry: ToolGrant | ProfileGrant): entry is ProfileGrant {
+  return 'profile' in entry;
+}
+
+/**
+ * A JSON Schema (2020-12 subset, see ADR 0008) used for typed handovers. Only the shape is checked
+ * here; keywords, `$ref` targets and size/depth limits are checked by `checkJsonSchemaSubset`.
+ */
+export const JsonSchemaValueSchema = z.record(z.string(), z.unknown());
+
+export const HANDOVER_EVENT_SOURCE = 'event';
+
+export const HandoverInputSchema = z.strictObject({
+  /** Validates the value the step receives as input (event data, previous output or `from` map). */
+  schema: JsonSchemaValueSchema.optional(),
+  /** Explicit sources (`event` or ids of earlier steps); the step then sees only these. */
+  from: z.array(slug).min(1).max(16).optional(),
+});
+export type HandoverInput = z.infer<typeof HandoverInputSchema>;
+
+export const HandoverOutputSchema = z.strictObject({
+  schema: JsonSchemaValueSchema,
+  /** `retry`: one more model turn with the validation errors, then fail. */
+  onInvalid: z.enum(['fail', 'retry']).default('fail'),
+});
+export type HandoverOutput = z.infer<typeof HandoverOutputSchema>;
+
+/** Same format as the secret resolver accepts (see `secrets.ts`). */
+export const SECRET_REF_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
+
+/** A secret reference a step needs (never a value); issued by the credential broker per step. */
+export const CredentialRefSchema = z.strictObject({
+  secret: z.string().regex(SECRET_REF_PATTERN, 'invalid secret reference'),
+  /** Environment variable that receives the value in the step's tool processes. */
+  env: z
+    .string()
+    .regex(/^[A-Z_][A-Z0-9_]{0,63}$/, 'env must be an upper-case variable name')
+    .optional(),
+});
+export type CredentialRef = z.infer<typeof CredentialRefSchema>;
+
+export const STEP_ACCESS = ['read-only', 'write'] as const;
+export type StepAccess = (typeof STEP_ACCESS)[number];
+
 export const BudgetSchema = z.strictObject({
   maxTokens: z.number().int().positive().optional(),
   maxCostUsd: z.number().positive().optional(),
@@ -99,29 +168,6 @@ export const SimulatedResponseSchema = z.strictObject({
 });
 export type SimulatedResponse = z.infer<typeof SimulatedResponseSchema>;
 
-export const AgentSpecSchema = z.strictObject({
-  id: slug,
-  description: z.string().optional(),
-  /** Name of a configured provider (see docs/configuration.md), e.g. `simulated`, `bedrock`. */
-  provider: z.string().min(1),
-  model: z.string().min(1),
-  temperature: z.number().min(0).max(2).optional(),
-  maxTokensPerCall: z.number().int().positive().optional(),
-  /** Inline instructions; usually taken from the `## Agent: <id>` markdown section instead. */
-  instructions: z.string().optional(),
-  tools: z.array(ToolGrantSchema).default([]),
-  /** Overrides the pipeline toolbox for this agent. */
-  toolbox: z
-    .string()
-    .regex(/^[a-z0-9][a-z0-9-]*(\+[a-z0-9][a-z0-9-]*)*$/)
-    .optional(),
-  outputs: z.array(OutputSchema).default([{ format: 'markdown' }]),
-  budget: BudgetSchema.optional(),
-  /** Scripted model responses used by the `simulated` provider (tests, demos). */
-  simulation: z.strictObject({ responses: z.array(SimulatedResponseSchema).min(1) }).optional(),
-});
-export type AgentSpecInput = z.input<typeof AgentSpecSchema>;
-
 export const RUNNER_KINDS = [
   'in-process',
   'local',
@@ -132,6 +178,48 @@ export const RUNNER_KINDS = [
   'gitlab-ci',
 ] as const;
 export type RunnerKind = (typeof RUNNER_KINDS)[number];
+
+/** Per-step runtime override: another runner, or a narrower egress list (ADR 0008). */
+export const StepRuntimeSchema = z.strictObject({
+  runner: z.enum(RUNNER_KINDS).optional(),
+  /** Must be a subset of the pipeline's `runtime.egress`; a step can only narrow it. */
+  egress: z.array(z.string().min(1)).optional(),
+});
+export type StepRuntime = z.infer<typeof StepRuntimeSchema>;
+
+export const WHEN_MAX_LENGTH = 512;
+
+export const AgentSpecSchema = z.strictObject({
+  id: slug,
+  description: z.string().optional(),
+  /** Name of a configured provider (see docs/configuration.md), e.g. `simulated`, `bedrock`. */
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  temperature: z.number().min(0).max(2).optional(),
+  maxTokensPerCall: z.number().int().positive().optional(),
+  /** Inline instructions; usually taken from the `## Agent: <id>` markdown section instead. */
+  instructions: z.string().optional(),
+  /** Concrete tool grants and profile grants; the parser splits them (`tools`, `profileGrants`). */
+  tools: z.array(ToolEntrySchema).default([]),
+  /** Overrides the pipeline toolbox for this agent. */
+  toolbox: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]*(\+[a-z0-9][a-z0-9-]*)*$/)
+    .optional(),
+  outputs: z.array(OutputSchema).default([{ format: 'markdown' }]),
+  budget: BudgetSchema.optional(),
+  /** Scripted model responses used by the `simulated` provider (tests, demos). */
+  simulation: z.strictObject({ responses: z.array(SimulatedResponseSchema).min(1) }).optional(),
+  // ADR 0008 (additive, optional): typed handovers, conditions, access class, credentials, runtime.
+  input: HandoverInputSchema.optional(),
+  output: HandoverOutputSchema.optional(),
+  /** Condition over `event` and `steps.<id>.output`; the step is skipped when false. */
+  when: z.string().min(1).max(WHEN_MAX_LENGTH).optional(),
+  access: z.enum(STEP_ACCESS).optional(),
+  credentials: z.array(CredentialRefSchema).max(16).optional(),
+  runtime: StepRuntimeSchema.optional(),
+});
+export type AgentSpecInput = z.input<typeof AgentSpecSchema>;
 
 /**
  * Where and with which tools a run executes. A toolbox is a minimal, signed container image from
@@ -181,6 +269,13 @@ export const PipelineFrontMatterSchema = z.strictObject({
     .array(z.string().regex(/^[a-z0-9][a-z0-9-]*@\d+\.\d+\.\d+$/, 'use name@x.y.z'))
     .default([]),
   runtime: RuntimeSchema.default({ runner: 'in-process', egress: [] }),
+  /** Named JSON Schemas referenced as `{ $ref: '#/schemas/<name>' }` (ADR 0008). */
+  schemas: z
+    .record(
+      z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,62}$/, 'invalid schema name'),
+      JsonSchemaValueSchema,
+    )
+    .optional(),
   agents: z.array(AgentSpecSchema).min(1),
   /** Execution order of agent ids; defaults to the order in `agents`. */
   pipeline: z.array(slug).optional(),
