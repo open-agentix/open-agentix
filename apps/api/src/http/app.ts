@@ -25,6 +25,7 @@ import { LOG_REDACT_PATHS } from '../context.js';
 import { HttpError, forbidden, registerErrorHandler } from '../errors.js';
 import type { Services } from '../services/index.js';
 import { VERSION } from '../version.js';
+import { decorateOpenApi } from './openapi-decorate.js';
 import { registerAgentRoutes } from './routes/agents.js';
 import { registerAuditRoutes } from './routes/audit.js';
 import { registerAuthRoutes } from './routes/auth.js';
@@ -155,7 +156,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       },
     },
     transform: jsonSchemaTransform,
-    transformObject: jsonSchemaTransformObject,
+    transformObject: (doc) => decorateOpenApi(jsonSchemaTransformObject(doc)),
   });
 
   // Authentication + route-level RBAC. Resource-level (team) checks happen in the services.
