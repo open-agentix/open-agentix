@@ -137,7 +137,16 @@
     "available": "Available",
     "planned": "Planned",
     "provider": "Provider",
-    "recentAudit": "Recent audit events"
+    "recentAudit": "Recent audit events",
+    "demo": {
+      "title": "Try a scenario",
+      "intro": "Pick one of the fixed scenarios. The agent runs against fake data; you cannot type prompts.",
+      "run": "Run scenario",
+      "started": "Scenario started",
+      "live": "Live model: {model}. Budget left today: {remaining}.",
+      "simulated": "Simulated model (no network, no cost).",
+      "limit": "Up to {runs} runs per {minutes} minutes per visitor."
+    }
   },
   "agents": {
     "title": "Agents",

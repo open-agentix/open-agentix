@@ -31,6 +31,7 @@ import { registerAgentRoutes } from './routes/agents.js';
 import { registerAuditRoutes } from './routes/audit.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
+import { registerDemoRoutes } from './routes/demo.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSystemRoutes } from './routes/system.js';
@@ -219,6 +220,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     'POST /v1/guidelines/review',
     'POST /v1/runs/:id/stream-token',
     'POST /v1/audit/verify',
+    'POST /v1/demo/scenarios/:scenario/run',
   ]);
   app.addHook('onRequest', async (req, reply) => {
     if (!ctx.config.demo.enabled) return;
@@ -256,6 +258,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   registerAuditRoutes(typed, deps);
   registerUserRoutes(typed, deps);
   registerTenantRoutes(typed, deps);
+  registerDemoRoutes(typed, deps);
   registerBudgetRoutes(typed, deps);
   registerWorkerRoutes(typed, deps);
   await app.ready();

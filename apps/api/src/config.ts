@@ -109,6 +109,17 @@ export const EnvSchema = z.object({
   OAX_DEMO_MCP: bool.default(false),
   OAX_DEMO_MODE: bool.default(false),
   OAX_DEMO_PASSWORD: z.string().min(8).default('demo-password-2026'),
+  // Demo scenarios (docs/demo.md): fixed scenarios only, optionally executed by Claude Code.
+  OAX_DEMO_LLM: z.enum(['simulated', 'claude-code']).default('simulated'),
+  OAX_DEMO_LLM_MODEL: z.string().min(1).default('haiku'),
+  /** File with a token from `claude setup-token`, mounted read-only (never an env value). */
+  OAX_DEMO_LLM_TOKEN_FILE: z.string().optional(),
+  OAX_DEMO_LLM_DAILY_BUDGET_USD: z.coerce.number().positive().default(1),
+  OAX_DEMO_LLM_RUN_BUDGET_USD: z.coerce.number().positive().default(0.05),
+  OAX_DEMO_LLM_WORKDIR: z.string().optional(),
+  OAX_DEMO_RATE_RUNS: int(3),
+  OAX_DEMO_RATE_WINDOW_SECONDS: int(600),
+  OAX_DEMO_DAILY_RUNS: int(100),
 
   // Runners (v0.2; parsed and validated now, feature-flagged off).
   OAX_RUNNERS_ENABLED: z.string().default('in-process'),
@@ -202,7 +213,20 @@ export interface Config {
   workerHttp: { host: string; port: number };
   secrets: { dir: string | undefined; envRefs: string[] };
   demoMcp: boolean;
-  demo: { enabled: boolean; password: string };
+  demo: {
+    enabled: boolean;
+    password: string;
+    /** Who executes scenario runs: the simulated provider (default) or the Claude Code harness. */
+    llm: 'simulated' | 'claude-code';
+    llmModel: string;
+    llmTokenFile: string | undefined;
+    dailyBudgetUsd: number;
+    runBudgetUsd: number;
+    workDir: string | undefined;
+    /** Scenario runs per visitor (IP) and window, and per day for the whole demo. */
+    rate: { runs: number; windowSeconds: number };
+    dailyRuns: number;
+  };
   runners: {
     enabled: RunnerKind[];
     kubernetesJob: { enabled: boolean } & z.infer<typeof KubernetesJobRunnerConfigSchema> & {
@@ -256,6 +280,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new OaxError(
       'config_invalid',
       'OAX_RUN_TOKEN_SECRET (>= 32 chars) is required in production',
+    );
+  }
+  if (e.OAX_DEMO_LLM === 'claude-code' && !e.OAX_DEMO_MODE) {
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: OAX_DEMO_LLM=claude-code requires OAX_DEMO_MODE=true (fixed scenarios only)',
     );
   }
   const oidcConfigured = e.OAX_OIDC_ISSUER && e.OAX_OIDC_CLIENT_ID && e.OAX_OIDC_REDIRECT_URI;
@@ -345,7 +375,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     workerHttp: { host: e.OAX_WORKER_HTTP_HOST, port: e.OAX_WORKER_HTTP_PORT },
     secrets: { dir: e.OAX_SECRETS_DIR, envRefs: secretEnvRefs(env) },
     demoMcp: e.OAX_DEMO_MCP,
-    demo: { enabled: e.OAX_DEMO_MODE, password: e.OAX_DEMO_PASSWORD },
+    demo: {
+      enabled: e.OAX_DEMO_MODE,
+      password: e.OAX_DEMO_PASSWORD,
+      llm: e.OAX_DEMO_LLM,
+      llmModel: e.OAX_DEMO_LLM_MODEL,
+      llmTokenFile: e.OAX_DEMO_LLM_TOKEN_FILE,
+      dailyBudgetUsd: e.OAX_DEMO_LLM_DAILY_BUDGET_USD,
+      runBudgetUsd: e.OAX_DEMO_LLM_RUN_BUDGET_USD,
+      workDir: e.OAX_DEMO_LLM_WORKDIR,
+      rate: { runs: e.OAX_DEMO_RATE_RUNS, windowSeconds: e.OAX_DEMO_RATE_WINDOW_SECONDS },
+      dailyRuns: e.OAX_DEMO_DAILY_RUNS,
+    },
     runners: runnersConfig(e),
     toolboxes: {
       registry: e.OAX_TOOLBOX_REGISTRY,

@@ -8,3 +8,5 @@ docs
 examples
 openapi.yaml
 **/test
+
+secrets/
