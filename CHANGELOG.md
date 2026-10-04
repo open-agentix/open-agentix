@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Demo profile**: `docker-compose.demo.yml` is a standalone, working stack (api, worker, ui,
+  postgres) with the simulated provider. Fixed demo scenarios (`GET /v1/demo/scenarios`,
+  `POST /v1/demo/scenarios/{id}/run`), a dashboard card, per-visitor and daily limits and the optional
+  `OAX_DEMO_LLM=claude-code` mode that runs scenarios through the Claude Code harness (no free-text
+  prompts, no built-in or outbound tools, per-run and daily budget caps, token only as a read-only
+  mounted file). `docs/demo.md`.
 - **Claude Code harness**: the adapter now runs `claude -p` (stream-json, `--tools ""`, `dontAsk`,
   explicit allowlist, `--restricted`) in a temporary directory with a minimal environment. The policy
   gate is served as a loopback MCP bridge (`serveGateHttp`) so every tool call is policy-checked,

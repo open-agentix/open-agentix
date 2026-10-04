@@ -159,7 +159,20 @@ Bedrock uses the AWS default credential chain: on EKS annotate the ServiceAccoun
 | `OAX_DEMO_PASSWORD` | `demo-password-2026` | Shared password of the fake demo users (`admin@example.org`, `engineer@`, `integrator@`, `operator@`, `auditor@`, `viewer@`, `contractor@example.org`). Not a secret. |
 
 `pnpm seed:demo` loads the same data set into an empty database (`--force` to add anyway).
-Compose: `docker compose -f docker-compose.yml -f docker-compose.demo.yml up`.
+Compose (standalone: api, worker, ui, postgres): `docker compose -f docker-compose.demo.yml up --build`.
+
+Fixed scenarios and the optional live model are described in [`demo.md`](demo.md):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_DEMO_LLM` | `simulated` | `claude-code` runs visitor-started scenarios through the Claude Code harness (requires `OAX_DEMO_MODE=true`). |
+| `OAX_DEMO_LLM_MODEL` | `haiku` | Model alias passed to the harness. |
+| `OAX_DEMO_LLM_TOKEN_FILE` | – | File with a token from `claude setup-token`, mounted read-only into the worker (never an environment value). Without it the login of the worker's user is used. |
+| `OAX_DEMO_LLM_DAILY_BUDGET_USD` | `1` | Daily cap for live model runs (runs in flight reserve `OAX_DEMO_LLM_RUN_BUDGET_USD`). |
+| `OAX_DEMO_LLM_RUN_BUDGET_USD` | `0.05` | Hard cost cap of one scenario run. |
+| `OAX_DEMO_LLM_WORKDIR` | OS temp dir | Parent of the harness' temporary work directories. |
+| `OAX_DEMO_RATE_RUNS`, `OAX_DEMO_RATE_WINDOW_SECONDS` | `3`, `600` | Scenario runs per visitor (salted hash of the client IP) and window. |
+| `OAX_DEMO_DAILY_RUNS` | `100` | Scenario runs per day for the whole demo. |
 
 ## Outbound proxy
 
