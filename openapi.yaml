@@ -6900,6 +6900,185 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/demo/scenarios:
+    get:
+      summary: "Demo mode: fixed scenarios, limits and the live-model budget"
+      tags:
+        - demo
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  llm:
+                    type: object
+                    properties:
+                      mode:
+                        type: string
+                        enum:
+                          - simulated
+                          - claude-code
+                      model:
+                        type:
+                          - string
+                          - "null"
+                      dailyBudgetUsd:
+                        type: number
+                      spentTodayUsd:
+                        type: number
+                      remainingUsd:
+                        type: number
+                    required:
+                      - mode
+                      - model
+                      - dailyBudgetUsd
+                      - spentTodayUsd
+                      - remainingUsd
+                    additionalProperties: false
+                  rateLimit:
+                    type: object
+                    properties:
+                      runs:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      windowSeconds:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                    required:
+                      - runs
+                      - windowSeconds
+                    additionalProperties: false
+                  scenarios:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        title:
+                          type: string
+                        description:
+                          type: string
+                        agent:
+                          type: string
+                      required:
+                        - id
+                        - title
+                        - description
+                        - agent
+                      additionalProperties: false
+                required:
+                  - llm
+                  - rateLimit
+                  - scenarios
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/demo/scenarios/{scenario}/run:
+    post:
+      summary: "Demo mode: run a fixed scenario (no free-text input; rate limited per visitor)"
+      tags:
+        - demo
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+          in: path
+          name: scenario
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "202":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId:
+                    type: string
+                required:
+                  - runId
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/worker/runs/{id}/gate:
     post:
       summary: "Policy gate: decide a tool call before execution"
