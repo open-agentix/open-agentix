@@ -15,3 +15,4 @@ export * from './domain.js';
 export * from './secrets.js';
 export * from './run-token.js';
 export * from './guidelines.js';
+export * from './egress.js';
