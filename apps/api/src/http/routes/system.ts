@@ -1,4 +1,5 @@
 import { PERMISSIONS, ROLES, ROLE_PERMISSIONS, RUNNER_KINDS } from '@openagentix/core';
+import { catalogModels, loadModelCatalog } from '@openagentix/providers';
 import { z } from 'zod';
 import { HttpError } from '../../errors.js';
 import { VERSION } from '../../version.js';
@@ -85,6 +86,45 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
       },
     },
     async () => ({ name: 'openagentix' as const, version: VERSION }),
+  );
+
+  app.get(
+    '/v1/models',
+    {
+      config: { access: 'agents:read' },
+      schema: {
+        tags: ['system'],
+        summary: 'Model catalog (pinned snapshot + local overrides from OAX_PRICE_TABLE)',
+        security: [{ bearer: [] }],
+        response: {
+          200: z.object({
+            source: z.string(),
+            snapshotDate: z.string(),
+            items: z.array(
+              z.object({
+                provider: z.string(),
+                providerName: z.string(),
+                id: z.string(),
+                name: z.string(),
+                contextTokens: z.number().int().nullable(),
+                outputTokens: z.number().int().nullable(),
+                inputPerMTok: z.number().nullable(),
+                outputPerMTok: z.number().nullable(),
+                source: z.enum(['catalog', 'override']),
+              }),
+            ),
+          }),
+        },
+      },
+    },
+    async () => {
+      const catalog = loadModelCatalog();
+      return {
+        source: catalog.source,
+        snapshotDate: catalog.snapshotDate,
+        items: catalogModels(catalog, ctx.config.priceTable),
+      };
+    },
   );
 
   app.get(

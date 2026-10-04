@@ -113,3 +113,26 @@ describe('system endpoints', () => {
     expect(bad.json().error).toBe('validation_failed');
   });
 });
+
+describe('model catalog endpoint', () => {
+  it('lists the pinned snapshot with overrides', async () => {
+    const node = await testNode({
+      OAX_PRICE_TABLE: JSON.stringify([
+        { provider: 'anthropic', model: 'claude-haiku-4-5', inputPerMTok: 0.5, outputPerMTok: 2 },
+      ]),
+    });
+    const res = (await node.req({ method: 'GET', url: '/v1/models' })).json();
+    expect(res.source).toBeTruthy();
+    expect(res.items.find((m: { id: string }) => m.id === 'claude-haiku-4-5')).toMatchObject({
+      inputPerMTok: 0.5,
+      source: 'override',
+    });
+    expect(
+      node.ctx.costModel.modelCall('anthropic', 'claude-opus-5-5', {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+      }).totalMicros,
+    ).toBe(4_000_000);
+    await node.close();
+  });
+});

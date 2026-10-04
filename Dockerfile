@@ -39,6 +39,7 @@ WORKDIR /app
 COPY --from=prod-deps /src /app
 COPY --from=build /src/packages/core/dist /app/packages/core/dist
 COPY --from=build /src/packages/providers/dist /app/packages/providers/dist
+COPY --from=build /src/packages/providers/catalog /app/packages/providers/catalog
 COPY --from=build /src/packages/events/dist /app/packages/events/dist
 COPY --from=build /src/packages/mcp/dist /app/packages/mcp/dist
 COPY --from=build /src/packages/runners/dist /app/packages/runners/dist

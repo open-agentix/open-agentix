@@ -199,6 +199,91 @@ paths:
                   - name
                   - version
                 additionalProperties: false
+  /v1/models:
+    get:
+      summary: Model catalog (pinned snapshot + local overrides from OAX_PRICE_TABLE)
+      tags:
+        - system
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source:
+                    type: string
+                  snapshotDate:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        provider:
+                          type: string
+                        providerName:
+                          type: string
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        contextTokens:
+                          anyOf:
+                            - type: integer
+                              minimum: -9007199254740991
+                              maximum: 9007199254740991
+                            - type: "null"
+                        outputTokens:
+                          anyOf:
+                            - type: integer
+                              minimum: -9007199254740991
+                              maximum: 9007199254740991
+                            - type: "null"
+                        inputPerMTok:
+                          type:
+                            - number
+                            - "null"
+                        outputPerMTok:
+                          type:
+                            - number
+                            - "null"
+                        source:
+                          type: string
+                          enum:
+                            - catalog
+                            - override
+                      required:
+                        - provider
+                        - providerName
+                        - id
+                        - name
+                        - contextTokens
+                        - outputTokens
+                        - inputPerMTok
+                        - outputPerMTok
+                        - source
+                      additionalProperties: false
+                required:
+                  - source
+                  - snapshotDate
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/settings:
     get:
       summary: Capabilities for the UI (providers, runners, auth methods)
