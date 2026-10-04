@@ -9,9 +9,10 @@ import {
 } from '@openagentix/mcp';
 import { ProviderRegistry, SimulatedProvider } from '@openagentix/providers';
 import { InProcessRunner } from '@openagentix/runners';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+import { agents } from '../db/schema.js';
 import type { AppContext } from '../context.js';
-import { agents, costLedger, runs, teams, tenants } from '../db/schema.js';
+import { DEFAULT_TENANT_ID, runs, users as usersTable } from '../db/schema.js';
 import type { Services } from '../services/index.js';
 import {
   CVE_TRIAGE,
@@ -26,7 +27,6 @@ import {
  * Deterministic seed for the public demo (demo.openagentix.si): fixed fake data on example.org,
  * simulated provider only, demo MCP servers in memory, no outbound network, no real secrets.
  */
-export const DEMO_TENANT_ID = '00000000-0000-4000-8000-0000000000a2';
 export const DEMO_PRICE_TABLE = [
   // Demo prices so the cost views show numbers; the simulated provider itself is free.
   {
@@ -42,6 +42,8 @@ export interface DemoUser {
   email: string;
   displayName: string;
   globalRoles: Role[];
+  /** Tenant slug; the default tenant when omitted. */
+  tenant?: 'acme-labs';
   teams?: { slug: string; role: Role }[];
   agents?: { name: string; role: Role }[];
 }
@@ -65,6 +67,7 @@ export const DEMO_USERS: DemoUser[] = [
   {
     email: 'viewer@example.org',
     displayName: 'Vic Viewer',
+    tenant: 'acme-labs',
     globalRoles: [],
     teams: [{ slug: 'team-platform', role: 'viewer' }],
   },
@@ -140,17 +143,18 @@ export async function seedDemo(
       auditValid: (await services.audit.verify()).valid,
     };
   }
-  const admin = await services.identity.createLocalUser('demo-seed', {
-    email: 'demo-owner@example.org',
-    displayName: 'Demo Owner',
-    password: opts.password,
-    globalRoles: ['admin'],
-  });
-  const actor = admin.id;
-  await ctx.db
-    .insert(tenants)
-    .values({ id: DEMO_TENANT_ID, slug: 'acme-labs', name: 'Acme Labs (demo)' })
-    .onConflictDoNothing();
+  const admin = await services.identity.createLocalUser(
+    { userId: 'demo-seed', tenantId: DEFAULT_TENANT_ID },
+    {
+      email: 'demo-owner@example.org',
+      displayName: 'Demo Owner',
+      password: opts.password,
+      globalRoles: ['admin'],
+    },
+  );
+  await ctx.db.update(usersTable).set({ platformAdmin: true }).where(eq(usersTable.id, admin.id));
+  const ownerPrincipal = await services.identity.principalForUser(admin.id);
+  const actor = ownerPrincipal;
   const sec = await services.identity.createTeam(actor, {
     slug: 'team-security',
     name: 'Security (demo)',
@@ -161,7 +165,22 @@ export async function seedDemo(
     name: 'Platform (demo)',
     monthlyBudgetUsd: 20,
   });
-  await ctx.db.update(teams).set({ tenantId: DEMO_TENANT_ID }).where(eq(teams.id, platform.id));
+  // A second, fully isolated tenant with its own team, administrator and agent.
+  const acme = await services.tenants.create(ownerPrincipal, {
+    slug: 'acme-labs',
+    name: 'Acme Labs (demo)',
+    admin: {
+      email: 'admin@acme.example.org',
+      displayName: 'Acme Admin',
+      password: opts.password,
+    },
+  });
+  const acmePrincipal = await services.identity.actingIn(ownerPrincipal, acme.id);
+  const acmePlatform = await services.identity.createTeam(acmePrincipal, {
+    slug: 'team-platform',
+    name: 'Platform (Acme demo)',
+    monthlyBudgetUsd: 20,
+  });
 
   for (const name of ['cve-db', 'tickets'])
     await services.catalog.createConnection(actor, {
@@ -200,7 +219,6 @@ export async function seedDemo(
     rules: { forbiddenDependencies: ['event-stream', 'left-pad'] },
   });
 
-  const ownerPrincipal = await services.identity.principalForUser(admin.id);
   const agentIds = new Map<string, string>();
   for (const source of [
     CVE_TRIAGE,
@@ -210,19 +228,21 @@ export async function seedDemo(
     RELEASE_WATCH,
     LOG_SUMMARY,
   ]) {
-    const a = await services.agents.create(ownerPrincipal, source);
-    await services.agents.publish(ownerPrincipal, a.id);
+    // log-summary belongs to the second tenant, everything else to the default tenant.
+    const owner = source === LOG_SUMMARY ? acmePrincipal : ownerPrincipal;
+    const a = await services.agents.create(owner, source);
+    await services.agents.publish(owner, a.id);
     agentIds.set(a.name, a.id);
   }
-  await ctx.db
-    .update(agents)
-    .set({ tenantId: DEMO_TENANT_ID })
-    .where(eq(agents.id, agentIds.get('log-summary')!));
 
-  const teamIds: Record<string, string> = { 'team-security': sec.id, 'team-platform': platform.id };
+  const teamIds: Record<string, string> = {
+    'team-security': sec.id,
+    'team-platform': platform.id,
+    'acme-labs/team-platform': acmePlatform.id,
+  };
   const users: Record<string, string> = {};
   for (const u of DEMO_USERS) {
-    const created = await services.identity.createLocalUser(actor, {
+    const created = await services.identity.createLocalUser(u.tenant ? acmePrincipal : actor, {
       email: u.email,
       displayName: u.displayName,
       password: opts.password,
@@ -230,13 +250,14 @@ export async function seedDemo(
     });
     users[u.email] = created.id;
   }
-  for (const slug of ['team-security', 'team-platform']) {
-    const members = DEMO_USERS.flatMap((u) =>
+  for (const [key, teamId] of Object.entries(teamIds)) {
+    const [tenant, slug] = key.includes('/') ? key.split('/') : [undefined, key];
+    const members = DEMO_USERS.filter((u) => u.tenant === tenant).flatMap((u) =>
       (u.teams ?? [])
         .filter((t) => t.slug === slug)
         .map((t) => ({ userId: users[u.email]!, role: t.role })),
     );
-    await services.identity.setTeamMembers(actor, teamIds[slug]!, members);
+    await services.identity.setTeamMembers(tenant ? acmePrincipal : actor, teamId, members);
   }
   for (const u of DEMO_USERS) {
     for (const b of u.agents ?? [])
@@ -378,19 +399,6 @@ export async function seedDemo(
     ],
   );
 
-  // Second tenant's rows.
-  const logRuns = await ctx.db
-    .select({ id: runs.id })
-    .from(runs)
-    .where(eq(runs.agentId, agentIds.get('log-summary')!));
-  const ids = logRuns.map((r) => r.id);
-  if (ids.length) {
-    await ctx.db.update(runs).set({ tenantId: DEMO_TENANT_ID }).where(inArray(runs.id, ids));
-    await ctx.db
-      .update(costLedger)
-      .set({ tenantId: DEMO_TENANT_ID })
-      .where(inArray(costLedger.runId, ids));
-  }
   await services.audit.checkpoint();
   return {
     seeded: true,
