@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Tenant isolation**: every request-facing query is filtered by the caller's tenant; other
+  tenants' resources answer 404 (denied agent/run access is audited), names are unique per tenant,
+  workers resolve tool servers per run and tenant, cross-tenant references are refused. Tenants API
+  (`/v1/tenants`), platform operators (`users.platform_admin`, `X-OAX-Tenant`, `allTenants`),
+  connection scopes (platform, tenant, team, agent), platform vs tenant policies, tenant partition
+  key on audit entries, and `docs/tenancy.md` with isolation tests.
+
+### Changed
+
+- **Breaking (API/DB, pre-1.0)**: `Principal` carries `tenantId` and `platformAdmin`; migration
+  `0003` makes names unique per tenant, adds `users.tenant_id`, `users.platform_admin` and
+  `policies.scope`, and marks existing `admin` users as platform operators.
+
 ## [0.1.0] - 2026-10-04
 
 First MVP release of the openagentix platform (control node, worker, packages).

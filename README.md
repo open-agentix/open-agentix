@@ -140,6 +140,7 @@ flowchart LR
 ## Documentation
 
 - [Configuration (environment contract)](docs/configuration.md)
+- [Tenants and access](docs/tenancy.md)
 - [Architecture](docs/architecture.md) and [ADRs](docs/adr/)
 - [Performance and benchmark](docs/performance.md)
 - [Toolbox images](toolboxes/README.md)
