@@ -73,6 +73,7 @@ services:
       dockerfile: apps/ui/Dockerfile
       args:
         VITE_OAX_API_URL: http://localhost:8080
+        VITE_OAX_DEMO: 'true'
     image: ghcr.io/open-agentix/open-agentix-ui:dev
     ports: ['127.0.0.1:3000:8080']
     read_only: true

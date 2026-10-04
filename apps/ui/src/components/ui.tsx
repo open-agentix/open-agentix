@@ -253,12 +253,15 @@ export function Section({
   children,
   className,
   id,
+  tour,
 }: {
   title?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
   id?: string;
+  /** Anchor for the guided demo tour (`data-tour`). */
+  tour?: string;
 }) {
   const auto = useId();
   const headingId = `${id ?? auto}-title`;
@@ -267,6 +270,7 @@ export function Section({
       className={className ? `card ${className}` : 'card'}
       aria-labelledby={title ? headingId : undefined}
       id={id}
+      data-tour={tour}
     >
       {title || actions ? (
         <div className="card-head">
