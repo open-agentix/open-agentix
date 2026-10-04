@@ -10,3 +10,6 @@ export * from './harness.js';
 export * from './harness-runner.js';
 export * from './harness/opencode.js';
 export { HandoverFailure, StepFlow, buildHandoverPrompt, outputValue } from './handover-flow.js';
+export * from './isolating.js';
+export * from './kube-client.js';
+export * from './kubernetes-job.js';

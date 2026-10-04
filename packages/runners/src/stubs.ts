@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { PreparedRun, RunResult, Runner, RunnerContext } from './types.js';
 
 /**
- * Typed, documented stubs for remote runners. Their configuration schemas are final enough to be
+ * Typed, documented stubs for remote runners (the Kubernetes Job runner is real, see kubernetes-job.ts). Their configuration schemas are final enough to be
  * used by the Helm chart and UI; execution lands in v0.2 (container, Kubernetes Job) and v0.3
  * (AWS Lambda, GitHub Actions, GitLab CI). See docs/adr/0005-runners-and-external-harnesses.md.
  */
@@ -35,6 +35,30 @@ export const KubernetesJobRunnerConfigSchema = z.strictObject({
     .strictObject({ cpu: z.string().default('500m'), memory: z.string().default('512Mi') })
     .default({ cpu: '500m', memory: '512Mi' }),
   nodeSelector: z.record(z.string(), z.string()).default({}),
+  imagePullSecrets: z.array(z.string()).default([]),
+  /**
+   * Mount the ServiceAccount API token into the step Pod. Off by default: a step never needs the
+   * Kubernetes API. IRSA on EKS does not need it either (its projected web-identity token is
+   * injected by the EKS pod identity webhook independently of this flag).
+   */
+  automountServiceAccountToken: z.boolean().default(false),
+  /** Toolbox names (`toolbox-<name>` images) a step may use; empty = any toolbox under `registry`. */
+  toolboxAllowlist: z.array(z.string()).default([]),
+  /** Non-toolbox images (repository basename, e.g. `openagentix-worker`) allowed as run node. */
+  runNodeImages: z.array(z.string()).default([]),
+  /** UID/GID the step container runs as; must match the image's non-root user. */
+  runAsUser: z.number().int().min(1).default(65532),
+  /** Allow DNS to kube-dns in `kube-system` (needed to resolve the control node). */
+  dnsEgress: z.boolean().default(true),
+  /** Where the control node lives; the only cluster-internal destination a step may reach. */
+  controlPlane: z
+    .strictObject({
+      podSelector: z.record(z.string(), z.string()).optional(),
+      namespaceSelector: z.record(z.string(), z.string()).optional(),
+      cidrs: z.array(z.string()).default([]),
+      ports: z.array(z.number().int().min(1).max(65535)).default([443]),
+    })
+    .default({ cidrs: [], ports: [443] }),
 });
 
 export const AwsLambdaRunnerConfigSchema = z.strictObject({
@@ -77,15 +101,17 @@ export const RUNNER_CONFIG_SCHEMAS = {
 
 export type RemoteRunnerKind = keyof typeof RUNNER_CONFIG_SCHEMAS;
 
-const MILESTONE: Record<RemoteRunnerKind, string> = {
+const MILESTONE: Record<StubRunnerKind, string> = {
   container: 'v0.2',
-  'kubernetes-job': 'v0.2',
   'aws-lambda': 'v0.3',
   'github-actions': 'v0.3',
   'gitlab-ci': 'v0.3',
 };
 
-export class StubRunner<K extends RemoteRunnerKind> implements Runner {
+/** Remote runners that are still stubs (`kubernetes-job` is implemented in kubernetes-job.ts). */
+export type StubRunnerKind = Exclude<RemoteRunnerKind, 'kubernetes-job'>;
+
+export class StubRunner<K extends StubRunnerKind> implements Runner {
   readonly config: z.infer<(typeof RUNNER_CONFIG_SCHEMAS)[K]>;
 
   constructor(

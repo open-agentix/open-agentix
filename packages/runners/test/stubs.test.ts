@@ -1,9 +1,9 @@
 import { NotImplementedError } from '@openagentix/core';
 import { describe, expect, it } from 'vitest';
-import { RUNNER_CONFIG_SCHEMAS, StubRunner } from '../src/index.js';
+import { RUNNER_CONFIG_SCHEMAS, StubRunner, type StubRunnerKind } from '../src/index.js';
 
 describe('stub runners', () => {
-  it.each(Object.keys(RUNNER_CONFIG_SCHEMAS))(
+  it.each(Object.keys(RUNNER_CONFIG_SCHEMAS).filter((k) => k !== 'kubernetes-job'))(
     '%s validates config and throws NotImplemented',
     async (kind) => {
       const configs: Record<string, unknown> = {
@@ -19,7 +19,7 @@ describe('stub runners', () => {
           callbackBaseUrl: 'https://oax.example',
         },
       };
-      const r = new StubRunner(kind as keyof typeof RUNNER_CONFIG_SCHEMAS, configs[kind] ?? {});
+      const r = new StubRunner(kind as StubRunnerKind, configs[kind] ?? {});
       expect(r.kind).toBe(kind);
       await expect(r.execute({} as never, {} as never)).rejects.toThrow(NotImplementedError);
       await expect(r.execute({} as never, {} as never)).rejects.toThrow(/planned for v0\.[23]/);
@@ -27,6 +27,8 @@ describe('stub runners', () => {
   );
   it('rejects invalid config', () => {
     expect(() => new StubRunner('github-actions', { repository: 'nope' })).toThrow();
-    expect(new StubRunner('kubernetes-job').config.serviceAccountName).toBe('openagentix-worker');
+    expect(RUNNER_CONFIG_SCHEMAS['kubernetes-job'].parse({}).serviceAccountName).toBe(
+      'openagentix-worker',
+    );
   });
 });
