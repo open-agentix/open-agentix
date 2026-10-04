@@ -183,4 +183,49 @@ describe('price proposals', () => {
     expect(listProposals(c, 'nope')).toEqual([]);
     expect(listProposals(c, 'openrouter', 3)).toHaveLength(3);
   });
+
+  it('carries optional cache prices into the price table and drops them on override', () => {
+    const c = {
+      source: 't',
+      snapshotDate: '2026-01-01',
+      providers: {
+        anthropic: {
+          name: 'A',
+          models: {
+            m1: {
+              name: 'M1',
+              limit: {},
+              cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+            },
+            m2: {
+              name: 'M2',
+              limit: {},
+              cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+            },
+          },
+        },
+      },
+    };
+    expect(catalogPriceTable(c).find((p) => p.model === 'm1')).toMatchObject({
+      cacheReadPerMTok: 0.3,
+      cacheWritePerMTok: 3.75,
+    });
+    const over = catalogModels(c, [
+      { provider: 'anthropic', model: 'm1', inputPerMTok: 9, outputPerMTok: 9, perToolCallUsd: 0 },
+      {
+        provider: 'anthropic',
+        model: 'm2',
+        inputPerMTok: 2,
+        outputPerMTok: 2,
+        cacheReadPerMTok: 0.5,
+        cacheWritePerMTok: 2.5,
+        perToolCallUsd: 0,
+      },
+    ]);
+    expect(over.find((m) => m.id === 'm1')).not.toHaveProperty('cacheReadPerMTok');
+    expect(over.find((m) => m.id === 'm2')).toMatchObject({
+      cacheReadPerMTok: 0.5,
+      cacheWritePerMTok: 2.5,
+    });
+  });
 });

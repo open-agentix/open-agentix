@@ -12,6 +12,10 @@ export const PriceEntrySchema = z.strictObject({
   model: z.string().min(1),
   inputPerMTok: z.number().nonnegative(),
   outputPerMTok: z.number().nonnegative(),
+  /** Prompt cache read price; without it cache reads are priced as input. */
+  cacheReadPerMTok: z.number().nonnegative().optional(),
+  /** Prompt cache write price; without it cache writes are priced at 1.25 x input. */
+  cacheWritePerMTok: z.number().nonnegative().optional(),
   /** Optional flat price per tool call (e.g. paid APIs behind MCP). */
   perToolCallUsd: z.number().nonnegative().default(0),
 });
@@ -27,11 +31,20 @@ export const DEFAULT_PRICE_TABLE: PriceEntry[] = [
 export interface Usage {
   inputTokens: number;
   outputTokens: number;
+  /** Tokens read from the provider's prompt cache (not included in `inputTokens`). */
+  cacheReadTokens?: number;
+  /** Tokens written to the provider's prompt cache (not included in `inputTokens`). */
+  cacheWriteTokens?: number;
 }
+
+/** Cache write tokens cost this multiple of the input price when no explicit price exists. */
+export const CACHE_WRITE_FALLBACK_FACTOR = 1.25;
 
 export interface CostBreakdown {
   inputMicros: number;
   outputMicros: number;
+  /** Cache read and write cost; only present when the usage carries cache tokens. */
+  cacheMicros?: number;
   totalMicros: number;
   /** False when no price entry matched (cost counted as 0 and flagged). */
   priced: boolean;
@@ -70,7 +83,22 @@ export class CostModel {
     if (!p) return { inputMicros: 0, outputMicros: 0, totalMicros: 0, priced: false };
     const inputMicros = Math.round(usage.inputTokens * p.inputPerMTok);
     const outputMicros = Math.round(usage.outputTokens * p.outputPerMTok);
-    return { inputMicros, outputMicros, totalMicros: inputMicros + outputMicros, priced: true };
+    const cacheRead = Math.max(0, usage.cacheReadTokens ?? 0);
+    const cacheWrite = Math.max(0, usage.cacheWriteTokens ?? 0);
+    if (cacheRead === 0 && cacheWrite === 0)
+      return { inputMicros, outputMicros, totalMicros: inputMicros + outputMicros, priced: true };
+    const cacheMicros =
+      Math.round(cacheRead * (p.cacheReadPerMTok ?? p.inputPerMTok)) +
+      Math.round(
+        cacheWrite * (p.cacheWritePerMTok ?? p.inputPerMTok * CACHE_WRITE_FALLBACK_FACTOR),
+      );
+    return {
+      inputMicros,
+      outputMicros,
+      cacheMicros,
+      totalMicros: inputMicros + outputMicros + cacheMicros,
+      priced: true,
+    };
   }
 
   toolCall(provider: string, model: string): number {
