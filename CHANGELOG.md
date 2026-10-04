@@ -83,6 +83,10 @@ All notable changes to this project are documented here. The format follows
   `0003` makes names unique per tenant, adds `users.tenant_id`, `users.platform_admin` and
   `policies.scope`, and marks existing `admin` users as platform operators.
 
+### Fixed
+
+- **Database password override**: `OAX_DATABASE_PASSWORD` / `PGPASSWORD` were ignored with pg 8.23 when the connection string contained no password (SCRAM error "client password must be a string"); the password is now injected into the connection string (URL-encoded).
+
 ## [0.1.0] - 2026-10-04
 
 First release of the openagentix platform (control node, worker, packages).
