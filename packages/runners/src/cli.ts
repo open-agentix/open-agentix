@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { PolicyBundleSchema, PriceTableSchema, validateAgentSource } from '@openagentix/core';
 import { parseProviderConfigs } from '@openagentix/providers';
+import { PLAN_USAGE, runPlanCommand } from './cli-plan.js';
 import { createHarness } from './harness.js';
 import { runLocal } from './local.js';
 import type { StepInput } from './types.js';
@@ -22,6 +23,7 @@ const USAGE = `oax ${CLI_VERSION} - run openagentix agents locally
 Usage:
   oax run <agents.md> --event <event.json> [options]
   oax validate <agents.md>
+  oax plan check|generate <plan.yaml> (see "oax plan --help")
   oax --version
 
 Options for "run":
@@ -75,9 +77,13 @@ function formatStep(s: StepInput): string {
 
 export async function runCli(argv: string[], io: CliIo): Promise<number> {
   const { positional, flags } = parseArgs(argv);
-  const [cmd, file] = positional;
+  const [cmd, file, file2] = positional;
   if (flags.version) {
     io.out(CLI_VERSION);
+    return 0;
+  }
+  if (cmd === 'plan' && flags.help) {
+    io.out(USAGE + PLAN_USAGE);
     return 0;
   }
   if (!cmd || flags.help) {
@@ -93,6 +99,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       io.out(r.valid ? `valid: ${r.definition?.name}@${r.definition?.version}` : 'invalid');
       return r.valid ? 0 : 1;
     }
+    if (cmd === 'plan') return await runPlanCommand(file, file2, flags, io);
     if (cmd !== 'run') {
       io.err(`unknown command "${cmd}"`);
       io.out(USAGE);

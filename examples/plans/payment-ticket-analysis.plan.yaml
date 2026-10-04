@@ -1,0 +1,42 @@
+# Agent Plan: a reviewable blueprint, not a runnable agent. Check it with
+#   oax plan check examples/plans/payment-ticket-analysis.plan.yaml --connections examples/plans/connections.json
+# and turn it into a draft agents.md with "oax plan generate". See docs/agent-check.md.
+apiVersion: openagentix.io/v1alpha1
+kind: AgentPlan
+name: payment-ticket-analysis
+version: 0.1.0
+description: >-
+  Read a new payment ticket and the customer record, decide how urgent it is and, for urgent
+  tickets only, add a comment to the ticket after a human approved it.
+schemas:
+  Ticket:
+    type: object
+    required: [id]
+    properties:
+      id: { type: string }
+  Finding:
+    type: object
+    required: [severity, summary]
+    properties:
+      severity: { enum: [low, high] }
+      summary: { type: string, maxLength: 2000 }
+steps:
+  - id: research
+    purpose: Read the ticket and the customer record. Read only, no side effects.
+    capabilities: [jira:read, crm/get_customer]
+    access: read-only
+    input: { from: [event], schema: Ticket }
+    output: { schema: Finding }
+  - id: analysis
+    purpose: Rate the urgency from the research result. Needs no tools.
+    capabilities: [model]
+    access: read-only
+    input: { from: [research] }
+    output: { schema: Finding }
+  - id: action
+    purpose: Comment on the ticket. Only for high severity, and only after approval.
+    capabilities: [jira:write]
+    access: write
+    approval: required
+    input: { from: [analysis] }
+    when: 'steps.analysis.output.severity == "high"'

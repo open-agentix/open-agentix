@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { parseWhen, whenStepRefs } from '../agents/when.js';
 import {
   parseCapability,
@@ -276,3 +277,14 @@ export function lintPlan(plan: AgentPlan, offered?: readonly OfferedConnection[]
     summary: summarize(findings),
   };
 }
+
+/** Shape of an offered-connections file (`oax plan --connections`): names and access classes only. */
+export const OfferedConnectionsSchema = z
+  .array(
+    z.strictObject({
+      name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
+      tools: z.record(z.string().max(200), z.enum(['read', 'write'])).optional(),
+      profiles: z.record(z.string().max(63), z.array(z.string().max(200))).optional(),
+    }),
+  )
+  .max(200);
