@@ -573,7 +573,7 @@ describe('audit API', () => {
       (await n.req({ method: 'GET', url: '/v1/audit/checkpoints' })).json().items.length,
     ).toBeGreaterThan(1);
     let count = 0;
-    for await (const _e of n.services.audit.export({}, 3)) count++;
+    for await (const _e of n.services.audit.export({ tenantId: 'all' }, 3)) count++;
     expect(count).toBeGreaterThan(20);
   });
 

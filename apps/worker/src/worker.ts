@@ -61,10 +61,19 @@ export class Worker {
     this.active.set(runId, abort);
     const token = this.services.control.issueToken(runId, this.id);
     const control = this.services.control.forToken(token);
-    const tools = new ToolGateway(await this.services.catalog.mcpConfigs(), {
-      secrets: this.ctx.secrets,
-      ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
-    });
+    // Tool servers resolve per run: only connections of the run's tenant (and platform ones) exist.
+    const run = await this.services.runs.get(runId);
+    const tools = new ToolGateway(
+      await this.services.catalog.mcpConfigs({
+        tenantId: run.tenantId,
+        teamId: run.teamId,
+        agentId: run.agentId,
+      }),
+      {
+        secrets: this.ctx.secrets,
+        ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
+      },
+    );
     try {
       return await withSpan('oax.run', { 'oax.run_id': runId, 'oax.worker': this.id }, async () => {
         const prepared = await this.services.control.prepare(runId);

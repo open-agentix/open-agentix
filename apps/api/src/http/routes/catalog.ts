@@ -32,8 +32,8 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: z.object({ items: z.array(ConnectionSchema) }) },
       },
     },
-    async () => ({
-      items: (await catalog.listConnections()).map(connectionDto),
+    async (req) => ({
+      items: (await catalog.listConnections(principalOf(req))).map(connectionDto),
     }),
   );
 
@@ -52,7 +52,7 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
     async (req, reply) =>
       reply
         .status(201)
-        .send(connectionDto(await catalog.createConnection(principalOf(req).userId, req.body))),
+        .send(connectionDto(await catalog.createConnection(principalOf(req), req.body))),
   );
 
   app.get(
@@ -67,7 +67,7 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: ConnectionSchema },
       },
     },
-    async (req) => connectionDto(await catalog.getConnection(req.params.id)),
+    async (req) => connectionDto(await catalog.getConnection(principalOf(req), req.params.id)),
   );
 
   app.put(
@@ -85,7 +85,7 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req) =>
       connectionDto(
-        await catalog.updateConnection(principalOf(req).userId, req.params.id, req.body.config),
+        await catalog.updateConnection(principalOf(req), req.params.id, req.body.config),
       ),
   );
 
@@ -101,7 +101,7 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) => {
-      await catalog.deleteConnection(principalOf(req).userId, req.params.id);
+      await catalog.deleteConnection(principalOf(req), req.params.id);
       return reply.status(204).send();
     },
   );
@@ -117,8 +117,8 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: z.object({ items: z.array(PolicySchema) }) },
       },
     },
-    async () => ({
-      items: (await catalog.listPolicies()).map(policyDto),
+    async (req) => ({
+      items: (await catalog.listPolicies(principalOf(req))).map(policyDto),
     }),
   );
 
@@ -135,9 +135,7 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) =>
-      reply
-        .status(201)
-        .send(policyDto(await catalog.createPolicy(principalOf(req).userId, req.body))),
+      reply.status(201).send(policyDto(await catalog.createPolicy(principalOf(req), req.body))),
   );
 
   app.get(
@@ -152,7 +150,7 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: PolicySchema },
       },
     },
-    async (req) => policyDto(await catalog.getPolicy(req.params.id)),
+    async (req) => policyDto(await catalog.getPolicy(principalOf(req), req.params.id)),
   );
 
   app.put(
@@ -168,8 +166,7 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: PolicySchema },
       },
     },
-    async (req) =>
-      policyDto(await catalog.updatePolicy(principalOf(req).userId, req.params.id, req.body)),
+    async (req) => policyDto(await catalog.updatePolicy(principalOf(req), req.params.id, req.body)),
   );
 
   const GuidelineSchema = z.object({
@@ -202,7 +199,9 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: z.object({ items: z.array(GuidelineSchema) }) },
       },
     },
-    async () => ({ items: (await services.guidelines.list()).map(guidelineDto) }),
+    async (req) => ({
+      items: (await services.guidelines.list(principalOf(req).tenantId)).map(guidelineDto),
+    }),
   );
 
   app.post(
@@ -227,7 +226,7 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
     async (req, reply) =>
       reply
         .status(201)
-        .send(guidelineDto(await services.guidelines.create(principalOf(req).userId, req.body))),
+        .send(guidelineDto(await services.guidelines.create(principalOf(req), req.body))),
   );
 
   app.post(
@@ -258,13 +257,13 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      const agent = await services.agents.get(req.body.agentId);
+      const agent = await services.agents.get(req.body.agentId, principalOf(req));
       await services.agents.assertAccess(principalOf(req), agent, 'agents:read');
       const def = agent.latestVersionId
         ? (await services.agents.definitionOf(agent.latestVersionId)).definition
         : services.agents.validate(agent.draftSource).definition;
       const r = await services.guidelines.review(
-        principalOf(req).userId,
+        principalOf(req),
         def ?? { name: agent.name, guidelines: [] },
         req.body.change,
       );
@@ -285,7 +284,12 @@ export function registerCatalogRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      const d = await catalog.evaluate(req.body.source, req.body.agentId, req.body.call);
+      const d = await catalog.evaluate(
+        principalOf(req).tenantId,
+        req.body.source,
+        req.body.agentId,
+        req.body.call,
+      );
       return { effect: d.effect, reasons: d.reasons };
     },
   );

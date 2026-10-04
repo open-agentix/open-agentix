@@ -34,6 +34,7 @@ import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSystemRoutes } from './routes/system.js';
+import { registerTenantRoutes } from './routes/tenants.js';
 import { registerUserRoutes } from './routes/users.js';
 import { registerWorkerRoutes } from './routes/worker.js';
 
@@ -162,6 +163,13 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     transformObject: (doc) => decorateOpenApi(jsonSchemaTransformObject(doc)),
   });
 
+  /** Platform operators may act inside another tenant with `X-OAX-Tenant`; everybody else gets 404. */
+  const actingIn = async (req: FastifyRequest, principal: Principal): Promise<Principal> => {
+    const tenant = req.headers['x-oax-tenant'];
+    if (typeof tenant !== 'string' || tenant === '') return principal;
+    return deps.services.identity.actingIn(principal, tenant);
+  };
+
   // Authentication + route-level RBAC. Resource-level (team) checks happen in the services.
   app.addHook('onRequest', async (req) => {
     const access = req.routeOptions.config?.access;
@@ -177,6 +185,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
         ctx.now().getTime(),
       );
       req.principal = await deps.services.identity.principalForUser(claims.userId, ['runs:read']);
+      req.principal = await actingIn(req, req.principal);
       if (
         access !== 'authenticated' &&
         access !== 'run-token' &&
@@ -195,7 +204,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       return;
     }
     if (!token) throw new HttpError(401, 'unauthenticated', 'authentication required');
-    req.principal = await deps.services.identity.authenticate(token);
+    req.principal = await actingIn(req, await deps.services.identity.authenticate(token));
     if (access !== 'authenticated' && !hasPermission(req.principal, access))
       throw forbidden(`missing permission ${access}`);
   });
@@ -245,6 +254,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   registerCatalogRoutes(typed, deps);
   registerAuditRoutes(typed, deps);
   registerUserRoutes(typed, deps);
+  registerTenantRoutes(typed, deps);
   registerWorkerRoutes(typed, deps);
   await app.ready();
   return app;

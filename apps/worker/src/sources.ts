@@ -17,7 +17,7 @@ export class KafkaSources {
   ) {}
 
   async start(): Promise<number> {
-    const sources = (await this.services.ingest.listSources()).filter(
+    const sources = (await this.services.ingest.listAllSources()).filter(
       (s) => s.kind === 'kafka' && s.enabled,
     );
     for (const s of sources) {

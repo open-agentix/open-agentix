@@ -1,8 +1,9 @@
 import { visibleAgents, visibleTeams, type Principal } from '@openagentix/core';
-import { and, desc, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import { agents, costLedger, teams } from '../db/schema.js';
+import { forbidden } from '../errors.js';
 
 export const COST_GROUPS = [
   'run',
@@ -112,13 +113,24 @@ export class CostsService {
     return new Map();
   }
 
+  /** Platform operators may aggregate across tenants; everybody else stays inside their own. */
+  private tenantFilter(principal: Principal, allTenants: boolean): SQL | undefined {
+    if (allTenants) {
+      if (!principal.platformAdmin) throw forbidden('allTenants needs platform operator access');
+      return undefined;
+    }
+    return eq(costLedger.tenantId, principal.tenantId);
+  }
+
   /** Cost lines for export (CSV/JSON), oldest first, same scoping as the summary. */
   async lines(
     principal: Principal,
     from?: string,
     to?: string,
     limit = 100_000,
+    allTenants = false,
   ): Promise<CostLine[]> {
+    const tenantFilter = this.tenantFilter(principal, allTenants);
     const scope = visibleTeams(principal, 'costs:read');
     const scopedAgents = visibleAgents(principal, 'costs:read');
     if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return [];
@@ -144,6 +156,7 @@ export class CostsService {
       .leftJoin(agents, sql`${agents.id} = ${costLedger.agentId}`)
       .where(
         and(
+          tenantFilter,
           from ? gte(costLedger.month, from) : undefined,
           to ? lte(costLedger.month, to) : undefined,
           scope === 'all'
@@ -170,11 +183,13 @@ export class CostsService {
     from?: string,
     to?: string,
     limit = 100,
+    allTenants = false,
   ): Promise<CostRow[]> {
+    const tenantFilter = this.tenantFilter(principal, allTenants);
     const scope = visibleTeams(principal, 'costs:read');
     const scopedAgents = visibleAgents(principal, 'costs:read');
     if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return [];
-    const key = `costs:${groupBy}:${from ?? ''}:${to ?? ''}:${limit}:${scope === 'all' ? 'all' : [...scope, ...scopedAgents.map((a) => `agent:${a}`)].sort().join(',')}`;
+    const key = `costs:${allTenants ? 'all' : principal.tenantId}:${groupBy}:${from ?? ''}:${to ?? ''}:${limit}:${scope === 'all' ? 'all' : [...scope, ...scopedAgents.map((a) => `agent:${a}`)].sort().join(',')}`;
     return cached(this.ctx.cache, key, 30_000, async () => {
       const col = COLUMN[groupBy];
       const rows = await this.ctx.db
@@ -187,6 +202,7 @@ export class CostsService {
         .from(costLedger)
         .where(
           and(
+            tenantFilter,
             from ? gte(costLedger.month, from) : undefined,
             to ? lte(costLedger.month, to) : undefined,
             scope === 'all'

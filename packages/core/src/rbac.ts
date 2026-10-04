@@ -96,10 +96,17 @@ export interface RoleBinding {
   agentId?: string | null;
 }
 
-export interface Principal {
-  kind: 'user' | 'token';
+/** Who acts inside which tenant: the minimum every tenant-scoped service call needs. */
+export interface TenantActor {
   userId: string;
+  tenantId: string;
+}
+
+export interface Principal extends TenantActor {
+  kind: 'user' | 'token';
   displayName: string;
+  /** Platform operators manage tenants and may switch the tenant they act in. */
+  platformAdmin: boolean;
   bindings: RoleBinding[];
   /** API tokens may be restricted to a subset of permissions; `undefined` = no restriction. */
   scopes?: readonly Permission[] | undefined;
