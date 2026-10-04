@@ -20,7 +20,6 @@ describe('demo seed', () => {
       'cve-triage',
       'feature-builder',
       'hardening-review',
-      'log-summary',
       'release-watch',
       'ticket-updater',
     ]);
@@ -28,7 +27,7 @@ describe('demo seed', () => {
       email: string;
       globalRoles: string[];
     }[];
-    expect(users.filter((u) => u.email.endsWith('@example.org'))).toHaveLength(8);
+    expect(users.filter((u) => u.email.endsWith('@example.org'))).toHaveLength(7);
     const stats = (await n.req({ method: 'GET', url: '/v1/stats/runs' })).json();
     expect(stats.byStatus.succeeded).toBeGreaterThanOrEqual(8);
     expect(stats.byStatus.awaiting_approval).toBe(1);
@@ -37,10 +36,16 @@ describe('demo seed', () => {
       (await n.req({ method: 'GET', url: '/v1/approvals?status=approved' })).json().items,
     ).toHaveLength(1);
     const tenantsWithCosts = (
-      await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=tenant' })
+      await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=tenant&allTenants=true' })
     ).json().items;
     expect(tenantsWithCosts).toHaveLength(2);
-    const useCases = (await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=use_case' }))
+    const acme = (
+      await n.req({ method: 'GET', url: '/v1/agents', headers: { 'x-oax-tenant': 'acme-labs' } })
+    ).json().items;
+    expect(acme.map((a: { name: string }) => a.name)).toEqual(['log-summary']);
+    const useCases = (
+      await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=use_case&allTenants=true' })
+    )
       .json()
       .items.map((i: { key: string }) => i.key);
     expect(useCases).toEqual(
@@ -70,6 +75,10 @@ describe('demo seed', () => {
         .json()
         .items.map((a: { name: string }) => a.name),
     ).toEqual(['log-summary']);
+    // The second tenant is invisible to the first one's users.
+    expect(
+      (await n.req({ method: 'GET', url: '/v1/agents', token: contractor })).json().items,
+    ).toHaveLength(1);
     const write = await n.req({
       method: 'POST',
       url: '/v1/teams',
