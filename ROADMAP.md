@@ -89,6 +89,18 @@ Wave 5:
 - [ ] **MCP catalog governance: review states, per-server egress and container MCP servers** (W5-5, #47) – *As a platform admin, I want a catalog with review states that decides which MCP servers a tenant may register and use, with network rules per server, and MCP servers that run as containers.*
 - [ ] **OPA (Rego) adapter for the policy gate** (W5-6, #48) – *As a compliance team, I want to reuse Rego policies in the gate, which can only make decisions stricter.*
 
+<!-- roadmap-v0.3-9-12:start -->
+Waves 9-12 (added 2026-10-04, parallel tracks):
+
+- [ ] **No-code agent builder with a round-trip code view and live Agent Check lint** (W9-1, design: [ADR 0010](docs/adr/0010-agent-authoring-builder-and-git-sync.md)) – *As an integrator or team lead, I want to build and change agents in a form (metadata, triggers, budget, steps, tools by profile, handovers, conditions, runtime, classification) and switch to the code view at any time without losing comments or unknown fields so that I do not need to write YAML and engineers can still work in code.*
+- [ ] **Git-synced agent repositories (GitOps): bindings, sync, review and publish, drift** (W9-2, design: [ADR 0010](docs/adr/0010-agent-authoring-builder-and-git-sync.md)) – *As a platform team, I want to connect a Git repository path as the source of a team's agents, with validation and Agent Check in the sync and publishing after review, so that agents are reviewed in pull requests, protected by branch rules and rolled back with a revert.*
+- [ ] **Central outbound network configuration: per-destination proxies, trust store, mTLS, safe connectivity tests** (W10-1, design: [ADR 0011](docs/adr/0011-outbound-network-proxies-and-private-endpoints.md)) – *As a platform operator in a corporate network, I want to define per destination which proxy (with credentials from the secret store), which CA bundle and which client certificate is used, and test connectivity safely, so that every outbound call of openagentix follows our network rules without code changes.*
+- [ ] **Private model endpoints: Bedrock PrivateLink and Azure OpenAI private endpoints** (W10-2, design: [ADR 0011](docs/adr/0011-outbound-network-proxies-and-private-endpoints.md)) – *As a cloud platform owner, I want model calls to reach Bedrock and Azure OpenAI over private connectivity (VPC interface endpoints, private endpoints) with correct signing and identity-based auth so that prompts never cross the public internet.*
+- [ ] **Real read-only demo agent that answers questions about the project from its public repository** (W11-1, design: [demo-repo-agent.md](docs/demo-repo-agent.md)) – *As a visitor of the demo, I want to ask a question about openagentix and get an answer with citations from the public repository so that I see a real agent work under the policy gate, read-only profile, budget and audit chain.*
+- [ ] **Connections: MCP servers and model providers as separate areas, typed instances, central grants** (W12-1, design: [ADR 0012](docs/adr/0012-connections-instances-scopes-and-data-protection.md)) – *As a tenant admin, I want MCP servers and model providers in their own console areas, several instances of the same server type with their own credentials, profiles, policies and budgets, and central connections only when the operator grants them, so that each use case gets exactly the access it needs and nothing is shared by accident.*
+- [ ] **Data protection: data flow rules, retention, PII hooks, processing record, export and erasure, operator separation** (W12-2, design: [ADR 0012](docs/adr/0012-connections-instances-scopes-and-data-protection.md)) – *As a data protection officer, I want classification, region and personal-data rules per connection, retention per tenant, a processing record of every external service, export and erasure, and operators kept away from tenant content, so that the platform supports GDPR obligations by design.*
+<!-- roadmap-v0.3-9-12:end -->
+
 ## v0.4 – Agent lifecycle: Check, Plan, Build, Evaluate, Approve (target: Q3 2027)
 
 Wave 6:
@@ -98,6 +110,12 @@ Wave 6:
 - [ ] **Version approval bound to digest, model, eval set and policy, with re-evaluation on material change** (W6-3, #51) – *As a risk officer, I want an agent version approved for production only together with its model configuration, evaluation set and policy, and re-evaluated when any of them changes.*
 - [ ] **Dark software factory pipeline template, automatic hardening review of PRs and the LLM second opinion** (W6-4, #6) – *As a founder, I want a spec -> code -> tests -> PR template for prototypes with the fixed notice, and the hardening agent reviewing every development agent's PR automatically (optionally with a model that can only add findings).*
 - [ ] **Console for the lifecycle: plans, evaluations, approvals of versions, guidelines and tenant admin** (W6-5, #52) – *As a platform admin, I want Agent Plans, evaluations, version approvals, guidelines and tenants in the console so that the whole path from process to production is visible in one place.*
+
+<!-- roadmap-v0.4-9-12:start -->
+Wave 9:
+
+- [ ] **PR-back: propose console edits of Git-managed agents as pull requests** (W9-3, design: [ADR 0010](docs/adr/0010-agent-authoring-builder-and-git-sync.md)) – *As an agent engineer, I want to change a Git-managed agent in the console and get a pull request instead of a conflict so that Git stays the source of truth without forcing everyone into an editor.*
+<!-- roadmap-v0.4-9-12:end -->
 
 ## v1.0 – Enterprise ready (target: H2 2027)
 
@@ -116,6 +134,12 @@ Wave 8:
 - [ ] **Air-gapped offline bundle: images, charts, SBOMs, signatures** (W8-2, #60) – *As a defence/critical-infrastructure operator, I want an offline bundle and no outbound calls at all.*
 - [ ] **Private model hosting managed by the Helm chart (vLLM/Ollama with GPU scheduling)** (W8-3, #61) – *As a regulated enterprise, I want vLLM/Ollama deployments managed by the Helm chart with GPU scheduling so that restricted data never leaves our cluster.*
 - [ ] **Public demo at demo.openagentix.si on the release images** (W8-4, #62) – *As a visitor, I want a live demo that I can trigger by curl or e-mail and whose audit chain I can verify.*
+
+<!-- roadmap-v1.0-9-12:start -->
+Wave 10:
+
+- [ ] **Google Vertex AI provider with Private Service Connect** (W10-3, design: [ADR 0011](docs/adr/0011-outbound-network-proxies-and-private-endpoints.md)) – *As a GCP customer, I want Vertex AI models through a Private Service Connect endpoint with workload identity federation so that model traffic stays private like on AWS and Azure.*
+<!-- roadmap-v1.0-9-12:end -->
 
 Chart work (OCI publishing, signing, Kubernetes Job runner wiring, KEDA, multi-tenancy,
 dashboards, private model hosting, offline bundle) is tracked in
