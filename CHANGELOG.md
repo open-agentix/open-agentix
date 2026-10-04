@@ -8,6 +8,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Air-gapped mode** (`OAX_AIRGAPPED`, `OAX_AIRGAPPED_ALLOW`): fail-closed start-up self-check,
+  process-wide egress policy and network guard (TCP, DNS, UDP), vendored model catalog only,
+  `airgapped` state on `/readyz`, tests proving no outbound traffic, and `docs/airgapped.md`.
 - **Tenant isolation**: every request-facing query is filtered by the caller's tenant; other
   tenants' resources answer 404 (denied agent/run access is audited), names are unique per tenant,
   workers resolve tool servers per run and tenant, cross-tenant references are refused. Tenants API

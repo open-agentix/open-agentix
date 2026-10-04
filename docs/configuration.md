@@ -218,6 +218,18 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | – | Enables OpenTelemetry traces via OTLP/HTTP (`<endpoint>/v1/traces`). |
 | `OTEL_SERVICE_NAME` | `openagentix-api` / `openagentix-worker` | Service name in traces. |
 
+## Air-gapped mode
+
+`OAX_AIRGAPPED=true` enables a fail-closed egress policy: start-up is refused when an enabled
+provider, MCP connection, OIDC, LDAP, OTel, outbound-webhook or proxy endpoint is not on
+`OAX_AIRGAPPED_ALLOW` (hosts, `.suffixes`, IPs, CIDRs, optional `:port`); the model catalog stays
+on the vendored snapshot. `/readyz` reports `airgapped`. Details: [`airgapped.md`](airgapped.md).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_AIRGAPPED` | `false` | Fail-closed air-gapped mode. |
+| `OAX_AIRGAPPED_ALLOW` | – | Internal hosts/suffixes/CIDRs that may be contacted (loopback, database and cache are implicit). |
+
 ## What the UI needs
 
 - Base URL of the API (`OAX_PUBLIC_URL`), the OpenAPI document at `/openapi.json` or
