@@ -94,10 +94,20 @@ export function estimateInputUpperBound(
 
 /** Fallback output estimate when the provider reports no usage: `ceil(bytes / 3)`. */
 export function estimateOutputTokens(text: string): number {
-  return Math.ceil(utf8Bytes(text) / 3);
+  return estimateOutputTokensFromBytes(utf8Bytes(text));
+}
+
+/** Same as {@link estimateOutputTokens} for an already counted UTF-8 byte size (streams). */
+export function estimateOutputTokensFromBytes(bytes: number): number {
+  return Math.ceil(bytes / 3);
 }
 
 /** Lower bound against endpoints that under-report: `ceil(bytes / 8)` (honest providers exceed it). */
 export function outputFloor(text: string): number {
-  return Math.ceil(utf8Bytes(text) / 8);
+  return outputFloorFromBytes(utf8Bytes(text));
+}
+
+/** Same as {@link outputFloor} for an already counted UTF-8 byte size (streams). */
+export function outputFloorFromBytes(bytes: number): number {
+  return Math.ceil(bytes / 8);
 }

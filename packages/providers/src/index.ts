@@ -10,4 +10,5 @@ export * from './registry.js';
 export * from './catalog.js';
 export * from './network-guard.js';
 export * from './unavailable.js';
+export * from './stream/index.js';
 export * from './model-wire.js';
