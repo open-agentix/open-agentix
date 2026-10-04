@@ -11,3 +11,5 @@ export {
 export * from './anthropic.js';
 export * from './bedrock.js';
 export * from './openai.js';
+export * from './aggregate.js';
+export * from './factory.js';

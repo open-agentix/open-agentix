@@ -56,6 +56,43 @@ const FINISH: Record<string, StopReason> = {
   content_filter: 'refusal',
 };
 
+/** Chat Completions body of a chat request (pure; shared with the streaming proxy transport). */
+export function toOpenAIBody(
+  req: ChatRequest,
+  maxTokensParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens',
+): Record<string, unknown> {
+  const messages: unknown[] = [];
+  if (req.system) messages.push({ role: 'system', content: req.system });
+  for (const m of req.messages) {
+    if (m.role === 'user') messages.push({ role: 'user', content: m.content });
+    else if (m.role === 'assistant') {
+      messages.push({
+        role: 'assistant',
+        content: m.content || null,
+        ...(m.toolCalls?.length
+          ? {
+              tool_calls: m.toolCalls.map((c) => ({
+                id: c.id,
+                type: 'function',
+                function: { name: c.name, arguments: JSON.stringify(c.args) },
+              })),
+            }
+          : {}),
+      });
+    } else messages.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
+  }
+  const body: Record<string, unknown> = { model: req.model, messages };
+  if (req.tools?.length) {
+    body.tools = req.tools.map((t) => ({
+      type: 'function',
+      function: { name: t.name, description: t.description ?? '', parameters: t.inputSchema },
+    }));
+  }
+  if (req.maxTokens !== undefined) body[maxTokensParam] = req.maxTokens;
+  if (req.temperature !== undefined) body.temperature = req.temperature;
+  return body;
+}
+
 /** Covers OpenAI, Azure OpenAI, vLLM, LM Studio and other `/chat/completions` servers. */
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly kind = 'openai' as const;
@@ -78,36 +115,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   toRequestBody(req: ChatRequest): Record<string, unknown> {
-    const messages: unknown[] = [];
-    if (req.system) messages.push({ role: 'system', content: req.system });
-    for (const m of req.messages) {
-      if (m.role === 'user') messages.push({ role: 'user', content: m.content });
-      else if (m.role === 'assistant') {
-        messages.push({
-          role: 'assistant',
-          content: m.content || null,
-          ...(m.toolCalls?.length
-            ? {
-                tool_calls: m.toolCalls.map((c) => ({
-                  id: c.id,
-                  type: 'function',
-                  function: { name: c.name, arguments: JSON.stringify(c.args) },
-                })),
-              }
-            : {}),
-        });
-      } else messages.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
-    }
-    const body: Record<string, unknown> = { model: req.model, messages };
-    if (req.tools?.length) {
-      body.tools = req.tools.map((t) => ({
-        type: 'function',
-        function: { name: t.name, description: t.description ?? '', parameters: t.inputSchema },
-      }));
-    }
-    if (req.maxTokens !== undefined) body[this.opts.maxTokensParam ?? 'max_tokens'] = req.maxTokens;
-    if (req.temperature !== undefined) body.temperature = req.temperature;
-    return body;
+    return toOpenAIBody(req, this.opts.maxTokensParam);
   }
 
   async complete(req: ChatRequest, opts: CompleteOptions = {}): Promise<ChatResponse> {
