@@ -32,8 +32,10 @@ Options for "run":
   --prices <file>      JSON price table for cost calculation
   --approve <all|none> answer to approval requests (default: none = reject)
   --harness <name>     run through an external harness instead of the built-in loop
-                       (claude-code; opencode, hermes and openclaw are documented stubs)
+                       (claude-code, opencode; hermes and openclaw are documented stubs)
   --harness-token-file <file>  token from "claude setup-token" (default: login of this user)
+                       opencode: model connection from --providers/OAX_PROVIDERS (the agent's
+                       provider: name), binary OAX_OPENCODE_BIN, pin OAX_OPENCODE_SHA256
   --json               print steps and the result as JSON lines
 `;
 
@@ -122,6 +124,13 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
               ...(typeof flags['harness-token-file'] === 'string'
                 ? { oauthTokenFile: flags['harness-token-file'] }
                 : {}),
+              opencode: {
+                providers: parseProviderConfigs(providersJson),
+                ...(io.env.OAX_OPENCODE_BIN ? { command: io.env.OAX_OPENCODE_BIN } : {}),
+                ...(io.env.OAX_OPENCODE_SHA256
+                  ? { expectedSha256: io.env.OAX_OPENCODE_SHA256 }
+                  : {}),
+              },
             }),
           }
         : {}),

@@ -8,3 +8,5 @@ export { runCli, CLI_VERSION, type CliIo } from './cli.js';
 export * from './stubs.js';
 export * from './harness.js';
 export * from './harness-runner.js';
+export * from './harness/opencode.js';
+export { HandoverFailure, StepFlow, buildHandoverPrompt, outputValue } from './handover-flow.js';

@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { reasonsText } from '../src/features/runs/ApprovalCard';
 import { runDurationMs } from '../src/features/runs/RunDetailPage';
-import { policyOutcome } from '../src/features/runs/StepTimeline';
+import { handoverSummary, policyOutcome } from '../src/features/runs/StepTimeline';
 import { mergeSteps } from '../src/features/runs/useRunStream';
 import * as f from './fixtures';
 import { api } from './handlers';
@@ -221,6 +221,89 @@ describe('run detail', () => {
     );
     await renderApp(`/runs/${f.ids.run}`);
     expect(await screen.findByText(/doesn't exist/i)).toBeInTheDocument();
+  });
+});
+
+describe('skipped steps and handover failures', () => {
+  const base = { ...f.steps[2]!, agentId: 'action', input: null, tokensIn: 0, tokensOut: 0 };
+  const skipped = {
+    ...base,
+    seq: 4,
+    kind: 'condition',
+    name: 'when',
+    status: 'skipped',
+    output: { when: 'steps.analysis.output.severity == "high"' },
+  } as (typeof f.steps)[number];
+  const invalid = {
+    ...base,
+    seq: 5,
+    kind: 'handover',
+    name: 'output',
+    status: 'error',
+    output: {
+      direction: 'output',
+      attempt: 1,
+      schemaDigest: 'abc',
+      errors: [
+        { instancePath: '/severity', keyword: 'enum', schemaPath: '#/enum' },
+        { instancePath: '', keyword: 'required', schemaPath: '#/required' },
+      ],
+    },
+  } as (typeof f.steps)[number];
+
+  it('summarises condition and handover steps without values', () => {
+    expect(handoverSummary(skipped)).toEqual({
+      outcome: 'skipped',
+      direction: null,
+      detail: 'steps.analysis.output.severity == "high"',
+      violations: 0,
+    });
+    expect(handoverSummary({ ...skipped, status: 'error', output: { reason: 'no path' } })).toEqual(
+      { outcome: 'conditionError', direction: null, detail: 'no path', violations: 0 },
+    );
+    expect(handoverSummary(invalid)).toMatchObject({
+      outcome: 'invalid',
+      direction: 'output',
+      violations: 2,
+    });
+    expect(
+      handoverSummary({
+        ...invalid,
+        name: 'input',
+        output: { direction: 'input', errors: [{ keyword: 'missing' }] },
+      }),
+    ).toMatchObject({ outcome: 'missing', direction: 'input' });
+    expect(handoverSummary({ ...invalid, name: 'retry', output: null })).toMatchObject({
+      outcome: 'retry',
+      violations: 0,
+    });
+    expect(handoverSummary({ ...skipped, kind: 'output', output: null })).toBeNull();
+    expect(handoverSummary({ ...skipped, output: null })).toMatchObject({
+      outcome: 'skipped',
+      detail: '',
+    });
+  });
+
+  it('lists skipped steps and handover failures in the run timeline', async () => {
+    server.use(
+      http.get(api('/v1/runs/:id/steps'), () =>
+        HttpResponse.json({ items: [...f.steps, skipped, invalid], nextCursor: null }),
+      ),
+    );
+    await renderApp(`/runs/${f.ids.run}`);
+    await heading(/ticket-updater/);
+    expect(
+      await screen.findByText(
+        'Step skipped, condition is false: steps.analysis.output.severity == "high"',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Skipped')).toBeInTheDocument();
+    expect(screen.getByText('Condition')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'The output does not match its schema (2 violations). Values are never logged.',
+      ),
+    ).toBeInTheDocument();
   });
 });
 
