@@ -89,6 +89,24 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
       sourceDto(await ingest.updateSource(principalOf(req).userId, req.params.id, req.body), url),
   );
 
+  app.delete(
+    '/v1/event-sources/:id',
+    {
+      config: { access: 'sources:write' },
+      schema: {
+        tags: ['events'],
+        summary: 'Delete an event source (its events are kept)',
+        security: sec,
+        params: IdParams,
+        response: { 204: z.null() },
+      },
+    },
+    async (req, reply) => {
+      await ingest.deleteSource(principalOf(req).userId, req.params.id);
+      return reply.status(204).send(null);
+    },
+  );
+
   app.get(
     '/v1/events',
     {

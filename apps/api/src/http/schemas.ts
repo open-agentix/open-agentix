@@ -153,7 +153,7 @@ export const DecisionBody = z.object({
 export const SourceSchema = z.object({
   id: Id,
   name: z.string(),
-  kind: z.enum(['webhook', 'mail', 'kafka']),
+  kind: z.enum(['webhook', 'mail', 'kafka', 'cron']),
   scheme: z.enum(['oax-v1', 'github']),
   secretRefs: z.array(z.string()),
   agentId: Id.nullable(),
@@ -164,7 +164,7 @@ export const SourceSchema = z.object({
 });
 export const SourceCreateBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
-  kind: z.enum(['webhook', 'mail', 'kafka']),
+  kind: z.enum(['webhook', 'mail', 'kafka', 'cron']),
   scheme: z.enum(['oax-v1', 'github']).optional(),
   secretRefs: z.array(z.string().min(1)).max(4).optional(),
   agentId: Id.nullable().optional(),
