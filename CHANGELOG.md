@@ -147,6 +147,21 @@ All notable changes to this project are documented here. The format follows
   the cost model (`cacheReadPerMTok`, `cacheWritePerMTok`; fallback input and 1.25 x input). No
   endpoint or behaviour change yet.
 
+- **Model call accounting (W1-3b-2)**: `ModelAccountingService` reserves the worst-case cost of a model
+  call before it is made and settles the measured cost afterwards (ADR 0009 section 4). A reservation
+  is checked against the run and step budgets (cost, tokens, model calls), the monthly tenant, use case
+  and team budgets and the concurrency limits in one transaction under a per-tenant advisory lock, so
+  concurrent calls cannot overshoot a limit. Settlement writes the `model_call` step, the ledger line,
+  run counters, budget alerts and audit entries atomically and is idempotent; a missing or implausible
+  usage report falls back to the estimate and a lower bound (`usage_source` `estimated` / `floor`), an
+  overdue reservation is charged at the reserved amount (`model.reservation_expired`, worker reaper),
+  and a model without a price is refused (`model_unpriced`) whenever a cost limit applies. Cache tokens
+  are priced separately (cache read as input and cache write as 1.25 x input unless the price entry
+  names them). Migration `0010` adds `model_reservations`, the ledger columns `usage_source`,
+  `cache_read_tokens`, `cache_write_tokens`, `reservation_id`, `via` and `run_node_sessions.model_token_jti`;
+  all money is integer micro-USD. **Not yet wired**: the model proxy and the executor call the service
+  with W1-3b-3 and W1-3b-4, so the budgets documented in `docs/budgets.md` still check after a call until then.
+
 ### Changed
 
 - **Breaking (pre-1.0)**: MCP connection secrets of in-process runs are resolved through the tenant
