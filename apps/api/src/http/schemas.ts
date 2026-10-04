@@ -190,8 +190,12 @@ export const EventSchema = z.object({
 });
 export const EventListQuery = PageQuery.extend({ sourceId: Id.optional() });
 
+export const ConnectionScopeSchema = z.enum(['platform', 'tenant', 'team', 'agent']);
 export const ConnectionSchema = z.object({
   id: Id,
+  tenantId: Id,
+  scope: ConnectionScopeSchema,
+  scopeId: Id.nullable(),
   name: z.string(),
   kind: z.literal('mcp'),
   config: z.record(z.string(), z.unknown()),
@@ -201,6 +205,10 @@ export const ConnectionSchema = z.object({
 export const ConnectionCreateBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
   kind: z.literal('mcp').default('mcp'),
+  scope: ConnectionScopeSchema.default('tenant').describe(
+    'who may use it: platform (operators only), tenant, one team or one agent',
+  ),
+  scopeId: Id.nullable().optional().describe('team or agent id for team/agent scope'),
   config: z
     .record(z.string(), z.unknown())
     .describe('MCP server config; secrets only as references (envSecrets/headerSecrets)'),
@@ -209,6 +217,7 @@ export const ConnectionUpdateBody = z.object({ config: z.record(z.string(), z.un
 
 export const PolicySchema = z.object({
   id: Id,
+  scope: z.enum(['platform', 'tenant']),
   name: z.string(),
   description: z.string().nullable(),
   bundle: z.record(z.string(), z.unknown()),
@@ -217,6 +226,10 @@ export const PolicySchema = z.object({
   updatedAt: Iso,
 });
 export const PolicyCreateBody = z.object({
+  scope: z
+    .enum(['platform', 'tenant'])
+    .default('tenant')
+    .describe('platform bundles apply to every tenant and need platform operator access'),
   name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
   description: z.string().max(2000).optional(),
   bundle: z.record(z.string(), z.unknown()),
@@ -258,7 +271,14 @@ export const AuditEntrySchema = z.object({
   prevHash: z.string(),
   hash: z.string(),
 });
+export const AllTenantsQuery = z.object({
+  allTenants: z.coerce
+    .boolean()
+    .default(false)
+    .describe('platform operators only: span every tenant instead of the acting tenant'),
+});
 export const AuditQuery = PageQuery.extend({
+  allTenants: AllTenantsQuery.shape.allTenants,
   runId: Id.optional(),
   action: z.string().optional(),
   from: z.string().datetime().optional(),
@@ -299,6 +319,7 @@ export const CostQuery = z.object({
     .regex(/^\d{4}-\d{2}-01$/)
     .optional(),
   limit: z.coerce.number().int().min(1).max(1000).default(100),
+  allTenants: AllTenantsQuery.shape.allTenants,
 });
 export const CostRowSchema = z.object({
   key: z.string().nullable(),
@@ -313,6 +334,7 @@ export const RoleSchema = z.enum(ROLES);
 export const PermissionSchema = z.enum(PERMISSIONS);
 export const UserSchema = z.object({
   id: Id,
+  tenantId: Id,
   email: z.string(),
   displayName: z.string(),
   source: z.string(),
@@ -386,8 +408,34 @@ export const AuthMethodsSchema = z.object({
   oidc: z.object({ enabled: z.boolean(), loginUrl: z.string().nullable() }),
 });
 export const LoginResponse = z.object({ token: z.string(), expiresAt: Iso, user: UserSchema });
+export const TenantSchema = z.object({
+  id: Id,
+  slug: z.string(),
+  name: z.string(),
+  monthlyBudgetUsd: z.number().nullable(),
+  createdAt: Iso,
+});
+export const TenantCreateBody = z.object({
+  slug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
+  name: z.string().min(1).max(200),
+  monthlyBudgetUsd: z.number().positive().optional(),
+  admin: z
+    .object({
+      email: z.string().email(),
+      displayName: z.string().min(1).max(200),
+      password: z.string().min(12).max(200),
+    })
+    .optional()
+    .describe('first local administrator of the new tenant'),
+});
+export const TenantPatchBody = z.object({
+  name: z.string().min(1).max(200).optional(),
+  monthlyBudgetUsd: z.number().positive().nullable().optional(),
+});
 export const MeSchema = z.object({
   user: UserSchema,
+  tenant: TenantSchema.pick({ id: true, slug: true, name: true }),
+  platformAdmin: z.boolean(),
   kind: z.enum(['user', 'token']),
   permissions: z.array(z.string()),
   bindings: z.array(z.object({ role: z.string(), teamId: Id.nullable() })),

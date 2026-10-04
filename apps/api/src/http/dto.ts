@@ -1,7 +1,7 @@
 import type { AuditCheckpoint } from '@openagentix/core';
 import type { AgentRow, AgentVersionRow, VersionSummary } from '../services/agents.js';
 import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
-import type { PublicUser, TeamRow, TokenInfo } from '../services/identity.js';
+import type { PublicUser, TeamRow, TenantRow, TokenInfo } from '../services/identity.js';
 import type { EventRow, SourceRow } from '../services/ingest.js';
 import type { ApprovalRow, RunRow, StepRow } from '../services/runs.js';
 
@@ -119,6 +119,9 @@ export const eventDto = (e: EventRow) => ({
 
 export const connectionDto = (c: ConnectionRow) => ({
   id: c.id,
+  tenantId: c.tenantId,
+  scope: c.scope as 'platform' | 'tenant' | 'team' | 'agent',
+  scopeId: c.scopeId,
   name: c.name,
   kind: c.kind as 'mcp',
   config: c.config as Record<string, unknown>,
@@ -128,6 +131,7 @@ export const connectionDto = (c: ConnectionRow) => ({
 
 export const policyDto = (p: PolicyRow) => ({
   id: p.id,
+  scope: p.scope as 'platform' | 'tenant',
   name: p.name,
   description: p.description,
   bundle: p.bundle as Record<string, unknown>,
@@ -154,6 +158,14 @@ export const tokenDto = (t: TokenInfo) => ({
   ...t,
   expiresAt: iso(t.expiresAt),
   lastUsedAt: isoOrNull(t.lastUsedAt),
+  createdAt: iso(t.createdAt),
+});
+
+export const tenantDto = (t: TenantRow) => ({
+  id: t.id,
+  slug: t.slug,
+  name: t.name,
+  monthlyBudgetUsd: t.monthlyBudgetMicros === null ? null : Number(t.monthlyBudgetMicros) / 1e6,
   createdAt: iso(t.createdAt),
 });
 

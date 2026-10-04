@@ -32,14 +32,18 @@ export const tenants = pgTable('tenants', {
   createdAt: created(),
 });
 
-export const teams = pgTable('teams', {
-  id: uuid('id').primaryKey(),
-  tenantId: tenant(),
-  slug: text('slug').notNull().unique(),
-  name: text('name').notNull(),
-  monthlyBudgetMicros: micros('monthly_budget_micros'),
-  createdAt: created(),
-});
+export const teams = pgTable(
+  'teams',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: tenant(),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    monthlyBudgetMicros: micros('monthly_budget_micros'),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex('teams_tenant_slug_uq').on(t.tenantId, t.slug)],
+);
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey(),
@@ -53,6 +57,10 @@ export const users = pgTable('users', {
     .notNull()
     .default(sql`'{}'::text[]`),
   disabled: boolean('disabled').notNull().default(false),
+  /** Home tenant: every role of the user applies inside this tenant only. */
+  tenantId: tenant(),
+  /** Platform operators may manage tenants and switch the tenant they act in. */
+  platformAdmin: boolean('platform_admin').notNull().default(false),
   createdAt: created(),
   lastLoginAt: ts('last_login_at'),
 });
@@ -105,7 +113,7 @@ export const agents = pgTable(
   {
     id: uuid('id').primaryKey(),
     tenantId: tenant(),
-    name: text('name').notNull().unique(),
+    name: text('name').notNull(),
     teamId: uuid('team_id').references(() => teams.id),
     description: text('description'),
     draftSource: text('draft_source').notNull(),
@@ -115,7 +123,10 @@ export const agents = pgTable(
     createdBy: uuid('created_by'),
     createdAt: created(),
   },
-  (t) => [index('agents_team_created_idx').on(t.teamId, t.createdAt.desc(), t.id.desc())],
+  (t) => [
+    index('agents_team_created_idx').on(t.teamId, t.createdAt.desc(), t.id.desc()),
+    uniqueIndex('agents_tenant_name_uq').on(t.tenantId, t.name),
+  ],
 );
 
 /** Immutable once inserted (trigger in migration 0001). */
@@ -139,21 +150,25 @@ export const agentVersions = pgTable(
   ],
 );
 
-export const eventSources = pgTable('event_sources', {
-  id: uuid('id').primaryKey(),
-  tenantId: tenant(),
-  name: text('name').notNull().unique(),
-  kind: text('kind').notNull(),
-  scheme: text('scheme').notNull().default('oax-v1'),
-  secretRefs: text('secret_refs')
-    .array()
-    .notNull()
-    .default(sql`'{}'::text[]`),
-  agentId: uuid('agent_id').references(() => agents.id),
-  config: jsonb('config').notNull().default({}),
-  enabled: boolean('enabled').notNull().default(true),
-  createdAt: created(),
-});
+export const eventSources = pgTable(
+  'event_sources',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: tenant(),
+    name: text('name').notNull(),
+    kind: text('kind').notNull(),
+    scheme: text('scheme').notNull().default('oax-v1'),
+    secretRefs: text('secret_refs')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    agentId: uuid('agent_id').references(() => agents.id),
+    config: jsonb('config').notNull().default({}),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex('event_sources_tenant_name_uq').on(t.tenantId, t.name)],
+);
 
 export const events = pgTable(
   'events',
@@ -288,31 +303,44 @@ export const approvals = pgTable(
   ],
 );
 
-export const connections = pgTable('connections', {
-  id: uuid('id').primaryKey(),
-  tenantId: tenant(),
-  /** Scope of a key/connection: platform, tenant, team or agent (BYOK). */
-  scope: text('scope').notNull().default('platform'),
-  scopeId: uuid('scope_id'),
-  name: text('name').notNull().unique(),
-  kind: text('kind').notNull(),
-  config: jsonb('config').notNull(),
-  createdBy: uuid('created_by'),
-  createdAt: created(),
-  updatedAt: ts('updated_at').notNull().defaultNow(),
-});
+export const connections = pgTable(
+  'connections',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: tenant(),
+    /** Scope of a key/connection: platform, tenant, team or agent (BYOK). */
+    scope: text('scope').notNull().default('tenant'),
+    scopeId: uuid('scope_id'),
+    name: text('name').notNull(),
+    kind: text('kind').notNull(),
+    config: jsonb('config').notNull(),
+    createdBy: uuid('created_by'),
+    createdAt: created(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    // Platform connections share one namespace, everything else is unique inside its tenant.
+    uniqueIndex('connections_tenant_name_uq').on(t.tenantId, t.name),
+  ],
+);
 
-export const policies = pgTable('policies', {
-  id: uuid('id').primaryKey(),
-  tenantId: tenant(),
-  name: text('name').notNull().unique(),
-  description: text('description'),
-  bundle: jsonb('bundle').notNull(),
-  enabled: boolean('enabled').notNull().default(true),
-  version: integer('version').notNull().default(1),
-  updatedBy: uuid('updated_by'),
-  updatedAt: ts('updated_at').notNull().defaultNow(),
-});
+export const policies = pgTable(
+  'policies',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: tenant(),
+    /** `platform` bundles apply to every tenant (stricter only), `tenant` bundles to one. */
+    scope: text('scope').notNull().default('tenant'),
+    name: text('name').notNull(),
+    description: text('description'),
+    bundle: jsonb('bundle').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    version: integer('version').notNull().default(1),
+    updatedBy: uuid('updated_by'),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('policies_tenant_name_uq').on(t.tenantId, t.name)],
+);
 
 /** Append-only (trigger + role grants): never UPDATE or DELETE. */
 export const auditLog = pgTable(

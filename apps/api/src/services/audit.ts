@@ -13,7 +13,7 @@ import type { KeyObject } from 'node:crypto';
 import { and, asc, desc, eq, gte, lt, lte, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { auditCheckpoints, auditLog } from '../db/schema.js';
+import { auditCheckpoints, auditLog, runs } from '../db/schema.js';
 import { decodeSeqCursor, encodeSeqCursor, page } from '../pagination.js';
 
 const AUDIT_LOCK = 734_201;
@@ -35,12 +35,20 @@ export function rowToEntry(r: Row): AuditEntry {
   };
 }
 
+/** What services append; `tenantId` is the partition key (resolved from the run when omitted). */
+export type AuditAppend = AuditEntryInput & { tenantId?: string | null };
+
 export interface AuditListFilter {
+  /** Restricts the view to one tenant; `'all'` is for platform operators only. */
+  tenantId: string | 'all';
   runId?: string | undefined;
   action?: string | undefined;
   from?: Date | undefined;
   to?: Date | undefined;
 }
+
+const tenantCondition = (tenantId: string | 'all') =>
+  tenantId === 'all' ? undefined : eq(auditLog.tenantId, tenantId);
 
 /** Appends to the hash-chained audit log (serialised via an advisory lock) and verifies it. */
 export class AuditService {
@@ -58,8 +66,24 @@ export class AuditService {
       this.publicKeys[ctx.config.audit.signingKeyId] ??= publicKeyFrom(this.signingKey);
   }
 
+  /** Tenant of a run (immutable, so cached for a long time). */
+  private async tenantOfRun(runId: string, db: Db = this.ctx.db): Promise<string | null> {
+    const key = `run-tenant:${runId}`;
+    const hit = await this.ctx.cache.get<string>(key);
+    if (hit) return hit;
+    const [r] = await db
+      .select({ t: runs.tenantId })
+      .from(runs)
+      .where(sql`${runs.id} = ${runId}`);
+    if (r) await this.ctx.cache.set(key, r.t, 3_600_000);
+    return r?.t ?? null;
+  }
+
   /** Appends one entry; pass `tx` to make it part of a surrounding transaction. */
-  async append(input: AuditEntryInput, tx?: Db): Promise<AuditEntry> {
+  async append(input: AuditAppend, tx?: Db): Promise<AuditEntry> {
+    const { tenantId: explicit, ...entryInput } = input;
+    const tenantId =
+      explicit ?? (input.runId ? await this.tenantOfRun(input.runId, tx ?? this.ctx.db) : null);
     const run = async (db: Db) => {
       await db.execute(sql`select pg_advisory_xact_lock(${AUDIT_LOCK})`);
       const [prev] = await db
@@ -67,9 +91,13 @@ export class AuditService {
         .from(auditLog)
         .orderBy(desc(auditLog.seq))
         .limit(1);
-      const entry = createAuditEntry(prev ?? null, { ...input, ts: input.ts ?? this.ctx.now() });
+      const entry = createAuditEntry(prev ?? null, {
+        ...entryInput,
+        ts: input.ts ?? this.ctx.now(),
+      });
       await db.insert(auditLog).values({
         seq: entry.seq,
+        tenantId,
         ts: new Date(entry.ts),
         actor: entry.actor,
         action: entry.action,
@@ -145,6 +173,7 @@ export class AuditService {
   ): Promise<{ items: AuditEntry[]; nextCursor: string | null }> {
     const before = decodeSeqCursor(cursor);
     const conds = [
+      tenantCondition(filter.tenantId),
       filter.runId ? eq(auditLog.runId, filter.runId) : undefined,
       filter.action ? eq(auditLog.action, filter.action) : undefined,
       filter.from ? gte(auditLog.ts, filter.from) : undefined,
@@ -207,11 +236,35 @@ export class AuditService {
     return total;
   }
 
+  /**
+   * Chain verification for a tenant. The chain itself is global, so the whole chain is verified,
+   * but only issues that concern the tenant's own entries are reported and no other tenant's
+   * entry counts or head hashes are revealed.
+   */
+  async verifyForTenant(tenantId: string): Promise<VerifyResult> {
+    const full = await this.verify();
+    const own = await this.ctx.db
+      .select({ seq: auditLog.seq })
+      .from(auditLog)
+      .where(eq(auditLog.tenantId, tenantId));
+    const seqs = new Set(own.map((r) => r.seq));
+    const issues = full.issues.filter((i) => seqs.has(i.seq));
+    return {
+      valid: full.valid,
+      checkedEntries: own.length,
+      checkedCheckpoints: 0,
+      headSeq: 0,
+      headHash: '0'.repeat(64),
+      issues,
+    };
+  }
+
   /** Async iterator over all entries (NDJSON export). */
   async *export(filter: AuditListFilter, batch = 1000): AsyncGenerator<AuditEntry> {
     let after = 0;
     for (;;) {
       const conds = [
+        tenantCondition(filter.tenantId),
         sql`${auditLog.seq} > ${after}`,
         filter.runId ? eq(auditLog.runId, filter.runId) : undefined,
         filter.action ? eq(auditLog.action, filter.action) : undefined,

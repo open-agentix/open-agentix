@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULT_TENANT_ID } from '../src/db/schema.js';
 import { CVE_TRIAGE } from './fixtures.js';
 import { testNode, type TestNode } from './helpers.js';
 
@@ -57,7 +58,15 @@ describe('connections', () => {
       timeoutMs: 5000,
       name: 'jira',
     });
-    expect((await n.services.catalog.mcpConfigs()).map((m) => m.name)).toEqual(['jira']);
+    expect(
+      (
+        await n.services.catalog.mcpConfigs({
+          tenantId: DEFAULT_TENANT_ID,
+          teamId: null,
+          agentId: 'a',
+        })
+      ).map((m) => m.name),
+    ).toEqual(['jira']);
     expect((await n.req({ method: 'GET', url: '/v1/connections' })).json().items).toHaveLength(1);
     expect((await n.req({ method: 'GET', url: `/v1/connections/${c.id}` })).json().name).toBe(
       'jira',
@@ -143,7 +152,7 @@ describe('policies', () => {
       payload: { bundle: { requireApprovalTools: ['x/*'] } },
     });
     expect(again.json()).toMatchObject({ version: 3, bundle: { requireApprovalTools: ['x/*'] } });
-    expect(await n.services.catalog.enabledBundles()).toEqual([]);
+    expect(await n.services.catalog.enabledBundles(DEFAULT_TENANT_ID)).toEqual([]);
     expect((await n.req({ method: 'GET', url: '/v1/policies' })).json().items).toHaveLength(1);
     expect((await n.req({ method: 'GET', url: `/v1/policies/${p.id}` })).json().name).toBe(
       'baseline',
@@ -252,7 +261,7 @@ describe('guidelines and hardening agent', () => {
       payload: { agentId: agent.id, change: { coveragePercent: 95, commitMessages: ['fix: x'] } },
     });
     expect(ok.json().passed).toBe(true);
-    const bundle = await n.services.guidelines.bundleFor({ guidelines: [] });
+    const bundle = await n.services.guidelines.bundleFor({ guidelines: [] }, DEFAULT_TENANT_ID);
     expect(bundle?.requireApprovalTools).toEqual(['tickets/update_*']);
     const audit = (await n.req({ method: 'GET', url: '/v1/audit?limit=50' }))
       .json()

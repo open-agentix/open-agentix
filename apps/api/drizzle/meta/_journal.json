@@ -22,6 +22,13 @@
       "when": 1791085527416,
       "tag": "0002_tenants_and_scoped_access",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791088929433,
+      "tag": "0003_tenant_isolation",
+      "breakpoints": true
     }
   ]
 }

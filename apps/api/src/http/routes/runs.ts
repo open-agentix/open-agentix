@@ -7,6 +7,7 @@ import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import { approvalDto, runDto, stepDto } from '../dto.js';
 import {
+  AllTenantsQuery,
   ApprovalQuery,
   ApprovalSchema,
   CostQuery,
@@ -287,11 +288,18 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
             .string()
             .regex(/^\d{4}-\d{2}-01$/)
             .optional(),
+          allTenants: AllTenantsQuery.shape.allTenants,
         }),
       },
     },
     async (req, reply) => {
-      const lines = await services.costs.lines(principalOf(req), req.query.from, req.query.to);
+      const lines = await services.costs.lines(
+        principalOf(req),
+        req.query.from,
+        req.query.to,
+        undefined,
+        req.query.allTenants,
+      );
       if (req.query.format === 'json')
         return reply.type('application/json').send(JSON.stringify({ items: lines }));
       return reply
@@ -321,6 +329,7 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
         req.query.from,
         req.query.to,
         req.query.limit,
+        req.query.allTenants,
       ),
     }),
   );

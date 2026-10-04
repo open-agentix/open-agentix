@@ -48,8 +48,11 @@ export class AgentsService {
     private readonly audit: AuditService,
   ) {}
 
-  async teamIdForOwner(owner: string): Promise<string | null> {
-    const [t] = await this.ctx.db.select({ id: teams.id }).from(teams).where(eq(teams.slug, owner));
+  async teamIdForOwner(tenantId: string, owner: string): Promise<string | null> {
+    const [t] = await this.ctx.db
+      .select({ id: teams.id })
+      .from(teams)
+      .where(and(eq(teams.slug, owner), eq(teams.tenantId, tenantId)));
     return t?.id ?? null;
   }
 
@@ -62,10 +65,17 @@ export class AgentsService {
     agent: AgentRow,
     permission: 'agents:read' | 'agents:write' | 'agents:publish' | 'runs:execute',
   ): Promise<void> {
-    if (hasPermission(principal, permission, agent.teamId, agent.id)) return;
-    if (!hasPermission(principal, 'agents:read', agent.teamId, agent.id)) {
+    // Tenant boundary first: another tenant's agent does not exist for this principal.
+    if (agent.tenantId === principal.tenantId) {
+      if (hasPermission(principal, permission, agent.teamId, agent.id)) return;
+    }
+    if (
+      agent.tenantId !== principal.tenantId ||
+      !hasPermission(principal, 'agents:read', agent.teamId, agent.id)
+    ) {
       await this.audit.append({
         actor: principal.userId,
+        tenantId: principal.tenantId,
         action: 'access.denied',
         target: agent.id,
         payload: { permission, resource: 'agent' },
@@ -81,18 +91,19 @@ export class AgentsService {
 
   async create(principal: Principal, source: string): Promise<AgentRow> {
     const def = loadAgentDefinition(source);
-    const teamId = await this.teamIdForOwner(def.owner);
+    const teamId = await this.teamIdForOwner(principal.tenantId, def.owner);
     if (!hasPermission(principal, 'agents:write', teamId))
       throw forbidden(`no write access for team "${def.owner}"`);
     const [exists] = await this.ctx.db
       .select({ id: agents.id })
       .from(agents)
-      .where(eq(agents.name, def.name));
+      .where(and(eq(agents.name, def.name), eq(agents.tenantId, principal.tenantId)));
     if (exists) throw conflict(`agent "${def.name}" already exists`);
     const [row] = await this.ctx.db
       .insert(agents)
       .values({
         id: randomUUID(),
+        tenantId: principal.tenantId,
         name: def.name,
         teamId,
         description: def.description ?? null,
@@ -102,6 +113,7 @@ export class AgentsService {
       .returning();
     await this.audit.append({
       actor: principal.userId,
+      tenantId: principal.tenantId,
       action: 'agent.created',
       target: row!.id,
       payload: { name: def.name, version: def.version, digest: def.digest },
@@ -109,9 +121,28 @@ export class AgentsService {
     return row!;
   }
 
-  async get(id: string): Promise<AgentRow> {
+  /**
+   * Loads an agent. Pass the caller's tenant for every request-facing lookup: an agent of another
+   * tenant is then "not found" (and the attempt is audited in the caller's tenant). Only trusted
+   * internal callers (worker, scheduler) omit it.
+   */
+  async get(
+    id: string,
+    tenant?: Pick<Principal, 'tenantId' | 'userId'> | string,
+  ): Promise<AgentRow> {
     const [row] = await this.ctx.db.select().from(agents).where(eq(agents.id, id));
+    const tenantId = typeof tenant === 'string' ? tenant : tenant?.tenantId;
     if (!row) throw notFound('agent');
+    if (tenantId && row.tenantId !== tenantId) {
+      await this.audit.append({
+        actor: typeof tenant === 'object' ? tenant.userId : 'unknown',
+        tenantId,
+        action: 'access.denied',
+        target: id,
+        payload: { permission: 'agents:read', resource: 'agent' },
+      });
+      throw notFound('agent');
+    }
     return row;
   }
 
@@ -126,6 +157,7 @@ export class AgentsService {
       .from(agents)
       .where(
         and(
+          eq(agents.tenantId, principal.tenantId),
           teamsVisible === 'all'
             ? undefined
             : or(
@@ -144,7 +176,7 @@ export class AgentsService {
   }
 
   async updateDraft(principal: Principal, id: string, source: string): Promise<AgentRow> {
-    const agent = await this.get(id);
+    const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:write');
     const def = loadAgentDefinition(source);
     if (def.name !== agent.name)
@@ -160,6 +192,7 @@ export class AgentsService {
       .returning();
     await this.audit.append({
       actor: principal.userId,
+      tenantId: principal.tenantId,
       action: 'agent.draft.updated',
       target: id,
       payload: { version: def.version, digest: def.digest },
@@ -203,7 +236,7 @@ export class AgentsService {
     principal: Principal,
     id: string,
   ): Promise<{ version: VersionSummary; created: boolean }> {
-    const agent = await this.get(id);
+    const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:publish');
     const def = loadAgentDefinition(agent.draftSource);
     this.checkRuntime(def);
@@ -240,6 +273,7 @@ export class AgentsService {
     await this.ctx.cache.del(`agent-latest:${id}`);
     await this.audit.append({
       actor: principal.userId,
+      tenantId: principal.tenantId,
       action: 'agent.published',
       target: id,
       payload: { version: row.version, digest: row.digest },
@@ -294,14 +328,14 @@ export class AgentsService {
 
   async latestVersionId(
     agentId: string,
-  ): Promise<{ versionId: string | null; teamId: string | null }> {
+  ): Promise<{ versionId: string | null; teamId: string | null; tenantId: string }> {
     return cached(this.ctx.cache, `agent-latest:${agentId}`, 60_000, async () => {
       const [a] = await this.ctx.db
-        .select({ v: agents.latestVersionId, t: agents.teamId })
+        .select({ v: agents.latestVersionId, t: agents.teamId, tenantId: agents.tenantId })
         .from(agents)
         .where(eq(agents.id, agentId));
       if (!a) throw notFound('agent');
-      return { versionId: a.v, teamId: a.t };
+      return { versionId: a.v, teamId: a.t, tenantId: a.tenantId };
     });
   }
 

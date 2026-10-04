@@ -1,7 +1,9 @@
 import { Readable } from 'node:stream';
 import { z } from 'zod';
 import type { Deps } from '../app.js';
-import { HttpError } from '../../errors.js';
+import { HttpError, forbidden } from '../../errors.js';
+import type { Principal } from '@openagentix/core';
+import { principalOf } from '../app.js';
 import {
   AuditEntrySchema,
   AuditExportQuery,
@@ -17,6 +19,13 @@ import type { ZApp } from '../zapp.js';
 const sec = [{ bearer: [] }];
 const tags = ['audit'];
 const date = (s?: string) => (s ? new Date(s) : undefined);
+
+/** The acting tenant, or every tenant for platform operators who ask for it. */
+function auditScope(p: Principal, allTenants: boolean): string | 'all' {
+  if (!allTenants) return p.tenantId;
+  if (!p.platformAdmin) throw forbidden('allTenants needs platform operator access');
+  return 'all';
+}
 
 export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
   const { audit } = services;
@@ -36,6 +45,7 @@ export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
     async (req) =>
       audit.list(
         {
+          tenantId: auditScope(principalOf(req), req.query.allTenants),
           runId: req.query.runId,
           action: req.query.action,
           from: date(req.query.from),
@@ -58,7 +68,12 @@ export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: VerifyResultSchema },
       },
     },
-    async (req) => audit.verify(req.body.fromSeq ?? 1, req.body.toSeq),
+    async (req) => {
+      const p = principalOf(req);
+      // The chain is global: operators verify it as a whole, tenants get a redacted result.
+      if (p.platformAdmin) return audit.verify(req.body.fromSeq ?? 1, req.body.toSeq);
+      return audit.verifyForTenant(p.tenantId);
+    },
   );
 
   app.get(
@@ -75,6 +90,7 @@ export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req, reply) => {
       const gen = audit.export({
+        tenantId: auditScope(principalOf(req), req.query.allTenants),
         runId: req.query.runId,
         action: req.query.action,
         from: date(req.query.from),
@@ -103,9 +119,11 @@ export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: z.object({ items: z.array(CheckpointSchema) }) },
       },
     },
-    async () => ({
-      items: await audit.listCheckpoints(),
-    }),
+    async (req) => {
+      const p = principalOf(req);
+      if (!p.platformAdmin) return { items: [] };
+      return { items: await audit.listCheckpoints() };
+    },
   );
 
   app.post(
@@ -119,7 +137,8 @@ export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
         response: { 201: CheckpointSchema, 409: ErrorSchema },
       },
     },
-    async (_req, reply) => {
+    async (req, reply) => {
+      if (!principalOf(req).platformAdmin) throw forbidden('platform operator access required');
       const cp = await audit.checkpoint();
       if (!cp)
         throw new HttpError(
