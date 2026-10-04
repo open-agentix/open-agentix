@@ -11,7 +11,7 @@ Until 1.0.0 only the latest minor release receives security fixes.
 
 ## Reporting a vulnerability
 
-**Please do not open public issues for security problems.**
+**Please do not open public issues for security problems, and do not report them by e-mail.**
 
 Report privately via
 [GitHub Security Advisories](https://github.com/open-agentix/open-agentix/security/advisories/new)
