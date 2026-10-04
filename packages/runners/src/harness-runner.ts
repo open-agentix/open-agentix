@@ -18,6 +18,7 @@ import {
 } from '@openagentix/core';
 import { serveGateHttp, type GatewayCallResult, type PolicyGate } from '@openagentix/mcp';
 import { buildUserPrompt } from './executor.js';
+import { HandoverFailure, StepFlow, buildHandoverPrompt } from './handover-flow.js';
 import type { ExternalHarness, HarnessResult } from './harness.js';
 import type { AgentOutput, PreparedRun, RunResult, RunnerContext } from './types.js';
 
@@ -73,18 +74,31 @@ export async function executeWithHarness(
   });
 
   let previous: AgentOutput | null = null;
+  const flow = new StepFlow(run, step);
   for (const agentId of def.pipeline) {
     const agent = def.agents.find((a) => a.id === agentId);
     if (!agent) return fail('agent_unknown', `agent "${agentId}" not found`);
     if (await ctx.control.isCancelled(run.runId))
       return fail('cancelled', 'run was cancelled', 'cancelled');
+    let start;
+    try {
+      start = await flow.begin(agent, previous);
+    } catch (e) {
+      if (e instanceof HandoverFailure) return fail(e.code, e.message);
+      throw e;
+    }
+    if (start.skipped) continue;
     const clearance = ctx.providers.has(agent.provider)
       ? ctx.providers.get(agent.provider).clearance
       : (options.clearance ?? 'internal');
-    const flow = controller.checkDataFlow(def.classification, clearance);
-    if (flow.action === 'kill') {
-      await step({ kind: 'control', agentId, name: 'kill', status: 'error', output: flow });
-      return fail('control_classification', flow.reasons[0]?.message ?? '', 'blocked_by_policy');
+    const dataFlow = controller.checkDataFlow(def.classification, clearance);
+    if (dataFlow.action === 'kill') {
+      await step({ kind: 'control', agentId, name: 'kill', status: 'error', output: dataFlow });
+      return fail(
+        'control_classification',
+        dataFlow.reasons[0]?.message ?? '',
+        'blocked_by_policy',
+      );
     }
 
     // Remaining run budget -> limits of this harness invocation.
@@ -222,7 +236,7 @@ export async function executeWithHarness(
       const invocation = harness.buildInvocation(
         def,
         scoped,
-        buildUserPrompt(run, previous),
+        start.explicit ? buildHandoverPrompt(start.value) : buildUserPrompt(run, previous),
         { serverName: GATE_SERVER, url: handle.url, runToken: handle.token },
         exposed,
       );
@@ -309,6 +323,15 @@ export async function executeWithHarness(
       );
     }
 
+    // An external harness cannot be asked again mid-run: `onInvalid: retry` fails like `fail`.
+    const invalid = flow.checkOutput(agent, res.text);
+    if (invalid) {
+      await flow.recordInvalid(agentId, 'output', 1, invalid.schemaDigest, invalid.errors);
+      return fail(
+        'handover_invalid',
+        `output of agent "${agentId}" does not match its output schema`,
+      );
+    }
     const format = agent.outputs[0]?.format ?? 'markdown';
     const out: AgentOutput = { agentId, format, content: res.text };
     if (format === 'json') {
@@ -319,6 +342,7 @@ export async function executeWithHarness(
       }
     }
     outputs.push(out);
+    flow.complete(out);
     await step({ kind: 'output', agentId, name: format, status: 'ok', output: out });
     previous = out;
   }
