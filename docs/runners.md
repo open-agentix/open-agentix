@@ -198,18 +198,54 @@ The runner's own create options are hardened and double-checked, but a compromis
 contained by it. For anything but evaluation use rootless Podman or a body-filtering proxy, and pin
 the proxy image by digest.
 
+## Model proxy (control node side, W1-3b-3)
+
+With `OAX_MODEL_PROXY_ENABLED=true` the control node serves two routes for run nodes
+([ADR 0009](adr/0009-model-proxy.md); settings in [configuration.md](configuration.md)):
+
+- `POST /v1/worker/runs/{id}/model-token` with `{ "agentId": "..." }` and the node's step-scoped run
+  token: returns `{ token, expiresAt, protocol, baseUrl, model }` (`Cache-Control: no-store`). The
+  model token (`oaxmt.`) is bound to run, session, node, step agent and one `jti` that is stored in
+  `run_node_sessions.model_token_jti`; it can be issued **once per step and session** (`409
+  model_token_already_issued`), expires with the session and dies the moment the session is revoked.
+  It uses a different key and prefix than the run token, so neither verifies as the other, and it
+  opens the model endpoint only (not the gate, approvals, credentials or handover).
+- `POST /v1/worker/runs/{id}/model` with the model token (or the step's run token): the body is a
+  strict `WorkerModelRequest` (`agentId`, `request.{model, system, messages, tools, maxTokens,
+  temperature, hints.context}`), the answer a `WorkerModelResponse` (`callId`, `response`, measured
+  `usage`, `costMicros`, `priced`, `remaining`). With `Accept: text/event-stream` the answer is a
+  stream of `start`, `delta`, then `done` (the same response object) or `error` events.
+
+What the control node decides, in this order: token and binding (run, session, node, step, `jti`,
+session not revoked or expired, run running and cancel flag unset), the model allowlist (the model
+and provider are fixed by the published step; the request cannot choose either, and a `provider`
+field is refused), data classification against the provider clearance, the air-gapped egress policy
+for every endpoint of the provider, the emergency-override hook, strict request validation and
+re-serialisation (no server tools, `mcp_servers`, URL sources or file ids; prototype and duplicate
+keys refused), then a worst-case reservation against the run, step and monthly budgets. The
+provider key is resolved on the control node for the run's scope (BYOK connection of the run's
+tenant, else platform provider) and is never returned, logged or audited; provider error text is
+scrubbed of it. A provider that ignores `max_tokens` is cut at the reserved bound plus 10 %; a
+revoked session, cancelled run, deadline or client disconnect ends an open stream, and the call is
+settled from the usage received so far. Every refusal and every internal error fails closed with a
+stable code (`model_not_allowed`, `classification_denied`, `egress_denied`, `control_budget_*`,
+`model_unpriced`, `model_rate_limited`, `provider_error`, `provider_timeout`,
+`model_proxy_unavailable`, ...) in the envelope `{ "error": { "code", "message" } }`. Bodies are
+never logged. Audit: `model_token.issued`, `model.denied` (once a minute per session and reason),
+`model.aborted`, `model.overrun`, `model.usage_floor`, `model.reservation_expired` and the
+`step.model_call` entry of every settlement (`via: proxy`). Metrics: `oax_model_proxy_*`.
+
 ## Not in this version
 
-- **Model proxy (W1-3b).** Run nodes call models only through the control node
-  (`POST /v1/worker/runs/{id}/model`) so that provider keys, egress rules and cost measurement stay on
-  the control node. Until it lands, a node has **no** model access: every provider except the keyless
-  `simulated` provider fails the step with `model_proxy_unavailable`
-  (`packages/runners/src/model-proxy.ts`). Cost and token numbers of a node are **not recorded**:
-  the control node drops them from node step reports (they would feed the cost ledger and budget
-  alerts) and the orchestrator ignores them in the node's result; only bounded step and tool-call
-  counters are used. Isolated steps therefore do not count against `maxCostUsd`/`maxTokens` until
-  W1-3b (nothing paid is reachable from a node before then). The node enforces `maxSteps`,
-  `maxToolCalls` and the timeout from the **remaining** budget handed over with the step.
+- **Model access from the run node (W1-3b-4).** The control node side is available (see "Model proxy"
+  below), but the run node and the step executor are not switched over yet: until then a node
+  still has no model access except the keyless `simulated` provider (every other provider fails the
+  step with `model_proxy_unavailable`, `packages/runners/src/model-proxy.ts`). Cost and token numbers
+  of a node are **not recorded**: the control node drops them from node step reports and the
+  orchestrator ignores them in the node's result; only bounded step and tool-call counters are used.
+  Isolated steps therefore do not count against `maxCostUsd`/`maxTokens` until the node calls the
+  proxy. The node enforces `maxSteps`, `maxToolCalls` and the timeout from the **remaining** budget
+  handed over with the step.
 
 ### Known follow-ups
 

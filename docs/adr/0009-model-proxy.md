@@ -629,3 +629,58 @@ passed before (pre-1.0, noted in the changelog).
 7. Catalog import of cache prices (`scripts/import-models-dev.mjs`) and per-image token constants.
 8. A native SSE variant of `POST .../model` for live token streaming into the console?
 9. Default limits (concurrency per session/tenant, calls per minute) after the first real loads.
+
+## Amendments
+
+### W1-3b-3: native endpoint and model token (2026-10-04)
+
+Decisions taken while implementing `POST /v1/worker/runs/{id}/model` and `.../model-token`. Where
+they differ from the text above, this section wins.
+
+1. **Native SSE variant (answers open question 8).** The native endpoint answers JSON by default.
+   With `Accept: text/event-stream` it answers Server-Sent Events: `start { callId }`,
+   `delta { text }` per upstream text delta, then `done` (the `WorkerModelResponse`) or `error
+   { code, message }`. Tool calls are delivered in `done` only. Errors before the first upstream
+   byte are plain JSON errors with the usual status. Providers without a streaming transport
+   (`simulated`, Bedrock models that do not speak the Anthropic body) are completed first and
+   replayed as one `delta` and `done`.
+2. **Revocation by polling only.** An open call polls the session and run every
+   `OAX_MODEL_PROXY_REVOCATION_POLL_MS`. The Valkey channel `oax:session-revoked` is not built: the
+   cache interface has no publish/subscribe. The sliding-window call rate (`OAX_MODEL_PROXY_CALLS_PER_MINUTE`)
+   is per replica and in memory; the concurrency limits are database counters and hold across replicas.
+3. **Hard stop rule.** The output of a stream is cut when `max(reported output tokens, ceil(streamed
+   bytes / 8))` exceeds the granted output bound by more than 10 %. Bytes / 8 is the floor of
+   section 4.1: an honest provider that obeys `max_tokens` never reaches it (using bytes / 3 would
+   cut honest answers that run into the limit). An aborted call is settled with the estimate
+   (bytes / 3, section 4.1), so for a provider that ignores `max_tokens` the settled cost can exceed
+   the reservation; that is recorded as `model.overrun` and is bounded by the cut-off point.
+4. **Token and binding errors.** A model token whose `jti` is not the one stored in the session is
+   `401 unauthenticated`; a token or run token for another run than the path's, an agent that is not
+   the token's step, and an orchestrator token without `sid` are `403 model_not_allowed`; a revoked
+   or expired session, a run that is not `running`, a cancelled run or a lease taken over by
+   another worker are `403 run_node_session_revoked`. A provider that does not resolve for the run's
+   scope (including another tenant's BYOK connection) is `403 model_not_allowed`; a provider that
+   exists but cannot be built (missing secret) is `503 model_proxy_unavailable`.
+5. **No per-session context cache.** Definition, provider and secrets are resolved on every call, so a
+   revoked connection or rotated key takes effect on the next call. The cost is a few indexed reads
+   per call.
+6. **Strict schema before the allowlist.** The strict request schema (unknown keys, server tools,
+   `provider`, node-supplied `simulation`) runs when the body is parsed, so such requests are
+   `400 model_parameter_refused` before the model allowlist (`403 model_not_allowed`) is evaluated.
+   Nothing is forwarded or reserved in either case.
+7. **Request parser.** The model routes use their own JSON parser (no duplicate keys, no
+   prototype keys, depth 64, `OAX_MODEL_PROXY_MAX_BODY_BYTES`) and answer in the model envelope
+   `{ error: { code, message } }`, including authentication failures; a body with both
+   `content-length` and `transfer-encoding` is refused.
+8. **Audit and settlement.** `ModelAccountingService.settle` accepts `auditExtra` (node id, request
+   digest, latency, stop reason: names and numbers only) that is merged into the `step.model_call`
+   payload, and scrubs step payloads before it opens its transaction (not inside it). A call that
+   cannot be settled returns `503` without the model output; the reaper settles the reservation at
+   the reserved amount.
+9. **Token response.** `baseUrl` is `<OAX_NODE_CONTROL_URL or OAX_PUBLIC_URL>/v1/worker/runs/<runId>`
+   and `protocol` is always `native` until the pass-through surfaces exist (W1-3b-6).
+10. **Known gaps carried to later tasks.** `ModelAccountingService` prices with the global
+    `CostModel`; prices set only on a BYOK connection's `models[]` are not seen by the reservation, so
+    such a model counts as unpriced (`422 model_unpriced` under a cost limit, otherwise `priced:
+    false`). The connection schema has no `tokenBoundFactor`. The emergency-override check (W2-3) is
+    a hook (`ModelProxyHooks.checkOverride`) without an implementation.
