@@ -4,8 +4,70 @@ import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import { agents, costLedger, teams } from '../db/schema.js';
 
-export const COST_GROUPS = ['run', 'agent', 'team', 'month', 'provider', 'model'] as const;
+export const COST_GROUPS = [
+  'run',
+  'agent',
+  'team',
+  'tenant',
+  'use_case',
+  'month',
+  'provider',
+  'model',
+] as const;
 export type CostGroup = (typeof COST_GROUPS)[number];
+
+export interface CostLine {
+  id: number;
+  createdAt: string;
+  month: string;
+  tenantId: string;
+  teamId: string | null;
+  agentId: string;
+  agentName: string | null;
+  useCase: string | null;
+  runId: string;
+  stepSeq: number | null;
+  provider: string | null;
+  model: string | null;
+  tokensIn: number;
+  tokensOut: number;
+  costMicros: number;
+  costUsd: number;
+}
+
+const CSV_COLUMNS: (keyof CostLine)[] = [
+  'id',
+  'createdAt',
+  'month',
+  'tenantId',
+  'teamId',
+  'agentId',
+  'agentName',
+  'useCase',
+  'runId',
+  'stepSeq',
+  'provider',
+  'model',
+  'tokensIn',
+  'tokensOut',
+  'costMicros',
+  'costUsd',
+];
+
+/** RFC 4180 CSV with a header row; formula-like cells are prefixed to prevent CSV injection. */
+export function costLinesToCsv(lines: readonly CostLine[]): string {
+  const cell = (v: unknown) => {
+    if (v === null || v === undefined) return '';
+    let s = String(v);
+    if (/^[=+\-@]/.test(s) && typeof v === 'string') s = `'${s}`;
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return (
+    [CSV_COLUMNS.join(','), ...lines.map((l) => CSV_COLUMNS.map((c) => cell(l[c])).join(','))].join(
+      '\r\n',
+    ) + '\r\n'
+  );
+}
 
 export interface CostRow {
   key: string | null;
@@ -20,6 +82,8 @@ const COLUMN: Record<CostGroup, SQL> = {
   run: sql`${costLedger.runId}::text`,
   agent: sql`${costLedger.agentId}::text`,
   team: sql`${costLedger.teamId}::text`,
+  tenant: sql`${costLedger.tenantId}::text`,
+  use_case: sql`${costLedger.useCase}`,
   month: sql`${costLedger.month}::text`,
   provider: sql`${costLedger.provider}`,
   model: sql`${costLedger.model}`,
@@ -46,6 +110,58 @@ export class CostsService {
       return new Map(rows.map((r) => [r.id, r.slug]));
     }
     return new Map();
+  }
+
+  /** Cost lines for export (CSV/JSON), oldest first, same scoping as the summary. */
+  async lines(
+    principal: Principal,
+    from?: string,
+    to?: string,
+    limit = 100_000,
+  ): Promise<CostLine[]> {
+    const scope = visibleTeams(principal, 'costs:read');
+    const scopedAgents = visibleAgents(principal, 'costs:read');
+    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return [];
+    const rows = await this.ctx.db
+      .select({
+        id: costLedger.id,
+        createdAt: costLedger.createdAt,
+        month: costLedger.month,
+        tenantId: costLedger.tenantId,
+        teamId: costLedger.teamId,
+        agentId: costLedger.agentId,
+        agentName: agents.name,
+        useCase: costLedger.useCase,
+        runId: costLedger.runId,
+        stepSeq: costLedger.stepSeq,
+        provider: costLedger.provider,
+        model: costLedger.model,
+        tokensIn: costLedger.tokensIn,
+        tokensOut: costLedger.tokensOut,
+        costMicros: costLedger.costMicros,
+      })
+      .from(costLedger)
+      .leftJoin(agents, sql`${agents.id} = ${costLedger.agentId}`)
+      .where(
+        and(
+          from ? gte(costLedger.month, from) : undefined,
+          to ? lte(costLedger.month, to) : undefined,
+          scope === 'all'
+            ? undefined
+            : or(
+                scope.length ? inArray(costLedger.teamId, scope) : undefined,
+                scopedAgents.length ? inArray(costLedger.agentId, scopedAgents) : undefined,
+              ),
+        ),
+      )
+      .orderBy(costLedger.id)
+      .limit(limit);
+    return rows.map((r) => ({
+      ...r,
+      createdAt: r.createdAt.toISOString(),
+      costMicros: Number(r.costMicros),
+      costUsd: Number(r.costMicros) / 1e6,
+    }));
   }
 
   async summary(

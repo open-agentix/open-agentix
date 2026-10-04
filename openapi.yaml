@@ -3675,6 +3675,54 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/costs/export:
+    get:
+      summary: Export cost lines (tenant, team, agent, use case, run, step, provider, model) as CSV or JSON
+      tags:
+        - costs
+      parameters:
+        - schema:
+            default: csv
+            type: string
+            enum:
+              - csv
+              - json
+          in: query
+          name: format
+          required: false
+        - schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-01$
+          in: query
+          name: from
+          required: false
+        - schema:
+            type: string
+            pattern: ^\d{4}-\d{2}-01$
+          in: query
+          name: to
+          required: false
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: CSV (or JSON with `format=json`) cost lines
+          content:
+            text/csv:
+              schema:
+                type: string
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/costs/summary:
     get:
       summary: Costs grouped by run, agent, team, month, provider or model
@@ -3688,6 +3736,8 @@ paths:
               - run
               - agent
               - team
+              - tenant
+              - use_case
               - month
               - provider
               - model

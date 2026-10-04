@@ -286,7 +286,9 @@ export const CheckpointSchema = z.object({
 });
 
 export const CostQuery = z.object({
-  groupBy: z.enum(['run', 'agent', 'team', 'month', 'provider', 'model']).default('agent'),
+  groupBy: z
+    .enum(['run', 'agent', 'team', 'tenant', 'use_case', 'month', 'provider', 'model'])
+    .default('agent'),
   from: z
     .string()
     .regex(/^\d{4}-\d{2}-01$/)

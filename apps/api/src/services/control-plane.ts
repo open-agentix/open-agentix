@@ -166,7 +166,13 @@ export class ControlPlaneService {
           toolCalls: sql`${runs.toolCalls} + ${step.kind === 'tool_call' ? 1 : 0}`,
         })
         .where(eq(runs.id, runId))
-        .returning({ seq: runs.lastSeq, agentId: runs.agentId, teamId: runs.teamId });
+        .returning({
+          seq: runs.lastSeq,
+          agentId: runs.agentId,
+          teamId: runs.teamId,
+          tenantId: runs.tenantId,
+          versionId: runs.agentVersionId,
+        });
       if (!run) throw notFound('run');
       await tx.insert(runSteps).values({
         runId,
@@ -186,8 +192,12 @@ export class ControlPlaneService {
         createdAt: this.ctx.now(),
       });
       if ((step.costMicros ?? 0) > 0 || (step.tokensIn ?? 0) > 0 || (step.tokensOut ?? 0) > 0) {
+        const { definition } = await this.agents.definitionOf(run.versionId);
         await tx.insert(costLedger).values({
           runId,
+          stepSeq: run.seq,
+          tenantId: run.tenantId,
+          useCase: definition.labels.useCase ?? null,
           agentId: run.agentId,
           teamId: run.teamId,
           provider: step.provider ?? null,

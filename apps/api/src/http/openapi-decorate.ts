@@ -35,6 +35,12 @@ const MEDIA: Record<
     description: 'One audit entry (JSON) per line, oldest first',
     schema: { type: 'string' },
   },
+  'get /v1/costs/export': {
+    status: '200',
+    type: 'text/csv',
+    description: 'CSV (or JSON with `format=json`) cost lines',
+    schema: { type: 'string' },
+  },
   'get /metrics': {
     status: '200',
     type: 'text/plain',
