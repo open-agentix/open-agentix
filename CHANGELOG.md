@@ -60,6 +60,17 @@ First MVP release of the openagentix platform (control node, worker, packages).
   approvals, parsed definition from validation, dry runs of drafts with the simulated provider,
   cron event sources, source deletion, user detail, team members, team update and deletion,
   agent search.
+- **Concept v2 foundations**: data model with tenants (`tenant_id` on agents, runs, events,
+  approvals, connections, policies, costs, audit partition key), agent-scoped role bindings
+  (hidden agents return 404, denials audited), cost lines with tenant/use case/run/step and CSV/JSON
+  export, deterministic change gate for schedule sources (HTTP/file probes, audited, no tokens),
+  pinned model catalog snapshot (models.dev schema) with local overrides and `GET /v1/models`,
+  versioned development guidelines (global -> tenant -> agent, stricter wins) enforced by the
+  policy gate and a hardening review endpoint, opt-in `dark-factory` agent mode with a fixed
+  "MVP/PoC only" notice.
+- **Public demo**: deterministic demo seed (`pnpm seed:demo`, `OAX_DEMO_MODE=true`) with two
+  tenants, users for all six roles, six agents, runs, approvals, costs and a verifiable audit chain;
+  read-only API in demo mode; compose demo profile.
 - Examples `cve-triage` and `ticket-updater` with an end-to-end integration test; Dockerfile
   (api/worker targets, non-root, read-only rootfs friendly), docker compose stack, demo script,
   toolbox catalog skeleton, ADRs 0001-0006, configuration contract, performance baseline, CI with

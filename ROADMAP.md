@@ -18,6 +18,17 @@ are targets, not promises.
 
 ## v0.2 – Isolation and operations (target: Q1 2027)
 
+Concept v2 follow-ups (data model already in place since v0.1.0)
+- **Tenant isolation in every query and API** – *As a service owner, I want tenants to be a hard boundary (agents, runs, connections, keys, audit partition, costs) so that one customer never sees another.* (v0.1.0 stores `tenant_id` everywhere with a default tenant.)
+- **BYOK provider connections** – *As a tenant admin, I want to register provider keys as secret references scoped to platform, tenant, team or agent so that each team pays with its own key.* (v0.1.0: `connections.scope/scope_id`, providers still from `OAX_PROVIDERS`.)
+- **Budgets per run, use case and tenant** – *As a finance owner, I want hard-stop budgets per run, agent, use case, tenant and month with alerts.* (v0.1.0: agent and team budgets, cost lines carry tenant/use case/step.)
+- **More change-gate probes (API with secrets, SQL query, MCP read)** – *As an integrator, I want schedules to run only when a database query or an MCP resource changes.* (v0.1.0: HTTP and file probes.)
+- **Model catalog refresh job** – *As a maintainer, I want a scheduled PR that refreshes the pinned models.dev snapshot so that prices stay current without run-time fetches.*
+- **Dark software factory pipeline template** – *As a founder, I want a spec -> code -> tests -> PR pipeline for MVPs with the fixed "MVP/PoC only" notice and merge/deploy approvals kept for production.*
+- **LLM second opinion for the hardening agent** – *As a security lead, I want an optional model review of pull requests that can only add findings to the deterministic guideline review.*
+- **Guideline evaluation in agent eval suites** – *As an agent engineer, I want guideline compliance measured in every eval run.*
+- **Demo resets** – *As the demo operator, I want the public demo data to be rebuilt on a schedule so that it always looks fresh.* (v0.1.0: read-only demo mode.)
+
 Runners and toolboxes
 - **Container runner** – *As a platform engineer, I want each run in a short-lived container from its toolbox image so that a compromised tool cannot touch other runs.*
 - **Kubernetes Job runner (EKS/IRSA)** – *As an EKS operator, I want one Job per run with its own ServiceAccount, IRSA role and NetworkPolicy so that credentials are scoped per agent.*
