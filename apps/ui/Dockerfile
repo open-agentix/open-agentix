@@ -18,6 +18,7 @@ COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
 COPY apps/ui/package.json apps/ui/
 RUN pnpm install --frozen-lockfile --filter @openagentix/ui
+COPY packages/core/src packages/core/src
 COPY apps/ui apps/ui
 # Optional absolute API origin (default: same origin, routed by the ingress).
 ARG VITE_OAX_API_URL=
