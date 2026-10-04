@@ -16,7 +16,7 @@ export function modelToolName(server: string, tool: string): string {
 }
 
 /**
- * Decides tool calls. In the MVP the in-process worker evaluates locally; remote worker nodes use
+ * Decides tool calls. The in-process worker evaluates locally; remote worker nodes use
  * the control node's gate endpoint (same interface, different transport).
  */
 export interface PolicyGate {
