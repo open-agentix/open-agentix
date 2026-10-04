@@ -199,6 +199,28 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     if (access !== 'authenticated' && !hasPermission(req.principal, access))
       throw forbidden(`missing permission ${access}`);
   });
+  // Public demo: read-mostly. Mutations are refused except sign-in and side-effect-free checks.
+  const DEMO_ALLOWED = new Set([
+    'POST /v1/auth/login',
+    'POST /v1/auth/logout',
+    'POST /v1/agents/validate',
+    'POST /v1/agents/:id/dry-run',
+    'POST /v1/policies/evaluate',
+    'POST /v1/guidelines/review',
+    'POST /v1/runs/:id/stream-token',
+    'POST /v1/audit/verify',
+  ]);
+  app.addHook('onRequest', async (req, reply) => {
+    if (!ctx.config.demo.enabled) return;
+    void reply.header('x-oax-demo', 'true');
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return;
+    if (DEMO_ALLOWED.has(`${req.method} ${req.routeOptions.url ?? ''}`)) return;
+    throw new HttpError(
+      403,
+      'demo_read_only',
+      'the public demo is read-only; run openagentix yourself to change data',
+    );
+  });
   app.addHook('preHandler', async (req) => {
     const id = (req.params as { id?: string } | undefined)?.id;
     if (id && req.routeOptions.url?.startsWith('/v1/runs/')) req.log = req.log.child({ runId: id });

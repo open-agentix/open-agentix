@@ -18,7 +18,8 @@
     "start": "node dist/main.js",
     "openapi": "node dist/openapi-cli.js ../../openapi.yaml",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node dist/migrate-cli.js"
+    "db:migrate": "node dist/migrate-cli.js",
+    "seed:demo": "node dist/seed-demo-cli.js"
   },
   "dependencies": {
     "@fastify/compress": "9.2.0",

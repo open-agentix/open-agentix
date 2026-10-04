@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Config } from './config.js';
 import { createContext, type AppContext } from './context.js';
 import { buildApp } from './http/app.js';
+import { seedDemo } from './demo/seed.js';
 import { createServices, type Services } from './services/index.js';
 
 export interface ControlNode {
@@ -18,6 +19,10 @@ export async function createControlNode(
   const ctx = await createContext(config, overrides);
   const services = createServices(ctx);
   await services.identity.ensureBootstrapAdmin();
+  if (config.demo.enabled) {
+    const r = await seedDemo(ctx, services, { password: config.demo.password });
+    ctx.logger.info(r, 'demo mode: seed checked');
+  }
   const app = await buildApp({ ctx, services });
   return { ctx, services, app };
 }

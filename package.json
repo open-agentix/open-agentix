@@ -18,7 +18,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "test:ui": "pnpm --filter @openagentix/ui test:coverage"
+    "test:ui": "pnpm --filter @openagentix/ui test:coverage",
+    "seed:demo": "pnpm --filter @openagentix/api seed:demo"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

@@ -301,6 +301,9 @@ paths:
                 properties:
                   version:
                     type: string
+                  demo:
+                    type: boolean
+                    description: "public demo mode: simulated provider, read-only, fake data"
                   providers:
                     type: array
                     items:
@@ -370,6 +373,7 @@ paths:
                     description: role -> permissions
                 required:
                   - version
+                  - demo
                   - providers
                   - runners
                   - auth

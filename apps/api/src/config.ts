@@ -107,6 +107,8 @@ export const EnvSchema = z.object({
 
   OAX_SECRETS_DIR: z.string().optional(),
   OAX_DEMO_MCP: bool.default(false),
+  OAX_DEMO_MODE: bool.default(false),
+  OAX_DEMO_PASSWORD: z.string().min(8).default('demo-password-2026'),
 
   // Runners (v0.2; parsed and validated now, feature-flagged off).
   OAX_RUNNERS_ENABLED: z.string().default('in-process'),
@@ -193,6 +195,7 @@ export interface Config {
   workerHttp: { host: string; port: number };
   secrets: { dir: string | undefined; envRefs: string[] };
   demoMcp: boolean;
+  demo: { enabled: boolean; password: string };
   runners: {
     enabled: RunnerKind[];
     kubernetesJob: { enabled: boolean } & z.infer<typeof KubernetesJobRunnerConfigSchema> & {
@@ -328,6 +331,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     workerHttp: { host: e.OAX_WORKER_HTTP_HOST, port: e.OAX_WORKER_HTTP_PORT },
     secrets: { dir: e.OAX_SECRETS_DIR, envRefs: secretEnvRefs(env) },
     demoMcp: e.OAX_DEMO_MCP,
+    demo: { enabled: e.OAX_DEMO_MODE, password: e.OAX_DEMO_PASSWORD },
     runners: runnersConfig(e),
     toolboxes: {
       registry: e.OAX_TOOLBOX_REGISTRY,
