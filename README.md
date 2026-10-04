@@ -36,7 +36,7 @@ part of the platform instead of part of the prompt:
 
 ```bash
 git clone https://github.com/open-agentix/open-agentix.git && cd open-agentix
-docker compose up --build -d          # postgres + api (:8080) + worker
+docker compose up --build -d          # postgres + api (:8080) + worker + ui (:3000)
 scripts/demo.sh                       # seeds the cve-triage example and sends a signed webhook
 ```
 
@@ -135,7 +135,7 @@ flowchart LR
 | `packages/runners` | runner contract, step executor, `oax` CLI, remote runner and external harness stubs |
 | `apps/api` | Fastify 5 control node, PostgreSQL via Drizzle, OpenAPI 3.1 ([`openapi.yaml`](openapi.yaml)) |
 | `apps/worker` | Postgres `SKIP LOCKED` queue, cron scheduler, Kafka consumers |
-| `apps/ui` | placeholder – the UI is built against the OpenAPI document |
+| `apps/ui` | React 19 web UI (TanStack Router/Query, en/de, typed client generated from `openapi.yaml`) |
 
 ## Documentation
 

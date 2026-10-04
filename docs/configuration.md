@@ -16,7 +16,7 @@ Chart and images are named `open-agentix` (chart repo `open-agentix/open-agentix
 | `ghcr.io/open-agentix/open-agentix-api:<version>` | `node dist/main.js` (`/app/apps/api`) | 8080 | liveness `GET /healthz`, readiness `GET /readyz` (DB reachable + schema migrated) |
 | `ghcr.io/open-agentix/open-agentix-api:<version>` | `node dist/migrate-cli.js` (`/app/apps/api`) | – | migrations Job (Helm hook); needs **only** the database variables |
 | `ghcr.io/open-agentix/open-agentix-worker:<version>` | `node dist/main.js` (`/app/apps/worker`) | 9090 | `GET /healthz`, `GET /readyz` (DB + schema + loop), `GET /metrics` |
-| `ghcr.io/open-agentix/open-agentix-ui:<version>` | provided by the UI (`apps/ui/Dockerfile`, branch `feat/ui`) | 8080 | expected: `nginxinc/nginx-unprivileged` serving static files on 8080, uid 101, `GET /healthz` |
+| `ghcr.io/open-agentix/open-agentix-ui:<version>` | nginx (`apps/ui/Dockerfile`, `apps/ui/nginx.conf`) | 8080 | `GET /healthz`; `nginxinc/nginx-unprivileged`, uid 101, static SPA; mount `emptyDir` on `/tmp` and `/var/cache/nginx` for a read-only root fs. Route `/v1`, `/healthz` of the API and `/openapi.json` to the API at the ingress, or build with `VITE_OAX_API_URL` for a separate API origin. |
 
 API and worker images run as user `node` (uid 1000), need no writable root file system (mount
 `/tmp` as `emptyDir` if desired) and no Linux capabilities. Images carry the label

@@ -36,7 +36,8 @@ services:
       OAX_PUBLIC_URL: http://localhost:8080
       OAX_BOOTSTRAP_ADMIN_EMAIL: admin@example.com
       OAX_BOOTSTRAP_ADMIN_PASSWORD: change-me-please-123
-      OAX_CORS_ORIGINS: http://localhost:5173
+      OAX_CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+      OAX_UI_URL: http://localhost:3000
       # Webhook signing secret referenced by event sources as "demo-hook".
       OAX_SECRET_DEMO_HOOK: demo-webhook-secret
     ports: ['8080:8080']
@@ -65,6 +66,22 @@ services:
     depends_on:
       api: { condition: service_healthy }
 
+  ui:
+    build:
+      context: .
+      dockerfile: apps/ui/Dockerfile
+      args:
+        # Without an ingress the browser talks to the API directly.
+        VITE_OAX_API_URL: http://localhost:8080
+    image: ghcr.io/open-agentix/open-agentix-ui:dev
+    ports: ['3000:8080']
+    read_only: true
+    tmpfs: ['/tmp', '/var/cache/nginx']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: ['ALL']
+    depends_on:
+      api: { condition: service_healthy }
+
   ollama:
     image: ollama/ollama:0.12.3
     profiles: ['ollama']
@@ -73,4 +90,20 @@ services:
 
 volumes:
   pgdata:
+  ui:
+    build:
+      context: .
+      dockerfile: apps/ui/Dockerfile
+      args:
+        # Without an ingress the browser talks to the API directly.
+        VITE_OAX_API_URL: http://localhost:8080
+    image: ghcr.io/open-agentix/open-agentix-ui:dev
+    ports: ['3000:8080']
+    read_only: true
+    tmpfs: ['/tmp', '/var/cache/nginx']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: ['ALL']
+    depends_on:
+      api: { condition: service_healthy }
+
   ollama:
