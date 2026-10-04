@@ -1,0 +1,59 @@
+# Minimal RBAC for the openagentix `kubernetes-job` runner.
+#
+# Everything is namespaced to the run namespace (OAX_K8S_NAMESPACE, default "openagentix-runs").
+# No ClusterRole, no list/watch, no access to Pods or Pod logs, no "get" on Secrets, no update.
+# Apply once per cluster; the Helm chart (open-agentix-helm) is expected to render the same rules.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openagentix-runs
+  labels:
+    # Restricted PodSecurity: the Pods the runner creates comply with it.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  # ServiceAccount of the worker (control side). On EKS annotate it for IRSA if the worker needs AWS.
+  name: openagentix-worker
+  namespace: openagentix-control
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  # ServiceAccount of the step Pods (OAX_K8S_SERVICE_ACCOUNT). It has NO Role binding at all.
+  # On EKS annotate it with eks.amazonaws.com/role-arn for a per-step IRSA role.
+  name: openagentix-worker
+  namespace: openagentix-runs
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openagentix-job-runner
+  namespace: openagentix-runs
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, patch, delete]
+  - apiGroups: ['']
+    resources: [secrets]
+    verbs: [create, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openagentix-job-runner
+  namespace: openagentix-runs
+subjects:
+  - kind: ServiceAccount
+    name: openagentix-worker
+    namespace: openagentix-control
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openagentix-job-runner

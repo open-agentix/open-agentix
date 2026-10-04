@@ -204,8 +204,9 @@ proxied either.
 
 ## Runners and toolboxes (v0.2 contract, feature-flagged off)
 
-These variables are parsed and validated today so the Helm chart can expose them; the
-`kubernetes-job` runner itself ships in v0.2.
+These variables are consumed by the `kubernetes-job` runner (see
+[kubernetes-job-runner.md](kubernetes-job-runner.md)); it stays opt-in behind `OAX_K8S_JOB_ENABLED`
+until the run node (W1-3) ships.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
