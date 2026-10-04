@@ -14,6 +14,20 @@ x-common-env: &common-env
   # JSON list of providers; the simulated provider needs no network and no API key.
   OAX_PROVIDERS: '[{"kind":"simulated","name":"simulated"},{"kind":"ollama","name":"ollama","baseUrl":"http://ollama:11434"}]'
 
+# Container runner (opt-in, docs/runners.md): set these in .env and start with
+#   docker compose --profile container-runner up --scale worker=0
+# Nothing isolating runs unless OAX_CONTAINER_RUNNER_ENABLED=true.
+x-container-env: &container-env
+  OAX_RUNNERS_ENABLED: ${OAX_RUNNERS_ENABLED:-in-process}
+  OAX_CONTAINER_RUNNER_ENABLED: ${OAX_CONTAINER_RUNNER_ENABLED:-false}
+  OAX_CONTAINER_ENGINE_URL: http://socket-proxy:2375
+  # Run node image pinned by digest, e.g. ghcr.io/open-agentix/open-agentix-run-node@sha256:...
+  OAX_CONTAINER_IMAGE: ${OAX_CONTAINER_IMAGE:-}
+  OAX_CONTAINER_NETWORK: openagentix-nodes
+  OAX_CONTAINER_EGRESS_PROXY_LISTEN: 0.0.0.0:3128
+  OAX_CONTAINER_EGRESS_PROXY_URL: http://worker-container:3128
+  OAX_NODE_CONTROL_URL: http://api:8080
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -32,7 +46,7 @@ services:
     build: { context: ., target: api }
     image: ghcr.io/open-agentix/open-agentix-api:dev
     environment:
-      <<: *common-env
+      <<: [*common-env, *container-env]
       OAX_PUBLIC_URL: http://localhost:8080
       OAX_BOOTSTRAP_ADMIN_EMAIL: admin@example.com
       OAX_BOOTSTRAP_ADMIN_PASSWORD: change-me-please-123
@@ -45,6 +59,8 @@ services:
     tmpfs: ['/tmp']
     security_opt: ['no-new-privileges:true']
     cap_drop: ['ALL']
+    # `nodes` is an internal network: run nodes reach the control node here and nothing else.
+    networks: [default, nodes]
     depends_on:
       postgres: { condition: service_healthy }
 
@@ -65,6 +81,59 @@ services:
     cap_drop: ['ALL']
     depends_on:
       api: { condition: service_healthy }
+
+  # --- container runner profile: one hardened container per isolated step ---
+
+  # The only holder of the Docker socket. It allows container create/start/wait/stop/kill/remove and
+  # network inspect and denies exec, build, images, volumes, swarm and everything else. The worker
+  # never sees /var/run/docker.sock. For production prefer rootless Podman or a stricter proxy.
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    profiles: ['container-runner']
+    environment:
+      CONTAINERS: '1'
+      NETWORKS: '1'
+      POST: '1'
+      EXEC: '0'
+      BUILD: '0'
+      IMAGES: '0'
+      VOLUMES: '0'
+      SERVICES: '0'
+      SWARM: '0'
+      SECRETS: '0'
+      CONFIGS: '0'
+      NODES: '0'
+      PLUGINS: '0'
+      SYSTEM: '0'
+      TASKS: '0'
+      INFO: '0'
+      AUTH: '0'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [socket]
+    read_only: true
+    tmpfs: ['/run']
+    security_opt: ['no-new-privileges:true']
+
+  # The orchestrating worker with the container runner. Scale the plain worker to 0 so that runs
+  # that need isolation are never claimed by a worker without a container runner.
+  worker-container:
+    build: { context: ., target: worker }
+    image: ghcr.io/open-agentix/open-agentix-worker:dev
+    profiles: ['container-runner']
+    environment:
+      <<: [*common-env, *container-env]
+      OAX_DB_MIGRATE_ON_START: 'false'
+      OAX_WORKER_CONCURRENCY: '4'
+      OAX_WORKER_HTTP_PORT: '9090'
+    read_only: true
+    tmpfs: ['/tmp']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: ['ALL']
+    networks: [default, nodes, socket]
+    depends_on:
+      api: { condition: service_healthy }
+      socket-proxy: { condition: service_started }
 
   ui:
     build:
@@ -88,22 +157,14 @@ services:
     volumes:
       - ollama:/root/.ollama
 
+networks:
+  # Run nodes live here: no route to the internet, only the control node and the egress proxy.
+  nodes:
+    name: openagentix-nodes
+    internal: true
+  socket:
+    internal: true
+
 volumes:
   pgdata:
-  ui:
-    build:
-      context: .
-      dockerfile: apps/ui/Dockerfile
-      args:
-        # Without an ingress the browser talks to the API directly.
-        VITE_OAX_API_URL: http://localhost:8080
-    image: ghcr.io/open-agentix/open-agentix-ui:dev
-    ports: ['3000:8080']
-    read_only: true
-    tmpfs: ['/tmp', '/var/cache/nginx']
-    security_opt: ['no-new-privileges:true']
-    cap_drop: ['ALL']
-    depends_on:
-      api: { condition: service_healthy }
-
   ollama:
