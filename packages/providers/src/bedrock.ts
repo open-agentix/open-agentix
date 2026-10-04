@@ -38,6 +38,10 @@ export interface BedrockOptions {
   proxyUrl?: string | undefined;
   clearance?: Classification;
   maxAttempts?: number | undefined;
+  /** Explicit credentials (BYOK); without them the AWS default provider chain applies. */
+  credentials?:
+    { accessKeyId: string; secretAccessKey: string; sessionToken?: string | undefined } | undefined;
+  catalogProvider?: string | undefined;
   client?: BedrockConverseClient | undefined;
 }
 
@@ -55,7 +59,7 @@ const STOP: Record<string, StopReason> = {
  * (AWS_WEB_IDENTITY_TOKEN_FILE + AWS_ROLE_ARN), ECS/EC2 roles, SSO and env vars work unchanged.
  */
 export function createBedrockClient(
-  opts: Pick<BedrockOptions, 'region' | 'endpoint' | 'proxyUrl' | 'maxAttempts'>,
+  opts: Pick<BedrockOptions, 'region' | 'endpoint' | 'proxyUrl' | 'maxAttempts' | 'credentials'>,
   env: Env = process.env,
 ): BedrockRuntimeClient {
   // The AWS SDK ignores HTTPS_PROXY; resolve it explicitly (NO_PROXY honoured, e.g. for VPC endpoints).
@@ -65,6 +69,7 @@ export function createBedrockClient(
     region: opts.region,
     ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
     ...(opts.maxAttempts ? { maxAttempts: opts.maxAttempts } : {}),
+    ...(opts.credentials ? { credentials: opts.credentials } : {}),
     ...(proxy
       ? { requestHandler: new NodeHttpHandler({ httpsAgent: new HttpsProxyAgent(proxy) }) }
       : {}),
@@ -76,11 +81,14 @@ export class BedrockProvider implements ModelProvider {
   readonly kind = 'bedrock' as const;
   readonly name: string;
   readonly clearance: Classification;
+  readonly family = 'bedrock';
+  readonly catalogProvider: string | undefined;
   private readonly client: BedrockConverseClient;
 
   constructor(opts: BedrockOptions) {
     this.name = opts.name;
     this.clearance = opts.clearance ?? 'confidential';
+    this.catalogProvider = opts.catalogProvider ?? 'amazon-bedrock';
     this.client = opts.client ?? createBedrockClient(opts);
   }
 

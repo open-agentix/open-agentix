@@ -19,8 +19,6 @@ are targets, not promises.
 ## v0.2 – Isolation and operations (target: Q1 2027)
 
 Concept v2 follow-ups (data model already in place since v0.1.0)
-- **Tenant isolation in every query and API** – *As a service owner, I want tenants to be a hard boundary (agents, runs, connections, keys, audit partition, costs) so that one customer never sees another.* (v0.1.0 stores `tenant_id` everywhere with a default tenant.)
-- **BYOK provider connections** – *As a tenant admin, I want to register provider keys as secret references scoped to platform, tenant, team or agent so that each team pays with its own key.* (v0.1.0: `connections.scope/scope_id`, providers still from `OAX_PROVIDERS`.)
 - **Per-agent monthly budgets and budget alert delivery** – *As a finance owner, I want a monthly limit per agent and alerts pushed to chat or mail, not only stored as events.* (v0.2: tenant, use case and team budgets with hard stop and alerts as events, see `docs/budgets.md`.)
 - **More change-gate probes (API with secrets, SQL query, MCP read)** – *As an integrator, I want schedules to run only when a database query or an MCP resource changes.* (v0.1.0: HTTP and file probes.)
 - **Model catalog refresh job** – *As a maintainer, I want a scheduled PR that refreshes the pinned models.dev snapshot so that prices stay current without run-time fetches.*

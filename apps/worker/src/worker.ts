@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServices, withSpan, type AppContext, type Services } from '@openagentix/api';
 import { ToolGateway, type InMemoryTransportFactory } from '@openagentix/mcp';
-import { ProviderRegistry } from '@openagentix/providers';
+import type { ProviderRegistry } from '@openagentix/providers';
 import { InProcessRunner, type RunResult, type Runner } from '@openagentix/runners';
 import { RunQueue } from './queue.js';
 
@@ -22,7 +22,7 @@ export class Worker {
   readonly services: Services;
   readonly queue: RunQueue;
   private readonly active = new Map<string, AbortController>();
-  private providers: ProviderRegistry | null;
+  private readonly providers: ProviderRegistry | null;
   private readonly runner: Runner;
   private loop: Promise<void> | null = null;
   private stopping = false;
@@ -37,13 +37,6 @@ export class Worker {
     this.queue = new RunQueue(ctx, this.id);
     this.providers = opts.providers ?? null;
     this.runner = opts.runner ?? new InProcessRunner();
-  }
-
-  private async providerRegistry(): Promise<ProviderRegistry> {
-    this.providers ??= await ProviderRegistry.create(this.ctx.config.providers, {
-      secrets: this.ctx.secrets,
-    });
-    return this.providers;
   }
 
   get running(): boolean {
@@ -81,11 +74,13 @@ export class Worker {
           { agent: prepared.definition.name, version: prepared.definition.version },
           'run started',
         );
+        const scope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
         const result = await this.runner.execute(prepared, {
-          providers: await this.providerRegistry(),
+          // Providers resolve per run: platform providers plus the run tenant's BYOK connections.
+          providers: this.providers ?? (await this.services.models.registryFor(scope)),
           tools,
           control,
-          costModel: this.ctx.costModel,
+          costModel: await this.services.models.costModelFor(scope),
           signal: abort.signal,
         });
         log.info(

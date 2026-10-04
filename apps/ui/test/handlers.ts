@@ -8,6 +8,25 @@ export const api = (path: string) => `${window.location.origin}${path}`;
 const json = <T>(body: T, status = 200) => HttpResponse.json(body as never, { status });
 
 export const handlers = [
+  http.post(api('/v1/models/proposals'), () =>
+    json<ResponseOf<'/v1/models/proposals', 'post'>>({
+      catalogProvider: 'anthropic',
+      snapshotDate: '2026-10-04',
+      items: [
+        {
+          id: 'claude-sonnet-5-5',
+          catalogModel: 'claude-sonnet-5-5',
+          name: 'Claude Sonnet 5.5',
+          contextTokens: 1_000_000,
+          outputTokens: 128_000,
+          inputPerMTok: 2,
+          outputPerMTok: 10,
+          toolCall: true,
+          priceSource: 'catalog',
+        },
+      ],
+    }),
+  ),
   http.get(api('/v1/version'), () =>
     json<ResponseOf<'/v1/version', 'get'>>({ name: 'openagentix', version: '0.1.0' }),
   ),
