@@ -76,3 +76,47 @@ treated as untrusted data and never as instructions.
 `OAX_PROVIDERS` accepts the same objects with an additional `name` (see
 [configuration](configuration.md#providers-and-costs)); they are the platform connections of an
 installation without database-managed keys.
+
+## Streaming upstream transports
+
+`@openagentix/providers` ships a streaming API next to the non-streaming `ModelProvider.complete`
+(ADR 0009, task W1-3b-5). It is a library for the control-node model proxy and is not wired to a
+route yet (W1-3b-6). Three transports implement `StreamingTransport.open(request, call)`:
+
+| Transport | Upstream | Provider kinds |
+| --- | --- | --- |
+| `AnthropicStreamTransport` | Anthropic Messages (`POST /v1/messages`, SSE) | `anthropic` |
+| `BedrockStreamTransport` | `InvokeModelWithResponseStream` with the Anthropic body (Anthropic model ids) | `bedrock` |
+| `OpenAIStreamTransport` | Chat Completions (`/chat/completions`, SSE), Azure deployment URLs | `openai`, `azure-openai`, `openrouter`, `vllm`, `lmstudio`, `ollama` (`/v1`), `openai-compatible` |
+
+`open()` resolves with an `UpstreamStream`:
+
+- `events` is a pull-based `AsyncIterable<UpstreamEvent>` (`{ event, data }`, parsed JSON). The
+  upstream is read only when the consumer asks for the next event, so a slow client slows the
+  upstream down (backpressure). Unknown event types are dropped and counted (`result().unknownEvents`).
+- `abort(reason)` or the `signal` call option ends the stream on purpose and closes the upstream
+  connection. The iteration then ends without an error and `result().abortReason` is set.
+- `shouldStop(snapshot)` runs after every event with the live meter; a returned reason aborts the
+  upstream request (mid-stream hard stop on output beyond the reservation, revocation, ...).
+- `result()` returns the settlement input: normalised `usage` (input tokens exclude cache reads and
+  writes, `cacheReadTokens`, `cacheWriteTokens`), `source` (`provider`, `estimated` or `floor`),
+  `usageReported` (false means the caller must fall back to its estimator), `complete`, `outputBytes`.
+  Output is estimated as `ceil(bytes / 3)` when nothing is reported or the stream was cut, and a
+  reported output below `ceil(bytes / 8)` is raised to that floor (`floorApplied`).
+
+Safety properties (all covered by tests against local fake provider servers):
+
+- Limits per call (`limits`): line, event and total bytes, time to first event (120 s), idle time
+  **between complete events** (60 s; trickled bytes and comments do not reset it) and a wall clock
+  deadline (600 s). Violations end in a `StreamError` (`provider_timeout` for time limits,
+  `provider_error` otherwise) with a `reason`; memory stays bounded.
+- The request is built from configuration: forced `stream: true` (OpenAI family also
+  `stream_options.include_usage: true`), key and headers from options only, `anthropic-beta`
+  values from an allowlisted pattern, redirects refused, origin pinned by the guarded fetch, the
+  egress policy asserted (also for Bedrock, whose SDK does its own networking).
+- Retries (429, 5xx, network) happen only before the first response byte.
+- The SSE `event:` line must agree with the payload `type`; unknown content block types and
+  malformed frames are errors; `formatSseEvent` splits data on every line terminator and validates
+  event names, so payloads cannot smuggle frames to a client.
+- Request and response bodies are never logged and never part of an error; error messages carry
+  status, type and at most 300 scrubbed characters; configured secrets are replaced by `[redacted]`.

@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Streaming upstream transports for the model proxy (W1-3b-5)**: `@openagentix/providers` gets a
+  streaming API next to `complete`: `AnthropicStreamTransport`, `BedrockStreamTransport`
+  (`InvokeModelWithResponseStream`) and `OpenAIStreamTransport` (OpenAI, Azure, OpenRouter, vLLM,
+  LM Studio, Ollama `/v1`, compatible; forces `include_usage`). Robust SSE parser (partial frames,
+  split UTF-8, line/event/total size limits), pull-based events with backpressure, abort via
+  `AbortSignal` that closes the upstream socket, a `shouldStop` hook for the mid-stream hard stop,
+  time-to-first-event, between-event idle and deadline timeouts, retries only before the first byte,
+  and a usage meter (provider usage incl. cache tokens, estimate and floor, `usageReported` flag for
+  the estimator fallback). No bodies in logs, secrets scrubbed from errors. Not yet wired to a route
+  (W1-3b-6). `docs/providers.md`.
 - **Kubernetes Job runner (W1-4)**: `KubernetesJobRunner` implements the isolating-runner contract
   of ADR 0008: one suspended Job per step plus an owner-referenced deny-by-default NetworkPolicy
   (DNS, control node and egress CIDR allowlist) and a Secret holding only the run token, then
