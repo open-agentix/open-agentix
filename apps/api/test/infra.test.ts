@@ -121,3 +121,29 @@ describe('telemetry and metrics', () => {
     );
   });
 });
+
+describe('cost CSV', () => {
+  it('quotes special characters and neutralises formulas', async () => {
+    const { costLinesToCsv } = await import('../src/services/costs.js');
+    const line = {
+      id: 1,
+      createdAt: 't',
+      month: '2026-10-01',
+      tenantId: 'x',
+      teamId: null,
+      agentId: 'a',
+      agentName: '=cmd()',
+      useCase: 'a,b "c"',
+      runId: 'r',
+      stepSeq: 1,
+      provider: null,
+      model: 'm',
+      tokensIn: 1,
+      tokensOut: 2,
+      costMicros: 3,
+      costUsd: 0.000003,
+    };
+    const csv = costLinesToCsv([line]).split('\r\n');
+    expect(csv[1]).toBe(`1,t,2026-10-01,x,,a,'=cmd(),"a,b ""c""",r,1,,m,1,2,3,0.000003`);
+  });
+});

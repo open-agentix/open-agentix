@@ -1,6 +1,7 @@
 import { isTerminal, type RunStatus } from '@openagentix/core';
 import { issueStreamToken } from '../../auth/stream-token.js';
 import { encodeSeqCursor } from '../../pagination.js';
+import { costLinesToCsv } from '../../services/costs.js';
 import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
@@ -265,6 +266,39 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
       approvalDto(
         await runs.decide(principalOf(req), req.params.id, req.body.decision, req.body.comment),
       ),
+  );
+
+  app.get(
+    '/v1/costs/export',
+    {
+      config: { access: 'costs:read' },
+      schema: {
+        tags: ['costs'],
+        summary:
+          'Export cost lines (tenant, team, agent, use case, run, step, provider, model) as CSV or JSON',
+        security: sec,
+        querystring: z.object({
+          format: z.enum(['csv', 'json']).default('csv'),
+          from: z
+            .string()
+            .regex(/^\d{4}-\d{2}-01$/)
+            .optional(),
+          to: z
+            .string()
+            .regex(/^\d{4}-\d{2}-01$/)
+            .optional(),
+        }),
+      },
+    },
+    async (req, reply) => {
+      const lines = await services.costs.lines(principalOf(req), req.query.from, req.query.to);
+      if (req.query.format === 'json')
+        return reply.type('application/json').send(JSON.stringify({ items: lines }));
+      return reply
+        .type('text/csv; charset=utf-8')
+        .header('content-disposition', 'attachment; filename="openagentix-costs.csv"')
+        .send(costLinesToCsv(lines));
+    },
   );
 
   app.get(

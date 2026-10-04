@@ -465,6 +465,34 @@ describe('runs API', () => {
   it('summarises costs and enforces team budgets', async () => {
     const byAgent = (await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=agent' })).json();
     expect(byAgent.items[0]).toMatchObject({ key: triageId, label: 'cve-triage' });
+    const byUseCase = (
+      await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=use_case' })
+    ).json();
+    expect(byUseCase.items.map((i: { key: string | null }) => i.key)).toContain(
+      'vulnerability-management',
+    );
+    const csv = await n.req({
+      method: 'GET',
+      url: '/v1/costs/export?from=2000-01-01&to=2100-01-01',
+    });
+    expect(csv.headers['content-type']).toContain('text/csv');
+    const [header, first] = csv.body.split('\r\n');
+    expect(header).toBe(
+      'id,createdAt,month,tenantId,teamId,agentId,agentName,useCase,runId,stepSeq,provider,model,tokensIn,tokensOut,costMicros,costUsd',
+    );
+    expect(first).toContain('cve-triage,vulnerability-management');
+    const json = (await n.req({ method: 'GET', url: '/v1/costs/export?format=json' })).json();
+    expect(json.items[0]).toMatchObject({
+      agentName: 'cve-triage',
+      useCase: 'vulnerability-management',
+      tenantId: '00000000-0000-4000-8000-000000000001',
+    });
+    expect(json.items[0].stepSeq).toBeGreaterThan(0);
+    expect(
+      (await n.req({ method: 'GET', url: '/v1/costs/export', token: viewerOther })).body
+        .split('\r\n')
+        .filter(Boolean),
+    ).toHaveLength(1);
     const byTeam = (await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=team' })).json();
     expect(byTeam.items[0].label).toBe('team-security');
     expect(byAgent.items[0].costMicros).toBeGreaterThan(0);
