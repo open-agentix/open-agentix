@@ -1,4 +1,5 @@
 import { classificationRank } from '../classification.js';
+import { DARK_FACTORY_NOTICE } from '../guidelines.js';
 import { OaxError, ValidationError, type ValidationIssue } from '../errors.js';
 import { compareSemver, isSemver } from '../semver.js';
 import { parseAgentDefinition, type AgentDefinition } from './parser.js';
@@ -123,6 +124,9 @@ export function checkDefinition(def: AgentDefinition): {
       }),
     );
   });
+  if (def.mode === 'dark-factory') {
+    warnings.push({ path: 'mode', message: `dark-factory mode: ${DARK_FACTORY_NOTICE}` });
+  }
   if (Object.keys(def.budget).length === 0) {
     warnings.push({ path: 'budget', message: 'no pipeline budget set; platform defaults apply' });
   }

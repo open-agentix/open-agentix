@@ -171,6 +171,15 @@ export const PipelineFrontMatterSchema = z.strictObject({
     approverRoles: ['operator', 'admin'],
     timeoutSeconds: 3600,
   }),
+  /**
+   * `dark-factory`: build software end to end with minimal human touch (opt-in, see
+   * DARK_FACTORY_NOTICE). Approval gates of policies and guidelines still apply.
+   */
+  mode: z.enum(['standard', 'dark-factory']).default('standard'),
+  /** Development guideline sets (`name@version`) attached to this agent. */
+  guidelines: z
+    .array(z.string().regex(/^[a-z0-9][a-z0-9-]*@\d+\.\d+\.\d+$/, 'use name@x.y.z'))
+    .default([]),
   runtime: RuntimeSchema.default({ runner: 'in-process', egress: [] }),
   agents: z.array(AgentSpecSchema).min(1),
   /** Execution order of agent ids; defaults to the order in `agents`. */
