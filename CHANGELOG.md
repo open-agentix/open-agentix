@@ -164,6 +164,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **UI navigation**: the governance group (policies, audit trail, users & teams, API tokens) is now
+  labelled "Governance" in English (was "Govern") and German (was "Steuern"); the key
+  `nav.groups.govern` is unchanged.
 - **Breaking (pre-1.0)**: MCP connection secrets of in-process runs are resolved through the tenant
   allowlist `tenants.secret_refs` (empty by default, canonical comparison); set it for tenants whose
   connections use secrets. Tenant slugs that overlap in canonical form (`acme`, `acme-corp`) cannot
