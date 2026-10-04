@@ -5653,6 +5653,226 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Monthly budgets of the tenant with spend and alerts raised this month */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description first day of the current month */
+                            month: string;
+                            tenant: {
+                                /** @enum {string} */
+                                scope: "tenant" | "use_case" | "team";
+                                /** @description tenant slug, use case label or team slug */
+                                key: string | null;
+                                /** @description monthly limit, null when no budget is set */
+                                limitUsd: number | null;
+                                /** @description spend of the current UTC month */
+                                spentUsd: number;
+                                percentUsed: number | null;
+                                /** @description alert thresholds (50, 80, 100) raised this month */
+                                alerts: number[];
+                            };
+                            useCases: {
+                                /** @enum {string} */
+                                scope: "tenant" | "use_case" | "team";
+                                /** @description tenant slug, use case label or team slug */
+                                key: string | null;
+                                /** @description monthly limit, null when no budget is set */
+                                limitUsd: number | null;
+                                /** @description spend of the current UTC month */
+                                spentUsd: number;
+                                percentUsed: number | null;
+                                /** @description alert thresholds (50, 80, 100) raised this month */
+                                alerts: number[];
+                            }[];
+                            teams: {
+                                /** @enum {string} */
+                                scope: "tenant" | "use_case" | "team";
+                                /** @description tenant slug, use case label or team slug */
+                                key: string | null;
+                                /** @description monthly limit, null when no budget is set */
+                                limitUsd: number | null;
+                                /** @description spend of the current UTC month */
+                                spentUsd: number;
+                                percentUsed: number | null;
+                                /** @description alert thresholds (50, 80, 100) raised this month */
+                                alerts: number[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/budgets/use-cases/{useCase}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the monthly budget of a use case (hard stop, alerts at 50, 80 and 100 %) */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    useCase: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        monthlyBudgetUsd: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        /** Remove the monthly budget of a use case */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    useCase: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/worker/runs/{id}/gate": {
         parameters: {
             query?: never;
@@ -6004,6 +6224,81 @@ export interface paths {
                     content: {
                         "application/json": {
                             cancelled: boolean;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/worker/runs/{id}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Monthly tenant, use case and team budgets of a run (hard stop) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            blocked: boolean;
+                            breaches: {
+                                /** @enum {string} */
+                                scope: "tenant" | "use_case" | "team";
+                                key: string;
+                                limitMicros: number;
+                                spentMicros: number;
+                                message: string;
+                            }[];
                         };
                     };
                 };
