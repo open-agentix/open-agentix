@@ -5,8 +5,10 @@ import {
   UnavailableProvider,
   createProvider,
   modelPriceEntries,
+  secretRefsOf,
   withName,
   type ModelEntry,
+  type ModelProvider,
   type ProviderConfig,
   type ProviderKind,
 } from '@openagentix/providers';
@@ -85,6 +87,65 @@ export class ModelsService {
       }
     }
     return ProviderRegistry.of(providers);
+  }
+
+  /**
+   * The one provider a model call uses, resolved for the run's scope exactly like `registryFor`
+   * (a connection of the run's tenant wins over a platform provider of the same name), together
+   * with its settings. Only the requested provider is built, so only its secrets are resolved.
+   * `null` when no provider of that name applies to the scope: another tenant's connections are
+   * never visible here (the scope carries the tenant of the run row).
+   */
+  async resolve(
+    scope: RunScope,
+    name: string,
+  ): Promise<{ provider: ModelProvider; config: ProviderConfig | null } | null> {
+    const row = (await this.catalog.connectionsForRun('model', scope)).find((r) => r.name === name);
+    if (row) {
+      const config = connectionProviderConfig(row);
+      try {
+        return {
+          provider: await createProvider(config, {
+            secrets: this.ctx.secrets,
+            fetchImpl: this.ctx.fetchImpl,
+          }),
+          config,
+        };
+      } catch (e) {
+        return {
+          provider: new UnavailableProvider(
+            row.name,
+            ADAPTER_KIND[config.kind] ?? 'openai',
+            (e as Error).message,
+          ),
+          config,
+        };
+      }
+    }
+    const platform = await this.platformRegistry();
+    if (!platform.has(name)) return null;
+    return {
+      provider: platform.get(name),
+      config: this.ctx.config.providers.find((p) => p.name === name) ?? null,
+    };
+  }
+
+  /**
+   * Resolved secret values of a provider's settings (key, header secrets), for scrubbing provider
+   * error text before it is returned, logged or audited. Values never leave the control node.
+   */
+  async secretValues(config: ProviderConfig | null): Promise<string[]> {
+    if (!config) return [];
+    const out: string[] = [];
+    for (const ref of secretRefsOf(config)) {
+      try {
+        const v = await this.ctx.secrets.resolve(ref);
+        if (v) out.push(v);
+      } catch {
+        // an unresolvable reference has nothing to scrub
+      }
+    }
+    return out;
   }
 
   async registryFor(scope: RunScope): Promise<ProviderRegistry> {

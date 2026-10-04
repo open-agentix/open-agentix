@@ -10,6 +10,7 @@ import { GuidelinesService } from './guidelines.js';
 import { IdentityService } from './identity.js';
 import { IngestService } from './ingest.js';
 import { ModelAccountingService } from './model-accounting.js';
+import { ModelProxyService } from './model-proxy.js';
 import { ModelsService } from './models.js';
 import { RunNodesService } from './run-nodes.js';
 import { RunsService } from './runs.js';
@@ -26,6 +27,7 @@ export interface Services {
   control: ControlPlaneService;
   runNodes: RunNodesService;
   modelAccounting: ModelAccountingService;
+  modelProxy: ModelProxyService;
   costs: CostsService;
   guidelines: GuidelinesService;
   tenants: TenantsService;
@@ -52,12 +54,24 @@ export function createServices(ctx: AppContext): Services {
     runNodes,
     guidelines,
   );
-  const modelAccounting = new ModelAccountingService(ctx, audit, agents, budgets, (runId, v) =>
-    runNodes.scrub(runId, v),
+  const mp = ctx.config.modelProxy;
+  const modelAccounting = new ModelAccountingService(
+    ctx,
+    audit,
+    agents,
+    budgets,
+    (runId, v) => runNodes.scrub(runId, v),
+    {
+      maxConcurrentPerSession: mp.maxConcurrentPerSession,
+      maxConcurrentPerTenant: mp.maxConcurrentPerTenant,
+      graceMs: mp.graceSeconds * 1000,
+      defaultDeadlineMs: mp.maxCallSeconds * 1000,
+    },
   );
   const costs = new CostsService(ctx);
   const tenants = new TenantsService(ctx, audit, identity);
   const models = new ModelsService(ctx, catalog, audit);
+  const modelProxy = new ModelProxyService(ctx, audit, agents, models, modelAccounting, runNodes);
   const agentCheck = new AgentCheckService(ctx, audit, catalog, models, budgets);
   return {
     audit,
@@ -70,6 +84,7 @@ export function createServices(ctx: AppContext): Services {
     control,
     runNodes,
     modelAccounting,
+    modelProxy,
     costs,
     guidelines,
     tenants,
@@ -90,6 +105,7 @@ export {
   IdentityService,
   IngestService,
   ModelAccountingService,
+  ModelProxyService,
   ModelsService,
   RunNodesService,
   RunsService,
