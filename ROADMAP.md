@@ -25,6 +25,15 @@ Runners and toolboxes
 - **Remote worker transport hardening** – *As an operator, I want mTLS between worker nodes and the control node so that run tokens are not the only protection.*
 - **Per-run secret injection** – *As an integrator, I want secrets injected per run and revoked afterwards so that leaked credentials expire immediately.*
 
+API follow-ups from the UI integration (deferred from v0.1.0)
+- **HTTP/API connections** – *As an integrator, I want plain HTTP API connections (base URL, auth by secret reference, allowed paths) next to MCP servers so that agents can call REST APIs without writing an MCP server.*
+- **Policy bindings per agent/team** – *As a security engineer, I want to bind policy bundles to specific teams or agents instead of only globally so that teams can have stricter rules.*
+- **Control-agent rule API** – *As a platform owner, I want to change rate, loop and anomaly thresholds per team through the API so that guardrails are tunable without redeploys.*
+- **Budget alert API** – *As a team lead, I want to configure alert thresholds and channels for budgets via the API.*
+- **Settings write API** – *As an admin, I want to manage providers (incl. Bedrock region, VPC endpoint, proxy) and enabled runners from the UI, audited, instead of environment variables.*
+- **Agent archive** – *As an agent engineer, I want to archive agents (hidden, no new runs, history kept) instead of deleting them.*
+- **Lighter run list projection and PostgreSQL benchmark in CI** – *As an operator, I want measured p95 numbers on PostgreSQL for every release.*
+
 Product
 - **UI v1** – *As a business user, I want to describe a workflow and see runs, approvals and costs in a browser.*
 - **Approval inbox + notifications** – *As an operator, I want approvals in Slack/Teams/mail with one-click decisions so that agents do not wait for me to open the UI.*
