@@ -4608,6 +4608,263 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/guidelines:
+    get:
+      summary: List development guideline sets (global, tenant, agent)
+      tags:
+        - policies
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        scope:
+                          type: string
+                          enum:
+                            - global
+                            - tenant
+                            - agent
+                        name:
+                          type: string
+                        version:
+                          type: string
+                        content:
+                          type: string
+                        rules:
+                          type: object
+                          propertyNames:
+                            type: string
+                          additionalProperties: {}
+                        createdAt:
+                          type: string
+                      required:
+                        - id
+                        - scope
+                        - name
+                        - version
+                        - content
+                        - rules
+                        - createdAt
+                      additionalProperties: false
+                required:
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: "Create an immutable guideline version (stricter rules always win: global -> tenant -> agent)"
+      tags:
+        - policies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum:
+                    - global
+                    - tenant
+                    - agent
+                name:
+                  type: string
+                  pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+                version:
+                  type: string
+                content:
+                  default: ""
+                  type: string
+                  maxLength: 200000
+                rules:
+                  type: object
+                  propertyNames:
+                    type: string
+                  additionalProperties: {}
+              required:
+                - scope
+                - name
+                - version
+                - rules
+      security:
+        - bearer: []
+      responses:
+        "201":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - global
+                      - tenant
+                      - agent
+                  name:
+                    type: string
+                  version:
+                    type: string
+                  content:
+                    type: string
+                  rules:
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties: {}
+                  createdAt:
+                    type: string
+                required:
+                  - id
+                  - scope
+                  - name
+                  - version
+                  - content
+                  - rules
+                  - createdAt
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/guidelines/review:
+    post:
+      summary: "Hardening agent: review a change (dependencies, coverage, commits, tests) of an agent against the resolved guidelines"
+      tags:
+        - policies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                change:
+                  type: object
+                  properties:
+                    addedDependencies:
+                      type: array
+                      items:
+                        type: string
+                    coveragePercent:
+                      type: number
+                      minimum: 0
+                      maximum: 100
+                    commitMessages:
+                      type: array
+                      items:
+                        type: string
+                    changedFiles:
+                      type: array
+                      items:
+                        type: string
+              required:
+                - agentId
+                - change
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  passed:
+                    type: boolean
+                  findings:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        rule:
+                          type: string
+                        message:
+                          type: string
+                      required:
+                        - rule
+                        - message
+                      additionalProperties: false
+                  applied:
+                    type: array
+                    items:
+                      type: string
+                required:
+                  - passed
+                  - findings
+                  - applied
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/policies/evaluate:
     post:
       summary: Dry-run the policy gate for a tool call
