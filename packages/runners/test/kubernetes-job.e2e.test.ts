@@ -15,6 +15,7 @@ describe.skipIf(!enabled)('kubernetes-job runner on a real cluster (OAX_TEST_KIN
     const client = new InClusterKubeClient({
       apiServer: process.env.OAX_TEST_KUBE_API!,
       token: process.env.OAX_TEST_KUBE_TOKEN ?? 'unused-with-kubectl-proxy',
+      allowInsecure: process.env.OAX_TEST_KUBE_API!.startsWith('http://'),
     });
     const runner = new KubernetesJobRunner({
       client,
@@ -22,6 +23,7 @@ describe.skipIf(!enabled)('kubernetes-job runner on a real cluster (OAX_TEST_KIN
         namespace: process.env.OAX_TEST_NAMESPACE ?? 'openagentix-runs',
         registry: process.env.OAX_TEST_REGISTRY ?? 'ghcr.io/open-agentix',
         runNodeImages: ['openagentix-worker'],
+        toolboxAllowlist: ['git+node'],
       },
     });
     const nodeId = crypto.randomUUID();

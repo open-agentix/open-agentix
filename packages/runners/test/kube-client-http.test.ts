@@ -40,7 +40,7 @@ describe('InClusterKubeClient default transport', () => {
       res.writeHead(404);
       res.end();
     });
-    const c = new InClusterKubeClient({ apiServer: url, token: 'tok' });
+    const c = new InClusterKubeClient({ apiServer: url, token: 'tok', allowInsecure: true });
     await expect(
       c.createJob('runs', { apiVersion: 'batch/v1', kind: 'Job', metadata: { name: 'j' } }),
     ).resolves.toEqual({ uid: 'U1' });
@@ -56,7 +56,11 @@ describe('InClusterKubeClient default transport', () => {
   });
 
   it('fails on connection errors', async () => {
-    const c = new InClusterKubeClient({ apiServer: 'http://127.0.0.1:1', token: 'x' });
+    const c = new InClusterKubeClient({
+      apiServer: 'http://127.0.0.1:1',
+      token: 'x',
+      allowInsecure: true,
+    });
     await expect(c.getJob('runs', 'j')).rejects.toThrow();
   });
 });

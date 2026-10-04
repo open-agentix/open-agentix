@@ -3,6 +3,10 @@
 # Everything is namespaced to the run namespace (OAX_K8S_NAMESPACE, default "openagentix-runs").
 # No ClusterRole, no list/watch, no access to Pods or Pod logs, no "get" on Secrets, no update.
 # Apply once per cluster; the Helm chart (open-agentix-helm) is expected to render the same rules.
+#
+# HARD PREREQUISITE: a CNI that ENFORCES NetworkPolicy (Calico, Cilium, the EKS VPC CNI with network
+# policy enabled, ...). Without one, every NetworkPolicy below is silently ignored and step Pods
+# have unrestricted egress. The runner cannot detect this; verify it once with a test Pod.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -22,11 +26,56 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  # ServiceAccount of the step Pods (OAX_K8S_SERVICE_ACCOUNT). It has NO Role binding at all.
-  # On EKS annotate it with eks.amazonaws.com/role-arn for a per-step IRSA role.
-  name: openagentix-worker
+  # ServiceAccount of the step Pods (OAX_K8S_SERVICE_ACCOUNT, default openagentix-run-node). It
+  # must differ from the worker's (the runner refuses equal names) and has NO Role binding at all.
+  # On EKS an IRSA annotation (eks.amazonaws.com/role-arn) here gives ALL steps of this runner the
+  # same role; per-step roles (one ServiceAccount per agent) are not supported yet.
+  name: openagentix-run-node
   namespace: openagentix-runs
 automountServiceAccountToken: false
+---
+# Static namespace-wide default deny. The per-step NetworkPolicies the runner creates are purely
+# additive on top of it, so a Pod that outlives or loses its own policy (termination, GC, a failed
+# delete) falls back to "no traffic" instead of "all traffic".
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: openagentix-runs
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Bounds for every container in the run namespace (the runner also clamps step limits to
+# OAX_K8S_RESOURCES_CPU / OAX_K8S_RESOURCES_MEMORY).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: run-node-limits
+  namespace: openagentix-runs
+spec:
+  limits:
+    - type: Container
+      min: { cpu: 50m, memory: 32Mi }
+      max: { cpu: '2', memory: 2Gi }
+      default: { cpu: 500m, memory: 512Mi }
+      defaultRequest: { cpu: 500m, memory: 512Mi }
+---
+# Caps what all concurrent steps together can consume (the runner starts one Job per step and
+# does not limit concurrency itself; the orchestrator's run concurrency and this quota do).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: run-node-quota
+  namespace: openagentix-runs
+spec:
+  hard:
+    pods: '50'
+    count/jobs.batch: '100'
+    requests.cpu: '25'
+    requests.memory: 50Gi
+    limits.cpu: '25'
+    limits.memory: 50Gi
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

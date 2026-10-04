@@ -28,7 +28,7 @@ describe('stub runners', () => {
   it('rejects invalid config', () => {
     expect(() => new StubRunner('github-actions', { repository: 'nope' })).toThrow();
     expect(RUNNER_CONFIG_SCHEMAS['kubernetes-job'].parse({}).serviceAccountName).toBe(
-      'openagentix-worker',
+      'openagentix-run-node',
     );
   });
 });

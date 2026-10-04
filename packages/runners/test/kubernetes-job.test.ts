@@ -10,6 +10,9 @@ import {
   buildSecret,
   isCidr,
   nodeObjectName,
+  effectiveResources,
+  parseCpu,
+  parseMemoryMb,
   planEgress,
   validateImage,
   type JobStatus,
@@ -22,6 +25,7 @@ import { KubernetesJobRunnerConfigSchema } from '../src/stubs.js';
 
 const DIGEST = `sha256:${'a'.repeat(64)}`;
 const NODE = '3b0f6c2e-7d1a-4c53-9a39-0f4b3c1d2e55';
+const OPEN = { toolboxAllowlist: ['git+node', 'trivy'], egress: ['10.0.0.0/8'] };
 const RUN = '8f14e45f-ceea-467a-9575-1d5a1c3e9f10';
 const TOKEN = 'oaxrt.SECRET-TOKEN-VALUE';
 
@@ -42,6 +46,8 @@ function spec(over: Partial<RunNodeSpec> = {}): RunNodeSpec {
 function cfg(over: Record<string, unknown> = {}): KubernetesJobRunnerConfig {
   return KubernetesJobRunnerConfigSchema.parse({
     namespace: 'runs',
+    toolboxAllowlist: ['git+node', 'trivy'],
+    egress: ['10.0.0.0/8', '192.0.2.0/24'],
     controlPlane: {
       namespaceSelector: { team: 'oax' },
       podSelector: { app: 'api' },
@@ -57,8 +63,12 @@ class FakeKube implements KubeClient {
   secrets = new Map<string, KubeObject>();
   policies = new Map<string, KubeObject>();
   patches: Record<string, unknown>[] = [];
+  deleteUids: Record<string, string | undefined> = {};
   statuses: (JobStatus | null)[] = [];
   failOn = new Set<string>();
+  /** Job status after deleteJob: how many getJob calls still see the terminating Job. */
+  lingerPolls = 0;
+  deleted = false;
 
   private maybeFail(op: string) {
     this.calls.push(op);
@@ -76,32 +86,45 @@ class FakeKube implements KubeClient {
   }
   async getJob(): Promise<JobStatus | null> {
     this.calls.push('getJob');
+    if (this.deleted) {
+      if (this.lingerPolls > 0) {
+        this.lingerPolls--;
+        return st({ active: 0 });
+      }
+      return null;
+    }
     return this.statuses.length > 1 ? (this.statuses.shift() ?? null) : (this.statuses[0] ?? null);
   }
-  async deleteJob(_ns: string, name: string) {
+  async deleteJob(_ns: string, name: string, uid?: string) {
     this.maybeFail('deleteJob');
+    this.deleteUids.job = uid;
     this.jobs.delete(name);
+    this.deleted = true;
   }
   async createSecret(_ns: string, s: KubeObject) {
     this.maybeFail('createSecret');
     this.secrets.set(s.metadata.name, s);
+    return { uid: 'secret-uid-1' };
   }
-  async deleteSecret(_ns: string, name: string) {
+  async deleteSecret(_ns: string, name: string, uid?: string) {
     this.maybeFail('deleteSecret');
+    this.deleteUids.secret = uid;
     this.secrets.delete(name);
   }
   async createNetworkPolicy(_ns: string, p: KubeObject) {
     this.maybeFail('createNetworkPolicy');
     this.policies.set(p.metadata.name, p);
+    return { uid: 'policy-uid-1' };
   }
-  async deleteNetworkPolicy(_ns: string, name: string) {
+  async deleteNetworkPolicy(_ns: string, name: string, uid?: string) {
     this.maybeFail('deleteNetworkPolicy');
+    this.deleteUids.policy = uid;
     this.policies.delete(name);
   }
 }
 
 const st = (over: Partial<JobStatus> = {}): JobStatus => ({
-  uid: 'u',
+  uid: 'job-uid-1',
   succeeded: 0,
   failed: 0,
   active: 1,
@@ -144,8 +167,12 @@ describe('manifests', () => {
       capabilities: { drop: ['ALL'] },
       seccompProfile: { type: 'RuntimeDefault' },
     });
-    expect(c.resources.limits).toEqual({ cpu: '0.5', memory: '256Mi', 'ephemeral-storage': '1Gi' });
-    expect(c.resources.requests).toEqual({ cpu: '0.5', memory: '256Mi' });
+    expect(c.resources.limits).toEqual({
+      cpu: '500m',
+      memory: '256Mi',
+      'ephemeral-storage': '1Gi',
+    });
+    expect(c.resources.requests).toEqual({ cpu: '500m', memory: '256Mi' });
     expect(c.command).toEqual(['oax', 'run-node']);
     expect(pod.volumes).toEqual([
       {
@@ -189,8 +216,10 @@ describe('manifests', () => {
       buildJob(spec({ limits: { cpus: 0, memoryMb: 1, timeoutSeconds: 1, pids: 1 } }), cfg()),
     ).toThrow(/limits/);
     expect(() => buildJob(spec({ controlUrl: 'ftp://x' }), cfg())).toThrow(/controlUrl/);
+    expect(() => buildJob(spec({ controlUrl: 'http://oax.example.org' }), cfg())).toThrow(/https/);
     expect(() => buildJob(spec({ runId: 'bad id!' }), cfg())).toThrow(/runId/);
-    expect(() => buildJob(spec({ nodeId: '!!!' }), cfg())).toThrow(/nodeId|Kubernetes name/);
+    expect(() => buildJob(spec({ nodeId: '!!!' }), cfg())).toThrow(/UUID/);
+    expect(() => buildJob(spec({ nodeId: 'ABC_def' }), cfg())).toThrow(/UUID/);
   });
 
   it('builds a Secret with the run token only', () => {
@@ -201,7 +230,7 @@ describe('manifests', () => {
   });
 
   it('builds a deny-by-default NetworkPolicy with an explicit allowlist', () => {
-    const p = buildNetworkPolicy(spec(), cfg({ egress: ['192.0.2.0/24'] })) as any;
+    const p = buildNetworkPolicy(spec({ egress: ['10.1.0.0/16', '192.0.2.0/25'] }), cfg()) as any;
     expect(p.spec.policyTypes).toEqual(['Ingress', 'Egress']);
     expect(p.spec.ingress).toEqual([]);
     expect(p.spec.podSelector.matchLabels['openagentix.io/node-id']).toBe(NODE);
@@ -220,9 +249,10 @@ describe('manifests', () => {
       ],
       ports: [{ protocol: 'TCP', port: 8080 }],
     });
-    expect(egress.slice(2).map((e: any) => e.to[0].ipBlock.cidr)).toEqual(
-      ['10.1.0.0/16', '192.0.2.0/24'].sort(),
-    );
+    expect(egress.slice(2).map((e: any) => e.to[0].ipBlock.cidr)).toEqual([
+      '10.1.0.0/16',
+      '192.0.2.0/25',
+    ]);
   });
 
   it('opens nothing but control plane and DNS when no egress is declared', () => {
@@ -244,32 +274,103 @@ describe('manifests', () => {
   });
 });
 
-describe('egress planning and image validation', () => {
-  it('classifies CIDRs and hosts, refuses open-ended entries', () => {
-    expect(planEgress(['b.example.org', '10.0.0.0/8', ' ', '*.x.io'], ['10.0.0.0/8'])).toEqual({
-      cidrs: ['10.0.0.0/8'],
+describe('egress planning (operator list is an upper bound)', () => {
+  it('classifies CIDRs and hosts and only narrows the operator ceiling', () => {
+    expect(planEgress(['b.example.org', '10.2.0.0/16', ' ', '*.x.io'], cfg())).toEqual({
+      cidrs: [{ cidr: '10.2.0.0/16', except: [] }],
       hosts: ['*.x.io', 'b.example.org'],
     });
-    expect(planEgress(['2001:db8::/32'], []).cidrs).toEqual(['2001:db8::/32']);
-    expect(() => planEgress(['0.0.0.0/0'], [])).toThrow(/all destinations/);
-    expect(() => planEgress(['10.0.0.256/8'], [])).toThrow(/valid CIDR/);
-    expect(() => planEgress(['10.0.0.1'], [])).toThrow(/valid CIDR/);
-    expect(() => planEgress(['bad host'], [])).toThrow(/neither/);
+    // nothing declared = nothing opened, even if the operator list is wide
+    expect(planEgress([], cfg())).toEqual({ cidrs: [], hosts: [] });
+    expect(() => planEgress(['10.0.0.256/8'], cfg())).toThrow(/valid CIDR/);
+    expect(() => planEgress(['10.0.0.1'], cfg())).toThrow(/valid CIDR/);
+    expect(() => planEgress(['bad host'], cfg())).toThrow(/neither/);
     expect(isCidr('1.2.3.4/33')).toBe(false);
+    expect(isCidr('1.2.3/24')).toBe(false);
   });
 
-  it('only runs digest-pinned, allowlisted images from the registry', () => {
+  it('rejects CIDRs outside the operator ceiling (superset, other range)', () => {
+    expect(() => planEgress(['11.0.0.0/8'], cfg())).toThrow(/outside the operator/);
+    expect(() => planEgress(['10.0.0.0/7'], cfg())).toThrow(/too broad|outside/);
+    expect(() => planEgress(['203.0.113.0/24'], cfg())).toThrow(/outside the operator/);
+    // empty operator list: no step CIDR at all
+    expect(() => planEgress(['10.1.0.0/16'], cfg({ egress: [] }))).toThrow(/outside the operator/);
+  });
+
+  it('rejects a /1 split, /0 and over-broad prefixes (v4 >= /8, v6 >= /32)', () => {
+    const wide = cfg({ egress: ['0.0.0.0/1', '128.0.0.0/1', '::/1'] });
+    expect(() => planEgress(['0.0.0.0/1'], wide)).toThrow(/too broad/);
+    expect(() => planEgress(['128.0.0.0/1'], wide)).toThrow(/too broad/);
+    expect(() => planEgress(['::/1'], wide)).toThrow(/too broad/);
+    expect(() => planEgress(['0.0.0.0/0'], cfg())).toThrow(/too broad/);
+    // the operator list itself must obey the minimum prefix
+    expect(() => planEgress(['10.1.0.0/16'], wide)).toThrow(/operator egress entry .* too broad/);
+    expect(() => planEgress(['2001:db8::/31'], cfg({ egress: ['2001:db8::/31'] }))).toThrow(
+      /too broad/,
+    );
+  });
+
+  it('never opens IMDS, link-local or loopback, v4 and v6', () => {
+    const open = cfg({
+      egress: ['169.254.0.0/16', '127.0.0.0/8', '10.0.0.0/8', '2001:db8::/32', 'fd00:ec2::/32'],
+    });
+    expect(() => planEgress(['169.254.169.254/32'], open)).toThrow(/always-denied/);
+    expect(() => planEgress(['169.254.0.0/16'], open)).toThrow(/always-denied/);
+    expect(() => planEgress(['127.0.0.0/8'], open)).toThrow(/always-denied/);
+    expect(() => planEgress(['fd00:ec2::254/128'], open)).toThrow(/always-denied/);
+    expect(() => planEgress(['fd00:ec2::/32'], open)).not.toThrow(); // punched out via except
+  });
+
+  it('punches always-denied and configured ranges out of an allowed CIDR with except', () => {
+    const c = cfg({
+      egress: ['10.0.0.0/8', '2001:db8::/32'],
+      denyCidrs: ['10.244.0.0/16', '10.96.0.0/12', '192.0.2.0/24', '2001:db8:1::/48'],
+    });
+    expect(planEgress(['10.0.0.0/8', '2001:db8::/32'], c).cidrs).toEqual([
+      { cidr: '10.0.0.0/8', except: ['10.244.0.0/16', '10.96.0.0/12'] },
+      { cidr: '2001:db8::/32', except: ['2001:db8:1::/48'] },
+    ]);
+    expect(() => planEgress(['10.244.1.0/24'], c)).toThrow(/always-denied/);
+    expect(() =>
+      planEgress(['10.0.0.0/8'], cfg({ egress: ['10.0.0.0/8'], denyCidrs: ['nope'] })),
+    ).toThrow(/deny CIDR/);
+    const p = buildNetworkPolicy(spec({ egress: ['10.0.0.0/8'] }), c) as any;
+    expect(p.spec.egress.at(-1).to[0].ipBlock).toEqual({
+      cidr: '10.0.0.0/8',
+      except: ['10.244.0.0/16', '10.96.0.0/12'],
+    });
+  });
+
+  it('refuses any step egress in air-gapped mode', () => {
+    const c = cfg({ airgapped: true });
+    expect(() => planEgress(['10.1.0.0/16'], c)).toThrow(/air-gapped/);
+    expect(() => planEgress(['api.example.org'], c)).toThrow(/air-gapped/);
+    expect(planEgress([], c)).toEqual({ cidrs: [], hosts: [] });
+  });
+});
+
+describe('image validation', () => {
+  it('only runs digest-pinned images allowlisted by exact repository path', () => {
     const c = cfg({ toolboxAllowlist: ['git+node'], runNodeImages: ['openagentix-worker'] });
     expect(() => validateImage(`ghcr.io/open-agentix/toolbox-git-node@${DIGEST}`, c)).not.toThrow();
     expect(() =>
       validateImage(`ghcr.io/open-agentix/openagentix-worker@${DIGEST}`, c),
     ).not.toThrow();
+    // case is normalised
+    expect(() => validateImage(`GHCR.io/Open-Agentix/Toolbox-Git-Node@${DIGEST}`, c)).not.toThrow();
     expect(() => validateImage(`ghcr.io/open-agentix/toolbox-trivy@${DIGEST}`, c)).toThrow(
       /allowlist/,
     );
     expect(() => validateImage(`ghcr.io/open-agentix/other@${DIGEST}`, c)).toThrow(
       /run node image/,
     );
+    // exact path, not basename: nested paths do not match
+    expect(() => validateImage(`ghcr.io/open-agentix/evil/toolbox-git-node@${DIGEST}`, c)).toThrow(
+      /run node image/,
+    );
+    expect(() =>
+      validateImage(`ghcr.io/open-agentix/evil/openagentix-worker@${DIGEST}`, c),
+    ).toThrow(/run node image/);
     expect(() => validateImage(`evil.io/open-agentix/toolbox-git-node@${DIGEST}`, c)).toThrow(
       /registry/,
     );
@@ -279,15 +380,81 @@ describe('egress planning and image validation', () => {
     expect(() => validateImage(`ghcr.io/open-agentix/toolbox-git-node:1@${DIGEST}`, c)).toThrow(
       /tag/,
     );
-    // empty allowlist = any toolbox
-    expect(() =>
-      validateImage(`ghcr.io/open-agentix/toolbox-trivy@${DIGEST}`, cfg()),
-    ).not.toThrow();
   });
 
-  it('derives valid object names', () => {
-    expect(nodeObjectName('ABC_def.1')).toBe('oax-step-abc-def-1');
-    expect(nodeObjectName('x'.repeat(80)).length).toBeLessThanOrEqual(57);
+  it('an empty toolbox allowlist allows no toolbox (fail closed)', () => {
+    expect(() =>
+      validateImage(`ghcr.io/open-agentix/toolbox-trivy@${DIGEST}`, cfg({ toolboxAllowlist: [] })),
+    ).toThrow(/allowlist/);
+  });
+
+  it('derives collision-free object names from UUIDs only', () => {
+    expect(nodeObjectName(NODE.toUpperCase())).toBe(`oax-step-${NODE}`);
+    expect(() => nodeObjectName('ABC_def')).toThrow(/UUID/);
+    expect(() => nodeObjectName('abc.def')).toThrow(/UUID/);
+  });
+});
+
+describe('resources and identity', () => {
+  it('clamps step limits into [floor, operator ceiling] and never yields 0', () => {
+    const c = cfg({ resources: { cpu: '1', memory: '1Gi' } });
+    const lim = (cpus: number, memoryMb: number) => ({
+      cpus,
+      memoryMb,
+      timeoutSeconds: 10,
+      pids: 1,
+    });
+    expect(effectiveResources(lim(0.0001, 1), c)).toEqual({ cpu: '50m', memory: '32Mi' });
+    expect(effectiveResources(lim(64, 99999), c)).toEqual({ cpu: '1000m', memory: '1024Mi' });
+    expect(effectiveResources(lim(0.25, 200.2), c)).toEqual({ cpu: '250m', memory: '201Mi' });
+    // ceiling below the floor wins
+    expect(
+      effectiveResources(lim(1, 1000), cfg({ resources: { cpu: '10m', memory: '16Mi' } })),
+    ).toEqual({
+      cpu: '10m',
+      memory: '16Mi',
+    });
+    expect(() => effectiveResources(lim(Number.NaN, 1), c)).toThrow(/finite/);
+    expect(() => effectiveResources(lim(Infinity, 1), c)).toThrow(/finite/);
+    const job = buildJob(spec({ limits: lim(99, 99999) }), c) as any;
+    expect(job.spec.template.spec.containers[0].resources.limits.cpu).toBe('1000m');
+  });
+
+  it('parses quantities', () => {
+    expect(parseCpu('500m')).toBe(0.5);
+    expect(parseCpu('2')).toBe(2);
+    expect(() => parseCpu('x')).toThrow(/cpu/);
+    expect(parseMemoryMb('512Mi')).toBe(512);
+    expect(parseMemoryMb('1Gi')).toBe(1024);
+    expect(parseMemoryMb('2048Ki')).toBe(2);
+    expect(parseMemoryMb(String(1024 * 1024 * 3))).toBe(3);
+    expect(parseMemoryMb('1G')).toBeCloseTo(953.67, 1);
+    expect(parseMemoryMb('1M')).toBeCloseTo(0.954, 2);
+    expect(parseMemoryMb('1024K')).toBeCloseTo(0.977, 2);
+    expect(() => parseMemoryMb('lots')).toThrow(/memory/);
+  });
+
+  it('refuses the worker ServiceAccount and namespace for step Pods', () => {
+    const mkr = (config: Record<string, unknown>) =>
+      new KubernetesJobRunner({ client: new FakeKube(), config });
+    expect(KubernetesJobRunnerConfigSchema.parse({}).serviceAccountName).toBe(
+      'openagentix-run-node',
+    );
+    expect(() => mkr({ serviceAccountName: 'openagentix-worker' })).toThrow(/ServiceAccount/);
+    expect(() => mkr({ serviceAccountName: 'w', workerServiceAccount: 'w' })).toThrow(
+      /ServiceAccount/,
+    );
+    expect(() => mkr({ namespace: 'ctl', workerNamespace: 'ctl' })).toThrow(/namespace/);
+    expect(() => mkr({ namespace: 'runs', workerNamespace: 'ctl' })).not.toThrow();
+  });
+
+  it('rejects empty controlPlane selectors', () => {
+    expect(() =>
+      KubernetesJobRunnerConfigSchema.parse({ controlPlane: { podSelector: {} } }),
+    ).toThrow(/must not be empty/);
+    expect(() =>
+      KubernetesJobRunnerConfigSchema.parse({ controlPlane: { namespaceSelector: {} } }),
+    ).toThrow(/must not be empty/);
   });
 });
 
@@ -295,7 +462,7 @@ describe('KubernetesJobRunner lifecycle', () => {
   const mk = (kube: FakeKube, extra: Record<string, unknown> = {}) =>
     new KubernetesJobRunner({
       client: kube,
-      config: { namespace: 'runs', ...extra },
+      config: { namespace: 'runs', ...OPEN, ...extra },
       pollMs: 1,
       sleep: async () => undefined,
     });
@@ -303,13 +470,18 @@ describe('KubernetesJobRunner lifecycle', () => {
   it('starts one suspended Job with owned NetworkPolicy and Secret, then unsuspends', async () => {
     const kube = new FakeKube();
     const warn = vi.fn();
-    const r = new KubernetesJobRunner({ client: kube, config: { namespace: 'runs' }, warn });
+    const r = new KubernetesJobRunner({
+      client: kube,
+      config: { namespace: 'runs', ...OPEN },
+      warn,
+    });
     const h = await r.startNode(spec(), {});
     expect(r.kind).toBe('kubernetes-job');
     expect(kube.calls).toEqual(['createJob', 'createNetworkPolicy', 'createSecret', 'patchJob']);
     expect(kube.patches).toEqual([{ spec: { suspend: false } }]);
     const owner = (kube.secrets.values().next().value as KubeObject).metadata.ownerReferences![0]!;
     expect(owner).toMatchObject({ kind: 'Job', uid: 'job-uid-1', controller: true });
+    expect(owner).not.toHaveProperty('blockOwnerDeletion');
     expect(kube.policies.values().next().value!.metadata.ownerReferences).toEqual([owner]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('api.example.org'));
     expect(h.nodeId).toBe(NODE);
@@ -338,7 +510,11 @@ describe('KubernetesJobRunner lifecycle', () => {
   it('wait: abort returns cancelled, also while sleeping', async () => {
     const kube = new FakeKube();
     kube.statuses = [st()];
-    const r = new KubernetesJobRunner({ client: kube, config: { namespace: 'runs' }, pollMs: 5 });
+    const r = new KubernetesJobRunner({
+      client: kube,
+      config: { namespace: 'runs', ...OPEN },
+      pollMs: 5,
+    });
     const h = await r.startNode(spec(), {});
     const ac = new AbortController();
     const p = h.wait(ac.signal);
@@ -347,36 +523,108 @@ describe('KubernetesJobRunner lifecycle', () => {
     await expect(h.wait(ac.signal)).resolves.toEqual({ exitCode: null, reason: 'cancelled' });
   });
 
-  it('stop deletes Job, Secret and NetworkPolicy, idempotently', async () => {
+  it('stop deletes Job, Secret and NetworkPolicy by uid, idempotently', async () => {
     const kube = new FakeKube();
     const h = await mk(kube).startNode(spec(), {});
     await h.stop('cancelled');
     await h.stop('cancelled');
     expect(kube.jobs.size + kube.secrets.size + kube.policies.size).toBe(0);
     expect(kube.calls.filter((c) => c === 'deleteJob')).toHaveLength(1);
+    expect(kube.deleteUids).toEqual({
+      job: 'job-uid-1',
+      secret: 'secret-uid-1',
+      policy: 'policy-uid-1',
+    });
   });
 
-  it('stop tries everything, reports failures once and can be retried', async () => {
+  it('deletes the NetworkPolicy LAST, only after the Pods are gone', async () => {
+    const kube = new FakeKube();
+    const h = await mk(kube).startNode(spec(), {});
+    kube.calls.length = 0;
+    kube.lingerPolls = 3; // Job still terminating (Pods running) for three polls
+    await h.stop('timeout');
+    const order = kube.calls;
+    const del = order.indexOf('deleteJob');
+    const pol = order.indexOf('deleteNetworkPolicy');
+    expect(del).toBeGreaterThanOrEqual(0);
+    expect(pol).toBe(order.length - 1); // very last call
+    // every poll that still saw the terminating Job happened before the policy was removed
+    expect(order.slice(del, pol).filter((c) => c === 'getJob')).toHaveLength(4);
+  });
+
+  it('keeps the NetworkPolicy when the Pods are not confirmed gone', async () => {
+    const kube = new FakeKube();
+    const r = new KubernetesJobRunner({
+      client: kube,
+      config: { namespace: 'runs', ...OPEN },
+      pollMs: 1,
+      cleanupTimeoutMs: 3,
+      sleep: async () => undefined,
+    });
+    const h = await r.startNode(spec(), {});
+    kube.lingerPolls = 100;
+    await expect(h.stop('timeout')).rejects.toThrow(/NetworkPolicy kept/);
+    expect(kube.policies.size).toBe(1);
+    expect(kube.calls).not.toContain('deleteNetworkPolicy');
+    kube.lingerPolls = 0; // retry succeeds once the Pods are gone
+    await expect(h.stop('timeout')).resolves.toBeUndefined();
+    expect(kube.policies.size).toBe(0);
+  });
+
+  it('keeps the policy when deleting the Job failed; reports once; can be retried', async () => {
     const kube = new FakeKube();
     const h = await mk(kube).startNode(spec(), {});
     kube.failOn.add('deleteJob');
     await expect(h.stop('timeout')).rejects.toThrow(/cleanup of run node .* boom deleteJob/);
-    expect(kube.secrets.size + kube.policies.size).toBe(0);
+    expect(kube.secrets.size).toBe(0);
+    expect(kube.policies.size).toBe(1); // Pods may still run: policy stays
     kube.failOn.clear();
     await expect(h.stop('timeout')).resolves.toBeUndefined();
-    expect(kube.jobs.size).toBe(0);
+    expect(kube.policies.size).toBe(0);
   });
 
-  it('rolls back a half-created node when startup fails', async () => {
-    for (const op of ['createNetworkPolicy', 'createSecret', 'patchJob']) {
+  it('reports secret and policy delete failures', async () => {
+    const kube = new FakeKube();
+    const h = await mk(kube).startNode(spec(), {});
+    kube.failOn.add('deleteSecret').add('deleteNetworkPolicy');
+    await expect(h.stop('step_end')).rejects.toThrow(/boom deleteSecret; boom deleteNetworkPolicy/);
+  });
+
+  it('rolls back only what this call created when startup fails', async () => {
+    for (const [op, left] of [
+      ['createNetworkPolicy', []],
+      ['createSecret', []],
+      ['patchJob', []],
+    ] as const) {
       const kube = new FakeKube();
       kube.failOn.add(op);
       await expect(mk(kube).startNode(spec(), {})).rejects.toThrow(`boom ${op}`);
-      expect(kube.jobs.size + kube.secrets.size + kube.policies.size).toBe(0);
+      expect(kube.jobs.size + kube.secrets.size + kube.policies.size).toBe(left.length);
     }
+  });
+
+  it('never deletes anything after a failed createJob (e.g. 409 name collision)', async () => {
     const kube = new FakeKube();
     kube.failOn.add('createJob');
     await expect(mk(kube).startNode(spec(), {})).rejects.toThrow('boom createJob');
+    expect(kube.calls).toEqual(['createJob']);
+  });
+
+  it('does not delete a NetworkPolicy or Secret it did not create (409 on create)', async () => {
+    const kube = new FakeKube();
+    kube.failOn.add('createNetworkPolicy');
+    await expect(mk(kube).startNode(spec(), {})).rejects.toThrow('boom createNetworkPolicy');
+    expect(kube.calls).not.toContain('deleteNetworkPolicy');
+    expect(kube.calls).not.toContain('deleteSecret');
+    expect(kube.calls).toContain('deleteJob');
+    expect(kube.deleteUids.job).toBe('job-uid-1');
+  });
+
+  it('wait treats a Job with another uid as missing', async () => {
+    const kube = new FakeKube();
+    const h = await mk(kube).startNode(spec(), {});
+    kube.statuses = [st({ uid: 'someone-elses', succeeded: 1 })];
+    await expect(h.wait()).resolves.toEqual({ exitCode: null, reason: 'job_missing' });
   });
 
   it('validates before any API call and honours an aborted signal', async () => {
@@ -440,18 +688,17 @@ describe('InClusterKubeClient', () => {
   }
   const obj: KubeObject = { apiVersion: 'v1', kind: 'X', metadata: { name: 'n' } };
 
-  it('maps calls to the namespaced REST paths', async () => {
+  it('maps calls to the namespaced REST paths and returns uids', async () => {
     const { c, reqs } = client((r) =>
-      r.method === 'POST' && r.path.endsWith('/jobs')
-        ? { status: 201, body: { metadata: { uid: 'U' } } }
-        : { status: 200 },
+      r.method === 'POST' ? { status: 201, body: { metadata: { uid: 'U' } } } : { status: 200 },
     );
     await expect(c.createJob('runs', obj)).resolves.toEqual({ uid: 'U' });
     await c.patchJob('runs', 'j', { a: 1 });
-    await c.createSecret('runs', obj);
-    await c.createNetworkPolicy('runs', obj);
-    await c.deleteJob('runs', 'j');
-    await c.deleteSecret('runs', 's');
+    await expect(c.createSecret('runs', obj)).resolves.toEqual({ uid: 'U' });
+    await expect(c.createNetworkPolicy('runs', obj)).resolves.toEqual({ uid: 'U' });
+    await c.deleteJob('runs', 'j', 'JU');
+    await c.deleteSecret('runs', 's', 'SU');
+    await c.deleteNetworkPolicy('runs', 'p', 'PU');
     await c.deleteNetworkPolicy('runs', 'p');
     expect(reqs.map((r) => `${r.method} ${r.path}`)).toEqual([
       'POST /apis/batch/v1/namespaces/runs/jobs',
@@ -461,9 +708,34 @@ describe('InClusterKubeClient', () => {
       'DELETE /apis/batch/v1/namespaces/runs/jobs/j',
       'DELETE /api/v1/namespaces/runs/secrets/s',
       'DELETE /apis/networking.k8s.io/v1/namespaces/runs/networkpolicies/p',
+      'DELETE /apis/networking.k8s.io/v1/namespaces/runs/networkpolicies/p',
     ]);
     expect(reqs[1].contentType).toBe('application/merge-patch+json');
-    expect(reqs[4].body).toEqual({ propagationPolicy: 'Background' });
+    expect(reqs[4].body).toEqual({ propagationPolicy: 'Foreground', preconditions: { uid: 'JU' } });
+    expect(reqs[5].body).toEqual({ preconditions: { uid: 'SU' } });
+    expect(reqs[6].body).toEqual({ preconditions: { uid: 'PU' } });
+    expect(reqs[7].body).toBeUndefined();
+  });
+
+  it('treats a failed uid precondition (409) as "not ours": nothing to delete', async () => {
+    const { c } = client(() => ({ status: 409, body: { message: 'precondition failed' } }));
+    await expect(c.deleteJob('runs', 'j', 'JU')).resolves.toBeUndefined();
+    await expect(c.deleteSecret('runs', 's', 'SU')).resolves.toBeUndefined();
+    // without a precondition a 409 is a real error
+    await expect(c.deleteSecret('runs', 's')).rejects.toThrow(/HTTP 409/);
+  });
+
+  it('refuses a plain-http API server unless explicitly allowed', () => {
+    expect(() => new InClusterKubeClient({ apiServer: 'http://k8s', token: 't' })).toThrow(/https/);
+    expect(
+      () =>
+        new InClusterKubeClient({
+          apiServer: 'http://127.0.0.1:8001',
+          token: 't',
+          allowInsecure: true,
+        }),
+    ).not.toThrow();
+    expect(() => new InClusterKubeClient({ apiServer: 'https://k8s', token: 't' })).not.toThrow();
   });
 
   it('treats 404 on delete as success and surfaces other errors', async () => {
