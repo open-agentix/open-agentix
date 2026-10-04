@@ -22,6 +22,21 @@ describe('login', () => {
     await expectNoA11yViolations();
   });
 
+  it('sends signed-out visitors on an unknown path to the login page', async () => {
+    const { router } = await renderApp('/does/not/exist', { signedIn: false });
+    await heading('Sign in');
+    expect(router.state.location.pathname).toBe('/login');
+    expect(router.state.location.search).toEqual({});
+    expect(screen.queryByText(/page not found/i)).not.toBeInTheDocument();
+  });
+
+  it('still shows the not-found page to signed-in users', async () => {
+    const { router } = await renderApp('/does/not/exist');
+    expect(await screen.findByText('Page not found')).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/does/not/exist');
+    expect(screen.getByRole('link', { name: /back to the dashboard/i })).toBeInTheDocument();
+  });
+
   it('validates empty input and shows a wrong-password message', async () => {
     server.use(
       http.post(api('/v1/auth/login'), () =>

@@ -613,6 +613,7 @@
     "verify": "Verify hash chain",
     "verifyOk": "The audit trail is intact.",
     "verifyDetails": "{entries} entries and {checkpoints} signed checkpoints checked; head is #{seq}.",
+    "verifyDetailsEmpty": "{entries} entries and {checkpoints} signed checkpoints checked; the trail is empty.",
     "verifyFailed": {
       "one": "Tampering detected: {count} problem",
       "other": "Tampering detected: {count} problems"

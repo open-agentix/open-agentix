@@ -21,11 +21,26 @@ All notable changes to this project are documented here. The format follows
   session, only for references the tenant allows (`tenants.secret_refs`, empty = nothing, migration
   `0009`; `PATCH /v1/tenants/{id}` `secretRefs`), audited as `runnode.started`, `credential.issued`,
   `credential.denied`, `credential.revoked`, `runnode.stopped`, `runner.unsafe_socket` without values.
-  A revoked or expired session kills its token immediately; a node token can never complete a run or
-  act for another step. An egress allowlist proxy (`CONNECT`, per-node accounts, deny by default,
-  air-gapped policy on top) enforces `runtime.egress`. New `GET /v1/worker/runs/{id}/handover`,
+  A revoked or expired session kills its token immediately (also when another worker takes the run
+  over); node-reported cost and tokens are dropped, nodes receive the remaining budget; a node token can never complete a run or
+  act for another step. A separate egress proxy service (`CONNECT`, signed per-node grants, operator ceiling
+  `OAX_CONTAINER_EGRESS_ALLOW`, private/metadata/loopback ranges closed, air-gapped policy on top)
+  enforces `runtime.egress`. New `GET /v1/worker/runs/{id}/handover`,
   `POST .../handover/result`; Compose profile `container-runner`; `docs/runners.md`. **Not yet**: run
   nodes cannot call models except the keyless `simulated` provider until the model proxy (W1-3b).
+- **Kubernetes Job runner (W1-4)**: `KubernetesJobRunner` implements the isolating-runner contract
+  of ADR 0008: one suspended Job per step plus an owner-referenced deny-by-default NetworkPolicy
+  (DNS, control node and egress CIDR allowlist) and a Secret holding only the run token, then
+  unsuspend; everything is deleted on stop. Hardened Pods (non-root, read-only rootfs, drop ALL,
+  seccomp RuntimeDefault, no ServiceAccount token, resource limits, `activeDeadlineSeconds`,
+  `ttlSecondsAfterFinished`, no secrets in env), digest-pinned and allowlisted images only, minimal
+  namespaced RBAC (`docs/examples/kubernetes-job-runner-rbac.yaml`), in-cluster API client without
+  extra dependencies. Security-reviewed: operator egress is an upper bound (steps can only narrow,
+  min prefix /8 and /32, IMDS/link-local/loopback and `OAX_K8S_DENY_CIDRS` excluded, no step egress
+  when air-gapped), Foreground Job deletion with the NetworkPolicy removed last, a static
+  default-deny policy, uid-tracked cleanup, UUID-only node ids, clamped resources with LimitRange
+  and ResourceQuota, a dedicated step ServiceAccount (`openagentix-run-node`), fail-closed toolbox
+  allowlist and an explicit admission-signature acknowledgement. The `kubernetes-job` `StubRunner` is gone. `docs/kubernetes-job-runner.md`.
 - **Agent Check and Agent Plan v1 (advisory)**: strict `AgentPlan` schema, deterministic
   least-privilege lint `LP001`-`LP008` with a fixed JSON output, optional model-assisted notes that
   can only add `info`/`warning` findings (untrusted, schema-validated, costed and budget-checked),
@@ -116,6 +131,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **Breaking (pre-1.0)**: MCP connection secrets of in-process runs are resolved through the tenant
+  allowlist `tenants.secret_refs` (empty by default, canonical comparison); set it for tenants whose
+  connections use secrets. Tenant slugs that overlap in canonical form (`acme`, `acme-corp`) cannot
+  be created together, and the tenant prefix check of connection secrets is canonical.
 - A step whose effective runner is isolating is never executed inline by the worker: without an
   enabled runner the run fails with `runner_unavailable`. The `container` runner is no longer a stub;
   publishing also refuses per-step runners that are not enabled.
@@ -131,6 +150,16 @@ All notable changes to this project are documented here. The format follows
 
 - `docker-compose.yml`: the `volumes:` section contained a copy of the `ui` service and a dangling
   `ollama:` key; it now declares `pgdata` and `ollama`.
+- **Release workflow**: the api image is built for linux/amd64 only; the QEMU arm64 build exceeded the 60 minute job timeout and the api image was never published (worker and ui keep amd64 and arm64).
+
+- **Costs page "request validation failed"**: `GET /v1/costs/summary` and `/v1/costs/export` now accept
+  `from`/`to` as a date (`YYYY-MM-DD`) or a full ISO 8601 timestamp and round it down to the first
+  day of its month (UTC); the UI sends plain `YYYY-MM-DD` dates (local calendar, no timezone shift on
+  the first of the month). Affects "This month", "Last 30 days" and the dashboard spend tile.
+- **Audit "Verify hash chain" showed head #0 with an all-zero hash for tenants**: the tenant-scoped
+  result now reports the tenant's own latest entry (real sequence number and hash) instead of a
+  placeholder; the UI no longer prints a head for an empty trail.
+- **UI unknown routes**: signed-out visitors opening an unknown path are redirected to `/login` instead of seeing the "Page not found" page; signed-in users still get the not-found page.
 - **Database password override**: `OAX_DATABASE_PASSWORD` / `PGPASSWORD` were ignored with pg 8.23 when the connection string contained no password (SCRAM error "client password must be a string"); the password is now injected into the connection string (URL-encoded).
 
 ## [0.1.0] - 2026-10-04

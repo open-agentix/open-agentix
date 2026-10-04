@@ -22,7 +22,19 @@ const ENV = {
   OAX_CONTAINER_NETWORK: 'oax-nodes',
   OAX_NODE_CONTROL_URL: 'http://api:8080',
   OAX_WORKER_POLL_MS: '20',
+  OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',
+  OAX_CONTAINER_EGRESS_GRANT_SECRET: 'g'.repeat(40),
+  OAX_CONTAINER_EGRESS_ALLOW: 'jira.example.com,crm.example.com',
 };
+/** The default tenant starts without any secret; these tests need one. */
+const allowSecrets = (node: TestNode) =>
+  node.req({ method: 'GET', url: '/v1/tenants' }).then((r) =>
+    node.req({
+      method: 'PATCH',
+      url: `/v1/tenants/${r.json().items[0].id}`,
+      payload: { secretRefs: ['mail-hook'] },
+    }),
+  );
 
 const source = (name: string, action: string) => `---
 apiVersion: openagentix.io/v1alpha1
@@ -188,6 +200,7 @@ async function runWith(
 beforeAll(async () => {
   n = await testNode(ENV);
   await n.req({ method: 'POST', url: '/v1/teams', payload: { slug: 'team-ops', name: 'Ops' } });
+  await allowSecrets(n);
   await n.req({
     method: 'POST',
     url: '/v1/connections',
@@ -333,7 +346,7 @@ describe('isolated step end to end (run node code in-process, fake engine)', () 
       await n.req({
         method: 'PATCH',
         url: `/v1/tenants/${tenantId}`,
-        payload: { secretRefs: ['*'] },
+        payload: { secretRefs: ['mail-hook'] },
       });
     }
   });
@@ -397,12 +410,63 @@ describe('NodeDispatcher', () => {
       mk(def(), { container: strict }).dispatch(req({ id: 's', toolbox: 'git+node' })),
     ).rejects.toMatchObject({ code: 'toolbox_image_unknown' });
   });
+  it('ignores cost and token numbers reported by a node and bounds its counters', async () => {
+    const calls: string[] = [];
+    const services = {
+      runNodes: {
+        createSession: async () => ({
+          sessionId: 's',
+          nodeId: 'n',
+          token: 'oaxrt.a.b',
+          expiresAt: new Date(),
+        }),
+        revoke: async () => void calls.push('revoke'),
+        recordStopped: async () => void calls.push('stopped'),
+        resultOf: async () => ({
+          agentId: 's',
+          format: 'json',
+          content: '{}',
+          usage: { tokensIn: 9e9, tokensOut: 9e9, costMicros: 9e12, steps: 5e6, toolCalls: 7 },
+        }),
+      },
+      control: { isCancelled: async () => false },
+    };
+    const runner = {
+      imageFor: () => IMAGE,
+      startNode: async () => ({
+        nodeId: 'n',
+        wait: async () => ({ exitCode: 0 }),
+        stop: async () => void calls.push('stop'),
+      }),
+    };
+    const d = new NodeDispatcher(
+      {
+        services: services as never,
+        runners: { container: runner } as never,
+        workerId: 'w',
+        controlUrl: 'http://api:8080',
+        limits: { cpus: 1, memoryMb: 128, pids: 8 },
+      },
+      def(),
+    );
+    const res = await d.dispatch({ runId: 'r', agent: { id: 's' } as never, input: null });
+    expect(res.usage).toEqual({
+      tokensIn: 0,
+      tokensOut: 0,
+      costMicros: 0,
+      steps: 1000,
+      toolCalls: 7,
+    });
+    // the token dies before the node is removed
+    expect(calls.indexOf('revoke')).toBeLessThan(calls.indexOf('stop'));
+  });
 });
 
 describe('air-gapped deployments', () => {
   it('run an isolated step with the same configuration (no outbound access needed)', async () => {
     const air = await testNode({ ...ENV, OAX_AIRGAPPED: 'true' });
     try {
+      await allowSecrets(air);
       await air.req({
         method: 'POST',
         url: '/v1/teams',

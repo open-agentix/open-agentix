@@ -3,7 +3,7 @@ import type { StepCredentials } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/index.js';
-import { runNodeSessions, runs, runSteps } from '../src/db/schema.js';
+import { costLedger, eventSources, runNodeSessions, runs, runSteps } from '../src/db/schema.js';
 import { RUN_TOKEN_SECRET, testNode, type TestNode } from './helpers.js';
 
 const IMAGE = `ghcr.io/open-agentix/open-agentix-worker@sha256:${'a'.repeat(64)}`;
@@ -14,7 +14,17 @@ const ENV = {
   OAX_CONTAINER_IMAGE: IMAGE,
   OAX_CONTAINER_NETWORK: 'oax-nodes',
   OAX_NODE_CONTROL_URL: 'http://api:8080',
+  OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',
+  OAX_CONTAINER_EGRESS_GRANT_SECRET: 'g'.repeat(40),
+  OAX_CONTAINER_EGRESS_ALLOW: 'jira.example.org,*.corp.example',
+  // a platform provider key: never handed to a node, whatever the tenant allows
+  OAX_PROVIDERS: JSON.stringify([
+    { kind: 'simulated', name: 'simulated' },
+    { kind: 'openai', name: 'oai', apiKeySecret: 'oai-key' },
+  ]),
 };
+/** What the default tenant is allowed to receive in these tests (it starts with nothing). */
+const ALLOWED = ['mail-hook', 'trivy-hook', 'gh-hook', 'oai-key', 'src-secret', 'plat-secret'];
 
 const SOURCE = `---
 apiVersion: openagentix.io/v1alpha1
@@ -24,6 +34,8 @@ version: 1.0.0
 owner: team-ops
 runtime:
   runner: container
+  egress: [jira.example.org]
+budget: { maxTokens: 1000, maxCostUsd: 1, maxSteps: 50, maxToolCalls: 10, timeoutSeconds: 100 }
 schemas:
   Out: { type: object, required: [ok], properties: { ok: { type: boolean } } }
 agents:
@@ -44,11 +56,30 @@ agents:
     when: 'exists(event.data.go)'
     credentials:
       - { secret: gh-hook }
+  - id: leak-provider
+    provider: simulated
+    model: sim-1
+    instructions: x.
+    credentials:
+      - { secret: oai-key }
+  - id: leak-source
+    provider: simulated
+    model: sim-1
+    instructions: x.
+    credentials:
+      - { secret: src-secret }
+  - id: leak-platform
+    provider: simulated
+    model: sim-1
+    instructions: x.
+    credentials:
+      - { secret: plat-secret }
 ---
 `;
 
 let n: TestNode;
 let agentId: string;
+let tenantId: string;
 
 async function newRun(): Promise<string> {
   const res = await n.req({
@@ -110,6 +141,32 @@ beforeAll(async () => {
     },
   });
   expect(conn.statusCode).toBe(201);
+  tenantId = (await n.req({ method: 'GET', url: '/v1/tenants' })).json().items[0].id;
+  expect(
+    (
+      await n.req({
+        method: 'PATCH',
+        url: `/v1/tenants/${tenantId}`,
+        payload: { secretRefs: ALLOWED },
+      })
+    ).statusCode,
+  ).toBe(200);
+  // a platform connection and an event source that use secrets of their own
+  await n.req({
+    method: 'POST',
+    url: '/v1/connections',
+    payload: {
+      name: 'platform-tool',
+      scope: 'platform',
+      config: { transport: 'stdio', command: 'x', envSecrets: { T: 'plat-secret' } },
+    },
+  });
+  await n.ctx.db.insert(eventSources).values({
+    id: crypto.randomUUID(),
+    name: 'hook',
+    kind: 'webhook',
+    secretRefs: ['src-secret'],
+  });
   const created = await n.req({ method: 'POST', url: '/v1/agents', payload: { source: SOURCE } });
   expect(created.statusCode).toBe(201);
   agentId = created.json().id;
@@ -278,7 +335,6 @@ describe('credential broker', () => {
   it('refuses references the tenant does not allow (fail closed, nothing consumed)', async () => {
     const runId = await newRun();
     const s = await session(runId);
-    const tenantId = (await n.req({ method: 'GET', url: '/v1/tenants' })).json().items[0].id;
     const set = (secretRefs: string[]) =>
       n.req({ method: 'PATCH', url: `/v1/tenants/${tenantId}`, payload: { secretRefs } });
     try {
@@ -299,7 +355,7 @@ describe('credential broker', () => {
       expect((await set(['mail-*', 'trivy-*'])).statusCode).toBe(200);
       expect((await creds(runId, s.token, 'research')).statusCode).toBe(200);
     } finally {
-      await set(['*']);
+      await set(ALLOWED);
     }
   });
 
@@ -350,9 +406,10 @@ describe('credential values never reach step records', () => {
     const dump = JSON.stringify(rows) + JSON.stringify(await auditOf(runId));
     expect(dump).not.toContain('mail-secret-1');
     expect(dump).not.toContain('hook-secret-1');
-    expect(n.services.runNodes.knownSecrets(runId)).toContain('mail-secret-1');
+    expect(await n.services.runNodes.knownSecrets(runId)).toContain('mail-secret-1');
+    // still scrubbed after the session ended: late steps must not leak the values either
     await n.services.runNodes.revokeRun(runId, 'cancelled');
-    expect(n.services.runNodes.knownSecrets(runId)).toEqual([]);
+    expect(await n.services.runNodes.knownSecrets(runId)).toContain('mail-secret-1');
   });
 });
 
@@ -571,9 +628,16 @@ describe('sessions are created only by the lease holder', () => {
 describe('tenant secret allowlist API', () => {
   it('is visible, validated and only changeable by platform operators', async () => {
     const tenants = (await n.req({ method: 'GET', url: '/v1/tenants' })).json().items;
-    expect(tenants[0].secretRefs).toEqual(['*']);
+    expect(tenants[0].secretRefs).toEqual([...ALLOWED].sort());
     const id = tenants[0].id as string;
-    for (const bad of [['has space'], ['../x'], Array.from({ length: 65 }, (_, i) => `s${i}`)]) {
+    for (const bad of [
+      ['has space'],
+      ['../x'],
+      ['*'],
+      ['acme*'],
+      ['UPPER.x'],
+      Array.from({ length: 65 }, (_, i) => `s${i}`),
+    ]) {
       const res = await n.req({
         method: 'PATCH',
         url: `/v1/tenants/${id}`,
@@ -591,9 +655,9 @@ describe('tenant secret allowlist API', () => {
     const set = await n.req({
       method: 'PATCH',
       url: `/v1/tenants/${created.json().id}`,
-      payload: { secretRefs: ['b', 'a*', 'b'] },
+      payload: { secretRefs: ['bb', 'a_*', 'bb'] },
     });
-    expect(set.json().secretRefs).toEqual(['a*', 'b']);
+    expect(set.json().secretRefs).toEqual(['a_*', 'bb']);
   });
 });
 
@@ -629,25 +693,25 @@ describe('platform configuration of the container runner', () => {
     expect(ok.config).toMatchObject({ image: IMAGE, network: 'oax-nodes', allowRawSocket: false });
     expect(ok.nodeControlUrl).toBe('http://api:8080');
   });
-  it('parses the egress proxy settings and refuses half of them', () => {
-    const withProxy = cfg({
-      ...ENV,
-      OAX_CONTAINER_EGRESS_PROXY_LISTEN: '0.0.0.0:3128',
-      OAX_CONTAINER_EGRESS_PROXY_URL: 'http://worker:3128',
-      OAX_CONTAINER_TOOLBOX_IMAGES: JSON.stringify({ trivy: `x/y@sha256:${'b'.repeat(64)}` }),
-    }).runners.container;
-    expect(withProxy.egressProxyListen).toEqual({ host: '0.0.0.0', port: 3128 });
-    expect(withProxy.config?.egressProxyUrl).toBe('http://worker:3128');
-    expect(() => cfg({ ...ENV, OAX_CONTAINER_EGRESS_PROXY_LISTEN: '0.0.0.0:3128' })).toThrow(
-      /both/,
+  it('parses the egress settings and refuses half of them or a bad private range', () => {
+    const c = cfg(ENV).runners.container;
+    expect(c.config?.egressProxyUrl).toBe('http://egress-proxy:3128');
+    expect(c.config?.egressGrantSecret).toBe('g'.repeat(40));
+    expect(c.config?.egressAllow).toEqual(['jira.example.org', '*.corp.example']);
+    const noProxy = { ...ENV } as Record<string, string>;
+    delete noProxy.OAX_CONTAINER_EGRESS_PROXY_URL;
+    expect(() => cfg(noProxy)).toThrow(/both/);
+    const noSecret = { ...ENV } as Record<string, string>;
+    delete noSecret.OAX_CONTAINER_EGRESS_GRANT_SECRET;
+    expect(() => cfg(noSecret)).toThrow(/both/);
+    expect(() => cfg({ ...ENV, OAX_CONTAINER_EGRESS_GRANT_SECRET: 'short' })).toThrow();
+    expect(() => cfg({ ...ENV, OAX_CONTAINER_EGRESS_PRIVATE_ALLOW: 'not-a-cidr' })).toThrow(
+      /not a CIDR/,
     );
-    expect(() =>
-      cfg({
-        ...ENV,
-        OAX_CONTAINER_EGRESS_PROXY_LISTEN: 'nonsense',
-        OAX_CONTAINER_EGRESS_PROXY_URL: 'http://w:1',
-      }),
-    ).toThrow(/host:port/);
+    expect(() => cfg({ ...ENV, OAX_CONTAINER_EGRESS_ALLOW: '*.com' })).toThrow();
+    expect(
+      cfg({ ...ENV, OAX_CONTAINER_EGRESS_PRIVATE_ALLOW: '10.1.0.0/16' }).runners.container.enabled,
+    ).toBe(true);
   });
   it('publish refuses a step runner that is not enabled', async () => {
     const plain = await testNode();
@@ -672,5 +736,426 @@ describe('platform configuration of the container runner', () => {
     } finally {
       await plain.close();
     }
+  });
+});
+
+describe('platform secrets are never handed to a node', () => {
+  it.each([
+    ['leak-provider', 'oai-key', 'a provider key'],
+    ['leak-source', 'src-secret', 'an event source secret'],
+    ['leak-platform', 'plat-secret', 'the secret of a platform connection'],
+  ])('%s: %s (%s) is refused even though the tenant allows it', async (step, ref) => {
+    const runId = await newRun();
+    const s = await session(runId, step);
+    const res = await creds(runId, s.token, step);
+    expect(res.statusCode).toBe(403);
+    expect(res.body).not.toContain(ref + '-value');
+    const denied = (await auditOf(runId)).find((e) => e.action === 'credential.denied')!;
+    expect(denied.payload).toMatchObject({ reason: 'platform_secret' });
+    expect(denied.payload.refs).toEqual([ref]);
+  });
+  it('the check is canonical: a differently written name of the same secret is refused too', async () => {
+    const refs = await n.services.runNodes.platformSecretRefs();
+    expect(refs.has('oai_key')).toBe(true);
+    expect(refs.has('src_secret')).toBe(true);
+    expect(refs.has('plat_secret')).toBe(true);
+    expect(refs.has('mail_hook')).toBe(false);
+  });
+});
+
+describe('in-process runs obey the same tenant allowlist', () => {
+  it('resolves allowed references, platform connection references, and refuses everything else', async () => {
+    const r = await n.services.runNodes.resolverFor(tenantId);
+    expect(await r.resolve('mail-hook')).toBe('mail-secret-1');
+    expect(await r.resolve('plat-secret').catch((e) => e.code)).not.toBe('secret_not_allowed');
+    await n.req({
+      method: 'PATCH',
+      url: `/v1/tenants/${tenantId}`,
+      payload: { secretRefs: ['gh-*'] },
+    });
+    try {
+      const narrow = await n.services.runNodes.resolverFor(tenantId);
+      expect(await narrow.resolve('gh-hook')).toBe('gh-secret');
+      await expect(narrow.resolve('mail-hook')).rejects.toMatchObject({
+        code: 'secret_not_allowed',
+      });
+      await expect(narrow.resolve('MAIL.hook')).rejects.toMatchObject({
+        code: 'secret_not_allowed',
+      });
+      // platform connections keep working: their references are operator-chosen
+      expect(await narrow.resolve('plat-secret').catch((e) => e.code)).not.toBe(
+        'secret_not_allowed',
+      );
+    } finally {
+      await n.req({
+        method: 'PATCH',
+        url: `/v1/tenants/${tenantId}`,
+        payload: { secretRefs: ALLOWED },
+      });
+    }
+    await n.req({ method: 'PATCH', url: `/v1/tenants/${tenantId}`, payload: { secretRefs: [] } });
+    try {
+      const none = await n.services.runNodes.resolverFor(tenantId);
+      await expect(none.resolve('mail-hook')).rejects.toMatchObject({ code: 'secret_not_allowed' });
+    } finally {
+      await n.req({
+        method: 'PATCH',
+        url: `/v1/tenants/${tenantId}`,
+        payload: { secretRefs: ALLOWED },
+      });
+    }
+  });
+});
+
+describe('tenants cannot reach each other through spelling', () => {
+  it('slugs that overlap in canonical form cannot coexist', async () => {
+    const mk = (slug: string) =>
+      n.req({ method: 'POST', url: '/v1/tenants', payload: { slug, name: slug } });
+    expect((await mk('omega')).statusCode).toBe(201);
+    for (const clash of ['omega-corp', 'omega-b']) {
+      const res = await mk(clash);
+      expect(res.statusCode, clash).toBe(409);
+      expect(res.body).toContain('overlaps');
+    }
+    expect((await mk('omegacorp')).statusCode).toBe(201);
+  });
+  it('tenant connection references are checked against the tenant prefix in canonical form', async () => {
+    const created = await n.req({
+      method: 'POST',
+      url: '/v1/tenants',
+      payload: {
+        slug: 'zeta',
+        name: 'Zeta',
+        admin: { email: 'zeta@example.com', displayName: 'Z', password: 'zeta-password-123' },
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const token = await n.login('zeta@example.com', 'zeta-password-123');
+    const conn = (name: string, ref: string) =>
+      n.req({
+        method: 'POST',
+        url: '/v1/connections',
+        token,
+        payload: { name, config: { transport: 'stdio', command: 'x', envSecrets: { T: ref } } },
+      });
+    expect((await conn('c-a', 'zeta.token')).statusCode).toBe(201);
+    expect((await conn('c-b', 'ZETA-token')).statusCode).toBe(201);
+    for (const [i, ref] of ['zetacorp.token', 'other.zeta.token', 'oai-key'].entries()) {
+      const res = await conn(`c-x${i}`, ref);
+      expect(res.statusCode, ref).toBe(400);
+      expect(res.body).toContain('must start with');
+    }
+  });
+});
+
+describe('a node cannot steer cost accounting or flood the records', () => {
+  const stepBody = (over: object = {}) => ({
+    kind: 'model_call',
+    agentId: 'research',
+    name: 'simulated/sim-1',
+    status: 'ok',
+    tokensIn: 5_000_000,
+    tokensOut: 5_000_000,
+    costMicros: 999_999_999,
+    provider: 'fake',
+    model: 'fake-1',
+    durationMs: 5,
+    ...over,
+  });
+  it('drops cost, tokens, provider and model of a node step; no ledger row, no run counters', async () => {
+    const runId = await newRun();
+    const s = await session(runId);
+    const res = await n.req({
+      method: 'POST',
+      url: `/v1/worker/runs/${runId}/steps`,
+      token: s.token,
+      payload: stepBody(),
+    });
+    expect(res.statusCode).toBe(204);
+    const [row] = await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId));
+    expect(row).toMatchObject({
+      costMicros: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+      provider: null,
+      model: null,
+    });
+    expect(await n.ctx.db.select().from(costLedger).where(eq(costLedger.runId, runId))).toEqual([]);
+    const [run] = await n.ctx.db.select().from(runs).where(eq(runs.id, runId));
+    expect(Number(run!.costMicros)).toBe(0);
+    expect(run!.tokensIn + run!.tokensOut).toBe(0);
+  });
+  it('the trusted worker token still records cost (in-process behaviour is unchanged)', async () => {
+    const runId = await newRun();
+    const token = n.services.control.issueToken(runId, 'w1');
+    const res = await n.req({
+      method: 'POST',
+      url: `/v1/worker/runs/${runId}/steps`,
+      token,
+      payload: stepBody({ costMicros: 1234, tokensIn: 10, tokensOut: 5 }),
+    });
+    expect(res.statusCode).toBe(204);
+    const [run] = await n.ctx.db.select().from(runs).where(eq(runs.id, runId));
+    expect(Number(run!.costMicros)).toBe(1234);
+  });
+  it('bounds numbers, names and payload sizes', async () => {
+    const runId = await newRun();
+    const s = await session(runId);
+    const post = (payload: object) =>
+      n.req({ method: 'POST', url: `/v1/worker/runs/${runId}/steps`, token: s.token, payload });
+    for (const bad of [
+      { costMicros: 1e13 },
+      { tokensIn: 1e10 },
+      { durationMs: 1e10 },
+      { provider: 'x'.repeat(101) },
+      { name: 'x'.repeat(501) },
+    ])
+      expect((await post(stepBody(bad))).statusCode, JSON.stringify(bad)).toBe(400);
+    const big = { text: 'x'.repeat(200_000) };
+    expect(
+      (
+        await post(
+          stepBody({ kind: 'tool_call', name: 'n'.repeat(400).slice(0, 300), output: big }),
+        )
+      ).statusCode,
+    ).toBeLessThan(500);
+    const rows = await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId));
+    const stored = rows.at(-1)!;
+    expect(stored.output).toMatchObject({ truncated: true });
+    expect(stored.name.length).toBeLessThanOrEqual(200);
+  });
+});
+
+describe('node-influenced data is scrubbed', () => {
+  it('gate args, approval args, results and failures never keep a handed-out value', async () => {
+    const runId = await newRun();
+    const s = await session(runId);
+    await creds(runId, s.token, 'research');
+    const leak = 'token=mail-secret-1 and hook-secret-1';
+    const gate = await n.req({
+      method: 'POST',
+      url: `/v1/worker/runs/${runId}/gate`,
+      token: s.token,
+      payload: {
+        agentId: 'research',
+        call: { server: 'jira', tool: 'get_issue', args: { q: leak } },
+      },
+    });
+    expect(gate.statusCode).toBe(200);
+    await n.req({
+      method: 'POST',
+      url: `/v1/worker/runs/${runId}/approvals`,
+      token: s.token,
+      payload: {
+        agentId: 'research',
+        call: { server: 'jira', tool: 'get_issue', args: { q: leak } },
+      },
+    });
+    const post = await n.req({
+      method: 'POST',
+      url: `/v1/worker/runs/${runId}/handover/result`,
+      token: s.token,
+      payload: {
+        agentId: 'research',
+        format: 'json',
+        content: JSON.stringify({ ok: true, note: leak }),
+        json: { ok: true, note: leak },
+        failure: { status: 'failed', code: 'x', message: `boom ${leak}` },
+      },
+    });
+    expect(post.statusCode).toBe(204);
+    const result = await n.services.runNodes.resultOf(s.sessionId);
+    const dump = JSON.stringify(result) + JSON.stringify(await auditOf(runId));
+    const approvals = JSON.stringify(
+      await n.ctx.db.query?.approvals?.findMany?.({}).catch(() => []),
+    );
+    for (const v of ['mail-secret-1', 'hook-secret-1']) {
+      expect(dump).not.toContain(v);
+      expect(approvals).not.toContain(v);
+    }
+    expect(result).toMatchObject({ agentId: 'research' });
+    // the result is deleted when it was read
+    expect(await n.services.runNodes.resultOf(s.sessionId)).toBeNull();
+  });
+});
+
+describe('sessions are bound to the orchestrator that created them', () => {
+  it('a takeover of the run kills the old session', async () => {
+    const runId = await newRun();
+    const s = await session(runId);
+    expect((await creds(runId, s.token, 'research')).statusCode).toBe(200);
+    await n.ctx.db.update(runs).set({ lockedBy: 'w2' }).where(eq(runs.id, runId));
+    const dead = await n.req({
+      method: 'GET',
+      url: `/v1/worker/runs/${runId}/status`,
+      token: s.token,
+    });
+    expect(dead.statusCode).toBe(409);
+    expect(dead.json().error).toBe('invalid_state');
+    const s2 = await n.services.runNodes.createSession(runId, 'w2', {
+      agentId: 'research',
+      input: null,
+      timeoutSeconds: 10,
+      runner: 'container',
+      image: IMAGE,
+    });
+    expect(
+      (await n.req({ method: 'GET', url: `/v1/worker/runs/${runId}/status`, token: s2.token }))
+        .statusCode,
+    ).toBe(200);
+  });
+});
+
+describe('handles and plaintext do not live in one process', () => {
+  it('persists handles in the session and revokes them from a fresh service instance', async () => {
+    const revoked: string[] = [];
+    const { RunNodesService } = await import('../src/services/run-nodes.js');
+    const source = {
+      name: 'dynamic',
+      issue: async (ref: string) => ({ value: `v-${ref}`, handle: `h-${ref}` }),
+      revoke: async (h: string) => void revoked.push(h),
+    };
+    const svc = new RunNodesService(
+      n.ctx,
+      n.services.audit,
+      n.services.agents,
+      n.services.catalog,
+      source,
+    );
+    const runId = await newRun();
+    const s = await svc.createSession(runId, 'w1', {
+      agentId: 'research',
+      input: null,
+      timeoutSeconds: 10,
+      runner: 'container',
+      image: IMAGE,
+    });
+    const claims = (await import('@openagentix/core')).verifyRunToken(RUN_TOKEN_SECRET, s.token);
+    const out = await svc.issueCredentials(claims, runId, 'research');
+    expect(out.credentials[0]!.value).toBe('v-mail-hook');
+    const [row] = await n.ctx.db
+      .select()
+      .from(runNodeSessions)
+      .where(eq(runNodeSessions.id, s.sessionId));
+    expect([...row!.credentialHandles].sort()).toEqual(['h-mail-hook', 'h-trivy-hook']);
+    const fresh = new RunNodesService(
+      n.ctx,
+      n.services.audit,
+      n.services.agents,
+      n.services.catalog,
+      source,
+    );
+    await fresh.revoke(s.sessionId, 'step_end');
+    expect(revoked.sort()).toEqual(['h-mail-hook', 'h-trivy-hook']);
+    // a dynamic source's values are not re-resolved for scrubbing (only the static source is)
+    expect(await fresh.knownSecrets(runId)).toEqual([]);
+    // nothing secret sits in memory of the service
+    expect(Object.values(svc).some((v) => v instanceof Map)).toBe(false);
+  });
+  it('a fresh instance can scrub static values (no per-process state needed)', async () => {
+    const runId = await newRun();
+    const s = await session(runId);
+    await creds(runId, s.token, 'research');
+    const { RunNodesService } = await import('../src/services/run-nodes.js');
+    const fresh = new RunNodesService(
+      n.ctx,
+      n.services.audit,
+      n.services.agents,
+      n.services.catalog,
+    );
+    expect((await fresh.knownSecrets(runId)).sort()).toEqual(['hook-secret-1', 'mail-secret-1']);
+    expect(
+      await fresh.knownSecrets('00000000-0000-4000-8000-0000000000bb').catch(() => 'err'),
+    ).toBeDefined();
+  });
+});
+
+describe('the handover carries only what is left of the budget', () => {
+  it('subtracts consumption and elapsed time', async () => {
+    const runId = await newRun();
+    await n.ctx.db
+      .update(runs)
+      .set({
+        tokensIn: 100,
+        tokensOut: 50,
+        costMicros: 250_000,
+        toolCalls: 4,
+        lastSeq: 12,
+        startedAt: new Date(Date.now() - 30_000),
+      })
+      .where(eq(runs.id, runId));
+    const s = await session(runId);
+    const h = (
+      await n.req({
+        method: 'GET',
+        url: `/v1/worker/runs/${runId}/handover?agentId=research`,
+        token: s.token,
+      })
+    ).json();
+    expect(h.run.budget).toMatchObject({
+      maxTokens: 850,
+      maxCostUsd: 0.75,
+      maxToolCalls: 6,
+      maxSteps: 38,
+    });
+    expect(h.run.budget.timeoutSeconds).toBeLessThanOrEqual(70);
+    expect(h.run.budget.timeoutSeconds).toBeGreaterThan(60);
+  });
+  it('never hands out zero or negative limits (floor of the smallest legal value)', async () => {
+    const runId = await newRun();
+    await n.ctx.db
+      .update(runs)
+      .set({
+        tokensIn: 5000,
+        costMicros: 5_000_000,
+        toolCalls: 99,
+        lastSeq: 999,
+        startedAt: new Date(Date.now() - 10_000_000),
+      })
+      .where(eq(runs.id, runId));
+    const s = await session(runId);
+    const h = (
+      await n.req({
+        method: 'GET',
+        url: `/v1/worker/runs/${runId}/handover?agentId=research`,
+        token: s.token,
+      })
+    ).json();
+    expect(h.run.budget).toMatchObject({
+      maxTokens: 1,
+      maxToolCalls: 1,
+      maxSteps: 1,
+      timeoutSeconds: 1,
+    });
+    expect(h.run.budget.maxCostUsd).toBeGreaterThan(0);
+  });
+});
+
+describe('step egress is bounded by the operator ceiling at publish', () => {
+  it('refuses egress outside OAX_CONTAINER_EGRESS_ALLOW and accepts what is inside', async () => {
+    const mk = (egress: string, name: string) =>
+      SOURCE.replace('name: broker-agent', `name: ${name}`).replace(
+        'egress: [jira.example.org]',
+        `egress: [${egress}]`,
+      );
+    for (const [i, bad] of ['evil.example.com', '10.0.0.0/8', '"*.com"', '0.0.0.0/1'].entries()) {
+      const a = await n.req({
+        method: 'POST',
+        url: '/v1/agents',
+        payload: { source: mk(bad, `egress-bad-${i}`) },
+      });
+      expect(a.statusCode, a.body).toBe(201);
+      const pub = await n.req({ method: 'POST', url: `/v1/agents/${a.json().id}/publish` });
+      expect(pub.statusCode, bad).toBe(400);
+      expect(pub.body).toContain('runtime.egress');
+    }
+    const ok = await n.req({
+      method: 'POST',
+      url: '/v1/agents',
+      payload: { source: mk('jira.example.org, "*.corp.example"', 'egress-ok') },
+    });
+    expect(
+      (await n.req({ method: 'POST', url: `/v1/agents/${ok.json().id}/publish` })).statusCode,
+    ).toBe(201);
   });
 });

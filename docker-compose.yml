@@ -24,8 +24,10 @@ x-container-env: &container-env
   # Run node image pinned by digest, e.g. ghcr.io/open-agentix/open-agentix-run-node@sha256:...
   OAX_CONTAINER_IMAGE: ${OAX_CONTAINER_IMAGE:-}
   OAX_CONTAINER_NETWORK: openagentix-nodes
-  OAX_CONTAINER_EGRESS_PROXY_LISTEN: 0.0.0.0:3128
-  OAX_CONTAINER_EGRESS_PROXY_URL: http://worker-container:3128
+  # Step egress is off unless BOTH are set; the operator ceiling decides what steps may declare.
+  OAX_CONTAINER_EGRESS_PROXY_URL: ${OAX_CONTAINER_EGRESS_GRANT_SECRET:+http://egress-proxy:3128}
+  OAX_CONTAINER_EGRESS_GRANT_SECRET: ${OAX_CONTAINER_EGRESS_GRANT_SECRET:-}
+  OAX_CONTAINER_EGRESS_ALLOW: ${OAX_CONTAINER_EGRESS_ALLOW:-}
   OAX_NODE_CONTROL_URL: http://api:8080
 
 services:
@@ -85,8 +87,12 @@ services:
   # --- container runner profile: one hardened container per isolated step ---
 
   # The only holder of the Docker socket. It allows container create/start/wait/stop/kill/remove and
-  # network inspect and denies exec, build, images, volumes, swarm and everything else. The worker
-  # never sees /var/run/docker.sock. For production prefer rootless Podman or a stricter proxy.
+  # network inspect and denies exec, build, images, volumes, swarm and everything else.
+  # HONEST WARNING: this proxy cannot inspect request bodies. Whoever can talk to it (the worker) can
+  # still create a privileged container with a host bind mount, which is root on the host. The
+  # worker's own create options are hardened and checked, but a compromised worker is not contained
+  # by this proxy. For production use rootless Podman or a body-filtering proxy, and pin this image
+  # by digest. This profile is for evaluation.
   socket-proxy:
     image: tecnativa/docker-socket-proxy:0.3.0
     profiles: ['container-runner']
@@ -115,6 +121,26 @@ services:
     tmpfs: ['/run']
     security_opt: ['no-new-privileges:true']
 
+  # The egress proxy: its OWN service, on the internal node network and an egress network only
+  # (never on `default` or `socket`). Stateless: it verifies per-node grants signed with
+  # OAX_CONTAINER_EGRESS_GRANT_SECRET. Private ranges stay closed unless
+  # OAX_CONTAINER_EGRESS_PRIVATE_ALLOW lists them. Without a grant secret it is not started.
+  egress-proxy:
+    build: { context: ., target: egress-proxy }
+    image: ghcr.io/open-agentix/open-agentix-egress-proxy:dev
+    profiles: ['container-runner']
+    environment:
+      OAX_CONTAINER_EGRESS_GRANT_SECRET: ${OAX_CONTAINER_EGRESS_GRANT_SECRET:?set a random secret of at least 32 characters}
+      OAX_CONTAINER_EGRESS_ALLOW: ${OAX_CONTAINER_EGRESS_ALLOW:-}
+      OAX_CONTAINER_EGRESS_PRIVATE_ALLOW: ${OAX_CONTAINER_EGRESS_PRIVATE_ALLOW:-}
+      OAX_AIRGAPPED: ${OAX_AIRGAPPED:-false}
+      OAX_AIRGAPPED_ALLOW: ${OAX_AIRGAPPED_ALLOW:-}
+    read_only: true
+    tmpfs: ['/tmp']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: ['ALL']
+    networks: [nodes, egress]
+
   # The orchestrating worker with the container runner. Scale the plain worker to 0 so that runs
   # that need isolation are never claimed by a worker without a container runner.
   worker-container:
@@ -130,7 +156,8 @@ services:
     tmpfs: ['/tmp']
     security_opt: ['no-new-privileges:true']
     cap_drop: ['ALL']
-    networks: [default, nodes, socket]
+    # Not on `nodes`: only the control node and the egress proxy are neighbours of run nodes.
+    networks: [default, socket]
     depends_on:
       api: { condition: service_healthy }
       socket-proxy: { condition: service_started }
@@ -164,6 +191,9 @@ networks:
     internal: true
   socket:
     internal: true
+  # Outbound access for the egress proxy only.
+  egress:
+    name: openagentix-egress
 
 volumes:
   pgdata:

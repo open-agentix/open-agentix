@@ -2,9 +2,9 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
   ContainerRunner,
-  EgressProxy,
   assertSafeCreateBody,
   proxyUrlWithCredentials,
+  verifyEgressGrant,
   type ContainerRunnerConfigInput,
   type EngineHijack,
   type EngineRequest,
@@ -101,15 +101,15 @@ function fakeEngine(opts: { internal?: boolean; failOn?: string } = {}): FakeEng
   };
 }
 
-const runner = (
-  e: FakeEngine,
-  cfg: Partial<ContainerRunnerConfigInput> = {},
-  proxy?: EgressProxy,
-) =>
-  new ContainerRunner(
-    { ...baseConfig, ...cfg },
-    { transport: e.transport, hijack: e.hijack, ...(proxy ? { egressProxy: proxy } : {}) },
-  );
+const runner = (e: FakeEngine, cfg: Partial<ContainerRunnerConfigInput> = {}) =>
+  new ContainerRunner({ ...baseConfig, ...cfg }, { transport: e.transport, hijack: e.hijack });
+
+const GRANT_SECRET = 'g'.repeat(40);
+const withEgress: Partial<ContainerRunnerConfigInput> = {
+  egressProxyUrl: 'http://egress-proxy:3128',
+  egressGrantSecret: GRANT_SECRET,
+  egressAllow: ['jira.example.com', '*.corp.example'],
+};
 
 const code = async (p: Promise<unknown>) => ((await p.catch((e) => e)) as { code?: string }).code;
 
@@ -133,10 +133,14 @@ describe('container runner configuration', () => {
         .unsafeSocket,
     ).toBe(false);
   });
-  it('refuses a proxy URL without a proxy and root uids', () => {
+  it('needs the proxy URL and the grant secret together, and refuses root uids', () => {
     expect(
-      () => new ContainerRunner({ ...baseConfig, egressProxyUrl: 'http://worker:3128' }),
-    ).toThrow(/no egress proxy/);
+      () => new ContainerRunner({ ...baseConfig, egressProxyUrl: 'http://egress-proxy:3128' }),
+    ).toThrow(/together/);
+    expect(() => new ContainerRunner({ ...baseConfig, egressGrantSecret: GRANT_SECRET })).toThrow();
+    expect(() => new ContainerRunner({ ...baseConfig, egressAllow: ['*.com'] })).toThrow(
+      /two labels/,
+    );
     expect(() => new ContainerRunner({ ...baseConfig, uid: 0 })).toThrow();
   });
   it('is not a whole-run runner', async () => {
@@ -360,26 +364,87 @@ describe('startNode: lifecycle', () => {
     // anything that was created is force-removed again
     expect(e.removed()).toBe(failOn !== '/create');
   });
-  it('registers the node with the egress proxy, hands it its account on stdin, and unregisters', async () => {
+  it('hands the node a signed, expiring egress grant on stdin and nothing in the create options', async () => {
     const e = fakeEngine();
-    const proxy = new EgressProxy();
-    const r = runner(e, { egressProxyUrl: 'http://worker:3128' }, proxy);
-    const handle = await r.startNode(spec({ egress: ['jira.example.com'] }));
-    expect(proxy.registered).toBe(1);
+    const handle = await runner(e, withEgress).startNode(spec({ egress: ['jira.example.com'] }));
+    await new Promise((r) => setTimeout(r, 10));
     const [lines] = e.stdin as string[];
     const [token, proxyLine] = lines!.split('\n');
     expect(token).toBe('oaxrt.payload.signature');
-    expect(proxyLine).toMatch(new RegExp(`^http://${NODE}:[A-Za-z0-9_-]{20,}@worker:3128/$`));
-    // the proxy account never appears in the create options either
-    expect(JSON.stringify(e.created[0])).not.toMatch(/worker:3128/);
+    const u = new URL(proxyLine!);
+    expect(decodeURIComponent(u.username)).toBe(NODE);
+    const claims = verifyEgressGrant(GRANT_SECRET, NODE, decodeURIComponent(u.password));
+    expect(claims).toMatchObject({ n: NODE, e: ['jira.example.com'] });
+    // lifetime: step timeout + 60 s
+    expect(claims!.x - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(90);
+    expect(JSON.stringify(e.created[0])).not.toMatch(/egress-proxy|3128/);
     await handle.stop('step_end');
-    expect(proxy.registered).toBe(0);
   });
-  it('unregisters from the proxy when starting fails', async () => {
-    const proxy = new EgressProxy();
-    const r = runner(fakeEngine({ failOn: '/start' }), { egressProxyUrl: 'http://w:3128' }, proxy);
-    await expect(r.startNode(spec({ egress: [] }))).rejects.toThrow();
-    expect(proxy.registered).toBe(0);
+  it('refuses step egress outside the operator ceiling before anything is created', async () => {
+    for (const egress of [
+      'evil.example.com',
+      '*.example.com',
+      '10.0.0.0/8',
+      '0.0.0.0/1',
+      '*.com',
+      'jira.example.com:22',
+    ]) {
+      const e = fakeEngine();
+      expect(await code(runner(e, withEgress).startNode(spec({ egress: [egress] })))).toMatch(
+        /egress_invalid/,
+      );
+      expect(e.calls).toHaveLength(0);
+    }
+    // no ceiling at all: no step may declare egress
+    const none = fakeEngine();
+    const r = runner(none, {
+      egressProxyUrl: 'http://egress-proxy:3128',
+      egressGrantSecret: GRANT_SECRET,
+    });
+    expect(await code(r.startNode(spec({ egress: ['jira.example.com'] })))).toBe('egress_invalid');
+  });
+  it('a step without egress gets no proxy line at all', async () => {
+    const e = fakeEngine();
+    const h = await runner(e, withEgress).startNode(spec());
+    await new Promise((r) => setTimeout(r, 10));
+    expect(e.stdin).toEqual(['oaxrt.payload.signature\n']);
+    await h.stop('step_end');
+  });
+});
+
+describe('hard lifetime and orphan reaper', () => {
+  it('labels every node with an expiry and tells it its deadline', () => {
+    const body = runner(fakeEngine()).buildCreateBody(spec());
+    const expires = Number(body.Labels['io.openagentix.expires']);
+    expect(expires - Math.floor(Date.now() / 1000)).toBeGreaterThan(30);
+    expect(expires - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(30 + 90);
+    expect(body.Env).toContain('OAX_NODE_DEADLINE_SECONDS=60');
+  });
+  it('removes expired and unlabelled-expiry containers and keeps live ones', async () => {
+    const removed: string[] = [];
+    const now = 1_000_000_000_000;
+    const transport: EngineTransport = async (req) => {
+      const p = req.path.replace('/v1.43', '');
+      if (p.startsWith('/containers/json'))
+        return {
+          status: 200,
+          body: Buffer.from(
+            JSON.stringify([
+              { Id: 'a'.repeat(64), Labels: { 'io.openagentix.expires': String(now / 1000 - 5) } },
+              {
+                Id: 'b'.repeat(64),
+                Labels: { 'io.openagentix.expires': String(now / 1000 + 500) },
+              },
+              { Id: 'c'.repeat(64), Labels: {} },
+            ]),
+          ),
+        };
+      if (req.method === 'DELETE') removed.push(p.split('/')[2]!.split('?')[0]!);
+      return { status: 204, body: Buffer.alloc(0) };
+    };
+    const r = new ContainerRunner(baseConfig, { transport });
+    expect(await r.reapOrphans(now)).toBe(2);
+    expect(removed.sort()).toEqual(['a'.repeat(64), 'c'.repeat(64)]);
   });
 });
 

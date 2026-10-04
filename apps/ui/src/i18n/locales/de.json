@@ -620,6 +620,7 @@
     "verify": "Hash-Kette prüfen",
     "verifyOk": "Der Audit-Trail ist unversehrt.",
     "verifyDetails": "{entries} Einträge und {checkpoints} signierte Checkpoints geprüft; Kopf ist #{seq}.",
+    "verifyDetailsEmpty": "{entries} Einträge und {checkpoints} signierte Checkpoints geprüft; der Trail ist leer.",
     "verifyFailed": {
       "one": "Manipulation erkannt: {count} Problem",
       "other": "Manipulation erkannt: {count} Probleme"

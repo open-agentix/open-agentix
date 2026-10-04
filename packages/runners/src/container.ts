@@ -1,7 +1,8 @@
-import { OaxError, parseAllowlist, type RunnerKind } from '@openagentix/core';
+import { OaxError, type RunnerKind } from '@openagentix/core';
 import { z } from 'zod';
 import type { EngineHijack } from './container-hijack.js';
-import type { EgressProxy } from './egress-proxy.js';
+import { mintEgressGrant } from './egress-proxy.js';
+import { assertWithinCeiling, parseEgressEntry } from './egress-rules.js';
 import {
   EngineClient,
   isRawDockerSocket,
@@ -49,8 +50,15 @@ export const ContainerRunnerConfigSchema = z.strictObject({
     .default({}),
   /** Pre-created network with `internal: true`; its only neighbours are the control node and the proxy. */
   network: z.string().min(1),
-  /** URL nodes use for the egress proxy (reachable from the internal network). */
+  /**
+   * URL nodes use for the egress proxy (a separate service, reachable from the internal network).
+   * Without it no step can declare egress.
+   */
   egressProxyUrl: z.string().url().optional(),
+  /** HMAC key shared with the egress proxy; signs each node's grant. Required with the URL. */
+  egressGrantSecret: z.string().min(32).optional(),
+  /** Operator upper bound for step egress (same grammar as `runtime.egress`); empty = none. */
+  egressAllow: z.array(z.string()).default([]),
   command: z.array(z.string().min(1)).min(1).default(['node', 'dist/run-node-cli.js']),
   workingDir: z.string().default('/app/apps/worker'),
   /** Upper bounds; a step's limits are clamped to them. */
@@ -66,6 +74,8 @@ export type ContainerRunnerConfig = z.infer<typeof ContainerRunnerConfigSchema>;
 export type ContainerRunnerConfigInput = z.input<typeof ContainerRunnerConfigSchema>;
 
 export const NODE_LABEL = 'io.openagentix.run-node';
+/** Unix seconds after which the container must not exist any more (hard lifetime). */
+export const EXPIRES_LABEL = 'io.openagentix.expires';
 const TOKEN_DIR = '/run/oax';
 /** The token arrives on stdin: not env, not a command line, not copyable, not in `inspect`. */
 const TOKEN_STDIN = '/dev/stdin';
@@ -152,8 +162,6 @@ export function assertSafeCreateBody(body: Record<string, unknown>): void {
 }
 
 export interface ContainerRunnerDeps {
-  /** Egress proxy that enforces the step allowlists; required when a step declares egress. */
-  egressProxy?: EgressProxy;
   /** Injectable transport (tests, custom TLS); defaults to node's http client. */
   transport?: EngineTransport;
   /** Injectable attach (hijack) function; defaults to node's http client. */
@@ -166,8 +174,8 @@ export class ContainerRunner implements IsolatingRunner {
   /** `true` when the raw Docker socket was explicitly allowed (the caller audits and warns). */
   readonly unsafeSocket: boolean;
   private readonly engine: EngineClient;
-  private readonly proxy: EgressProxy | undefined;
   private readonly endpoint: EngineEndpoint;
+  private readonly egressCeiling: ReturnType<typeof parseEgressEntry>[];
 
   constructor(config: ContainerRunnerConfigInput, deps: ContainerRunnerDeps = {}) {
     this.config = ContainerRunnerConfigSchema.parse(config);
@@ -183,12 +191,28 @@ export class ContainerRunner implements IsolatingRunner {
       deps.transport ?? nodeTransport(this.endpoint),
       deps.hijack ?? nodeHijack(this.endpoint),
     );
-    this.proxy = deps.egressProxy;
-    if (this.config.egressProxyUrl && !this.proxy)
+    if (!!this.config.egressProxyUrl !== !!this.config.egressGrantSecret)
       throw new OaxError(
         'config_invalid',
-        'egressProxyUrl is set but no egress proxy was provided',
+        'egressProxyUrl and egressGrantSecret must be set together (or neither: no step egress)',
       );
+    this.egressCeiling = this.config.egressAllow.map(parseEgressEntry);
+  }
+
+  /**
+   * Removes run node containers that outlived their hard lifetime (a crashed worker, a lost
+   * engine connection). Safe to call at startup and periodically: live nodes carry a future
+   * expiry and are never touched. Returns the number of removed containers.
+   */
+  async reapOrphans(now: number = Date.now()): Promise<number> {
+    let removed = 0;
+    for (const c of await this.engine.listContainers(NODE_LABEL)) {
+      const expires = Number(c.Labels?.[EXPIRES_LABEL]);
+      if (Number.isFinite(expires) && expires * 1000 > now) continue;
+      await this.engine.removeContainer(c.Id).catch(() => undefined);
+      removed++;
+    }
+    return removed;
   }
 
   /** The orchestrator starts nodes per step through {@link startNode}; there is no whole-run mode. */
@@ -236,12 +260,13 @@ export class ContainerRunner implements IsolatingRunner {
       throw new OaxError('run_node_invalid', 'control URL is not an http(s) URL');
     }
     if (spec.egress.length > 0) {
-      if (!this.proxy || !c.egressProxyUrl)
+      if (!c.egressProxyUrl || !c.egressGrantSecret)
         throw new OaxError(
           'egress_proxy_missing',
           'the step declares egress hosts but no egress proxy is configured; refusing to start (deny by default)',
         );
-      parseAllowlist(spec.egress.join(' '));
+      // Syntax, minimum prefixes and the operator ceiling (intersection, never a union).
+      assertWithinCeiling(spec.egress, this.egressCeiling);
     }
     const l = spec.limits;
     if (!(l.cpus > 0 && l.memoryMb >= 64 && l.pids > 0 && l.timeoutSeconds > 0))
@@ -266,11 +291,16 @@ export class ContainerRunner implements IsolatingRunner {
         `OAX_NODE_ID=${spec.nodeId}`,
         `OAX_STEP_IDS=${spec.steps.join(',')}`,
         `OAX_RUN_TOKEN_FILE=${TOKEN_STDIN}`,
+        // The node exits by itself at its deadline; the reaper removes what outlives it anyway.
+        `OAX_NODE_DEADLINE_SECONDS=${Math.ceil(spec.limits.timeoutSeconds) + 30}`,
         'NODE_ENV=production',
         'HOME=/tmp',
       ],
       Labels: {
         [NODE_LABEL]: 'true',
+        [EXPIRES_LABEL]: String(
+          Math.floor(Date.now() / 1000) + Math.ceil(spec.limits.timeoutSeconds) + 90,
+        ),
         'io.openagentix.run-id': spec.runId,
         'io.openagentix.node-id': spec.nodeId,
       },
@@ -311,13 +341,19 @@ export class ContainerRunner implements IsolatingRunner {
         'network_not_internal',
         `network "${this.config.network}" is not an internal network; refusing to start a run node`,
       );
-    const withProxy = this.proxy !== undefined && this.config.egressProxyUrl !== undefined;
     const body = this.buildCreateBody(spec);
     assertSafeCreateBody(body);
-    const proxyAccount = withProxy ? this.proxy!.register(spec.nodeId, spec.egress) : undefined;
+    // A signed, expiring grant: the stateless proxy verifies it, nothing to unregister afterwards.
+    const proxyPassword =
+      spec.egress.length > 0 && this.config.egressProxyUrl && this.config.egressGrantSecret
+        ? mintEgressGrant(this.config.egressGrantSecret, {
+            nodeId: spec.nodeId,
+            egress: spec.egress,
+            ttlSeconds: Math.ceil(spec.limits.timeoutSeconds) + 60,
+          })
+        : undefined;
     let id: string | undefined;
     const cleanup = async () => {
-      this.proxy?.unregister(spec.nodeId);
       if (id) await this.engine.removeContainer(id).catch(() => undefined);
     };
     let stdin: StdinHandle | undefined;
@@ -329,14 +365,8 @@ export class ContainerRunner implements IsolatingRunner {
       // Line 1: the run token. Line 2 (only with egress): the node's account at the egress proxy.
       const lines = [
         spec.runToken,
-        ...(proxyAccount
-          ? [
-              proxyUrlWithCredentials(
-                this.config.egressProxyUrl!,
-                spec.nodeId,
-                proxyAccount.password,
-              ),
-            ]
+        ...(proxyPassword
+          ? [proxyUrlWithCredentials(this.config.egressProxyUrl!, spec.nodeId, proxyPassword)]
           : []),
       ];
       await stdin.send(Buffer.from(`${lines.join('\n')}\n`));

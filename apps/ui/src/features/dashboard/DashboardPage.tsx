@@ -24,7 +24,7 @@ import {
 } from '../../components/ui';
 import { useI18n } from '../../i18n/i18n';
 import { DemoScenarios } from './DemoScenarios';
-import { shortId, startOfMonth, startOfToday, useDocumentTitle } from '../../lib/hooks';
+import { monthStartDate, shortId, startOfToday, useDocumentTitle } from '../../lib/hooks';
 
 const recentRunsQuery = queryOptions({
   queryKey: ['runs', 'recent'],
@@ -64,7 +64,7 @@ export function DashboardPage() {
   const can = useCan();
   const { data: me } = useQuery(meQuery);
   const runs = useQuery({ ...recentRunsQuery, enabled: can('runs:read') });
-  const month = startOfMonth();
+  const month = monthStartDate();
   const costs = useQuery({ ...costsQuery('month', month), enabled: can('costs:read') });
   const teams = useQuery({ ...teamsQuery, enabled: can('users:read') });
   const policies = useQuery({ ...policiesQuery, enabled: can('policies:read') });

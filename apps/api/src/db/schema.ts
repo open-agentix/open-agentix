@@ -323,6 +323,10 @@ export const runNodeSessions = pgTable(
     tenantId: tenant(),
     /** Token worker id of the node. */
     nodeId: text('node_id').notNull(),
+    /** The worker that holds the run's lease and created the session; must still hold it. */
+    orchestratorId: text('orchestrator_id').notNull(),
+    /** Opaque handles of dynamic credentials, recalled on revoke (any control node instance). */
+    credentialHandles: jsonb('credential_handles').$type<string[]>().notNull().default([]),
     steps: jsonb('steps').$type<string[]>().notNull(),
     expiresAt: ts('expires_at').notNull(),
     revokedAt: ts('revoked_at'),

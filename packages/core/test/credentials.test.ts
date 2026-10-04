@@ -3,8 +3,11 @@ import {
   StaticCredentialSource,
   StaticSecretResolver,
   matchSecretGlob,
+  canonicalSecretRef,
+  hasTenantPrefix,
   parseSecretRefPatterns,
   secretRefAllowed,
+  slugsCollide,
   type OaxError,
 } from '../src/index.js';
 
@@ -39,12 +42,58 @@ describe('secret reference globs', () => {
     expect(secretRefAllowed(['y', 'x*'], 'xyz')).toBe(true);
   });
   it('validates and normalises patterns', () => {
-    expect(parseSecretRefPatterns(['b', 'a*', 'b'])).toEqual(['a*', 'b']);
-    for (const bad of ['', '.hidden', 'a b', 'a/b', '$x'])
-      expect(() => parseSecretRefPatterns([bad])).toThrow(/invalid secret reference pattern/);
-    expect(() => parseSecretRefPatterns(Array.from({ length: 65 }, (_, i) => `s${i}`))).toThrow(
+    expect(parseSecretRefPatterns(['bb', 'ab.*', 'bb', 'a_b-*'])).toEqual(['a_b-*', 'ab.*', 'bb']);
+    for (const bad of [
+      '',
+      '*',
+      '.hidden',
+      'a b',
+      'a/b',
+      '$x',
+      'ACME.x',
+      'acme*',
+      'a*b',
+      'a.*.b',
+      'x',
+    ])
+      expect(() => parseSecretRefPatterns([bad]), bad).toThrow(/invalid secret reference pattern/);
+    expect(() => parseSecretRefPatterns(Array.from({ length: 65 }, (_, i) => `s${i}x`))).toThrow(
       /at most 64/,
     );
+  });
+});
+
+describe('canonical form (what the resolver sees)', () => {
+  it('maps like envNameForSecret: lower case, everything else becomes _', () => {
+    expect(canonicalSecretRef('Acme.Corp-DB.pass')).toBe('acme_corp_db_pass');
+    expect(canonicalSecretRef('acme.corp.db-password')).toBe(
+      canonicalSecretRef('acme-corp.db-password'),
+    );
+  });
+  it('a tenant pattern cannot reach a differently written but identical secret', () => {
+    // `acme.*` would otherwise allow `acme.corp.db-password`, which IS the secret `acme-corp.db-password`
+    // for the resolver (same environment variable). Both are the same canonical name, so an
+    // allowlist for `acme.*` allows it, which is why slugs that overlap cannot coexist:
+    expect(matchSecretGlob('acme.*', 'acme.corp.db-password')).toBe(true);
+    expect(matchSecretGlob('acme.*', 'acme-corp.db-password')).toBe(true);
+    expect(slugsCollide('acme', 'acme-corp')).toBe(true);
+    expect(slugsCollide('acme-corp', 'acme')).toBe(true);
+    expect(slugsCollide('acme', 'acmecorp')).toBe(false);
+    expect(slugsCollide('acme', 'acme')).toBe(true);
+    expect(slugsCollide('beta', 'acme')).toBe(false);
+  });
+  it('prefix checks use the canonical form and need a separator', () => {
+    expect(hasTenantPrefix('acme', 'acme.db')).toBe(true);
+    expect(hasTenantPrefix('acme', 'ACME-db')).toBe(true);
+    expect(hasTenantPrefix('acme', 'acme_db')).toBe(true);
+    expect(hasTenantPrefix('acme', 'acmecorp.db')).toBe(false);
+    expect(hasTenantPrefix('acme', 'other.acme.db')).toBe(false);
+    expect(hasTenantPrefix('acme-corp', 'acme.corp.db')).toBe(true);
+  });
+  it('globs compare canonically and case-insensitively', () => {
+    expect(matchSecretGlob('jira.*', 'JIRA-token')).toBe(true);
+    expect(matchSecretGlob('jira-bot', 'Jira.Bot')).toBe(true);
+    expect(matchSecretGlob('jira-bot', 'jira.bot2')).toBe(false);
   });
 });
 

@@ -160,12 +160,45 @@ describe('costs', () => {
 
   it('computes periods and budget alerts', () => {
     const now = new Date(2026, 9, 15);
-    expect(new Date(periodStart('month', now)!).getDate()).toBe(1);
-    expect(periodStart('30d', now)).toBe(new Date(now.getTime() - 30 * 86_400_000).toISOString());
+    expect(periodStart('month', now)).toBe('2026-10-01');
+    expect(periodStart('30d', now)).toBe('2026-09-15');
     expect(periodStart('all', now)).toBeUndefined();
     expect(budgetAlert(5, null)).toBe('none');
     expect(budgetAlert(5, 10)).toBe('ok');
     expect(budgetAlert(8, 10)).toBe('warning');
     expect(budgetAlert(10, 10)).toBe('exceeded');
+  });
+
+  it('sends API-conformant period bounds for this month, the last 30 days and all time', async () => {
+    const froms: (string | null)[] = [];
+    server.use(
+      http.get(api('/v1/costs/summary'), ({ request }) => {
+        const from = new URL(request.url).searchParams.get('from');
+        froms.push(from);
+        // Mirrors the API contract: a date or an ISO timestamp, never anything else.
+        if (from !== null && !/^\d{4}-\d{2}-\d{2}(T.*)?$/.test(from)) {
+          return HttpResponse.json(
+            { error: 'validation_error', message: 'request validation failed' },
+            { status: 400 },
+          );
+        }
+        return HttpResponse.json({
+          groupBy: 'agent',
+          items: [
+            { key: f.ids.agent, tokensIn: 1, tokensOut: 1, costMicros: 1, costUsd: 0.000001 },
+          ],
+        });
+      }),
+    );
+    const { user } = await renderApp('/costs');
+    await heading('Costs');
+    // default period: this month, a plain first-of-month date
+    await waitFor(() => expect(froms.some((x) => /^\d{4}-\d{2}-01$/.test(x ?? ''))).toBe(true));
+    expect(screen.queryByText('request validation failed')).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Period'), '30d');
+    await waitFor(() => expect(froms.at(-1)).toMatch(/^\d{4}-\d{2}-\d{2}$/));
+    await user.selectOptions(screen.getByLabelText('Period'), 'all');
+    await waitFor(() => expect(froms.at(-1)).toBeNull());
+    expect(screen.queryByText('request validation failed')).not.toBeInTheDocument();
   });
 });

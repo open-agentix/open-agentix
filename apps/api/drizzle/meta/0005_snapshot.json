@@ -1,5 +1,5 @@
 {
-  "id": "e3477da5-cdb6-43b8-8573-ab2b0db57f19",
+  "id": "dc708ea6-06b4-47ef-85d7-037d29c2b747",
   "prevId": "e690c516-ea57-4dd6-b8ff-cc8dff67ce1e",
   "version": "7",
   "dialect": "postgresql",
@@ -1794,6 +1794,19 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "orchestrator_id": {
+          "name": "orchestrator_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "credential_handles": {
+          "name": "credential_handles",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
         },
         "steps": {
           "name": "steps",

@@ -1,7 +1,6 @@
 import { createContext, createLogger, initTelemetry, loadConfig } from '@openagentix/api';
-import { getEgressPolicy } from '@openagentix/core';
 import { demoServerFactories, inMemoryServers } from '@openagentix/mcp';
-import { ContainerRunner, EgressProxy } from '@openagentix/runners';
+import { ContainerRunner } from '@openagentix/runners';
 import { createWorkerHttpServer } from './http.js';
 import { KafkaSources } from './sources.js';
 import { CronScheduler } from './scheduler.js';
@@ -18,16 +17,10 @@ const ctx = await createContext(config, {
 });
 // Opt-in container runner: one hardened container per isolated step (docs/runners.md).
 const container = config.runners.container;
-const egressProxy =
-  container.enabled && container.egressProxyListen
-    ? new EgressProxy({ outer: getEgressPolicy() })
-    : undefined;
+// The egress proxy is NOT part of this process: it is its own service (egress-proxy-cli.js), so that
+// a worker attached to the engine network never carries a path to the internet or the platform.
 const containerRunner =
-  container.enabled && container.config
-    ? new ContainerRunner(container.config, egressProxy ? { egressProxy } : {})
-    : undefined;
-if (egressProxy && container.egressProxyListen)
-  await egressProxy.listen(container.egressProxyListen.port, container.egressProxyListen.host);
+  container.enabled && container.config ? new ContainerRunner(container.config) : undefined;
 // OAX_DEMO_MCP=true registers the built-in demo MCP servers (cve-db, tickets) for `in-memory` connections.
 const worker = new Worker(ctx, {
   ...(config.demoMcp ? { inMemoryMcp: inMemoryServers(demoServerFactories()) } : {}),
@@ -60,6 +53,15 @@ if (containerRunner?.unsafeSocket) {
     payload: { engine: container.config?.engine ?? 'docker' },
   });
 }
+// Containers that outlived their hard lifetime (crashed worker, lost engine connection) are removed
+// at startup and every minute; live nodes carry a future expiry and are never touched.
+const reapNodes = () =>
+  void containerRunner
+    ?.reapOrphans()
+    .then((n) => n > 0 && ctx.logger.warn({ removed: n }, 'removed expired run node containers'))
+    .catch((err: unknown) => ctx.logger.warn({ err }, 'run node reaper failed'));
+reapNodes();
+const reaper = containerRunner ? setInterval(reapNodes, 60_000) : undefined;
 const scheduler = new CronScheduler(ctx, worker.services);
 const kafka = new KafkaSources(ctx, worker.services);
 worker.start();
@@ -73,7 +75,7 @@ const shutdown = async (signal: string) => {
   ctx.logger.info({ signal }, 'worker shutting down');
   scheduler.stop();
   http.close();
-  await egressProxy?.close();
+  if (reaper) clearInterval(reaper);
   await kafka.stop();
   await worker.stop(signal === 'SIGINT');
   await ctx.database.close();

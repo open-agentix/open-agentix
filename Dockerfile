@@ -87,6 +87,20 @@ WORKDIR /app/apps/worker
 USER 10001:10001
 CMD ["node", "dist/run-node-cli.js"]
 
+# Egress proxy for run nodes (docs/runners.md): its own service, attached to the internal node network
+# and an egress network only. Stateless; verifies signed per-node grants.
+FROM runtime AS egress-proxy
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.title="open-agentix-egress-proxy" \
+      org.opencontainers.image.source="https://github.com/open-agentix/open-agentix" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${VERSION}"
+COPY --from=build /src/apps/worker/dist /app/apps/worker/dist
+WORKDIR /app/apps/worker
+USER 10001:10001
+EXPOSE 3128
+CMD ["node", "dist/egress-proxy-cli.js"]
+
 # Optional demo worker with the Claude Code CLI (OAX_DEMO_LLM=claude-code, see docs/demo.md).
 # Pinned version; the CLI is installed at build time only, nothing is downloaded at run time.
 FROM base AS claude-cli

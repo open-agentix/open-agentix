@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { parseSecretRefPatterns, type Principal } from '@openagentix/core';
+import { parseSecretRefPatterns, slugsCollide, type Principal } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import { tenants } from '../db/schema.js';
@@ -46,6 +46,15 @@ export class TenantsService {
     this.assertOperator(p);
     const [exists] = await this.ctx.db.select().from(tenants).where(eq(tenants.slug, input.slug));
     if (exists) throw conflict(`tenant ${input.slug} already exists`);
+    // `acme.corp.x` and `acme-corp.x` are the same secret for the resolver: tenants whose slugs
+    // overlap in canonical form could read each other's secrets, so they cannot coexist.
+    const clash = (await this.ctx.db.select({ slug: tenants.slug }).from(tenants)).find((t) =>
+      slugsCollide(t.slug, input.slug),
+    );
+    if (clash)
+      throw conflict(
+        `tenant slug ${input.slug} overlaps with ${clash.slug} in secret names (a. b-c and a-b.c are the same secret)`,
+      );
     const [row] = await this.ctx.db
       .insert(tenants)
       .values({

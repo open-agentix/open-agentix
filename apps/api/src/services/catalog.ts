@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
+  hasTenantPrefix,
   type AccessCatalog,
   evaluateToolCall,
   expandProfiles,
@@ -242,7 +243,8 @@ export class CatalogService {
     if (scope !== 'platform' && actor.tenantId !== DEFAULT_TENANT_ID && refs.length) {
       const [t] = await this.ctx.db.select().from(tenants).where(eq(tenants.id, actor.tenantId));
       const prefix = `${t?.slug ?? actor.tenantId}.`;
-      const foreign = refs.filter((r) => !r.startsWith(prefix));
+      // Canonical comparison: the resolver maps `a.b-c` and `a-b.c` to the same secret.
+      const foreign = refs.filter((r) => !hasTenantPrefix(t?.slug ?? actor.tenantId, r));
       if (foreign.length)
         throw new HttpError(
           400,

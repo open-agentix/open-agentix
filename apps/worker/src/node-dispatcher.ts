@@ -150,11 +150,21 @@ export class NodeDispatcher implements StepDispatcher {
       content: result.content,
       ...(Object.hasOwn(result, 'json') ? { json: result.json } : {}),
     };
+    // Cost and tokens of a node are NOT taken from its report: an untrusted node must not steer
+    // the run's budget accounting, and the control node does not record them either (from W1-3b the
+    // model proxy measures them). Counters are bounded. Isolated steps therefore count against
+    // maxCostUsd/maxTokens only once W1-3b lands; until then nodes cannot reach a paid model, and
+    // maxSteps/maxToolCalls/timeout are enforced inside the node from the REMAINING budget.
+    const cap = (n: number | undefined) => Math.min(Math.max(0, n ?? 0), 1000);
     return {
       output,
-      usage: result.usage
-        ? { ...result.usage }
-        : { tokensIn: 0, tokensOut: 0, costMicros: 0, steps: 0, toolCalls: 0 },
+      usage: {
+        tokensIn: 0,
+        tokensOut: 0,
+        costMicros: 0,
+        steps: cap(result.usage?.steps),
+        toolCalls: cap(result.usage?.toolCalls),
+      },
     };
   }
 }

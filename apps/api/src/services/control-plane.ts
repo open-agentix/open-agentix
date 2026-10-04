@@ -3,7 +3,6 @@ import type { OaxError } from '@openagentix/core';
 import {
   evaluateToolCall,
   issueRunToken,
-  redact,
   stepAuditEntry,
   verifyRunToken,
   type AgentDefinition,
@@ -34,6 +33,8 @@ import type { RunNodesService } from './run-nodes.js';
 import { monthOf } from './runs.js';
 
 const ACTIVE = ['running', 'awaiting_approval'];
+/** Largest input or output a run node may attach to one step record. */
+const NODE_STEP_MAX_BYTES = 64 * 1024;
 
 /**
  * The control node side of the worker contract. Every method is scoped by a signed run token,
@@ -212,15 +213,49 @@ export class ControlPlaneService {
       action: 'policy.decision',
       target: `${call.server}/${call.tool}`,
       runId,
-      payload: { args: call.args, effect: decision.effect, reasons: decision.reasons },
+      payload: {
+        args: await this.nodes.scrub(runId, call.args),
+        effect: decision.effect,
+        reasons: decision.reasons,
+      },
     });
     return decision;
   }
 
-  async recordStep(runId: string, rawStep: StepInput): Promise<void> {
+  /**
+   * A step reported by an untrusted run node. Cost, token counts, provider and model are measured
+   * by the control node only (from W1-3b, through the model proxy); a node's own numbers would feed
+   * the cost ledger and the budget alerts, so they are dropped. Everything else is bounded.
+   */
+  private sanitizeNodeStep(step: StepInput): StepInput {
+    const cap = (v: unknown): unknown => {
+      if (v === undefined || v === null) return v;
+      const text = JSON.stringify(v);
+      return text.length <= NODE_STEP_MAX_BYTES ? v : { truncated: true, bytes: text.length };
+    };
+    return {
+      kind: step.kind,
+      agentId: step.agentId,
+      name: step.name.slice(0, 200),
+      status: step.status,
+      ...(step.input !== undefined ? { input: cap(step.input) } : {}),
+      ...(step.output !== undefined ? { output: cap(step.output) } : {}),
+      ...(step.durationMs !== undefined
+        ? { durationMs: Math.min(step.durationMs, 86_400_000) }
+        : {}),
+    };
+  }
+
+  async recordStep(
+    runId: string,
+    rawStep: StepInput,
+    from: 'trusted' | 'node' = 'trusted',
+  ): Promise<void> {
     // Values the broker handed out for this run never reach step rows or audit payloads.
-    const known = this.nodes.knownSecrets(runId);
-    const step = known.length > 0 ? redact(rawStep, { knownSecrets: known }) : rawStep;
+    const step = await this.nodes.scrub(
+      runId,
+      from === 'node' ? this.sanitizeNodeStep(rawStep) : rawStep,
+    );
     await this.ctx.db.transaction(async (tx) => {
       const [run] = await tx
         .update(runs)
@@ -316,7 +351,7 @@ export class ControlPlaneService {
       teamId,
       agentId,
       tool: `${call.server}/${call.tool}`,
-      args: call.args,
+      args: await this.nodes.scrub(runId, call.args),
       reasons: (reasons ?? []) as object,
       approverRoles: definition.approvals.approverRoles,
       status: 'pending',
@@ -329,7 +364,10 @@ export class ControlPlaneService {
       action: 'approval.requested',
       target: id,
       runId,
-      payload: { tool: `${call.server}/${call.tool}`, args: call.args },
+      payload: {
+        tool: `${call.server}/${call.tool}`,
+        args: await this.nodes.scrub(runId, call.args),
+      },
     });
     return id;
   }

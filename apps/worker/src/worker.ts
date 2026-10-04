@@ -52,7 +52,9 @@ export class Worker {
   ) {
     this.id = opts.workerId ?? `worker-${randomUUID().slice(0, 8)}`;
     this.services = createServices(ctx);
-    this.queue = new RunQueue(ctx, this.id);
+    this.queue = new RunQueue(ctx, this.id, (runId) =>
+      this.services.runNodes.revokeRun(runId, 'lease_lost'),
+    );
     this.providers = opts.providers ?? null;
     this.runner = opts.runner ?? new InProcessRunner();
   }
@@ -81,7 +83,8 @@ export class Worker {
         agentId: run.agentId,
       }),
       {
-        secrets: this.ctx.secrets,
+        // Tenant allowlist (tenants.secret_refs) applies in-process exactly as it does for nodes.
+        secrets: await this.services.runNodes.resolverFor(run.tenantId),
         ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
       },
     );

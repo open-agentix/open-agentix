@@ -377,19 +377,35 @@ export const CheckpointSchema = z.object({
   signature: z.string(),
 });
 
+/**
+ * A cost period bound. Accepts a plain date (`2026-10-01`, `2026-10-15`) or a full ISO 8601
+ * timestamp (`2026-10-01T00:00:00.000Z`) and is normalised to the first day of the month (UTC)
+ * it falls in, because the cost ledger is kept per month.
+ */
+const MONTH_BOUND_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+export function toMonthStart(value: string): string | null {
+  if (!MONTH_BOUND_RE.test(value)) return null;
+  const hasTime = value.includes('T');
+  const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(value.slice(10));
+  const d = new Date(hasTime && !hasZone ? `${value}Z` : value);
+  if (Number.isNaN(d.getTime())) return null;
+  if (!hasTime && d.toISOString().slice(0, 10) !== value) return null;
+  return `${d.toISOString().slice(0, 7)}-01`;
+}
+export const MonthBound = z
+  .string()
+  .regex(MONTH_BOUND_RE, 'expected YYYY-MM-DD or an ISO 8601 timestamp')
+  .refine((v) => toMonthStart(v) !== null, 'not a valid date')
+  .transform((v) => toMonthStart(v) as string);
+
 export const CostQuery = z.object({
   groupBy: z
     .enum(['run', 'agent', 'team', 'tenant', 'use_case', 'month', 'provider', 'model'])
     .default('agent'),
-  from: z
-    .string()
-    .regex(/^\d{4}-\d{2}-01$/)
-    .optional()
-    .describe('first day of a month, inclusive'),
-  to: z
-    .string()
-    .regex(/^\d{4}-\d{2}-01$/)
-    .optional(),
+  from: MonthBound.optional().describe(
+    'start of the period, inclusive: YYYY-MM-DD or ISO 8601 timestamp, rounded down to the first day of its month (UTC)',
+  ),
+  to: MonthBound.optional().describe('end of the period, inclusive: same formats as `from`'),
   limit: z.coerce.number().int().min(1).max(1000).default(100),
   allTenants: AllTenantsQuery.shape.allTenants,
 });
@@ -562,12 +578,12 @@ export const StepBody = z.object({
   status: z.enum(STEP_STATUSES),
   input: Json.optional(),
   output: Json.optional(),
-  tokensIn: z.number().int().nonnegative().optional(),
-  tokensOut: z.number().int().nonnegative().optional(),
-  costMicros: z.number().int().nonnegative().optional(),
-  durationMs: z.number().int().nonnegative().optional(),
-  provider: z.string().optional(),
-  model: z.string().optional(),
+  tokensIn: z.number().int().nonnegative().max(1e9).optional(),
+  tokensOut: z.number().int().nonnegative().max(1e9).optional(),
+  costMicros: z.number().int().nonnegative().max(1e12).optional(),
+  durationMs: z.number().int().nonnegative().max(86_400_000).optional(),
+  provider: z.string().max(100).optional(),
+  model: z.string().max(200).optional(),
 });
 
 /** Run node protocol (ADR 0008): the node's own step only; nothing about other steps. */

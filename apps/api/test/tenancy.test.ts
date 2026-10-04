@@ -295,7 +295,14 @@ describe('tenant isolation', () => {
         .statusCode,
     ).toBe(404);
     const verify = await A({ method: 'POST', url: '/v1/audit/verify', payload: {} });
-    expect(verify.json()).toMatchObject({ valid: true, headSeq: 0 });
+    // Tenants see their own latest entry as the head (real seq and hash), not the global head.
+    const own = (await A({ method: 'GET', url: '/v1/audit?limit=1' })).json().items[0];
+    const globalHead = (
+      await n.req({ method: 'POST', url: '/v1/audit/verify', payload: {} })
+    ).json();
+    expect(verify.json()).toMatchObject({ valid: true, headSeq: own.seq, headHash: own.hash });
+    expect(own.seq).toBeGreaterThan(0);
+    expect(verify.json().headSeq).toBeLessThanOrEqual(globalHead.headSeq);
   });
 
   it('lets a platform operator act inside and across tenants', async () => {

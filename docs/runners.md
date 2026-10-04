@@ -80,14 +80,33 @@ complete a run (`403`).
 - **Once per step and session** (`409 credential_already_issued` afterwards, audited). A restarted
   node gets a new session. The issue is recorded before the values are resolved, so a failure never
   leaves a second chance on the same session.
-- Only references the tenant allows: `tenants.secret_refs`, a list of globs (`*` is the only
-  wildcard). The default tenant is migrated to `["*"]`; **every other tenant starts with an empty
-  list and gets no secret at all** (`403 credential_scope`, audited `credential.denied`). Platform
-  operators change it with `PATCH /v1/tenants/{id}` (`secretRefs`).
+- Only references the tenant allows: `tenants.secret_refs`, a list of lower case patterns with at most
+  one trailing `*` after a separator (`acme.*`; a bare `*` or `acme*` is refused). **Every tenant,
+  the default tenant included, starts with an empty list and gets no secret at all** (`403
+  credential_scope`, audited `credential.denied`); platform operators set it with
+  `PATCH /v1/tenants/{id}` (`secretRefs`). References are compared in their **canonical form**
+  (lower case, every character outside `[a-z0-9]` becomes `_`), because that is what the default
+  resolver does (`OAX_SECRET_<NAME>`): `acme.corp.db-password` and `acme-corp.db-password` are the
+  same secret. For the same reason tenants whose slugs overlap in canonical form (`acme`,
+  `acme-corp`) cannot coexist, and the prefix rule for tenant connections (`<slug>.` ...) compares
+  canonically.
+- **Platform secrets are never delivered**, whatever a tenant allows: references of provider keys
+  (environment providers and every model connection), event source secrets (webhook signing, Kafka
+  credentials) and the secrets of platform-scope connections are refused (`credential.denied`,
+  reason `platform_secret`). A platform connection that needs a secret therefore only works for
+  in-process steps.
+- **The same allowlist applies in-process**: the worker's tool gateway resolves a tenant's MCP
+  connection secrets through a tenant-scoped resolver (`tenants.secret_refs`; references of
+  platform connections stay resolvable). Existing installations must set `secretRefs` for tenants
+  whose connections use secrets (breaking, pre-1.0).
 - Response is `Cache-Control: no-store`. Values live in the node's memory and reach tool processes
-  as their environment and HTTP headers, nothing else. They are registered for redaction on the
-  control node, so step records and audit payloads of the run never contain them. Audit entries
-  (`credential.issued`, `credential.denied`) carry names and ids only.
+  as their environment and HTTP headers, nothing else. Nothing secret is kept in the control node's
+  memory: for scrubbing, the values a run's nodes received are re-resolved from the secret store
+  (static source only). Step records, gate and approval arguments, audit payloads, the node's
+  result (content, JSON, failure message) are scrubbed with them, and the result is deleted once the
+  orchestrator read it. **This is a net for accidental leaks only**: a compromised node holds the
+  plain values and can encode them, send them through allowed egress or into tool arguments.
+  Audit entries (`credential.issued`, `credential.denied`) carry names and ids only.
 - Sources: v0.2 ships the `static` source (the existing env/file secret resolver). A source can
   implement `revoke(handle)` for real revocation; a static secret value itself cannot be recalled,
   only the session, node and token are destroyed.
@@ -104,7 +123,7 @@ Opt-in: nothing isolating runs by default. Enable it with `OAX_RUNNERS_ENABLED=i
 | `OAX_CONTAINER_TOOLBOX_IMAGES` | JSON map toolbox name -> digest-pinned image. A step with an unknown toolbox fails closed (`toolbox_image_unknown`). Toolbox build, signing and verification are W2-1. |
 | `OAX_CONTAINER_NETWORK` | required. A pre-created network with `internal: true`; the runner inspects it before every start and refuses anything else (`network_not_internal`). |
 | `OAX_NODE_CONTROL_URL` | required. Base URL of the control node **as seen from the node** (on the internal network), not the public URL. |
-| `OAX_CONTAINER_EGRESS_PROXY_LISTEN` / `_URL` | where the worker's egress proxy listens (`0.0.0.0:3128`) and the URL nodes use; set both or neither. Without a proxy no step can declare egress hosts. |
+| `OAX_CONTAINER_EGRESS_PROXY_URL`, `_GRANT_SECRET`, `_ALLOW`, `_PRIVATE_ALLOW` | the separate egress proxy, see Egress below; without URL and secret no step can declare egress. |
 | `OAX_CONTAINER_MAX_CPUS`, `_MAX_MEMORY_MB`, `_MAX_PIDS` | upper bounds (defaults 1, 512, 256); a step's limits are clamped to them. |
 | `OAX_CONTAINER_ENGINE`, `OAX_CONTAINER_ALLOW_RAW_SOCKET` | `docker` (default) or `podman`; the unsafe-socket switch. |
 
@@ -125,34 +144,56 @@ images and tokens in the environment):
 ### Egress
 
 Nodes sit on an internal network: no route to the internet, only the control node and the **egress
-proxy**. The proxy (`EgressProxy`, runs inside the worker process) is an HTTP `CONNECT` allowlist:
-each node authenticates with its own ephemeral account (delivered on stdin) and may reach exactly the
-hosts of its step's `runtime.egress` (`host`, `*.suffix`, IP, CIDR, optional port). Deny by default: a
-step without `egress` reaches nothing; unknown or unregistered nodes get `407`. Loopback, link-local,
-unspecified and multicast targets are refused even when listed, and every address a name resolves to
-is checked (no mixing a public and a local answer). Plain HTTP requests get `405`. In **air-gapped
-mode** the process-wide `OAX_AIRGAPPED_ALLOW` policy applies on top of the step list, so a node can
-never reach more than the platform itself could.
+proxy**. The proxy is its **own service** (image target `egress-proxy`, `egress-proxy-cli.js`),
+attached to the internal node network and an egress network and to nothing else; it is never part of
+the worker process, which is attached to the engine socket network. It is an HTTP `CONNECT`
+proxy and stateless: the runner mints a signed, expiring **grant** per node (node id, the step's
+egress entries, expiry; HMAC with `OAX_CONTAINER_EGRESS_GRANT_SECRET`) that the node presents as its
+proxy password. Per connection the proxy applies, in this order:
 
-### Docker Compose
+1. the **operator ceiling** `OAX_CONTAINER_EGRESS_ALLOW` (intersection, never a union; empty = no
+   step gets any egress). The same check runs at publish, at node start and in the proxy;
+2. the grant's rules: `host`, `host:port`, `*.suffix` (two labels at least), an IP or a CIDR no wider
+   than `/8` (IPv4) or `/32` (IPv6; `0.0.0.0/1` style splits are refused). **No port means 443 only**;
+3. the **resolved address**: loopback, link-local, metadata (`169.254.0.0/16`, `fd00:ec2::254`,
+   `100.100.100.200`, `168.63.129.16`) and unspecified addresses are never reachable. Private
+   destinations (RFC 1918 incl. the Docker bridges and their gateways, `100.64.0.0/10`,
+   `198.18.0.0/15`, `fc00::/7`, NAT64 `64:ff9b::/96`, 6to4, multicast, and IPv4-mapped forms of
+   them) are refused unless an **operator** opened that range in
+   `OAX_CONTAINER_EGRESS_PRIVATE_ALLOW` (CIDRs); an `agents.md` can never open them, so an author
+   cannot reach `socket-proxy:2375`, `postgres:5432` or `172.17.0.1` by naming them. Every address a
+   name resolves to must pass;
+4. in **air-gapped mode** the process-wide `OAX_AIRGAPPED_ALLOW` policy on top.
 
-`docker-compose.yml` has an opt-in profile that runs the worker with the container runner behind a
-socket proxy (`tecnativa/docker-socket-proxy`, only container and network calls allowed; pin it by
-digest for production):
+Plain HTTP requests get `405`. Limits: connections, concurrent tunnels per node (8), a short header
+timeout for silent clients, an idle timeout per tunnel.
+
+### Docker Compose (evaluation only)
+
+`docker-compose.yml` has an opt-in profile `container-runner`: a socket proxy, the worker with the
+container runner and the egress proxy as a separate service.
 
 ```bash
 # .env
 OAX_RUNNERS_ENABLED=in-process,container
 OAX_CONTAINER_RUNNER_ENABLED=true
 OAX_CONTAINER_IMAGE=ghcr.io/open-agentix/open-agentix-run-node@sha256:<digest>
+OAX_CONTAINER_EGRESS_GRANT_SECRET=<random, at least 32 characters>
+OAX_CONTAINER_EGRESS_ALLOW=jira.example.com,*.corp.example   # empty = no step egress
 
 docker compose --profile container-runner up --scale worker=0
 ```
 
-Scale the plain `worker` to 0: a run that needs isolation must not be claimed by a worker without a
-container runner (it would fail closed, but only one worker should serve the queue). The images must
-exist on the engine host (the runner never pulls). The networks `openagentix-nodes` and `socket` are
-`internal: true`.
+Scale the plain `worker` to 0 so that a run that needs isolation is never claimed by a worker without
+a container runner. The images must exist on the engine host (the runner never pulls). `nodes` and
+`socket` are `internal: true`; the egress proxy is on `nodes` and `egress` only, the worker on
+`default` and `socket` only.
+
+**The socket proxy is root-equivalent.** `tecnativa/docker-socket-proxy` filters by URL, not by
+request body: whoever can reach it can still create a privileged container with a host bind mount.
+The runner's own create options are hardened and double-checked, but a compromised worker is not
+contained by it. For anything but evaluation use rootless Podman or a body-filtering proxy, and pin
+the proxy image by digest.
 
 ## Not in this version
 
@@ -160,12 +201,31 @@ exist on the engine host (the runner never pulls). The networks `openagentix-nod
   (`POST /v1/worker/runs/{id}/model`) so that provider keys, egress rules and cost measurement stay on
   the control node. Until it lands, a node has **no** model access: every provider except the keyless
   `simulated` provider fails the step with `model_proxy_unavailable`
-  (`packages/runners/src/model-proxy.ts` documents the interface). Usage and cost are therefore
-  reported by the node (trusted for budgeting only; the monthly budgets are still enforced by the
-  control node from the recorded steps).
-- Step groups (one node for several steps), dynamic credential sources with real revocation (Vault,
-  STS), mTLS between nodes and the control node (W2-2), signed and scanned toolbox images (W2-1),
-  the Kubernetes Job runner (W1-4).
+  (`packages/runners/src/model-proxy.ts`). Cost and token numbers of a node are **not recorded**:
+  the control node drops them from node step reports (they would feed the cost ledger and budget
+  alerts) and the orchestrator ignores them in the node's result; only bounded step and tool-call
+  counters are used. Isolated steps therefore do not count against `maxCostUsd`/`maxTokens` until
+  W1-3b (nothing paid is reachable from a node before then). The node enforces `maxSteps`,
+  `maxToolCalls` and the timeout from the **remaining** budget handed over with the step.
+
+### Known follow-ups
+
+- Credentials are delivered per step, not per stdio server: all of a step's secrets are in the
+  node process and its children; UID separation or ptrace hardening between the node and its tool
+  processes is open.
+- `assertSafeCreateBody` is a deny list; it should become an allow list of exactly the options the
+  runner sets. Network membership (only the intended neighbours on the node network), the
+  inspect-then-create gap (TOCTOU) and inter-container traffic between nodes need a stricter
+  network model.
+- The import-boundary test of the run node is shallow and the run-node image still contains the
+  control node packages; a slim image stage is open. Posting a result after revocation races with
+  the orchestrator's read; a node can claim any failure status (it cannot succeed without an output
+  that the orchestrator validates). The gate only constrains cooperating nodes: a compromised node
+  can skip it, which is why credentials and egress are the real boundary.
+- Minor: approval requests from a node are not rate limited; error messages of the broker are
+  distinguishable; cancellation is polled every two seconds; the migration default tenant id is
+  the legacy constant.
+- Step groups, dynamic credential sources (Vault, STS), mTLS (W2-2), signed toolbox images (W2-1).
 
 ## Testing
 

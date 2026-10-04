@@ -523,8 +523,16 @@ Found while implementing the run node and the container runner; sections 1 to 4 
   `classification`, `budget`) and `mcp` (the MCP connections of the step with secret references
   stripped; values arrive through the broker). `StepHandoverResult` also carries `usage` and, instead
   of an output, `failure { status, code, message }` so that a policy block stays a policy block.
-- **Egress proxy (3.5)**: implemented as an `EgressProxy` inside the worker process (HTTP `CONNECT`,
-  per-node accounts), not as a separate container; loopback/link-local targets are never reachable.
+- **Egress proxy (3.5)**: a separate, stateless service (HTTP `CONNECT`, image target
+  `egress-proxy`) on the node network and an egress network only. Nodes authenticate with signed,
+  expiring grants minted by the runner; the proxy applies the operator ceiling, the grant's rules
+  and a check of the resolved address (private, shared, metadata, loopback and link-local ranges are
+  closed to step authors; only an operator can open private ranges). No port means 443.
+- **Credential scope (section 2)**: the tenant allowlist compares canonical names (the resolver maps
+  `a.b-c` and `a-b.c` to the same secret), every tenant starts with an empty allowlist, platform
+  secrets (provider keys, event sources, platform connections) are never delivered, and the same
+  allowlist applies to in-process runs. Cost and token numbers of a node are not recorded until the
+  model proxy (W1-3b) measures them on the control node; a node receives the REMAINING budget.
 - **Migration number**: `0009_run_node_sessions.sql` keeps the reserved number; the journal index is
   5 because 0005 to 0008 are not used yet.
 - **Model calls (3.4)** are **not** part of W1-3a: until W1-3b, a run node can only use the keyless

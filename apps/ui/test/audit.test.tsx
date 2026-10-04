@@ -44,6 +44,34 @@ describe('audit trail', () => {
     ).toBeInTheDocument();
   });
 
+  it('does not show a head for an empty trail', async () => {
+    server.use(
+      http.post(api('/v1/audit/verify'), () =>
+        HttpResponse.json({
+          valid: true,
+          checkedEntries: 0,
+          checkedCheckpoints: 0,
+          headSeq: 0,
+          headHash: '0'.repeat(64),
+          issues: [],
+        }),
+      ),
+    );
+    const { user } = await renderApp('/audit');
+    await heading('Audit trail');
+    await user.click(screen.getByRole('button', { name: 'Verify hash chain' }));
+    expect(await screen.findByText(/the trail is empty/)).toBeInTheDocument();
+    expect(screen.queryByText('0'.repeat(64))).not.toBeInTheDocument();
+  });
+
+  it('shows the real head hash of a verified trail', async () => {
+    const { user } = await renderApp('/audit');
+    await heading('Audit trail');
+    await user.click(screen.getByRole('button', { name: 'Verify hash chain' }));
+    await screen.findByText('The audit trail is intact.');
+    expect(screen.queryByText('0'.repeat(64))).not.toBeInTheDocument();
+  });
+
   it('reports tampering', async () => {
     server.use(
       http.post(api('/v1/audit/verify'), () =>

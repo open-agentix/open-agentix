@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ContainerRunner, EgressProxy, type RunNodeSpec } from '../src/index.js';
+import { ContainerRunner, type RunNodeSpec } from '../src/index.js';
 
 /**
  * Opt-in integration test against a real Docker/Podman engine (`OAX_TEST_DOCKER=1`). It proves the
@@ -45,20 +45,16 @@ exit 0
 `;
 
 describe.skipIf(!enabled)('container runner against a real engine (OAX_TEST_DOCKER=1)', () => {
-  const proxy = new EgressProxy();
   const runner = () =>
-    new ContainerRunner(
-      {
-        engineUrl: process.env.OAX_TEST_ENGINE_URL ?? 'unix:///var/run/docker.sock',
-        allowRawSocket: process.env.OAX_TEST_ALLOW_RAW_SOCKET === '1',
-        image: IMAGE,
-        network: NETWORK,
-        command: ['sh', '-c', CHECKS],
-        workingDir: '/',
-        uid: 10001,
-      },
-      { egressProxy: proxy },
-    );
+    new ContainerRunner({
+      engineUrl: process.env.OAX_TEST_ENGINE_URL ?? 'unix:///var/run/docker.sock',
+      allowRawSocket: process.env.OAX_TEST_ALLOW_RAW_SOCKET === '1',
+      image: IMAGE,
+      network: NETWORK,
+      command: ['sh', '-c', CHECKS],
+      workingDir: '/',
+      uid: 10001,
+    });
   const spec = (token: string, extra: Partial<RunNodeSpec> = {}): RunNodeSpec => ({
     runId: newId(),
     nodeId: newId(),
@@ -88,17 +84,14 @@ describe.skipIf(!enabled)('container runner against a real engine (OAX_TEST_DOCK
     for (const [i, s] of specs.entries()) {
       // The probe reads its expectations from the environment of the test process via the image
       // command; here they are baked into the command through the config instead.
-      const checked = new ContainerRunner(
-        {
-          ...r.config,
-          command: [
-            'sh',
-            '-c',
-            `EXPECT='${i === 0 ? 'AAAAAAAA' : 'BBBBBBBB'}' FORBIDDEN='${i === 0 ? 'BBBBBBBB' : 'AAAAAAAA'}'\n${CHECKS}`,
-          ],
-        },
-        { egressProxy: proxy },
-      );
+      const checked = new ContainerRunner({
+        ...r.config,
+        command: [
+          'sh',
+          '-c',
+          `EXPECT='${i === 0 ? 'AAAAAAAA' : 'BBBBBBBB'}' FORBIDDEN='${i === 0 ? 'BBBBBBBB' : 'AAAAAAAA'}'\n${CHECKS}`,
+        ],
+      });
       const handle = await checked.startNode(s);
       exits.push((await handle.wait()).exitCode);
       await handle.stop('step_end');
@@ -109,17 +102,14 @@ describe.skipIf(!enabled)('container runner against a real engine (OAX_TEST_DOCK
   });
 
   it('kills a node that outlives its timeout and removes it', async () => {
-    const slow = new ContainerRunner(
-      {
-        engineUrl: process.env.OAX_TEST_ENGINE_URL ?? 'unix:///var/run/docker.sock',
-        allowRawSocket: process.env.OAX_TEST_ALLOW_RAW_SOCKET === '1',
-        image: IMAGE,
-        network: NETWORK,
-        command: ['sh', '-c', 'sleep 60'],
-        workingDir: '/',
-      },
-      { egressProxy: proxy },
-    );
+    const slow = new ContainerRunner({
+      engineUrl: process.env.OAX_TEST_ENGINE_URL ?? 'unix:///var/run/docker.sock',
+      allowRawSocket: process.env.OAX_TEST_ALLOW_RAW_SOCKET === '1',
+      image: IMAGE,
+      network: NETWORK,
+      command: ['sh', '-c', 'sleep 60'],
+      workingDir: '/',
+    });
     const s = spec('oaxrt.CCCCCCCC.sig', {
       limits: { cpus: 0.5, memoryMb: 128, timeoutSeconds: 1, pids: 64 },
     });

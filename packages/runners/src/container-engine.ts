@@ -237,6 +237,13 @@ export class EngineClient {
     await this.call('DELETE', `/containers/${id}?force=true&v=true`, { ok: [404] });
   }
 
+  /** Containers (running or not) that carry the label. */
+  async listContainers(label: string): Promise<{ Id: string; Labels?: Record<string, string> }[]> {
+    const filters = encodeURIComponent(JSON.stringify({ label: [label] }));
+    const r = await this.call('GET', `/containers/json?all=1&filters=${filters}`);
+    return JSON.parse(r.body.toString('utf8')) as { Id: string; Labels?: Record<string, string> }[];
+  }
+
   async inspectContainer(id: string): Promise<{ State?: EngineContainerState }> {
     const r = await this.call('GET', `/containers/${id}/json`);
     return JSON.parse(r.body.toString('utf8')) as { State?: EngineContainerState };

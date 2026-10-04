@@ -16,3 +16,8 @@ export * from './container.js';
 export * from './container-engine.js';
 export * from './egress-proxy.js';
 export * from './container-hijack.js';
+export * from './cidr.js';
+export * from './isolating.js';
+export * from './kube-client.js';
+export * from './kubernetes-job.js';
+export * from './egress-rules.js';

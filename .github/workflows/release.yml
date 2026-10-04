@@ -19,9 +19,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - { target: api, file: Dockerfile }
-          - { target: worker, file: Dockerfile }
-          - { target: ui, file: apps/ui/Dockerfile }
+          # The api image is built for amd64 only: the arm64 build under QEMU exceeded the job timeout.
+          # arm64 for the api image needs a native arm runner (tracked as a follow-up).
+          - { target: api, file: Dockerfile, platforms: 'linux/amd64' }
+          - { target: worker, file: Dockerfile, platforms: 'linux/amd64,linux/arm64' }
+          - { target: ui, file: apps/ui/Dockerfile, platforms: 'linux/amd64,linux/arm64' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -44,7 +46,7 @@ jobs:
           context: .
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

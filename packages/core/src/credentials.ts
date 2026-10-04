@@ -48,25 +48,43 @@ export class StaticCredentialSource implements CredentialSource {
 }
 
 /**
- * Matches a secret reference against a tenant allowlist pattern. `*` matches any run of
- * characters; there is no other syntax (no regular expressions), so patterns cannot backtrack.
+ * The canonical form of a secret reference: exactly what the default resolver maps it to
+ * (`OAX_SECRET_<NAME>`, see `envNameForSecret`): lower case, every character outside `[a-z0-9]`
+ * becomes `_`. `acme.corp.db-password` and `acme-corp.db-password` are the SAME secret for the
+ * resolver, so every comparison (tenant allowlists, tenant prefixes, deny lists) must use this form.
+ */
+export function canonicalSecretRef(ref: string): string {
+  return ref.toLowerCase().replace(/[^a-z0-9]/g, '_');
+}
+
+/**
+ * Matches a secret reference against a tenant allowlist pattern, both in canonical form. `*` matches
+ * any run of characters; there is no other syntax (no regular expressions), so patterns cannot
+ * backtrack. Because `.`, `-` and `_` canonicalise to the same character, a pattern can never tell
+ * them apart, which is what makes the comparison sound.
  */
 export function matchSecretGlob(pattern: string, ref: string): boolean {
-  const parts = pattern.split('*');
-  if (parts.length === 1) return pattern === ref;
+  const pat = canonicalSecretRefPattern(pattern);
+  const name = canonicalSecretRef(ref);
+  const parts = pat.split('*');
+  if (parts.length === 1) return pat === name;
   const first = parts[0]!;
   const last = parts[parts.length - 1]!;
-  if (!ref.startsWith(first) || !ref.endsWith(last)) return false;
-  if (ref.length < first.length + last.length) return false;
+  if (!name.startsWith(first) || !name.endsWith(last)) return false;
+  if (name.length < first.length + last.length) return false;
   let pos = first.length;
-  const end = ref.length - last.length;
+  const end = name.length - last.length;
   for (const mid of parts.slice(1, -1)) {
     if (mid === '') continue;
-    const at = ref.indexOf(mid, pos);
+    const at = name.indexOf(mid, pos);
     if (at < 0 || at + mid.length > end) return false;
     pos = at + mid.length;
   }
   return true;
+}
+
+function canonicalSecretRefPattern(pattern: string): string {
+  return pattern.toLowerCase().replace(/[^a-z0-9*]/g, '_');
 }
 
 /** `true` when at least one pattern allows the reference. An empty list allows nothing. */
@@ -74,15 +92,38 @@ export function secretRefAllowed(patterns: readonly string[], ref: string): bool
   return patterns.some((p) => matchSecretGlob(p, ref));
 }
 
-const PATTERN = /^[a-zA-Z0-9*][a-zA-Z0-9_.*-]{0,127}$/;
+/** True when `ref` lies under the tenant prefix `<slug>.` in canonical form. */
+export function hasTenantPrefix(slug: string, ref: string): boolean {
+  return canonicalSecretRef(ref).startsWith(`${canonicalSecretRef(slug)}_`);
+}
 
-/** Validates the patterns of `tenants.secret_refs` (references plus `*`; at most 64 entries). */
+/**
+ * `true` when two tenant slugs would share secret names: one canonical prefix (`acme_`) is a prefix
+ * of the other (`acme_corp_`). Such tenants must not coexist (`acme.corp.x` would be inside both).
+ */
+export function slugsCollide(a: string, b: string): boolean {
+  const x = `${canonicalSecretRef(a)}_`;
+  const y = `${canonicalSecretRef(b)}_`;
+  return x.startsWith(y) || y.startsWith(x);
+}
+
+const PATTERN = /^[a-z0-9][a-z0-9_.-]{1,127}\*?$/;
+
+/**
+ * Validates the patterns of `tenants.secret_refs`: lower case references, at most one `*` and only
+ * at the end, directly after a separator (`acme.*`, never `acme*`), at least two literal characters,
+ * at most 64 entries. A bare `*` is not allowed.
+ */
 export function parseSecretRefPatterns(input: readonly string[]): string[] {
   if (input.length > 64)
     throw new OaxError('config_invalid', 'a tenant can allow at most 64 secret patterns');
-  for (const p of input)
-    if (!PATTERN.test(p))
-      throw new OaxError('config_invalid', `invalid secret reference pattern "${p}"`);
+  for (const p of input) {
+    if (!PATTERN.test(p) || (p.endsWith('*') && !/[._-]\*$/.test(p)))
+      throw new OaxError(
+        'config_invalid',
+        `invalid secret reference pattern "${p}" (lower case, optional trailing "*" after . _ or -)`,
+      );
+  }
   return [...new Set(input)].sort();
 }
 

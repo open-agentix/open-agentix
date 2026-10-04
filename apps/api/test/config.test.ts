@@ -81,7 +81,7 @@ describe('runner, toolbox, secrets and worker settings', () => {
     expect(c.runners.kubernetesJob).toMatchObject({
       enabled: false,
       namespace: 'openagentix-runs',
-      serviceAccountName: 'openagentix-worker',
+      serviceAccountName: 'openagentix-run-node',
       imagePullSecrets: [],
     });
     expect(c.toolboxes).toEqual({
@@ -137,5 +137,46 @@ describe('runner, toolbox, secrets and worker settings', () => {
       /OAX_K8S_JOB_ENABLED/,
     );
     expect(() => loadConfig({ ...base, 'OAX_SECRET_bad-name': 'x' })).toThrow(/OAX_SECRET_/);
+  });
+
+  it('fails closed for the kubernetes-job runner without allowlist or signature enforcement', () => {
+    const k8s = {
+      ...base,
+      OAX_RUNNERS_ENABLED: 'kubernetes-job',
+      OAX_K8S_JOB_ENABLED: 'true',
+      OAX_TOOLBOX_ALLOWLIST: 'trivy',
+    };
+    // signature requirement defaults to true and is not enforced by the runner
+    expect(() => loadConfig(k8s)).toThrow(/OAX_K8S_SIGNATURES_VERIFIED_BY_ADMISSION/);
+    expect(() =>
+      loadConfig({ ...k8s, OAX_K8S_SIGNATURES_VERIFIED_BY_ADMISSION: 'true' }),
+    ).not.toThrow();
+    expect(() =>
+      loadConfig({ ...k8s, OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false', OAX_TOOLBOX_ALLOWLIST: '' }),
+    ).toThrow(/OAX_TOOLBOX_ALLOWLIST/);
+    for (const bad of [
+      { OAX_K8S_RESOURCES_MEMORY: '0' },
+      { OAX_K8S_RESOURCES_MEMORY: '1000K' },
+      { OAX_K8S_RESOURCES_CPU: '0' },
+      { OAX_K8S_RESOURCES_CPU: '10m' },
+    ]) {
+      expect(() => loadConfig({ ...k8s, OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false', ...bad })).toThrow(
+        /OAX_K8S_RESOURCES_\*.*below the minimum/,
+      );
+    }
+    const c = loadConfig({
+      ...k8s,
+      OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false',
+      OAX_K8S_RUN_NODE_IMAGES: 'openagentix-worker',
+      OAX_K8S_DENY_CIDRS: '10.244.0.0/16, 10.96.0.0/12',
+      OAX_AIRGAPPED: 'true',
+    });
+    expect(c.runners.kubernetesJob).toMatchObject({
+      serviceAccountName: 'openagentix-run-node',
+      toolboxAllowlist: ['trivy'],
+      runNodeImages: ['openagentix-worker'],
+      denyCidrs: ['10.244.0.0/16', '10.96.0.0/12'],
+      airgapped: true,
+    });
   });
 });

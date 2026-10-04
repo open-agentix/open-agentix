@@ -1,10 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import {
+  OaxError,
   StaticCredentialSource,
+  canonicalSecretRef,
   credentialEnvName,
   issueRunToken,
+  redact,
   resolveSchema,
   secretRefAllowed,
+  type Budget,
+  type SecretResolver,
   type AgentDefinition,
   type AgentSpec,
   type CredentialSource,
@@ -15,7 +20,8 @@ import type { McpServerConfig } from '@openagentix/mcp';
 import type { StepHandover, StepHandoverResult } from '@openagentix/runners';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
-import { runNodeSessions, runs, tenants } from '../db/schema.js';
+import { connections, eventSources, runNodeSessions, runs, tenants } from '../db/schema.js';
+import { secretRefsOf } from '@openagentix/providers';
 import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
@@ -63,14 +69,10 @@ interface StepNeeds {
  */
 export class RunNodesService {
   /**
-   * Values handed out per run, so that step records and audit payloads of that run are scrubbed
-   * with them. Kept in memory of the issuing control node only; a best-effort second layer on top
-   * of the generic redaction patterns.
+   * Nothing secret is kept in memory: the values a run's nodes received are re-resolved on demand
+   * for redaction (see {@link knownSecrets}), and the opaque handles of dynamic credentials live in
+   * the session row, so any control node instance can revoke them.
    */
-  private readonly issued = new Map<string, Set<string>>();
-  /** Handles of dynamic credentials per session, recalled when the session is revoked. */
-  private readonly handles = new Map<string, string[]>();
-
   constructor(
     private readonly ctx: AppContext,
     private readonly audit: AuditService,
@@ -79,9 +81,129 @@ export class RunNodesService {
     private readonly source: CredentialSource = new StaticCredentialSource(ctx.secrets),
   ) {}
 
-  /** Secret values issued for a run so far (for redaction). */
-  knownSecrets(runId: string): readonly string[] {
-    return [...(this.issued.get(runId) ?? [])];
+  /**
+   * Values of the secrets this run's nodes were given, for scrubbing step records, audit payloads
+   * and node results. Re-resolved from the secret store (static source only; a dynamic source's
+   * values are not recoverable and are covered by the generic patterns only). This is a net for
+   * ACCIDENTAL leaks: a compromised node holds the plain values and can encode them.
+   */
+  async knownSecrets(runId: string): Promise<string[]> {
+    if (this.source.name !== 'static') return [];
+    const sessions = await this.ctx.db
+      .select({ issued: runNodeSessions.credentialsIssued })
+      .from(runNodeSessions)
+      .where(eq(runNodeSessions.runId, runId));
+    const agentIds = new Set(sessions.flatMap((x) => x.issued));
+    if (agentIds.size === 0) return [];
+    const { run, definition } = await this.runContext(runId);
+    const out = new Set<string>();
+    for (const id of agentIds) {
+      const agent = definition.agents.find((a) => a.id === id);
+      if (!agent) continue;
+      const needs = this.needs(agent, await this.configsFor(run, agent));
+      for (const ref of needs.refs) {
+        try {
+          out.add(await this.ctx.secrets.resolve(ref));
+        } catch {
+          // not resolvable any more: nothing to scrub
+        }
+      }
+    }
+    return [...out];
+  }
+
+  /** Scrubs known secret values (and the generic patterns) from a value that a node influenced. */
+  async scrub<T>(runId: string, value: T): Promise<T> {
+    const known = await this.knownSecrets(runId);
+    return known.length > 0 ? redact(value, { knownSecrets: known }) : value;
+  }
+
+  /**
+   * Secret references that belong to the PLATFORM and are never handed to a run node, whatever a
+   * tenant allowlist says: provider keys (environment providers and every model connection), event
+   * source secrets (webhook signing, Kafka credentials), and the secrets of platform connections.
+   * Canonical form (see `canonicalSecretRef`).
+   */
+  async platformSecretRefs(): Promise<Set<string>> {
+    const out = new Set<string>();
+    const walk = (v: unknown, secretish: boolean): void => {
+      if (typeof v === 'string') {
+        if (secretish && v) out.add(canonicalSecretRef(v));
+      } else if (Array.isArray(v)) v.forEach((x) => walk(x, secretish));
+      else if (v && typeof v === 'object')
+        for (const [k, x] of Object.entries(v)) walk(x, secretish || /secret/i.test(k));
+    };
+    for (const p of this.ctx.config.providers) {
+      walk(p, false);
+      try {
+        for (const r of secretRefsOf(p as never)) out.add(canonicalSecretRef(r));
+      } catch {
+        // unusual provider shape: the walk above already covered the *Secret fields
+      }
+    }
+    for (const c of await this.ctx.db
+      .select({ kind: connections.kind, scope: connections.scope, config: connections.config })
+      .from(connections))
+      if (c.kind === 'model' || c.scope === 'platform') walk(c.config, false);
+    for (const e of await this.ctx.db
+      .select({ refs: eventSources.secretRefs, config: eventSources.config })
+      .from(eventSources)) {
+      e.refs.forEach((r) => out.add(canonicalSecretRef(r)));
+      walk(e.config, false);
+    }
+    return out;
+  }
+
+  /**
+   * The secret resolver of IN-PROCESS runs of a tenant: the same allowlist as the broker. A tenant
+   * connection may only use references the tenant allows (`tenants.secret_refs`); references of
+   * platform connections are operator-chosen and stay resolvable for them.
+   */
+  async resolverFor(tenantId: string): Promise<SecretResolver> {
+    const [t] = await this.ctx.db
+      .select({ refs: tenants.secretRefs })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId));
+    const allowed = t?.refs ?? [];
+    const platform = new Set<string>();
+    for (const c of await this.ctx.db
+      .select({ config: connections.config })
+      .from(connections)
+      .where(and(eq(connections.kind, 'mcp'), eq(connections.scope, 'platform'))))
+      for (const k of ['envSecrets', 'headerSecrets'])
+        for (const v of Object.values(
+          ((c.config as Record<string, unknown>)[k] ?? {}) as Record<string, string>,
+        ))
+          platform.add(canonicalSecretRef(v));
+    const inner = this.ctx.secrets;
+    return {
+      resolve: async (ref: string) => {
+        if (!secretRefAllowed(allowed, ref) && !platform.has(canonicalSecretRef(ref)))
+          throw new OaxError(
+            'secret_not_allowed',
+            `secret "${ref}" is not allowed for this tenant (tenants.secret_refs)`,
+          );
+        return inner.resolve(ref);
+      },
+    };
+  }
+
+  /** What is left of the run's budget; a node enforces only this, never the full budget. */
+  private remainingBudget(budget: Budget, run: typeof runs.$inferSelect, now: number): Budget {
+    const out: Budget = {};
+    if (budget.maxTokens !== undefined)
+      out.maxTokens = Math.max(1, budget.maxTokens - run.tokensIn - run.tokensOut);
+    if (budget.maxCostUsd !== undefined)
+      out.maxCostUsd = Math.max(0.000001, budget.maxCostUsd - Number(run.costMicros) / 1e6);
+    // Steps are not stored per kind here; the step sequence number over-counts, which only tightens.
+    if (budget.maxSteps !== undefined) out.maxSteps = Math.max(1, budget.maxSteps - run.lastSeq);
+    if (budget.maxToolCalls !== undefined)
+      out.maxToolCalls = Math.max(1, budget.maxToolCalls - run.toolCalls);
+    if (budget.timeoutSeconds !== undefined) {
+      const elapsed = run.startedAt ? (now - run.startedAt.getTime()) / 1000 : 0;
+      out.timeoutSeconds = Math.max(1, Math.floor(budget.timeoutSeconds - elapsed));
+    }
+    return out;
   }
 
   private async runContext(runId: string) {
@@ -179,7 +301,7 @@ export class RunNodesService {
         name: definition.name,
         version: definition.version,
         classification: definition.classification,
-        budget: definition.budget,
+        budget: this.remainingBudget(definition.budget, run, now.getTime()),
       },
       mcp: (await this.configsFor(run, agent)).map((c) => this.stripSecrets(c)),
     };
@@ -188,6 +310,7 @@ export class RunNodesService {
       runId,
       tenantId: run.tenantId,
       nodeId,
+      orchestratorId,
       steps: [agent.id],
       expiresAt,
       handover: { [agent.id]: handover },
@@ -220,8 +343,7 @@ export class RunNodesService {
       .where(and(eq(runNodeSessions.id, sessionId), isNull(runNodeSessions.revokedAt)))
       .returning();
     if (!row) return;
-    const handles = this.handles.get(row.id) ?? [];
-    this.handles.delete(row.id);
+    const handles = row.credentialHandles;
     // A failing backend must not keep the session alive: it is revoked in the database first.
     for (const h of handles) await this.source.revoke?.(h).catch(() => undefined);
     await this.audit.append({
@@ -241,7 +363,6 @@ export class RunNodesService {
       .from(runNodeSessions)
       .where(and(eq(runNodeSessions.runId, runId), isNull(runNodeSessions.revokedAt)));
     for (const r of rows) await this.revoke(r.id, reason);
-    this.issued.delete(runId);
   }
 
   async recordStopped(
@@ -269,13 +390,21 @@ export class RunNodesService {
     });
   }
 
-  /** The result a node posted for its step, or `null` (the orchestrator then fails closed). */
+  /**
+   * The result a node posted for its step, or `null` (the orchestrator then fails closed). It is
+   * deleted when read: the orchestrator is the only consumer and the data lives on in the run.
+   */
   async resultOf(sessionId: string): Promise<StepHandoverResult | null> {
     const [row] = await this.ctx.db
       .select({ result: runNodeSessions.result })
       .from(runNodeSessions)
       .where(eq(runNodeSessions.id, sessionId));
-    return (row?.result as StepHandoverResult | null | undefined) ?? null;
+    if (!row?.result) return null;
+    await this.ctx.db
+      .update(runNodeSessions)
+      .set({ result: null })
+      .where(eq(runNodeSessions.id, sessionId));
+    return row.result as StepHandoverResult;
   }
 
   // ---------- node side (step-scoped token; every call checks the session) ----------
@@ -300,9 +429,10 @@ export class RunNodesService {
       .select({ status: runs.status, lockedBy: runs.lockedBy })
       .from(runs)
       .where(eq(runs.id, runId));
-    // The lease belongs to the orchestrator; a node only needs the run to be live and leased.
-    if (!run || !ACTIVE.includes(run.status) || run.lockedBy === null)
-      throw new HttpError(409, 'invalid_state', 'run is not active');
+    // The lease belongs to the orchestrator that created the session; when another worker took the
+    // run over, every session of the old attempt is dead (a restarted attempt gets new sessions).
+    if (!run || !ACTIVE.includes(run.status) || run.lockedBy !== s.orchestratorId)
+      throw new HttpError(409, 'invalid_state', 'run is not active for this session');
     return s;
   }
 
@@ -328,9 +458,11 @@ export class RunNodesService {
   ): Promise<void> {
     const s = await this.checkSession(claims, runId);
     this.assertStep(claims, result.agentId);
+    // Scrub what a node says before it is stored (and later shown): content, JSON and the message.
+    const clean = await this.scrub(runId, result);
     const [row] = await this.ctx.db
       .update(runNodeSessions)
-      .set({ result })
+      .set({ result: clean })
       .where(and(eq(runNodeSessions.id, s.id), sql`${runNodeSessions.result} is null`))
       .returning({ id: runNodeSessions.id });
     if (!row) throw new HttpError(409, 'conflict', 'the step result was already submitted');
@@ -381,6 +513,11 @@ export class RunNodesService {
       .from(tenants)
       .where(eq(tenants.id, run.tenantId));
     const allowed = tenant?.secretRefs ?? [];
+    // Platform secrets (provider keys, event sources, platform connections) never reach a node.
+    const platform = await this.platformSecretRefs();
+    const platformHit = needs.refs.filter((r) => platform.has(canonicalSecretRef(r)));
+    if (platformHit.length > 0)
+      return this.deny(s, agentId, 'platform_secret', { refs: platformHit });
     const refused = needs.refs.filter((r) => !secretRefAllowed(allowed, r));
     if (refused.length > 0) return this.deny(s, agentId, 'secret_not_allowed', { refs: refused });
     const [mark] = await this.ctx.db
@@ -398,6 +535,14 @@ export class RunNodesService {
       .returning({ id: runNodeSessions.id });
     if (!mark) return this.deny(s, agentId, 'already_issued');
     const values = new Map<string, string>();
+    const handles: string[] = [];
+    const persistHandles = async () => {
+      if (handles.length > 0)
+        await this.ctx.db
+          .update(runNodeSessions)
+          .set({ credentialHandles: handles })
+          .where(eq(runNodeSessions.id, s.id));
+    };
     let expiresAt = s.expiresAt;
     try {
       for (const ref of needs.refs) {
@@ -408,17 +553,16 @@ export class RunNodesService {
           nodeId: s.nodeId,
         });
         values.set(ref, issued.value);
-        if (issued.handle)
-          this.handles.set(s.id, [...(this.handles.get(s.id) ?? []), issued.handle]);
+        if (issued.handle) handles.push(issued.handle);
         if (issued.expiresAt && issued.expiresAt < expiresAt) expiresAt = issued.expiresAt;
       }
     } catch {
+      // Handles issued before the failure are still recalled when the session is revoked.
+      await persistHandles();
       // The reason stays out of the response (it can name backends); the audit entry has the refs.
       return this.deny(s, agentId, 'unavailable', { refs: needs.refs });
     }
-    let known = this.issued.get(runId);
-    if (!known) this.issued.set(runId, (known = new Set()));
-    for (const v of values.values()) known.add(v);
+    await persistHandles();
     const val = (ref: string) => values.get(ref)!;
     const result: StepCredentials = {
       agentId,
