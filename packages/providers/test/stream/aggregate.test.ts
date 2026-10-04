@@ -237,6 +237,7 @@ describe('createStreamPlan', () => {
     const openai = await plan({
       kind: 'openai',
       name: 'o',
+      baseUrl: 'https://api.openai.com/v1',
       apiKeySecret: 'k-openai',
       organization: 'org-1',
       headerSecrets: { 'x-extra': 'k-hdr' },
@@ -272,6 +273,7 @@ describe('createStreamPlan', () => {
       kind: 'azure-openai',
       name: 'az',
       endpoint: 'https://r.openai.azure.com',
+      apiVersion: '2024-10-21',
       apiKeySecret: 'k-openai',
       deployment: 'dep',
     });
