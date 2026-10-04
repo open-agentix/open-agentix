@@ -148,6 +148,7 @@ Evidence paths are relative to this repository unless prefixed (`helm:` = open-a
 | Per-run budgets (tokens, cost, steps, tool calls, timeout) with hard stop | spec, concept 19 | done | `BudgetSchema`, control agent | - | - |
 | Monthly budgets per tenant, use case and team with hard stop at admission and mid-run | addendum 5, issue #3 | done (unreleased) | PR #18, `apps/api/src/services/budgets.ts`, `docs/budgets.md` | - | - |
 | Budget alerts at 50/80/100 % as events and audit entries | roadmap v0.2 | done (unreleased) | PR #18 (`io.openagentix.budget.alert`) | Delivery to chat/mail is W2-5 | - |
+| Concurrency-safe budgets: worst-case reservation before every model call, settlement from measured usage (no overshoot by one call or a burst) | spec ("hard stop"), addendum 5 | not started | `docs/budgets.md` documents that one call or a burst can overshoot; budgets are checked after each call (`packages/core/src/control/controller.ts`, `apps/api/src/services/budgets.ts`) | Reservations, settlement, cache-token prices | W1-3b |
 | Per-agent monthly budgets, alert delivery, alert API | roadmap v0.2, website costs page | planned | not in `budgets.ts` | Agent scope, channels, API | W2-5 |
 | Cost chargeback (cost centres, ERP export) | roadmap v1.0 | planned | no code | Reports | W7-3 |
 
@@ -166,6 +167,7 @@ Evidence paths are relative to this repository unless prefixed (`helm:` = open-a
 | Adapters: OpenAI-compatible (OpenAI, Azure, vLLM, LM Studio, OpenRouter), Ollama, Bedrock (VPC endpoint, proxy, IRSA), Anthropic, simulated; egress guard | spec, concept 24 | done | `packages/providers/src/*` | - | - |
 | BYOK: model connections with secret references scoped to platform/tenant/team/agent | addendum 1, issue #2 | done (unreleased) | PR #15, `apps/api/src/services/models.ts` (`connectionsForRun('model', scope)`) | - | - |
 | Model catalog from a pinned models.dev snapshot with local overrides and a reviewed weekly refresh PR | addendum 2, issue #5 | done (unreleased) | `packages/providers/catalog/`, `scripts/import-models-dev.mjs`, `.github/workflows/catalog-refresh.yml` (PR #15) | - | - |
+| Model access for isolated run nodes through a control-node model proxy (keys never on nodes, usage measured on the control node, streaming Anthropic/OpenAI surfaces) | ADR 0008 (3.4), concept 16, 24 | not started | W1-3a (PR #76) ships a fail-closed placeholder (`packages/runners/src/model-proxy.ts`); nodes can only use `simulated`, node-reported cost is dropped | Proxy, accounting, surfaces | W1-3b |
 | Model routing (classification, cost, latency) | roadmap v0.3 | planned | no code | Routing rules | W4-5 |
 | Private model hosting via the chart (vLLM/Ollama, GPU) | roadmap v1.0 | planned | compose `--profile ollama` only | Chart templates | W8-3 |
 
@@ -192,6 +194,7 @@ Evidence paths are relative to this repository unless prefixed (`helm:` = open-a
 | --- | --- | --- | --- | --- | --- |
 | Claude Code adapter (`claude -p`, policy gate as loopback MCP bridge, platform-enforced limits) | spec, concept 15 | done (unreleased) | PR #17, `packages/runners/src/{harness,harness-runner}.ts`, `docs/verification/claude-code-harness.md` | - | - |
 | OpenCode adapter | spec, concept 15 (first example) | stub | `StubHarness` in `packages/runners/src/harness.ts` | Implementation | W1-6 |
+| Harnesses (Claude Code, OpenCode) inside isolated run nodes, cost measured by the platform | spec, concept 15, ADR 0005 | not started | harnesses run only as children of the orchestrator/CLI (`packages/runners/src/harness-runner.ts`), cost is harness-reported | Proxy mode, `runtime.harness`, harness run-node images | W1-3b |
 | Hermes, OpenClaw adapters | spec, concept 15 | stub | `StubHarness` | Implementation | W4-1 |
 
 ### 1.13 UI (console)
@@ -237,7 +240,8 @@ Conventions for every item:
 - **Parallelism:** items of one wave touch disjoint modules except where noted; `openapi.yaml`,
   `apps/ui/src/api/schema.d.ts` and `apps/ui/src/i18n/locales/*.json` are regenerated or appended on
   rebase, never hand-merged. Migration numbers are fixed here: 0005 agent plans (W1-5), 0006
-  security overrides (W2-3), 0007 evaluations (W2-4), 0008 agent budgets and channels (W2-5).
+  security overrides (W2-3), 0007 evaluations (W2-4), 0008 agent budgets and channels (W2-5),
+  0009 run node sessions (W1-3a), 0010 model proxy reservations and ledger columns (W1-3b).
 - **Docs and website:** the item's PR updates the platform docs; the website/blog change is made
   when the item ships in a release (never before).
 - Subagents leave PRs open; the main agent reviews, merges and checks the result.
@@ -251,6 +255,7 @@ flowchart LR
   W1_1["W1-1"]
   W1_2["W1-2"]
   W1_3["W1-3"]
+  W1_3b["W1-3b"]
   W1_4["W1-4"]
   W1_5["W1-5"]
   W1_6["W1-6"]
@@ -297,6 +302,10 @@ flowchart LR
   W0_1 --> W1_3
   W0_1 --> W1_4
   W1_3 --> W1_4
+  W1_3 --> W1_3b
+  W1_6 --> W1_3b
+  W1_3b --> W4_1
+  W1_3b --> W4_5
   W0_1 --> W1_5
   W1_3 --> W2_1
   W1_3 --> W2_2
@@ -379,6 +388,7 @@ Milestone: **v0.2** (exceptions per item). The claims the website and blog make 
 | W1-1 | Typed handovers with JSON Schema validation and conditional steps (`when`) | L | sonnet | no | W0-1 | packages/core/src/handover.ts (new), packages/core/src/conditions.ts (new), packages/runners/src/executor.ts (output and loop head), packages/runners/test/*, examples/ticket-triage.agents.md (new), docs/pipelines.md | #25 |
 | W1-2 | Named read/write tool profiles per MCP server | M | sonnet | yes | W0-1 | packages/mcp/src/config.ts, apps/api/src/services/catalog.ts, apps/api/src/services/agents.ts (publish expansion), packages/core/src/policy/engine.ts, apps/ui/src/features/connections/*, openapi.yaml (regenerate on rebase) | #26 |
 | W1-3 | Remote run node, per-step credential broker and the container runner | L | sonnet | yes | W0-1 | apps/worker/src/run-node.ts (new), apps/api/src/http/routes/worker.ts, apps/api/src/services/control-plane.ts, packages/runners/src/container.ts (new), packages/runners/src/http-control-plane.ts, packages/runners/src/stubs.ts, Dockerfile, docker-compose.yml | #10 |
+| W1-3b | Model proxy on the control node: model access for run nodes, measured cost, budget reservations, harnesses through the proxy | L (10 tasks) | sonnet (design: opus, ADR 0009) | yes | W1-3 (W1-3a, PR #76), W1-6 (harness tasks only) | apps/api/src/services/{model-proxy,model-accounting}.ts (new), apps/api/src/http/routes/{worker,model-proxy}.ts, apps/api/drizzle/0010_model_proxy.sql (new), packages/providers/src/stream/* (new), packages/runners/src/{model-proxy,executor,harness,harness/opencode}.ts, apps/worker/src/{run-node,node-dispatcher}.ts, packages/core/src/{model-token,token-estimate}.ts (new), Dockerfile, docker-compose.yml | - |
 | W1-4 | Kubernetes Job runner (EKS/IRSA) with per-step credentials | M | sonnet | yes | W0-1, W1-3 (run node, for the end-to-end test only) | packages/runners/src/kubernetes-job.ts (new), packages/runners/src/stubs.ts, apps/api/src/config.ts (existing OAX_K8S_* settings), open-agentix-helm: charts/open-agentix/templates/runners/* | #11 |
 | W1-5 | Agent Check and Agent Plan v1 (advisory plan generation with a least-privilege lint) | M | sonnet | yes | W0-1 (AgentPlan schema section, designed by opus) | packages/core/src/plan/* (new), apps/api/src/services/agent-check.ts (new), apps/api/src/http/routes/plans.ts (new), apps/api/drizzle/0005_agent_plans.sql (new), openapi.yaml | #27 |
 | W1-6 | OpenCode harness adapter behind the policy gate | M | sonnet | yes | - | packages/runners/src/harness.ts (split per adapter: harness/opencode.ts new), packages/runners/src/cli.ts, docs/harnesses.md | #28 |
@@ -429,6 +439,136 @@ Acceptance criteria:
 Tests: Unit tests with a fake engine API; an opt-in integration test (`OAX_TEST_DOCKER=1`) that runs the cve-triage example in a container and proves: no secret of another step is readable, egress outside the allowlist fails, container is gone afterwards; coverage >= 80 %.
 
 Docs and website: `docs/runners.md` (new), `docs/configuration.md` runner section, ADR 0005 status update; website runners page, toolbox page and security model page wording ('per-step credentials' instead of 'per-run' where it ships).
+
+Split (2026-10-04): W1-3a (PR #76) delivers the run node, the credential broker and the container runner. Model access of run nodes and the measured cost of isolated steps (the 'costs behave exactly as with `in-process`' part of the criteria above) moved to **W1-3b** (model proxy, [ADR 0009](adr/0009-model-proxy.md)).
+
+#### W1-3b Model proxy on the control node: model access for run nodes, measured cost, budget reservations, harnesses through the proxy
+
+*As a platform engineer, I want isolated run nodes to call models only through a model proxy on the control node so that provider keys never reach a node, cost is measured by the platform instead of reported by the node, and budgets are hard limits even with concurrent calls.* Milestone v0.2, size L (split into ten PR-sized tasks below), model `sonnet` (design by `opus`: [ADR 0009](adr/0009-model-proxy.md)), security review required.
+
+W1-3 was split in two: W1-3a (PR #76) delivers the run node, the credential broker and the container runner and leaves nodes without model access (only the keyless `simulated` provider; node-reported cost is dropped). W1-3b closes that gap. The design, threat model, API, accounting and error codes are fixed in ADR 0009; a task that needs to deviate amends the ADR first.
+
+Acceptance criteria (item level):
+
+- With `OAX_MODEL_PROXY_ENABLED=true`, a step in a `container` or `kubernetes-job` node can use every configured provider kind (Anthropic, Bedrock, OpenAI, Azure OpenAI, OpenRouter, vLLM, LM Studio, Ollama, OpenAI-compatible, simulated), resolved with the run's BYOK scopes; no provider key, BYOK secret or OAuth token is ever readable inside a node.
+- Tokens and cost of every model call (proxied and in-process) are measured on the control node from provider-reported usage (estimate and floor as fallback), written to the cost ledger with `usage_source` and `via`, and count against run, step and monthly tenant/use case/team budgets.
+- A reservation of the worst-case cost precedes every model call; with the default `upper-bound` mode the settled plus reserved cost of any scope never exceeds its limit under concurrency (proved by a concurrency test).
+- Streams are supported on the Anthropic Messages and OpenAI Chat Completions passthrough surfaces; a stream is cut on revocation, cancellation, deadline or output beyond the reservation and settled with the usage so far.
+- Classification clearance, air-gapped egress, model pinning per published step and (when W2-3 lands) emergency overrides are enforced on the proxy; every refusal is fail closed and audited.
+- Claude Code and OpenCode can run inside a run node with only the proxy URL and a step-scoped model token; their cost is measured by the proxy.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Depends on | Touches |
+| --- | --- | --- | --- | --- | --- |
+| W1-3b-1 | Contracts: model token, wire schemas, token estimator, cache prices | S | sonnet | W1-3a merged | packages/core/src/{model-token,token-estimate}.ts (new), packages/core/src/cost/model.ts, packages/providers/src/types.ts (`Usage` cache fields, optional), packages/runners/src/model-proxy.ts (wire schemas only) |
+| W1-3b-2 | Accounting: migration 0010, `ModelAccountingService` (reserve, settle, expire), ledger columns | M | sonnet | 1 | apps/api/drizzle/0010_model_proxy.sql, apps/api/src/db/schema.ts, apps/api/src/services/model-accounting.ts (new), apps/api/src/services/control-plane.ts (settlement path), apps/worker/src/queue.ts (reaper) |
+| W1-3b-3 | Native endpoint, model-token endpoint and the admission pipeline | M | sonnet | 2 | apps/api/src/services/model-proxy.ts (new), apps/api/src/http/routes/worker.ts, apps/api/src/services/run-nodes.ts (`model_token_jti`), apps/api/src/config.ts (`OAX_MODEL_PROXY_*` block), apps/api/src/metrics.ts |
+| W1-3b-4 | Run node and executor switch: `ModelProxyProvider`, metered providers, in-process reservations, authoritative counters | M | sonnet | 3 | packages/runners/src/{model-proxy,executor,http-control-plane,types}.ts, apps/worker/src/{run-node,node-dispatcher}.ts, apps/api/src/http/routes/worker.ts (`model-reservations`), docs/runners.md |
+| W1-3b-5 | Streaming upstream transports for the two surfaces | M | sonnet | 1 (parallel to 2-4) | packages/providers/src/stream/{sse,anthropic,bedrock,openai,meter}.ts (new) |
+| W1-3b-6 | Passthrough surfaces: Anthropic Messages and OpenAI Chat Completions with streaming and the mid-stream stop | L | sonnet | 3, 5 | apps/api/src/http/routes/model-proxy.ts (new), apps/api/src/services/model-proxy.ts, apps/api/src/http/schemas.ts |
+| W1-3b-7 | Harness adapters through the proxy and `agents[].runtime.harness` | M | sonnet | 6, W1-6 | packages/core/src/agents/{schema,validate}.ts (additive field, ADR 0009 section 10), packages/runners/src/{harness,harness-runner,harness/opencode}.ts, apps/api/src/services/agents.ts (publish checks), docs/harnesses.md |
+| W1-3b-8 | Harness steps inside run nodes and the harness run-node images | M | sonnet | 4, 7 | apps/worker/src/run-node.ts, packages/runners/src/{container,kubernetes-job}.ts (image by harness), Dockerfile (`run-node-claude-code`, `run-node-opencode`) |
+| W1-3b-9 | Deployment, configuration, observability and docs | S | sonnet | 4, 6 | docker-compose.yml, docs/{model-proxy,configuration,budgets,airgapped,providers,runners}.md (model-proxy.md new), apps/api/src/telemetry.ts, CHANGELOG.md; open-agentix-helm mirror issue |
+| W1-3b-10 | Opt-in end-to-end abuse suite against a real engine | S | haiku (tests; must run them and report real results) | 8, 9 | packages/runners/test/model-proxy.integration.test.ts (new), apps/worker/test/run-node-e2e.test.ts |
+
+Order and parallelism: 1 first; then 2 and 5 in parallel; 3 after 2; 4 and 6 after 3 (6 also after 5); 7 after 6; 8 after 4 and 7; 9 after 4 and 6; 10 last. Tasks 1 and 5 touch no W1-3a files and may start before PR #76 is merged.
+
+##### W1-3b-1 Contracts: model token, wire schemas, token estimator, cache prices
+
+Acceptance criteria:
+
+- `issueModelToken` / `verifyModelToken` (`oaxmt.` prefix, claims `v, aud: "model", runId, sid, nodeId, agentId, jti, iat, exp`, key = HMAC of the run token secret with the label `openagentix/model-token/v1`), constant-time comparison.
+- Strict zod schemas `WorkerModelRequest`, `WorkerModelResponse`, `ModelTokenResponse` and the error envelope (ADR 0009 sections 2.2, 2.3, 2.5).
+- `estimateInputUpperBound(request, catalogLimits)`, `estimateOutputTokens(text)`, `outputFloor(text)` as pure functions; `CostModel.modelCall` prices cache reads/writes (`cacheReadPerMTok`, `cacheWritePerMTok`, fallback input / 1.25 x input).
+
+Tests: token round trip; expired, not-yet-valid, wrong audience, tampered claims, truncated token refused. Security tests: a run token (`oaxrt.`) is refused by `verifyModelToken` and a model token is refused by `verifyRunToken` (domain separation); a token signed with the run token key directly (no label) is refused; property test that the input upper bound is >= the real token count for random Unicode text with a byte-level BPE fixture tokenizer; cost table tests with and without cache prices.
+
+##### W1-3b-2 Accounting: migration 0010, reservations and settlement
+
+Acceptance criteria:
+
+- Migration `0010_model_proxy.sql`: `model_reservations`, `cost_ledger.{usage_source, cache_read_tokens, cache_write_tokens, reservation_id, via}`, `run_node_sessions.model_token_jti` (ADR 0009 section 4.5); tenant-partitioned like every table.
+- `ModelAccountingService.reserve(ctx, bound)` in one transaction with a tenant advisory lock checks run, step, model-call count, monthly scopes and concurrency against ledger plus active reservations; `settle(reservationId, usage)` writes the trusted `model_call` step, ledger line, run counters, alerts and audit and closes the reservation atomically; `expire()` settles overdue reservations at the reserved amount (`model.reservation_expired`).
+- Unpriced model with any applicable cost limit -> `model_unpriced`.
+
+Tests: unit and database tests for every limit and code. Security tests: 50 concurrent reservations against a budget that fits 10 grant at most 10 and the sum never exceeds the limit (run, step, tenant, team, use case each); a reservation that would land exactly on the limit is allowed, one micro more is refused; two tenants reserve concurrently without blocking each other; a crash between reserve and settle (fault injection) leaves either both writes or none; an expired reservation is charged in full and audited; reservations of tenant A are invisible to every tenant B query.
+
+##### W1-3b-3 Native endpoint, model-token endpoint, admission
+
+Acceptance criteria:
+
+- `POST /v1/worker/runs/{id}/model` and `POST /v1/worker/runs/{id}/model-token` with the admission order of ADR 0009 section 3 (token, context, model pin, classification, egress, overrides hook, cancellation, validation, reservation), forwarding through the existing non-streaming adapters with keys resolved on the control node, settlement afterwards.
+- New route access kind `model-token`; `OAX_MODEL_PROXY_ENABLED` (default `false`, routes answer `503 model_proxy_unavailable`) and the other `OAX_MODEL_PROXY_*` limits in `apps/api/src/config.ts` and `docs/configuration.md`.
+- Metrics `oax_model_proxy_*` (ADR 0009 section 12); audit `model_token.issued`, `model.denied` (rate-limited per session).
+
+Tests: API tests per error code. Security tests: a node token of step A calling for step B -> `403 model_not_allowed`; another run's id in the path -> `403`; a revoked or expired session -> `403 run_node_session_revoked` on the very next call; an orchestrator token (no `sid`) is refused on the node endpoint; `model` different from the published one -> `403`, and a `provider` field is refused by the strict schema; node-supplied `hints.simulation` is ignored (the published one is used); classification above clearance -> `403` with zero upstream connections (fetch spy); air-gapped and not allowlisted -> `403 egress_denied` with zero connection attempts; second model-token request -> `409`; body over the limit -> `413`; `__proto__` keys refused; the provider key value never appears in any response, error, log line or audit payload (captured and searched), also when the provider error body echoes it.
+
+##### W1-3b-4 Run node and executor switch
+
+Acceptance criteria:
+
+- `ModelProxyProvider` (`metered = true`) used by `oax run-node` for every provider including `simulated`; `ModelProxyUnavailableProvider` deleted (the code `model_proxy_unavailable` remains for a disabled proxy).
+- The executor skips cost and `model_call` records for metered providers; in-process calls reserve through `ControlPlane.reserveModelCall` and settle through `recordStep` with `reservationId` (`HttpControlPlane`: `POST /v1/worker/runs/{id}/model-reservations`, orchestrator tokens only; the local CLI: no-op).
+- The control node refuses node-posted steps of kind `model_call` (`400 step_kind_refused`); `NodeDispatcher` re-reads the run counters after each node step.
+- `docs/runners.md`: the "Model proxy (W1-3b)" paragraph is replaced by a link to `docs/model-proxy.md`; the statement that isolated steps do not count against budgets is removed.
+
+Tests: run-node end-to-end test (simulated provider through the proxy): ledger lines with `via = 'proxy'`, run counters, audit entries. Security tests: a fake node that bypasses the executor and calls the proxy in a loop is stopped by the proxy at the step's `maxSteps` and `maxCostUsd`; a node posting a `model_call` step with cost is refused and nothing reaches the ledger; a run whose budget is used up by an in-process step refuses the next node step's first call; the run-node module graph does not import `createProvider` or the secret resolver.
+
+##### W1-3b-5 Streaming upstream transports
+
+Acceptance criteria:
+
+- SSE reader/writer with line and event size limits; upstream transports for Anthropic Messages (HTTP), Bedrock (`InvokeModelWithResponseStream` with the Anthropic body), and the OpenAI family (OpenAI, Azure deployment URLs, OpenRouter, vLLM, LM Studio, Ollama `/v1`, OpenAI-compatible) that force `stream_options.include_usage`; a usage meter that extracts provider usage incl. cache tokens and estimates output from deltas.
+- Proxy URL, timeouts and retries as in the existing adapters; retries only before the first byte.
+
+Tests: recorded fixtures per family (text, tool use, thinking, usage at start/end, missing usage). Security tests: an over-long SSE line, an event without terminator, invalid JSON and an endless stream (idle timeout) end in a controlled error, never in unbounded memory; a response over the size limit is cut; aborting the signal closes the upstream socket (asserted on the fake server).
+
+##### W1-3b-6 Passthrough surfaces with streaming
+
+Acceptance criteria:
+
+- `/v1/model-proxy/anthropic/v1/messages` (+ `count_tokens`, `models`) and `/v1/model-proxy/openai/v1/chat/completions` (+ `models`) with the parameter allowlists, limits and re-serialization of ADR 0009 section 6, forced max-token parameter, protocol error envelopes, simulated provider synthesis, `x-oax-call-id` / `x-oax-cost-micros` headers.
+- Mid-stream stop on output beyond the reservation, revocation (polling plus Valkey channel when configured), cancellation, deadline; partial settlement and `model.aborted`.
+
+Tests: protocol conformance with fixtures for both surfaces (stream and JSON). Security tests (table-driven, each asserts `400` and zero upstream requests): server tools (`web_search_*`, `web_fetch_*`, `code_execution_*`, `computer_*`), `mcp_servers`, `container`, URL and file image/document sources, OpenAI `n: 2`, `web_search_options`, `audio`, `service_tier`, unknown keys; CRLF or unknown values in `anthropic-beta`; a client `x-api-key`/`authorization` never reaches upstream (upstream sees only the platform key); `content-length` plus `transfer-encoding` refused; `max_tokens: 1e9` is clamped in the upstream body; a fake provider that ignores `max_tokens` is cut at the bound + 10 % and the settled cost is within the reservation; revoking the session ends an open stream within one poll interval; a client disconnect aborts the upstream request and settles an estimate; injected unknown SSE event types are not relayed; a model token of a step with an OpenAI-family provider on the Anthropic surface -> `model_surface_mismatch`; no request or response body in the logs.
+
+##### W1-3b-7 Harness adapters through the proxy
+
+Acceptance criteria:
+
+- Optional `agents[].runtime.harness: claude-code | opencode` (additive; ADR 0009 section 10 amends ADR 0008 section 1.5) with publish checks (`OAX_HARNESSES_ENABLED`, provider fits the harness surface, `harness_requires_model_connection` for node steps without a model connection).
+- Claude Code proxy mode: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` = model token, every model variable pinned to `agent.model`, no OAuth token; variable names verified against the pinned CLI version and written into `docs/verification/claude-code-harness.md`. OpenCode proxy mode: provider entry with the proxy base URL and `{env:OAX_OPENCODE_API_KEY}` = model token; `azure-openai` and `bedrock` (Anthropic models) accepted through the proxy.
+- In-orchestrator harness steps with a model connection use a harness session and the proxy; the OAuth subscription mode stays as today (`via = 'harness-report'`) and is refused for node steps.
+
+Tests: invocation builder tests (environment and config files), fake `claude`/`opencode` binaries that call a test proxy over HTTP. Security tests: the child environment contains neither a provider key nor `CLAUDE_CODE_OAUTH_TOKEN` in proxy mode; the model token is scrubbed from everything the harness returns; a background call for another model (the small/fast model) is refused and does not break the run; the ledger uses the proxy measurement even when the fake harness reports a different cost.
+
+##### W1-3b-8 Harness steps inside run nodes and images
+
+Acceptance criteria:
+
+- The run node runs a harness step with the model token and the in-node gate bridge; the runner chooses the image target `run-node-claude-code` or `run-node-opencode` (digest-pinned, harness binary pinned and checksummed at build time, nothing downloaded at run time).
+- Opt-in real tests `OAX_TEST_DOCKER=1` plus `OAX_TEST_CLAUDE_CODE=1` / `OAX_TEST_OPENCODE=1` against the proxy (a local vLLM/Ollama or the simulated surface).
+
+Tests: unit tests with the fake engine; opt-in container tests. Security tests (in the container): `env`, `/proc/*/environ` and the filesystem of the node contain no provider key; the harness cannot reach `api.anthropic.com` or any provider directly (no route) but completes through the proxy; the model token is refused after the step ends.
+
+##### W1-3b-9 Deployment, configuration, observability, docs
+
+Acceptance criteria:
+
+- Compose `container-runner` profile with `OAX_MODEL_PROXY_ENABLED=true`; `docs/model-proxy.md` (new: how it works, limits, codes, reservation modes, capture levels), updates of `docs/configuration.md`, `docs/budgets.md` (reservations, overshoot only for priced tool calls), `docs/airgapped.md`, `docs/providers.md`, `docs/harnesses.md`, `docs/runners.md`; changelog bullet under `[Unreleased]` incl. the pre-1.0 behaviour change (isolated steps now count against budgets).
+- OTel span `oax.model.call` with `gen_ai.*` attributes, no content.
+- Helm mirror issue in open-agentix-helm: `modelProxy.enabled`, `/v1/model-proxy/` and `/v1/worker/` kept off the public ingress unless `modelProxy.exposeOnIngress=true`, internal api Service as the node target.
+
+Tests: `docker compose --profile container-runner config` in CI; metrics and span unit tests. Security test: a check that the default ingress paths of the Compose/Helm docs do not route `/v1/model-proxy/` publicly.
+
+##### W1-3b-10 Opt-in end-to-end abuse suite
+
+Acceptance criteria: an opt-in integration test (`OAX_TEST_DOCKER=1`) starts a run node whose step is a hostile script and proves, with a real engine and the real api: no provider key readable in the node; another run's or step's model calls refused; concurrent calls cannot exceed a USD 0.01 budget (ledger sum checked afterwards); server tools and URL sources refused; a revoked token is dead for the model routes; the ledger, run counters and audit chain are consistent (`audit verify` passes). The report in the PR lists every check with its real result; nothing is claimed that did not run.
+
+Docs and website: ADR 0009, `docs/model-proxy.md` (new), the docs listed in W1-3b-9; website runners, security model, harness and costs pages say "model access for isolated steps through the control node's model proxy" only when it ships in a release.
+
+Helm: model proxy values, ingress exclusion of `/v1/model-proxy/` and `/v1/worker/`, internal api Service for run nodes (mirrors W1-3b-9).
 
 #### W1-4 Kubernetes Job runner (EKS/IRSA) with per-step credentials
 
@@ -1091,14 +1231,14 @@ Docs and website: Website demo page (today 'coming soon').
 | partial | 15 |
 | stub | 8 |
 | planned | 27 |
-| not started | 13 |
-| total | 104 |
+| not started | 16 |
+| total | 107 |
 
 "done" includes capabilities that are merged on `main` but not yet released (marked "done (unreleased)" in the matrix).
 
 | Milestone | Waves | Items |
 | --- | --- | --- |
-| v0.2 | 0, 1, 2, 3, 4 | W0-1, W0-2, W1-1, W1-2, W1-3, W1-4, W1-5, W1-6, W2-1, W2-2, W2-3, W2-4, W2-5, W2-6, W3-1, W3-2, W3-3, W3-4, W3-5, W3-6, W4-4 |
+| v0.2 | 0, 1, 2, 3, 4 | W0-1, W0-2, W1-1, W1-2, W1-3, W1-3b, W1-4, W1-5, W1-6, W2-1, W2-2, W2-3, W2-4, W2-5, W2-6, W3-1, W3-2, W3-3, W3-4, W3-5, W3-6, W4-4 |
 | v0.3 | 4, 5 | W4-1, W4-2, W4-3, W4-5, W5-1, W5-2, W5-3, W5-4, W5-5, W5-6 |
 | v0.4 | 6 | W6-1, W6-2, W6-3, W6-4, W6-5 |
 | v1.0 | 7, 8 | W7-1, W7-2, W7-3, W7-4, W7-5, W7-6, W8-1, W8-2, W8-3, W8-4 |
@@ -1133,17 +1273,23 @@ Docs and website: Website demo page (today 'coming soon').
 4. **Expression and schema evaluation (W1-1).** `when` and JSON Schema run on model-controlled
    data. Mitigation: no `eval`, bounded grammar, depth/size limits, no remote `$ref`, prototype
    pollution tests, fail-closed on evaluation errors.
-5. **Parallel waves editing shared files.** `executor.ts`, `openapi.yaml`, the i18n JSON files
+5. **Model proxy on the control node (W1-3b).** The proxy holds every provider key, takes
+   attacker-controlled requests from run nodes and decides about money. A bug leaks a key, lets a
+   node use the proxy as a free gateway or overspends a budget. Mitigation: ADR 0009 before code,
+   a strict parameter allowlist with re-serialization, model pinning per published step,
+   worst-case reservations with a concurrency test, fail-closed refusals, security review on every
+   task, an opt-in abuse suite against a real engine (W1-3b-10).
+6. **Parallel waves editing shared files.** `executor.ts`, `openapi.yaml`, the i18n JSON files
    and the migration sequence are touched by several items. Mitigation: W0-1 lands first,
    migration numbers are assigned in this plan, `openapi.yaml` and `schema.d.ts` are regenerated
    on rebase (never hand-merged), merge order inside a wave follows the item numbers.
-6. **Scope creep against honesty.** The website already promises more than the code does.
+7. **Scope creep against honesty.** The website already promises more than the code does.
    Mitigation: W0-2 fixes wording now; every item's acceptance criteria include the docs and
    website change; nothing moves to "available" before it is released.
-7. **Supply chain of harnesses and toolboxes (W1-6, W2-1, W4-1).** External binaries run agent
+8. **Supply chain of harnesses and toolboxes (W1-6, W2-1, W4-1).** External binaries run agent
    work. Mitigation: pinned versions with checksums installed at build time, no downloads at run
    time, signed images, Trivy gate, air-gapped refusal without an allowlist.
-8. **Load on reviewers.** Six parallel L/M items per wave produce large PRs. Mitigation: each
+9. **Load on reviewers.** Six parallel L/M items per wave produce large PRs. Mitigation: each
    item lands as small Conventional Commits in one PR, tests in the same commit, and subagents
    leave PRs open for the main reviewer.
 
@@ -1160,6 +1306,7 @@ work is mirrored in `open-agentix/open-agentix-helm`.
 | W1-1 | #25 | v0.2 | - |
 | W1-2 | #26 | v0.2 | - |
 | W1-3 | #10 | v0.2 | - |
+| W1-3b | - (to be filed by the issue sync) | v0.2 | open-agentix-helm (to be filed, W1-3b-9) |
 | W1-4 | #11 | v0.2 | open-agentix-helm#6 |
 | W1-5 | #27 | v0.2 | - |
 | W1-6 | #28 | v0.2 | - |

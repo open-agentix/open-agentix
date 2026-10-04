@@ -51,8 +51,10 @@ flowchart TB
 Typed handovers, `when` conditions, tool profiles, per-step credentials and isolated run nodes are
 specified in [ADR 0008](adr/0008-agents-md-data-flow-and-isolation-contract.md); the new
 `agents.md` fields are parsed and validated today and take effect as the wave 1 items land (see
-[agents.md reference](agents-md.md)). The advisory Agent Check lints plans and generates drafts
-([Agent Check](agent-check.md)); it never publishes.
+[agents.md reference](agents-md.md)). Model calls of isolated run nodes go through the model proxy
+on the control node, which measures usage and reserves budget before every call (proposed in
+[ADR 0009](adr/0009-model-proxy.md), plan item W1-3b). The advisory Agent Check lints plans and
+generates drafts ([Agent Check](agent-check.md)); it never publishes.
 
 ## Data model (PostgreSQL)
 
