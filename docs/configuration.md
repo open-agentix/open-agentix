@@ -202,14 +202,25 @@ A provider's own `proxyUrl` overrides the environment for that provider (NO_PROX
 direct egress to the directory (NetworkPolicy) instead. Kafka brokers and PostgreSQL are not
 proxied either.
 
-## Runners and toolboxes (v0.2 contract, feature-flagged off)
+## Runners and toolboxes (v0.2)
 
-These variables are parsed and validated today so the Helm chart can expose them; the
-`kubernetes-job` runner itself ships in v0.2.
+The `container` runner is implemented and opt-in (see [runners.md](runners.md)); the `OAX_K8S_*`
+variables are parsed and validated today so the Helm chart can expose them, the `kubernetes-job`
+runner itself is feature-flagged off.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `OAX_RUNNERS_ENABLED` | `in-process` | Comma list of runners agents may use (`in-process`, `local`, `container`, `kubernetes-job`, `aws-lambda`, `github-actions`, `gitlab-ci`). Publishing an agent with another `runtime.runner` fails. |
+| `OAX_CONTAINER_RUNNER_ENABLED` | `false` | Feature flag; required when `container` is listed in `OAX_RUNNERS_ENABLED`. With it on, `OAX_CONTAINER_ENGINE_URL`, `OAX_CONTAINER_IMAGE` (digest-pinned), `OAX_CONTAINER_NETWORK` (internal) and `OAX_NODE_CONTROL_URL` are required, otherwise the process refuses to start. |
+| `OAX_CONTAINER_ENGINE` | `docker` | `docker` or `podman`. |
+| `OAX_CONTAINER_ENGINE_URL` | – | `unix:///path/to/podman.sock` or a socket proxy `http://socket-proxy:2375`. The raw Docker socket is refused. |
+| `OAX_CONTAINER_ALLOW_RAW_SOCKET` | `false` | Unsafe: allow `/var/run/docker.sock` (warning at start, audit `runner.unsafe_socket`). |
+| `OAX_CONTAINER_IMAGE` | – | Run node image, `name@sha256:<digest>` only. |
+| `OAX_CONTAINER_TOOLBOX_IMAGES` | `{}` | JSON map toolbox name -> digest-pinned image. |
+| `OAX_CONTAINER_NETWORK` | – | Pre-created network with `internal: true` (verified before every start). |
+| `OAX_CONTAINER_EGRESS_PROXY_LISTEN` / `OAX_CONTAINER_EGRESS_PROXY_URL` | – | Listen address of the worker's egress proxy (`0.0.0.0:3128`) and the URL nodes use; set both or neither. |
+| `OAX_CONTAINER_MAX_CPUS` / `OAX_CONTAINER_MAX_MEMORY_MB` / `OAX_CONTAINER_MAX_PIDS` | `1` / `512` / `256` | Upper bounds for a node container. |
+| `OAX_NODE_CONTROL_URL` | – | Control node base URL as seen from run nodes (internal network). |
 | `OAX_K8S_JOB_ENABLED` | `false` | Feature flag; required when `kubernetes-job` is enabled. |
 | `OAX_K8S_NAMESPACE` | `openagentix-runs` | Namespace for run Jobs. |
 | `OAX_K8S_SERVICE_ACCOUNT` | `openagentix-worker` | ServiceAccount of run Jobs (annotate for IRSA on EKS). |

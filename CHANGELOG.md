@@ -8,6 +8,24 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Run node, per-step credential broker and container runner (W1-3a, opt-in)**: steps whose effective
+  runner is `container` (pipeline `runtime.runner` or per-step `runtime.runner`) run in their own
+  short-lived container, started by the worker through a socket proxy or rootless Podman: digest-pinned
+  image, numeric non-root user, read-only root filesystem, all capabilities dropped,
+  `no-new-privileges`, CPU/memory/PID limits, tmpfs, an `internal` network (verified before every
+  start), no engine socket inside, never started through the raw Docker socket unless explicitly
+  allowed. The step-scoped run token (claims `sid`, `steps`) reaches the node through its stdin, never
+  through the environment. The new run node (`apps/worker/src/run-node.ts`, entry `run-node-cli.js`, image target
+  `run-node`) talks to the control node only and never to PostgreSQL. The credential broker
+  (`POST /v1/worker/runs/{id}/credentials`) hands out exactly the step's secrets once per step and
+  session, only for references the tenant allows (`tenants.secret_refs`, empty = nothing, migration
+  `0009`; `PATCH /v1/tenants/{id}` `secretRefs`), audited as `runnode.started`, `credential.issued`,
+  `credential.denied`, `credential.revoked`, `runnode.stopped`, `runner.unsafe_socket` without values.
+  A revoked or expired session kills its token immediately; a node token can never complete a run or
+  act for another step. An egress allowlist proxy (`CONNECT`, per-node accounts, deny by default,
+  air-gapped policy on top) enforces `runtime.egress`. New `GET /v1/worker/runs/{id}/handover`,
+  `POST .../handover/result`; Compose profile `container-runner`; `docs/runners.md`. **Not yet**: run
+  nodes cannot call models except the keyless `simulated` provider until the model proxy (W1-3b).
 - **Agent Check and Agent Plan v1 (advisory)**: strict `AgentPlan` schema, deterministic
   least-privilege lint `LP001`-`LP008` with a fixed JSON output, optional model-assisted notes that
   can only add `info`/`warning` findings (untrusted, schema-validated, costed and budget-checked),
@@ -98,6 +116,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A step whose effective runner is isolating is never executed inline by the worker: without an
+  enabled runner the run fails with `runner_unavailable`. The `container` runner is no longer a stub;
+  publishing also refuses per-step runners that are not enabled.
 - The tenant limit `tenants.monthly_budget_micros`, stored but not enforced before, is now a hard
   stop. Runs refused at admission by a tenant or use case budget carry the error codes
   `tenant_budget_exceeded` and `use_case_budget_exceeded` (team budgets keep
@@ -108,6 +129,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- `docker-compose.yml`: the `volumes:` section contained a copy of the `ui` service and a dangling
+  `ollama:` key; it now declares `pgdata` and `ollama`.
 - **Database password override**: `OAX_DATABASE_PASSWORD` / `PGPASSWORD` were ignored with pg 8.23 when the connection string contained no password (SCRAM error "client password must be a string"); the password is now injected into the connection string (URL-encoded).
 
 ## [0.1.0] - 2026-10-04

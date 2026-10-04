@@ -39,3 +39,10 @@ harnesses (Claude Code, OpenCode, Hermes, OpenClaw) as executors.
 
 - Separate executors per target: duplicates the step loop and the guardrails.
 - Allowing harnesses their own tools: breaks the audit guarantee.
+
+## Status updates
+
+- 2026-10-04 (W1-3a): the `container` runner is implemented (no longer a stub). It is an
+  *isolating* runner: the worker orchestrates the run and starts one run node per isolated step
+  (`IsolatingRunner.startNode`), see [runners.md](../runners.md) and ADR 0008. `execute` is not used
+  for it. The model proxy for run nodes (W1-3b) and the Kubernetes Job runner (W1-4) are still open.

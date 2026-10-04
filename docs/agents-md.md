@@ -9,7 +9,10 @@ runtime) is described on the website's agents.md reference. This page covers the
 > conditional steps, W1-1, see [pipelines](pipelines.md)). `access` and `tools[].profile` are enforced
 > (see [MCP connections and tool profiles](mcp.md)): a profile grant is expanded into concrete tool
 > grants when the version is published, a draft that has not been published grants nothing.
-> `credentials` and the per-step `runtime` follow with W1-3/W1-4.
+> `credentials` and the per-step `runtime` (`runner: container`, narrower `egress`) have **runtime effect**
+> with the opt-in `container` runner (W1-3a, see [runners](runners.md)): the credential broker hands a
+> step exactly its declared secrets once per step. Models are not reachable from run nodes yet (W1-3b),
+> and the `kubernetes-job` runner follows with W1-4.
 
 | Field | Where | Meaning | Checked at publish |
 | --- | --- | --- | --- |
