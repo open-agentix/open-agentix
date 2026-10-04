@@ -154,6 +154,16 @@ describe('runner, toolbox, secrets and worker settings', () => {
     expect(() =>
       loadConfig({ ...k8s, OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false', OAX_TOOLBOX_ALLOWLIST: '' }),
     ).toThrow(/OAX_TOOLBOX_ALLOWLIST/);
+    for (const bad of [
+      { OAX_K8S_RESOURCES_MEMORY: '0' },
+      { OAX_K8S_RESOURCES_MEMORY: '1000K' },
+      { OAX_K8S_RESOURCES_CPU: '0' },
+      { OAX_K8S_RESOURCES_CPU: '10m' },
+    ]) {
+      expect(() => loadConfig({ ...k8s, OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false', ...bad })).toThrow(
+        /OAX_K8S_RESOURCES_\*.*below the minimum/,
+      );
+    }
     const c = loadConfig({
       ...k8s,
       OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false',

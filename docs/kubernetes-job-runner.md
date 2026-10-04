@@ -12,7 +12,7 @@ All objects live in the run namespace (`OAX_K8S_NAMESPACE`) and are named `oax-s
 | Object | Purpose |
 | --- | --- |
 | `Job` | `backoffLimit: 0`, `activeDeadlineSeconds` (step timeout, capped by `OAX_K8S_ACTIVE_DEADLINE_SECONDS`), `ttlSecondsAfterFinished`. Created **suspended**, unsuspended last. |
-| `NetworkPolicy` | Selects the Pod by `openagentix.io/node-id`; **no ingress**; egress only to DNS (kube-dns), the control node and the allowlist. Owner: the Job. |
+| `NetworkPolicy` | Selects the Pod by `openagentix.io/node-id`; **no ingress**; egress only to DNS (kube-dns), the control node and the allowlist. **No owner reference** (explicit delete only, labelled for a sweeper). |
 | `Secret` | Immutable, holds **only the step-scoped run token**, mounted read-only at `/run/oax/token` (mode 0400). Owner: the Job. |
 
 Order: Job (suspended) -> NetworkPolicy -> Secret -> unsuspend. No Pod can start before the policy
@@ -24,8 +24,11 @@ When the step ends (success, failure, cancel, timeout, lease loss) `stop()` dele
 **Foreground** propagation (the Job object only disappears after its Pods), then the Secret, waits
 until the Job is gone and deletes the **NetworkPolicy last**. If the Pods are not confirmed gone
 in time the policy is kept (owner GC removes it later) and `stop()` reports an error and can be
-retried. The owner references (without `blockOwnerDeletion`, so no `jobs/finalizers` RBAC is
-needed) clean up if the worker dies; the Job TTL removes finished Jobs.
+retried. The NetworkPolicy deliberately has **no owner reference**: with Foreground deletion the
+garbage collector would otherwise remove it in parallel with the Pods' termination and defeat the
+ordering. Only the Secret is owned by the Job (without `blockOwnerDeletion`, so no
+`jobs/finalizers` RBAC is needed); the Job TTL removes finished Jobs. A policy left behind by a
+worker crash is found by its labels (sweeper: follow-up) and is harmless: it only narrows access.
 
 ### Prerequisites
 
@@ -35,6 +38,9 @@ needed) clean up if the worker dies; the Job TTL removes finished Jobs.
   namespace, shipped in `examples/kubernetes-job-runner-rbac.yaml` (the Helm chart should render
   it). Per-step policies are then purely additive, so a terminating Pod or a garbage-collected
   policy never leaves a Pod with more access.
+- **Checked at every start**: the runner reads the default-deny policy (`defaultDenyPolicy`, default
+  `default-deny-all`; RBAC `get` on exactly that name) and refuses to start a step if it is missing
+  or not a real deny-all (ingress+egress, empty selector, no rules).
 - The step ServiceAccount (`OAX_K8S_SERVICE_ACCOUNT`, default `openagentix-run-node`) and the run
   namespace must differ from the worker's; the runner refuses equal values (set
   `OAX_K8S_WORKER_SERVICE_ACCOUNT` / `OAX_K8S_WORKER_NAMESPACE`).
@@ -61,7 +67,7 @@ can only narrow). Further rules, all enforced when the Job is built:
 
 - minimum prefix `/8` (IPv4) and `/32` (IPv6), for operator and step entries (no `/1` splits);
 - always-denied ranges are never reachable: `169.254.0.0/16` (IMDS and link-local),
-  `127.0.0.0/8`, `::1/128`, `fe80::/10`, `fd00:ec2::254/128` plus `OAX_K8S_DENY_CIDRS` (set your
+  `127.0.0.0/8`, `::1/128`, `fe80::/10`, `fd00:ec2::254/128`, `fd20:ce::254/128`, `168.63.129.16/32`, `100.100.100.200/32`, the IPv4-mapped (`::ffff:`) and NAT64 (`64:ff9b::`) forms of link-local and loopback, plus `OAX_K8S_DENY_CIDRS` (set your
   pod, service and node CIDRs, and the Kubernetes API address). An allowed CIDR containing such a
   range gets an `ipBlock.except` entry, a CIDR inside one is refused;
 - with `OAX_AIRGAPPED=true` a step may not declare any egress;
@@ -83,7 +89,8 @@ control node refuses to start the runner with both lists empty.
 ## Resources
 
 Step limits are clamped into `[50m / 32Mi, OAX_K8S_RESOURCES_CPU / OAX_K8S_RESOURCES_MEMORY]`
-(requests = limits); non-finite or non-positive values are refused, so a limit is never `0`. Add the
+(requests = limits); non-finite or non-positive step values are refused and operator ceilings below
+`50m` / `32Mi` are rejected at config load and in the runner constructor, so a limit is never `0`. Add the
 `LimitRange` and `ResourceQuota` of the example manifest to bound concurrency (the runner starts
 one Job per step and does not cap parallel Jobs itself).
 
@@ -121,6 +128,7 @@ OAX_TEST_IMAGE=ghcr.io/open-agentix/openagentix-worker@sha256:... pnpm vitest ru
   filtering resolver or DNS policy (Cilium/CoreDNS).
 - No per-step ServiceAccount/IRSA role yet (one shared ServiceAccount).
 - Host-name egress needs an egress gateway; there is no built-in proxy.
+- Wire `controlPlane`, `dnsEgress` and `automountServiceAccountToken` to env settings (until then a step cannot reach the control node; W1-3a integration), default `denyCidrs`.
 - Orphan sweeper for suspended Jobs after a worker crash; Job status is polled, not watched.
 - Pod Security Admission, image signature checks and the CNI prerequisite are cluster
   responsibilities (documented above, not verified by the runner).

@@ -92,6 +92,11 @@ rules:
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [create, delete]
+  # Read access to exactly the default-deny policy: the runner refuses to start a step without it.
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    resourceNames: [default-deny-all]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

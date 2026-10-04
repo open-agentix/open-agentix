@@ -11,6 +11,9 @@ import {
   isCidr,
   nodeObjectName,
   effectiveResources,
+  formatCidr,
+  parseCidr,
+  validateResourceCeiling,
   parseCpu,
   parseMemoryMb,
   planEgress,
@@ -69,6 +72,12 @@ class FakeKube implements KubeClient {
   /** Job status after deleteJob: how many getJob calls still see the terminating Job. */
   lingerPolls = 0;
   deleted = false;
+  defaultDeny: KubeObject | null = {
+    apiVersion: 'networking.k8s.io/v1',
+    kind: 'NetworkPolicy',
+    metadata: { name: 'default-deny-all' },
+    spec: { podSelector: {}, policyTypes: ['Ingress', 'Egress'] },
+  } as KubeObject;
 
   private maybeFail(op: string) {
     this.calls.push(op);
@@ -115,6 +124,11 @@ class FakeKube implements KubeClient {
     this.maybeFail('createNetworkPolicy');
     this.policies.set(p.metadata.name, p);
     return { uid: 'policy-uid-1' };
+  }
+  async getNetworkPolicy(_ns: string, name: string): Promise<KubeObject | null> {
+    this.maybeFail('getNetworkPolicy');
+    expect(name).toBe('default-deny-all');
+    return this.defaultDeny;
   }
   async deleteNetworkPolicy(_ns: string, name: string, uid?: string) {
     this.maybeFail('deleteNetworkPolicy');
@@ -477,12 +491,22 @@ describe('KubernetesJobRunner lifecycle', () => {
     });
     const h = await r.startNode(spec(), {});
     expect(r.kind).toBe('kubernetes-job');
-    expect(kube.calls).toEqual(['createJob', 'createNetworkPolicy', 'createSecret', 'patchJob']);
+    expect(kube.calls).toEqual([
+      'getNetworkPolicy',
+      'createJob',
+      'createNetworkPolicy',
+      'createSecret',
+      'patchJob',
+    ]);
     expect(kube.patches).toEqual([{ spec: { suspend: false } }]);
     const owner = (kube.secrets.values().next().value as KubeObject).metadata.ownerReferences![0]!;
     expect(owner).toMatchObject({ kind: 'Job', uid: 'job-uid-1', controller: true });
     expect(owner).not.toHaveProperty('blockOwnerDeletion');
-    expect(kube.policies.values().next().value!.metadata.ownerReferences).toEqual([owner]);
+    // The NetworkPolicy has NO owner: the GC must not remove it in parallel with Pod termination.
+    expect(kube.policies.values().next().value!.metadata.ownerReferences).toBeUndefined();
+    expect(kube.policies.values().next().value!.metadata.labels).toMatchObject({
+      'openagentix.io/node-id': NODE,
+    });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('api.example.org'));
     expect(h.nodeId).toBe(NODE);
   });
@@ -607,7 +631,7 @@ describe('KubernetesJobRunner lifecycle', () => {
     const kube = new FakeKube();
     kube.failOn.add('createJob');
     await expect(mk(kube).startNode(spec(), {})).rejects.toThrow('boom createJob');
-    expect(kube.calls).toEqual(['createJob']);
+    expect(kube.calls).toEqual(['getNetworkPolicy', 'createJob']);
   });
 
   it('does not delete a NetworkPolicy or Secret it did not create (409 on create)', async () => {
@@ -645,10 +669,138 @@ describe('KubernetesJobRunner lifecycle', () => {
   });
 });
 
+describe('default-deny prerequisite (fail closed)', () => {
+  const mk = (kube: FakeKube) =>
+    new KubernetesJobRunner({ client: kube, config: { namespace: 'runs', ...OPEN } });
+
+  it('refuses to start when the default-deny policy is missing', async () => {
+    const kube = new FakeKube();
+    kube.defaultDeny = null;
+    await expect(mk(kube).startNode(spec(), {})).rejects.toThrow(/no default-deny NetworkPolicy/);
+    expect(kube.calls).toEqual(['getNetworkPolicy']);
+  });
+
+  it('refuses a policy that is not a real deny-all', async () => {
+    const weak = (sp: Record<string, unknown>) =>
+      ({
+        apiVersion: 'networking.k8s.io/v1',
+        kind: 'NetworkPolicy',
+        metadata: { name: 'default-deny-all' },
+        spec: sp,
+      }) as KubeObject;
+    for (const sp of [
+      { podSelector: {}, policyTypes: ['Ingress'] },
+      { podSelector: {}, policyTypes: ['Egress'] },
+      { podSelector: { matchLabels: { a: 'b' } }, policyTypes: ['Ingress', 'Egress'] },
+      { podSelector: { matchExpressions: [] }, policyTypes: ['Ingress', 'Egress'] },
+      { podSelector: {}, policyTypes: ['Ingress', 'Egress'], egress: [{}] },
+      { podSelector: {}, policyTypes: ['Ingress', 'Egress'], ingress: [{}] },
+      {},
+    ]) {
+      const kube = new FakeKube();
+      kube.defaultDeny = weak(sp);
+      await expect(mk(kube).startNode(spec(), {})).rejects.toThrow(/default-deny/);
+      expect(kube.calls).toEqual(['getNetworkPolicy']);
+    }
+    const noSpec = new FakeKube();
+    noSpec.defaultDeny = { apiVersion: 'v1', kind: 'NetworkPolicy', metadata: { name: 'x' } };
+    await expect(mk(noSpec).startNode(spec(), {})).rejects.toThrow(/default-deny/);
+  });
+
+  it('surfaces API errors of the check', async () => {
+    const kube = new FakeKube();
+    kube.failOn.add('getNetworkPolicy');
+    await expect(mk(kube).startNode(spec(), {})).rejects.toThrow('boom getNetworkPolicy');
+  });
+});
+
+describe('review round 2 hardening', () => {
+  it('rejects operator resource ceilings that round to "no limit"', () => {
+    for (const resources of [
+      { cpu: '0', memory: '512Mi' },
+      { cpu: '10m', memory: '512Mi' },
+      { cpu: '500m', memory: '0' },
+      { cpu: '500m', memory: '512' },
+      { cpu: '500m', memory: '1000K' },
+      { cpu: '500m', memory: '31Mi' },
+    ]) {
+      expect(() => validateResourceCeiling(resources)).toThrow(/below the minimum/);
+      expect(
+        () => new KubernetesJobRunner({ client: new FakeKube(), config: { resources } }),
+      ).toThrow(/below the minimum/);
+    }
+    expect(() => validateResourceCeiling({ cpu: '50m', memory: '32Mi' })).not.toThrow();
+  });
+
+  it('emits canonical CIDRs in the NetworkPolicy', () => {
+    const c = cfg({ egress: ['10.0.0.0/8', '2001:db8::/32'] });
+    expect(planEgress(['10.1.2.3/16', '2001:0db8:0:0:0:0:0:0/32'], c).cidrs).toEqual([
+      { cidr: '10.1.0.0/16', except: [] },
+      { cidr: '2001:db8::/32', except: [] },
+    ]);
+    const p = buildNetworkPolicy(spec({ egress: ['10.1.2.3/16'] }), c) as any;
+    expect(p.spec.egress.at(-1).to[0].ipBlock.cidr).toBe('10.1.0.0/16');
+    expect(formatCidr(parseCidr('::/32')!)).toBe('::/32');
+    expect(formatCidr(parseCidr('1:0:0:2:0:0:0:3/128')!)).toBe('1:0:0:2::3/128');
+    expect(formatCidr(parseCidr('1:2:3:4:5:6:7:8/128')!)).toBe('1:2:3:4:5:6:7:8/128');
+    expect(formatCidr(parseCidr('1:0:3:4:5:6:7:8/128')!)).toBe('1:0:3:4:5:6:7:8/128');
+  });
+
+  it('denies embedded IPv4-mapped/NAT64 forms and further cloud metadata addresses', () => {
+    const c = cfg({
+      egress: [
+        '::ffff:0:0/96',
+        '64:ff9b::/96',
+        '168.63.129.0/24',
+        '100.100.100.0/24',
+        'fd20:ce::/32',
+      ],
+    });
+    for (const bad of [
+      '::ffff:a9fe:a9fe/128', // ::ffff:169.254.169.254
+      '::ffff:7f00:1/128', // ::ffff:127.0.0.1
+      '64:ff9b::a9fe:a9fe/128',
+      '64:ff9b::7f00:1/128',
+      '168.63.129.16/32',
+      '100.100.100.200/32',
+      'fd20:ce::254/128',
+    ]) {
+      expect(() => planEgress([bad], c), bad).toThrow(/always-denied/);
+    }
+    // a surrounding allowed range gets the denied part punched out
+    expect(planEgress(['64:ff9b::/96'], c).cidrs[0]!.except).toEqual([
+      '64:ff9b::a9fe:0/112',
+      '64:ff9b::7f00:0/104',
+    ]);
+    expect(planEgress(['168.63.129.0/24'], c).cidrs[0]!.except).toEqual(['168.63.129.16/32']);
+  });
+
+  it('requires exactly one @ in image references', () => {
+    const c = cfg();
+    const base = 'ghcr.io/open-agentix/toolbox-git-node';
+    expect(() => validateImage(`${base}@${DIGEST}@${DIGEST}`, c)).toThrow(/exactly one @/);
+    expect(() => validateImage(`${base}@x@${DIGEST}`, c)).toThrow(/exactly one @/);
+    expect(() => validateImage(`${base}@${DIGEST}`, c)).not.toThrow();
+  });
+});
+
 describe('RBAC', () => {
   it('is minimal: namespaced verbs on exactly three resources, no wildcards, no pods', () => {
     const flat = REQUIRED_RBAC.flatMap((r) => r.resources.map((x) => `${r.apiGroups[0]}/${x}`));
-    expect(flat.sort()).toEqual(['/secrets', 'batch/jobs', 'networking.k8s.io/networkpolicies']);
+    expect([...new Set(flat)].sort()).toEqual([
+      '/secrets',
+      'batch/jobs',
+      'networking.k8s.io/networkpolicies',
+    ]);
+    // reading policies is limited to exactly the default-deny policy
+    const reads = REQUIRED_RBAC.filter(
+      (r) => r.resources[0] === 'networkpolicies' && r.verbs.includes('get'),
+    );
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({ resourceNames: ['default-deny-all'], verbs: ['get'] });
+    expect(
+      REQUIRED_RBAC.find((r) => r.resources[0] === 'networkpolicies' && !r.resourceNames)!.verbs,
+    ).toEqual(['create', 'delete']);
     for (const r of REQUIRED_RBAC) {
       expect(r.verbs).not.toContain('*');
       expect(r.verbs).not.toContain('list');
@@ -668,6 +820,9 @@ describe('RBAC', () => {
     for (const rule of REQUIRED_RBAC) {
       expect(doc).toContain(`resources: [${rule.resources.join(', ')}]`);
       expect(doc).toContain(`verbs: [${rule.verbs.join(', ')}]`);
+      if (rule.resourceNames) {
+        expect(doc).toContain(`resourceNames: [${rule.resourceNames.join(', ')}]`);
+      }
     }
   });
 });
@@ -723,6 +878,22 @@ describe('InClusterKubeClient', () => {
     await expect(c.deleteSecret('runs', 's', 'SU')).resolves.toBeUndefined();
     // without a precondition a 409 is a real error
     await expect(c.deleteSecret('runs', 's')).rejects.toThrow(/HTTP 409/);
+  });
+
+  it('reads a NetworkPolicy (404 -> null, errors surfaced)', async () => {
+    const ok = client(() => ({ status: 200, body: { kind: 'NetworkPolicy' } }));
+    await expect(ok.c.getNetworkPolicy('runs', 'default-deny-all')).resolves.toEqual({
+      kind: 'NetworkPolicy',
+    });
+    expect(ok.reqs[0].path).toBe(
+      '/apis/networking.k8s.io/v1/namespaces/runs/networkpolicies/default-deny-all',
+    );
+    await expect(
+      client(() => ({ status: 404 })).c.getNetworkPolicy('runs', 'x'),
+    ).resolves.toBeNull();
+    await expect(client(() => ({ status: 403 })).c.getNetworkPolicy('runs', 'x')).rejects.toThrow(
+      /get NetworkPolicy/,
+    );
   });
 
   it('refuses a plain-http API server unless explicitly allowed', () => {
