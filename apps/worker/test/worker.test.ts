@@ -250,3 +250,66 @@ describe('cron event sources', () => {
     s.stop();
   });
 });
+
+describe('change gate on schedule sources', () => {
+  it('starts a run only when the probe digest changes', async () => {
+    expect(
+      (
+        await n.req({
+          method: 'POST',
+          url: '/v1/event-sources',
+          payload: {
+            name: 'gate-webhook',
+            kind: 'webhook',
+            config: { changeCheck: { probe: { type: 'file', path: '/x' } } },
+          },
+        })
+      ).statusCode,
+    ).toBe(400);
+    const src = (
+      await n.req({
+        method: 'POST',
+        url: '/v1/event-sources',
+        payload: {
+          name: 'release-watch',
+          kind: 'cron',
+          agentId,
+          config: {
+            schedule: '*/15 * * * *',
+            changeCheck: {
+              probe: {
+                type: 'http',
+                url: 'https://releases.example.org/latest.json',
+                jsonPointer: '/version',
+              },
+            },
+          },
+        },
+      })
+    ).json();
+    let body = '{"version":"1.0.0"}';
+    n.services.ingest.probeDeps = { fetch: async () => new Response(body) };
+    const s = new CronScheduler(n.ctx, n.services);
+    const tick = (min: number) =>
+      createEvent({
+        source: '/sources/cron/release-watch',
+        type: 'io.openagentix.cron.tick',
+        time: new Date(Date.UTC(2026, 9, 6, 10, min)),
+      });
+    const first = await s.fire(agentId, '*/15 * * * *', tick(0), src.id);
+    expect(first).toBeTruthy();
+    expect(await s.fire(agentId, '*/15 * * * *', tick(15), src.id)).toBeNull();
+    body = '{"version":"1.1.0"}';
+    const third = await s.fire(agentId, '*/15 * * * *', tick(30), src.id);
+    expect(third).toBeTruthy();
+    const ev = (await n.req({ method: 'GET', url: `/v1/runs/${third}` })).json().eventId;
+    const event = (await n.req({ method: 'GET', url: `/v1/events/${ev}` })).json();
+    expect(event.payload.data.change).toMatchObject({ changed: true });
+    const actions = (await n.req({ method: 'GET', url: '/v1/audit?limit=200' }))
+      .json()
+      .items.map((e: { action: string }) => e.action);
+    expect(actions).toContain('change_check.unchanged');
+    expect(actions).toContain('change_check.changed');
+    s.stop();
+  });
+});
