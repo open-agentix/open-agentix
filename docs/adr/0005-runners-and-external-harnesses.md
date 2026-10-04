@@ -16,7 +16,7 @@ harnesses (Claude Code, OpenCode, Hermes, OpenClaw) as executors.
   `PreparedRun` = agent definition + event + policy bundles + limits, and the context carries a
   **ControlPlane** (policy gate, step recording, approvals, cancellation, completion). Every runner
   uses the same step executor, so policy engine, audit chain and budgets are identical everywhere.
-- MVP implements `in-process` (worker) and `local` (CLI `oax run agents.md --event file.json`,
+- v0.1 implements `in-process` (worker) and `local` (CLI `oax run agents.md --event file.json`,
   simulated provider and demo MCP servers by default, in-memory audit chain verified at the end).
 - `container`, `kubernetes-job`, `aws-lambda`, `github-actions`, `gitlab-ci` exist as **typed
   stubs** with final configuration schemas; `execute` throws `NotImplementedError` naming the

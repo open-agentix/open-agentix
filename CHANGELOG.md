@@ -36,7 +36,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.1.0] - 2026-10-04
 
-First MVP release of the openagentix platform (control node, worker, packages).
+First release of the openagentix platform (control node, worker, packages).
 
 ### Added
 
@@ -95,7 +95,7 @@ First MVP release of the openagentix platform (control node, worker, packages).
   pinned model catalog snapshot (models.dev schema) with local overrides and `GET /v1/models`,
   versioned development guidelines (global -> tenant -> agent, stricter wins) enforced by the
   policy gate and a hardening review endpoint, opt-in `dark-factory` agent mode with a fixed
-  "MVP/PoC only" notice.
+  "prototypes and proofs of concept only" notice.
 - **Public demo**: deterministic demo seed (`pnpm seed:demo`, `OAX_DEMO_MODE=true`) with two
   tenants, users for all six roles, six agents, runs, approvals, costs and a verifiable audit chain;
   read-only API in demo mode; compose demo profile.

@@ -13,7 +13,7 @@ cron, mail), one or more **agents** act on them through **MCP tools and APIs**, 
 messages or reports.
 
 > **Transparency:** the code in this repository is written by **agentix-zero**, the project's AI
-> agent account. Humans review every change and own all decisions (maintainer: Erik Weisser). See
+> agent account. Humans review every change and own all decisions (accountable: the project lead). See
 > [GOVERNANCE.md](GOVERNANCE.md).
 
 ## Why
