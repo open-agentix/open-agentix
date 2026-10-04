@@ -1,0 +1,13 @@
+# Public demo profile (demo.openagentix.si): simulated provider only, built-in demo MCP servers,
+# fake data on example.org, read-only API. Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
+services:
+  api:
+    environment:
+      OAX_DEMO_MODE: 'true'
+      OAX_DEMO_PASSWORD: demo-password-2026
+      OAX_PROVIDERS: '[{"kind":"simulated","name":"simulated"}]'
+  worker:
+    environment:
+      OAX_DEMO_MCP: 'true'
+      OAX_PROVIDERS: '[{"kind":"simulated","name":"simulated"}]'

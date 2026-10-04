@@ -151,6 +151,16 @@ Bedrock uses the AWS default credential chain: on EKS annotate the ServiceAccoun
 `eks.amazonaws.com/role-arn` (IRSA); no keys in configuration. Standard AWS variables
 (`AWS_REGION`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `HTTPS_PROXY` for the SDK) apply.
 
+## Public demo mode
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_DEMO_MODE` | `false` | Seeds the deterministic demo data set on first start (2 tenants, users for all six roles incl. an agent-scoped user, 6 agents incl. dark-factory, hardening and change-gated agents, runs, approvals, costs, verifiable audit chain) and makes the API read-only except sign-in and side-effect-free checks (validate, dry-run, policy evaluation, hardening review, audit verify). Responses carry `x-oax-demo: true`; `GET /v1/settings` reports `demo: true`. Use with the simulated provider only. Helm: `demo.enabled`. |
+| `OAX_DEMO_PASSWORD` | `demo-password-2026` | Shared password of the fake demo users (`admin@example.org`, `engineer@`, `integrator@`, `operator@`, `auditor@`, `viewer@`, `contractor@example.org`). Not a secret. |
+
+`pnpm seed:demo` loads the same data set into an empty database (`--force` to add anyway).
+Compose: `docker compose -f docker-compose.yml -f docker-compose.demo.yml up`.
+
 ## Outbound proxy
 
 Node's `fetch` and the AWS SDK do not honour proxy variables on their own; openagentix resolves
