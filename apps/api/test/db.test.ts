@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDatabase, schema, type Database } from '../src/db/client.js';
+import pg from 'pg';
+import { buildPoolConfig, createDatabase, schema, type Database } from '../src/db/client.js';
 
 let database: Database;
 
@@ -67,5 +68,45 @@ describe('migrations', () => {
     expect(
       await failure(database.db.execute(sql`update agent_versions set source = 'changed'`)),
     ).toMatch(/append-only/);
+  });
+});
+
+describe('buildPoolConfig', () => {
+  const effective = (url: string, password?: string) =>
+    // A Client resolves its config through pg's ConnectionParameters (no connection is opened).
+    new pg.Client(buildPoolConfig({ url, password })) as unknown as {
+      user: string;
+      password: string;
+      host: string;
+      database: string;
+      connectionParameters: { ssl: unknown };
+    };
+
+  it('applies the password override to a URL without password', () => {
+    const p = effective('postgres://oax@db.example.org:5432/app?sslmode=require', 's3cret');
+    expect(p.password).toBe('s3cret');
+    expect(p.user).toBe('oax');
+    expect(p.host).toBe('db.example.org');
+    expect(p.database).toBe('app');
+    expect(p.connectionParameters.ssl).toBeTruthy();
+  });
+
+  it('replaces a password already contained in the URL', () => {
+    expect(effective('postgres://oax:old@db.example.org/app', 'new').password).toBe('new');
+  });
+
+  it('round-trips passwords with special characters', () => {
+    const pw = 'p@ss:w/ord%41 #?&=+';
+    expect(effective('postgres://oax@db.example.org/app', pw).password).toBe(pw);
+  });
+
+  it('keeps the URL password without an override', () => {
+    expect(effective('postgres://oax:pw@db.example.org/app').password).toBe('pw');
+  });
+
+  it('keeps pool settings', () => {
+    const cfg = buildPoolConfig({ url: 'postgres://oax@h/app', poolMax: 3 });
+    expect(cfg.max).toBe(3);
+    expect(cfg.application_name).toBe('openagentix');
   });
 });

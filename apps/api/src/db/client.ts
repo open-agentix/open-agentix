@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import type { PoolConfig } from 'pg';
 import * as schema from './schema.js';
 
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>;
@@ -42,6 +43,27 @@ export interface DatabaseOptions {
   password?: string | undefined;
   poolMax?: number;
   statementTimeoutMs?: number;
+}
+
+/**
+ * Builds the pg pool config. A password override is injected into the connection string:
+ * pg >= 8.23 lets a connection string without password override a separate `password` option
+ * with `undefined`, so the discrete option would be silently ignored.
+ */
+export function buildPoolConfig(opts: DatabaseOptions): PoolConfig {
+  let connectionString = opts.url;
+  if (opts.password !== undefined) {
+    const url = new URL(opts.url);
+    // encodeURIComponent: pg decodes the userinfo; the URL setter would leave `%` untouched.
+    url.password = encodeURIComponent(opts.password);
+    connectionString = url.toString();
+  }
+  return {
+    connectionString,
+    max: opts.poolMax ?? 20,
+    statement_timeout: opts.statementTimeoutMs ?? 15_000,
+    application_name: 'openagentix',
+  };
 }
 
 async function appliedMigrations(db: Db): Promise<number> {
@@ -91,13 +113,7 @@ export async function createDatabase(opts: DatabaseOptions): Promise<Database> {
   const { Pool } = await import('pg');
   const { drizzle } = await import('drizzle-orm/node-postgres');
   const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-  const pool = new Pool({
-    connectionString: opts.url,
-    ...(opts.password !== undefined ? { password: opts.password } : {}),
-    max: opts.poolMax ?? 20,
-    statement_timeout: opts.statementTimeoutMs ?? 15_000,
-    application_name: 'openagentix',
-  });
+  const pool = new Pool(buildPoolConfig(opts));
   const db = drizzle(pool, { schema }) as unknown as Db;
   return {
     db,
