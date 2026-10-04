@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   checkPublish,
+  expandProfiles,
   hasPermission,
   loadAgentDefinition,
   validateAgentSource,
@@ -17,6 +18,7 @@ import { agentVersions, agents, teams } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import { decodeTimeCursor, encodeTimeCursor, page } from '../pagination.js';
 import type { AuditService } from './audit.js';
+import type { CatalogService } from './catalog.js';
 
 export type AgentRow = typeof agents.$inferSelect;
 export type AgentVersionRow = typeof agentVersions.$inferSelect;
@@ -46,6 +48,7 @@ export class AgentsService {
   constructor(
     private readonly ctx: AppContext,
     private readonly audit: AuditService,
+    private readonly catalog: CatalogService,
   ) {}
 
   async teamIdForOwner(tenantId: string, owner: string): Promise<string | null> {
@@ -87,6 +90,23 @@ export class AgentsService {
 
   validate(source: string): ValidationResult {
     return validateAgentSource(source);
+  }
+
+  /**
+   * Like {@link validate}, plus the checks that need the connection catalog: unknown connections
+   * and profiles, and write tools for `access: read-only` steps (the same checks publish makes).
+   */
+  async validateFor(principal: Principal, source: string): Promise<ValidationResult> {
+    const result = validateAgentSource(source);
+    if (!result.definition) return result;
+    const catalog = await this.catalog.accessCatalog({
+      tenantId: principal.tenantId,
+      teamId: await this.teamIdForOwner(principal.tenantId, result.definition.owner),
+      agentId: '',
+    });
+    const { errors } = expandProfiles(result.definition, catalog);
+    if (errors.length === 0) return result;
+    return { ...result, valid: false, definition: null, errors: [...result.errors, ...errors] };
   }
 
   async create(principal: Principal, source: string): Promise<AgentRow> {
@@ -251,6 +271,31 @@ export class AgentsService {
         created: false,
       };
     }
+    // Profile grants become concrete grants now and are stored with the version: a later change
+    // of a profile never widens it. Read-only steps never receive a write tool.
+    const { definition, errors } = expandProfiles(
+      def,
+      await this.catalog.accessCatalog({
+        tenantId: principal.tenantId,
+        teamId: agent.teamId,
+        agentId: id,
+      }),
+    );
+    if (errors.length > 0) {
+      await this.audit.append({
+        actor: principal.userId,
+        tenantId: principal.tenantId,
+        action: 'agent.publish.denied',
+        target: id,
+        payload: { version: def.version, digest: def.digest, errors },
+      });
+      throw new HttpError(
+        400,
+        'validation_failed',
+        'tool grants are not allowed on this platform',
+        errors,
+      );
+    }
     const row = await this.ctx.db.transaction(async (tx) => {
       const [v] = await tx
         .insert(agentVersions)
@@ -260,7 +305,7 @@ export class AgentsService {
           version: def.version,
           digest: def.digest,
           source: agent.draftSource,
-          definition: def as unknown as object,
+          definition: definition as unknown as object,
           publishedBy: principal.userId,
         })
         .returning();
@@ -278,6 +323,19 @@ export class AgentsService {
       target: id,
       payload: { version: row.version, digest: row.digest },
     });
+    if (definition.expansion?.length) {
+      await this.audit.append({
+        actor: principal.userId,
+        tenantId: principal.tenantId,
+        action: 'agent.profiles.expanded',
+        target: id,
+        payload: {
+          version: row.version,
+          expansionDigest: definition.expansionDigest,
+          expansion: definition.expansion,
+        },
+      });
+    }
     return { version: summary(row), created: true };
   }
 

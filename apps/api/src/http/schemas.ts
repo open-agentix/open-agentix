@@ -54,9 +54,24 @@ export const VersionSchema = z.object({
   publishedBy: Id.nullable(),
   publishedAt: Iso,
 });
+export const ExpansionRecordSchema = z.object({
+  agentId: z.string(),
+  server: z.string(),
+  profile: z.string(),
+  tools: z.array(z.string()),
+  connectionVersion: z.string(),
+});
 export const VersionDetailSchema = VersionSchema.extend({
   source: z.string(),
   definition: z.record(z.string(), z.unknown()),
+  expansion: z
+    .array(ExpansionRecordSchema)
+    .optional()
+    .describe('profile grants as expanded at publish (also inside `definition`)'),
+  expansionDigest: z
+    .string()
+    .optional()
+    .describe('SHA-256 over the expanded grants and the tool classification at publish'),
 });
 export const PublishResultSchema = z.object({ version: VersionSchema, created: z.boolean() });
 

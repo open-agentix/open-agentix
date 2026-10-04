@@ -6,6 +6,7 @@ import {
   verifyRunToken,
   type AgentDefinition,
   type OaxEvent,
+  type PublishedDefinition,
   type PolicyDecision,
   type RunTokenClaims,
   type ToolCallRequest,
@@ -160,6 +161,7 @@ export class ControlPlaneService {
     const decision = evaluateToolCall(call, {
       definition,
       agent,
+      toolAccess: (definition as PublishedDefinition).toolAccess,
       bundles: await this.bundlesFor(definition, tenantId),
       callCounts: new Map(counts.map((c) => [c.name, Number(c.n)])),
     });
