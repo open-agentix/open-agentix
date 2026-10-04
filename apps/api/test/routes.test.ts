@@ -105,3 +105,29 @@ describe('OpenAPI document', () => {
     expect(fresh).toContain('openapi: 3.1.0');
   });
 });
+
+describe('OpenAPI decorations', () => {
+  it('declares error responses, media types and redirects', () => {
+    const doc = n.app.swagger() as unknown as {
+      paths: Record<
+        string,
+        Record<string, { responses: Record<string, { content?: Record<string, unknown> }> }>
+      >;
+    };
+    expect(Object.keys(doc.paths['/v1/runs/{id}/stream']!.get!.responses['200']!.content!)).toEqual(
+      ['text/event-stream'],
+    );
+    expect(Object.keys(doc.paths['/v1/audit/export']!.get!.responses['200']!.content!)).toEqual([
+      'application/x-ndjson',
+    ]);
+    expect(Object.keys(doc.paths['/metrics']!.get!.responses['200']!.content!)).toEqual([
+      'text/plain',
+    ]);
+    expect(doc.paths['/v1/runs/{id}']!.get!.responses).toHaveProperty('401');
+    expect(doc.paths['/v1/runs/{id}']!.get!.responses).toHaveProperty('403');
+    expect(doc.paths['/v1/runs/{id}']!.get!.responses).toHaveProperty('404');
+    expect(doc.paths['/v1/auth/oidc/login']!.get!.responses).toHaveProperty('302');
+    expect(doc.paths['/v1/auth/oidc/login']!.get!.responses).not.toHaveProperty('200');
+    expect(doc.paths['/healthz']!.get!.responses).not.toHaveProperty('401');
+  });
+});

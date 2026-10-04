@@ -22,7 +22,19 @@ components:
       in: header
       name: x-oax-signature
       description: HMAC-SHA256 signature
-  schemas: {}
+  schemas:
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: stable error code
+        message:
+          type: string
+        details: {}
 paths:
   /healthz:
     get:
@@ -144,7 +156,7 @@ paths:
         - ops
       responses:
         "200":
-          description: Default Response
+          description: Prometheus exposition format
           content:
             text/plain:
               schema:
@@ -270,6 +282,18 @@ paths:
                   - roles
                   - permissions
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/auth/login:
     post:
       summary: Log in with local or LDAP credentials
@@ -397,14 +421,30 @@ paths:
       responses:
         "200":
           description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/auth/oidc/login:
     get:
       summary: Start the OIDC authorization code flow (PKCE)
       tags:
         - auth
       responses:
-        "200":
-          description: Default Response
+        "302":
+          description: Redirect to the identity provider (authorization code + PKCE)
+          headers:
+            Location:
+              schema:
+                type: string
   /v1/auth/oidc/callback:
     get:
       summary: OIDC redirect target; returns a session or redirects to the UI
@@ -413,6 +453,12 @@ paths:
       responses:
         "200":
           description: Default Response
+        "302":
+          description: Redirect to `<OAX_UI_URL>/auth/callback#token=…&expiresAt=…` (or 200 JSON without a UI URL)
+          headers:
+            Location:
+              schema:
+                type: string
   /v1/me:
     get:
       summary: Current principal
@@ -513,6 +559,18 @@ paths:
                   - permissions
                   - bindings
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/agents:
     get:
       summary: List agents
@@ -598,6 +656,18 @@ paths:
                   - items
                   - nextCursor
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       summary: Create an agent from an agents.md draft
       tags:
@@ -686,6 +756,18 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -778,6 +860,18 @@ paths:
                   - version
                   - digest
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/agents/{id}:
     get:
       summary: Get an agent with its draft
@@ -846,6 +940,24 @@ paths:
                   - createdAt
                   - draftSource
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/agents/{id}/draft:
     put:
       summary: Replace the draft agents.md
@@ -927,6 +1039,24 @@ paths:
                   - createdAt
                   - draftSource
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/agents/{id}/publish:
     post:
       summary: Publish the draft as an immutable version
@@ -1033,6 +1163,24 @@ paths:
                   - version
                   - created
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -1109,6 +1257,24 @@ paths:
                 required:
                   - items
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/agents/{id}/versions/{version}:
     get:
       summary: Get a published version (source + parsed definition)
@@ -1175,6 +1341,24 @@ paths:
                   - source
                   - definition
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/agents/{id}/runs:
     post:
       summary: Trigger a run manually
@@ -1317,6 +1501,24 @@ paths:
                   - errorMessage
                   - outputs
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/event-sources:
     get:
       summary: List event sources
@@ -1393,6 +1595,18 @@ paths:
                 required:
                   - items
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       summary: Create an event source (secrets by reference)
       tags:
@@ -1503,6 +1717,18 @@ paths:
                   - createdAt
                   - ingestUrl
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -1595,6 +1821,24 @@ paths:
                   - createdAt
                   - ingestUrl
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     patch:
       summary: Update an event source
       tags:
@@ -1701,6 +1945,24 @@ paths:
                   - createdAt
                   - ingestUrl
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/events:
     get:
       summary: List received events (newest first)
@@ -1782,6 +2044,18 @@ paths:
                   - items
                   - nextCursor
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/events/{id}:
     get:
       summary: Get an event
@@ -1836,6 +2110,24 @@ paths:
                   - receivedAt
                   - payload
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/runs:
     get:
       summary: List runs (keyset pagination)
@@ -2012,6 +2304,18 @@ paths:
                   - items
                   - nextCursor
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/runs/{id}:
     get:
       summary: Get a run
@@ -2141,6 +2445,18 @@ paths:
                   - errorMessage
                   - outputs
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
           description: Default Response
           content:
@@ -2268,6 +2584,24 @@ paths:
                   - items
                   - nextCursor
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/runs/{id}/stream:
     get:
       summary: Stream run steps as Server-Sent Events (`step`, `status`, `end`); resumes from Last-Event-ID
@@ -2285,7 +2619,29 @@ paths:
         - bearer: []
       responses:
         "200":
-          description: Default Response
+          description: "Server-Sent Events: `step` (id = step seq), `status`, `end`"
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/runs/{id}/cancel:
     post:
       summary: Cancel a queued or running run
@@ -2415,6 +2771,24 @@ paths:
                   - errorMessage
                   - outputs
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -2553,6 +2927,18 @@ paths:
                   - items
                   - nextCursor
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/approvals/{id}/decision:
     post:
       summary: Approve or reject a pending tool call
@@ -2661,6 +3047,12 @@ paths:
                   - decidedAt
                   - comment
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "403":
           description: Default Response
           content:
@@ -2677,6 +3069,12 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -2779,6 +3177,18 @@ paths:
                   - groupBy
                   - items
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/connections:
     get:
       summary: List connections (MCP servers)
@@ -2831,6 +3241,18 @@ paths:
                 required:
                   - items
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       summary: Create a connection
       tags:
@@ -2898,6 +3320,18 @@ paths:
                   - createdAt
                   - updatedAt
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -2966,6 +3400,24 @@ paths:
                   - createdAt
                   - updatedAt
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     put:
       summary: Replace the config of a connection
       tags:
@@ -3031,6 +3483,24 @@ paths:
                   - createdAt
                   - updatedAt
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     delete:
       summary: Delete a connection
       tags:
@@ -3048,6 +3518,24 @@ paths:
       responses:
         "200":
           description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/policies:
     get:
       summary: List policy bundles
@@ -3104,6 +3592,18 @@ paths:
                 required:
                   - items
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       summary: Create a policy bundle
       tags:
@@ -3191,6 +3691,18 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -3263,6 +3775,24 @@ paths:
                   - version
                   - updatedAt
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     put:
       summary: Update a policy bundle (bumps its version)
       tags:
@@ -3335,6 +3865,24 @@ paths:
                   - version
                   - updatedAt
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/policies/evaluate:
     post:
       summary: Dry-run the policy gate for a tool call
@@ -3405,6 +3953,18 @@ paths:
                   - effect
                   - reasons
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/audit:
     get:
       summary: List audit entries (newest first)
@@ -3512,6 +4072,18 @@ paths:
                   - items
                   - nextCursor
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/audit/verify:
     post:
       summary: Verify the hash chain and signed checkpoints
@@ -3584,6 +4156,18 @@ paths:
                   - headHash
                   - issues
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/audit/export:
     get:
       summary: Export audit entries as NDJSON (oldest first)
@@ -3620,7 +4204,23 @@ paths:
         - bearer: []
       responses:
         "200":
-          description: Default Response
+          description: One audit entry (JSON) per line, oldest first
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/audit/checkpoints:
     get:
       summary: List signed checkpoints
@@ -3664,6 +4264,18 @@ paths:
                 required:
                   - items
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       summary: Sign the current head of the chain now
       tags:
@@ -3698,6 +4310,18 @@ paths:
                   - keyId
                   - signature
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -3787,6 +4411,18 @@ paths:
                 required:
                   - items
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       summary: Create a local user
       tags:
@@ -3886,6 +4522,18 @@ paths:
                   - createdAt
                   - lastLoginAt
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -3999,6 +4647,24 @@ paths:
                   - createdAt
                   - lastLoginAt
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/teams:
     get:
       summary: List teams
@@ -4044,6 +4710,18 @@ paths:
                 required:
                   - items
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       summary: Create a team (optional monthly budget)
       tags:
@@ -4100,6 +4778,18 @@ paths:
                   - monthlyBudgetUsd
                   - createdAt
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -4165,6 +4855,24 @@ paths:
       responses:
         "200":
           description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/tokens:
     get:
       summary: List API tokens (own; `all=true` for admins)
@@ -4227,6 +4935,18 @@ paths:
                 required:
                   - items
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     post:
       summary: Create a scoped, expiring API token
       tags:
@@ -4324,6 +5044,12 @@ paths:
                   - createdAt
                   - token
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "403":
           description: Default Response
           content:
@@ -4357,6 +5083,24 @@ paths:
       responses:
         "200":
           description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/worker/runs/{id}/gate:
     post:
       summary: "Policy gate: decide a tool call before execution"
@@ -4447,6 +5191,18 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/worker/runs/{id}/steps:
     post:
       summary: Record a step (with cost and audit entry)
@@ -4525,6 +5281,24 @@ paths:
       responses:
         "200":
           description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/worker/runs/{id}/approvals:
     post:
       summary: Request a human approval
@@ -4584,6 +5358,24 @@ paths:
                 required:
                   - approvalId
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/worker/runs/{id}/approvals/{approvalId}:
     get:
       summary: Poll an approval
@@ -4624,6 +5416,24 @@ paths:
                 required:
                   - status
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/worker/runs/{id}/status:
     get:
       summary: Cancellation flag of a run
@@ -4652,6 +5462,24 @@ paths:
                 required:
                   - cancelled
                 additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/worker/runs/{id}/complete:
     post:
       summary: Report the final result of a run
@@ -4743,6 +5571,24 @@ paths:
       responses:
         "200":
           description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/ingest/webhook/{sourceId}:
     post:
       summary: Receive a signed webhook (any JSON or CloudEvent)
@@ -4801,6 +5647,18 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
@@ -4875,6 +5733,18 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: Default Response
           content:
