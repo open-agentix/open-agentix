@@ -34,9 +34,10 @@ export const versionDetailDto = (v: AgentVersionRow) => ({
   definition: v.definition as Record<string, unknown>,
 });
 
-export const runDto = (r: RunRow) => ({
+export const runDto = (r: RunRow, agentName: string | null = null) => ({
   id: r.id,
   agentId: r.agentId,
+  agentName,
   agentVersionId: r.agentVersionId,
   teamId: r.teamId,
   eventId: r.eventId,
@@ -59,10 +60,10 @@ export const runDto = (r: RunRow) => ({
 
 export const stepDto = (s: StepRow) => ({
   seq: s.seq,
-  kind: s.kind,
+  kind: s.kind as never,
   agentId: s.agentId,
   name: s.name,
-  status: s.status,
+  status: s.status as never,
   input: s.input ?? null,
   output: s.output ?? null,
   tokensIn: s.tokensIn,
@@ -74,9 +75,10 @@ export const stepDto = (s: StepRow) => ({
   createdAt: iso(s.createdAt),
 });
 
-export const approvalDto = (a: ApprovalRow) => ({
+export const approvalDto = (a: ApprovalRow, pipelineName: string | null = null) => ({
   id: a.id,
   runId: a.runId,
+  pipelineName,
   teamId: a.teamId,
   agentId: a.agentId,
   tool: a.tool,

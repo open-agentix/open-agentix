@@ -16,6 +16,8 @@ import {
   PageQuery,
   RunListQuery,
   RunSchema,
+  RunStatsQuery,
+  RunStatsSchema,
   StepSchema,
   pageOf,
 } from '../schemas.js';
@@ -40,8 +42,45 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
       },
     },
     async (req) => {
-      const r = await runs.list(principalOf(req), req.query, req.query.limit, req.query.cursor);
-      return { items: r.items.map(runDto), nextCursor: r.nextCursor };
+      const q = req.query;
+      const r = await runs.list(
+        principalOf(req),
+        {
+          ...q,
+          from: q.from ? new Date(q.from) : undefined,
+          to: q.to ? new Date(q.to) : undefined,
+        },
+        q.limit,
+        q.cursor,
+      );
+      const names = await runs.agentNames(r.items.map((x) => x.agentId));
+      return {
+        items: r.items.map((x) => runDto(x, names.get(x.agentId) ?? null)),
+        nextCursor: r.nextCursor,
+      };
+    },
+  );
+
+  app.get(
+    '/v1/stats/runs',
+    {
+      config: { access: 'runs:read' },
+      schema: {
+        tags,
+        summary: 'Run counts by status, tokens, cost and average duration (dashboard)',
+        security: sec,
+        querystring: RunStatsQuery,
+        response: { 200: RunStatsSchema },
+      },
+    },
+    async (req) => {
+      const q = req.query;
+      return runs.stats(principalOf(req), {
+        agentId: q.agentId,
+        teamId: q.teamId,
+        from: q.from ? new Date(q.from) : undefined,
+        to: q.to ? new Date(q.to) : undefined,
+      });
     },
   );
 
@@ -199,8 +238,13 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
         req.query.status,
         req.query.limit,
         req.query.cursor,
+        req.query.runId,
       );
-      return { items: r.items.map(approvalDto), nextCursor: r.nextCursor };
+      const names = await runs.pipelineNames(r.items.map((a) => a.runId));
+      return {
+        items: r.items.map((a) => approvalDto(a, names.get(a.runId) ?? null)),
+        nextCursor: r.nextCursor,
+      };
     },
   );
 

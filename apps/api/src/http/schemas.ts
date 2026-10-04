@@ -1,4 +1,4 @@
-import { CLASSIFICATIONS, PERMISSIONS, ROLES, RUN_STATUSES } from '@openagentix/core';
+import { CLASSIFICATIONS, PERMISSIONS, ROLES, RUN_STATUSES, STEP_KINDS } from '@openagentix/core';
 import { z } from 'zod';
 
 /** zod schemas of the public API (source of the generated OpenAPI 3.1 document). */
@@ -30,6 +30,7 @@ export const ValidationResultSchema = z.object({
   name: z.string().nullable(),
   version: z.string().nullable(),
   digest: z.string().nullable(),
+  definition: z.record(z.string(), z.unknown()).nullable().describe('parsed definition when valid'),
 });
 
 export const AgentSchema = z.object({
@@ -63,6 +64,7 @@ export const RunStatusSchema = z.enum(RUN_STATUSES);
 export const RunSchema = z.object({
   id: Id,
   agentId: Id,
+  agentName: z.string().nullable(),
   agentVersionId: Id,
   teamId: Id.nullable(),
   eventId: Id.nullable(),
@@ -86,18 +88,31 @@ export const RunListQuery = PageQuery.extend({
   agentId: Id.optional(),
   status: RunStatusSchema.optional(),
   teamId: Id.optional(),
+  from: z.string().datetime().optional().describe('created at or after (ISO 8601)'),
+  to: z.string().datetime().optional().describe('created before (ISO 8601)'),
+});
+export const RunStatsQuery = RunListQuery.omit({ limit: true, cursor: true, status: true });
+export const RunStatsSchema = z.object({
+  total: z.number().int(),
+  byStatus: z.record(z.string(), z.number().int()),
+  tokensIn: z.number().int(),
+  tokensOut: z.number().int(),
+  costMicros: z.number().int(),
+  costUsd: z.number(),
+  avgDurationMs: z.number().nullable(),
 });
 export const ManualRunBody = z.object({
   data: Json.describe('Event payload (wrapped into a manual CloudEvent) or a full CloudEvent'),
   version: z.string().optional(),
 });
 
+export const STEP_STATUSES = ['ok', 'error', 'denied', 'pending', 'approved', 'rejected'] as const;
 export const StepSchema = z.object({
   seq: z.number().int(),
-  kind: z.string(),
+  kind: z.enum(STEP_KINDS),
   agentId: z.string().nullable(),
   name: z.string(),
-  status: z.string(),
+  status: z.enum(STEP_STATUSES),
   input: Json,
   output: Json,
   tokensIn: z.number().int(),
@@ -112,6 +127,7 @@ export const StepSchema = z.object({
 export const ApprovalSchema = z.object({
   id: Id,
   runId: Id,
+  pipelineName: z.string().nullable().describe('name of the agents.md pipeline of the run'),
   teamId: Id.nullable(),
   agentId: z.string(),
   tool: z.string(),
@@ -127,6 +143,7 @@ export const ApprovalSchema = z.object({
 });
 export const ApprovalQuery = PageQuery.extend({
   status: z.enum(['pending', 'approved', 'rejected', 'timeout']).default('pending'),
+  runId: Id.optional(),
 });
 export const DecisionBody = z.object({
   decision: z.enum(['approve', 'reject']),
@@ -279,6 +296,7 @@ export const CostQuery = z.object({
 });
 export const CostRowSchema = z.object({
   key: z.string().nullable(),
+  label: z.string().nullable().describe('agent name / team slug for agent and team groupings'),
   tokensIn: z.number().int(),
   tokensOut: z.number().int(),
   costMicros: z.number().int(),
@@ -315,6 +333,12 @@ export const TeamSchema = z.object({
   name: z.string(),
   monthlyBudgetUsd: z.number().nullable(),
   createdAt: Iso,
+});
+export const TeamMemberSchema = z.object({
+  userId: Id,
+  email: z.string(),
+  displayName: z.string(),
+  role: z.string(),
 });
 export const TeamCreateBody = z.object({
   slug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),

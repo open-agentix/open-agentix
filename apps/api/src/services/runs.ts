@@ -8,10 +8,10 @@ import {
   type Principal,
   type RunStatus,
 } from '@openagentix/core';
-import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { approvals, costLedger, events, runSteps, runs, teams } from '../db/schema.js';
+import { agents, approvals, costLedger, events, runSteps, runs, teams } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
 import {
   decodeSeqCursor,
@@ -35,6 +35,18 @@ export interface RunFilter {
   agentId?: string | undefined;
   status?: RunStatus | undefined;
   teamId?: string | undefined;
+  from?: Date | undefined;
+  to?: Date | undefined;
+}
+
+export interface RunStats {
+  total: number;
+  byStatus: Record<string, number>;
+  tokensIn: number;
+  tokensOut: number;
+  costMicros: number;
+  costUsd: number;
+  avgDurationMs: number | null;
 }
 
 /** Runs, steps, cancellation and human approvals. */
@@ -169,6 +181,8 @@ export class RunsService {
           filter.agentId ? eq(runs.agentId, filter.agentId) : undefined,
           filter.status ? eq(runs.status, filter.status) : undefined,
           filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
+          filter.from ? gte(runs.createdAt, filter.from) : undefined,
+          filter.to ? lt(runs.createdAt, filter.to) : undefined,
           scope === 'all' ? undefined : inArray(runs.teamId, scope),
           c
             ? or(lt(runs.createdAt, c.t), and(eq(runs.createdAt, c.t), lt(runs.id, c.id)))
@@ -178,6 +192,82 @@ export class RunsService {
       .orderBy(desc(runs.createdAt), desc(runs.id))
       .limit(limit + 1);
     return page(rows, limit, (r) => encodeTimeCursor(r.createdAt, r.id));
+  }
+
+  /** Aggregates for dashboards (same filters and team scoping as the list). */
+  async stats(principal: Principal, filter: Omit<RunFilter, 'status'>): Promise<RunStats> {
+    const scope = visibleTeams(principal, 'runs:read');
+    const empty: RunStats = {
+      total: 0,
+      byStatus: {},
+      tokensIn: 0,
+      tokensOut: 0,
+      costMicros: 0,
+      costUsd: 0,
+      avgDurationMs: null,
+    };
+    if (Array.isArray(scope) && scope.length === 0) return empty;
+    const rows = await this.ctx.db
+      .select({
+        status: runs.status,
+        n: sql<number>`count(*)::int`,
+        tokensIn: sql<number>`coalesce(sum(${runs.tokensIn}), 0)::bigint`,
+        tokensOut: sql<number>`coalesce(sum(${runs.tokensOut}), 0)::bigint`,
+        cost: sql<number>`coalesce(sum(${runs.costMicros}), 0)::bigint`,
+        durMs: sql<
+          number | null
+        >`sum(extract(epoch from (${runs.finishedAt} - ${runs.startedAt})) * 1000)`,
+        durN: sql<number>`count(${runs.finishedAt})::int`,
+      })
+      .from(runs)
+      .where(
+        and(
+          filter.agentId ? eq(runs.agentId, filter.agentId) : undefined,
+          filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
+          filter.from ? gte(runs.createdAt, filter.from) : undefined,
+          filter.to ? lt(runs.createdAt, filter.to) : undefined,
+          scope === 'all' ? undefined : inArray(runs.teamId, scope),
+        ),
+      )
+      .groupBy(runs.status);
+    const out: RunStats = { ...empty, byStatus: {} };
+    let dur = 0;
+    let durN = 0;
+    for (const r of rows) {
+      out.byStatus[r.status] = Number(r.n);
+      out.total += Number(r.n);
+      out.tokensIn += Number(r.tokensIn);
+      out.tokensOut += Number(r.tokensOut);
+      out.costMicros += Number(r.cost);
+      dur += Number(r.durMs ?? 0);
+      durN += Number(r.durN);
+    }
+    out.costUsd = out.costMicros / 1e6;
+    out.avgDurationMs = durN > 0 ? Math.round(dur / durN) : null;
+    return out;
+  }
+
+  /** agent id -> agent name (one query per page). */
+  async agentNames(ids: readonly string[]): Promise<Map<string, string>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Map();
+    const rows = await this.ctx.db
+      .select({ id: agents.id, name: agents.name })
+      .from(agents)
+      .where(inArray(agents.id, unique));
+    return new Map(rows.map((r) => [r.id, r.name]));
+  }
+
+  /** run id -> pipeline (agent) name. */
+  async pipelineNames(runIds: readonly string[]): Promise<Map<string, string>> {
+    const unique = [...new Set(runIds)];
+    if (unique.length === 0) return new Map();
+    const rows = await this.ctx.db
+      .select({ id: runs.id, name: agents.name })
+      .from(runs)
+      .innerJoin(agents, eq(agents.id, runs.agentId))
+      .where(inArray(runs.id, unique));
+    return new Map(rows.map((r) => [r.id, r.name]));
   }
 
   async steps(
@@ -228,7 +318,13 @@ export class RunsService {
 
   // ---------- approvals ----------
 
-  async listApprovals(principal: Principal, status: string, limit: number, cursor?: string) {
+  async listApprovals(
+    principal: Principal,
+    status: string,
+    limit: number,
+    cursor?: string,
+    runId?: string,
+  ) {
     const c = decodeTimeCursor(cursor);
     const scope = visibleTeams(principal, 'runs:read');
     if (Array.isArray(scope) && scope.length === 0) return { items: [], nextCursor: null };
@@ -238,6 +334,7 @@ export class RunsService {
       .where(
         and(
           eq(approvals.status, status),
+          runId ? eq(approvals.runId, runId) : undefined,
           scope === 'all' ? undefined : inArray(approvals.teamId, scope),
           c
             ? or(
