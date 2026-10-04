@@ -140,6 +140,7 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
     },
     async () => ({
       version: VERSION,
+      demo: ctx.config.demo.enabled,
       providers: ctx.config.providers.map((p) => ({
         name: p.name,
         kind: p.kind,

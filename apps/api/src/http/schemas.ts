@@ -395,6 +395,7 @@ export const MeSchema = z.object({
 
 export const SettingsSchema = z.object({
   version: z.string(),
+  demo: z.boolean().describe('public demo mode: simulated provider, read-only, fake data'),
   providers: z.array(
     z.object({ name: z.string(), kind: z.string(), clearance: z.enum(CLASSIFICATIONS).nullable() }),
   ),
