@@ -18,7 +18,10 @@ jobs:
       id-token: write # keyless cosign signing
     strategy:
       matrix:
-        target: [api, worker]
+        include:
+          - { target: api, file: Dockerfile }
+          - { target: worker, file: Dockerfile }
+          - { target: ui, file: apps/ui/Dockerfile }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -39,6 +42,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: true
@@ -79,6 +83,7 @@ jobs:
           digest() { docker buildx imagetools inspect "ghcr.io/open-agentix/open-agentix-$1:${version}" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
           DIGEST_API=$(digest api)
           DIGEST_WORKER=$(digest worker)
+          DIGEST_UI=$(digest ui)
           awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md > notes.md
           {
             echo
@@ -86,6 +91,7 @@ jobs:
             echo
             echo "- \`ghcr.io/open-agentix/open-agentix-api:${version}\` \`${DIGEST_API}\`"
             echo "- \`ghcr.io/open-agentix/open-agentix-worker:${version}\` \`${DIGEST_WORKER}\`"
+            echo "- \`ghcr.io/open-agentix/open-agentix-ui:${version}\` \`${DIGEST_UI}\`"
             echo
             echo "Verify: \`cosign verify ghcr.io/open-agentix/open-agentix-api@${DIGEST_API} --certificate-identity-regexp 'https://github.com/open-agentix/open-agentix/' --certificate-oidc-issuer https://token.actions.githubusercontent.com\`"
           } >> notes.md
