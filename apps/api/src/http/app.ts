@@ -25,6 +25,7 @@ import { LOG_REDACT_PATHS } from '../context.js';
 import { HttpError, forbidden, registerErrorHandler } from '../errors.js';
 import type { Services } from '../services/index.js';
 import { VERSION } from '../version.js';
+import { verifyStreamToken } from '../auth/stream-token.js';
 import { decorateOpenApi } from './openapi-decorate.js';
 import { registerAgentRoutes } from './routes/agents.js';
 import { registerAuditRoutes } from './routes/audit.js';
@@ -42,6 +43,8 @@ export type RouteAccess = Permission | 'authenticated' | 'public' | 'run-token' 
 declare module 'fastify' {
   interface FastifyContextConfig {
     access?: RouteAccess;
+    /** Accept a short-lived stream token in `?access_token=` (EventSource cannot set headers). */
+    streamToken?: boolean;
   }
   interface FastifyRequest {
     principal?: Principal;
@@ -164,6 +167,24 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     const access = req.routeOptions.config?.access;
     if (!access || access === 'public' || access === 'webhook') return;
     const token = bearerOf(req);
+    const query = req.query as { access_token?: string } | undefined;
+    if (!token && req.routeOptions.config?.streamToken && query?.access_token) {
+      const runId = (req.params as { id?: string }).id ?? '';
+      const claims = verifyStreamToken(
+        ctx.config.runToken.secret,
+        query.access_token,
+        runId,
+        ctx.now().getTime(),
+      );
+      req.principal = await deps.services.identity.principalForUser(claims.userId, ['runs:read']);
+      if (
+        access !== 'authenticated' &&
+        access !== 'run-token' &&
+        !hasPermission(req.principal, access)
+      )
+        throw forbidden(`missing permission ${access}`);
+      return;
+    }
     if (access === 'run-token') {
       // Signature and expiry are checked before the body is parsed; the run binding in the handler.
       try {
