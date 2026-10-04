@@ -26,6 +26,8 @@ export interface LocalControlPlaneOptions {
   /** Monthly budget verdict; local runs have no ledger, so the default never blocks. */
   checkBudget?: (runId: string) => BudgetVerdict | Promise<BudgetVerdict>;
   actor?: string;
+  /** Tool classes (`server/tool`) for read-only steps; defaults to the definition's own. */
+  toolAccess?: Readonly<Record<string, 'read' | 'write'>>;
 }
 
 /**
@@ -67,7 +69,7 @@ export class LocalControlPlane implements ControlPlane {
     const decision = evaluateToolCall(call, {
       definition: this.opts.definition,
       agent,
-      toolAccess: (this.opts.definition as PublishedDefinition).toolAccess,
+      toolAccess: this.opts.toolAccess ?? (this.opts.definition as PublishedDefinition).toolAccess,
       bundles: this.opts.policies ?? [],
       callCounts: counts,
     });

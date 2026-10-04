@@ -100,3 +100,13 @@ export const McpServerConfigSchema = z
   });
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 export type McpServerConfigInput = z.input<typeof McpServerConfigSchema>;
+
+/** `server/tool` -> class for every declared tool of the given connections (policy gate input). */
+export function toolAccessOfConfigs(
+  configs: readonly Pick<McpServerConfig, 'name' | 'tools'>[],
+): Record<string, 'read' | 'write'> {
+  const out: Record<string, 'read' | 'write'> = {};
+  for (const c of configs)
+    for (const [tool, v] of Object.entries(c.tools)) out[`${c.name}/${tool}`] = v.access;
+  return out;
+}

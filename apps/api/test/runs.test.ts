@@ -1,5 +1,6 @@
 import { generateAuditKeyPair, type OaxError } from '@openagentix/core';
 import {
+  DEMO_TOOL_ACCESS,
   McpServerConfigSchema,
   ToolGateway,
   demoServerFactories,
@@ -597,6 +598,15 @@ describe('typed handovers over the worker contract', () => {
     'owner: team-security',
     'owner: team-ops',
   );
+  beforeAll(async () => {
+    // Read-only steps need classified tools: declare the demo servers like an integrator would.
+    for (const [name, tools] of Object.entries(DEMO_TOOL_ACCESS))
+      await n.req({
+        method: 'POST',
+        url: '/v1/connections',
+        payload: { name, config: { transport: 'in-memory', tools } },
+      });
+  });
   const publish = async (source: string): Promise<string> => {
     const id = (await n.req({ method: 'POST', url: '/v1/agents', payload: { source } })).json()
       .id as string;
