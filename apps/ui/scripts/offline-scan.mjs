@@ -3,7 +3,14 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
 
 /** Absolute URLs that are plain strings, never requested (XML namespaces, docs, placeholders). */
-const ALLOWED_HOSTS = [/^www\.w3\.org$/, /^react\.dev$/, /\.internal$/, /\.vpce\.amazonaws\.com$/];
+const ALLOWED_HOSTS = [
+  /^www\.w3\.org$/,
+  /^react\.dev$/,
+  /\.internal$/,
+  /\.vpce\.amazonaws\.com$/,
+  // Documented placeholder shown as an input example in the model connection form.
+  /^example\.openai\.azure\.com$/,
+];
 
 const URL_RE = /https?:\/\/([a-z0-9][a-z0-9.-]*\.[a-z]{2,})(?::\d+)?/gi;
 
@@ -15,11 +22,11 @@ function files(dir) {
 }
 
 /** Returns a list of violations (empty = offline-clean). */
-export function scanDist(dir) {
+export function scanDist(dir, extensions = ['.html', '.css', '.js', '.svg', '.json']) {
   const violations = [];
   for (const file of files(dir)) {
     const ext = extname(file);
-    if (!['.html', '.css', '.js', '.svg', '.json'].includes(ext)) continue;
+    if (!extensions.includes(ext)) continue;
     const text = readFileSync(file, 'utf8');
     if (ext === '.html') {
       for (const m of text.matchAll(/(?:src|href)\s*=\s*["']((?:https?:)?\/\/[^"']+)/gi)) {
