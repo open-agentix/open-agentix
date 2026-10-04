@@ -9,6 +9,9 @@ import type { PreparedRun, RunResult, Runner, RunnerContext } from './types.js';
  */
 
 const egress = z.array(z.string()).default([]);
+const selector = z
+  .record(z.string(), z.string())
+  .refine((r) => Object.keys(r).length > 0, 'selector must not be empty');
 
 export const ContainerRunnerConfigSchema = z.strictObject({
   engine: z.enum(['docker', 'podman']).default('docker'),
@@ -25,12 +28,20 @@ export const ContainerRunnerConfigSchema = z.strictObject({
 export const KubernetesJobRunnerConfigSchema = z.strictObject({
   namespace: z.string().default('openagentix-runs'),
   /** ServiceAccount of the Job; on EKS annotate it for IRSA (`eks.amazonaws.com/role-arn`). */
-  serviceAccountName: z.string().default('openagentix-worker'),
+  serviceAccountName: z.string().default('openagentix-run-node'),
+  /** Worker identity; the step ServiceAccount and namespace must differ from it (refused otherwise). */
+  workerServiceAccount: z.string().default('openagentix-worker'),
+  workerNamespace: z.string().optional(),
   registry: z.string().default('ghcr.io/open-agentix'),
   ttlSecondsAfterFinished: z.number().int().nonnegative().default(600),
   activeDeadlineSeconds: z.number().int().positive().default(3600),
-  /** NetworkPolicy egress allowlist (CIDRs or DNS names via an egress gateway). */
+  /**
+   * Operator ceiling for step egress: a step's `runtime.egress` CIDRs must each lie inside one of
+   * these (intersection, never union). Empty = steps get no extra egress. Prefixes >= /8 (v4) or
+   * >= /32 (v6) only.
+   */
   egress,
+  /** Per-step ceiling (and default floor ratio): step limits are clamped into [32Mi/50m, this]. */
   resources: z
     .strictObject({ cpu: z.string().default('500m'), memory: z.string().default('512Mi') })
     .default({ cpu: '500m', memory: '512Mi' }),
@@ -42,10 +53,14 @@ export const KubernetesJobRunnerConfigSchema = z.strictObject({
    * injected by the EKS pod identity webhook independently of this flag).
    */
   automountServiceAccountToken: z.boolean().default(false),
-  /** Toolbox names (`toolbox-<name>` images) a step may use; empty = any toolbox under `registry`. */
+  /** Toolbox names (`toolbox-<name>` images) a step may use. Empty = NO toolbox image (fail closed). */
   toolboxAllowlist: z.array(z.string()).default([]),
-  /** Non-toolbox images (repository basename, e.g. `openagentix-worker`) allowed as run node. */
+  /** Non-toolbox images (exact repository path below `registry`, e.g. `openagentix-worker`). */
   runNodeImages: z.array(z.string()).default([]),
+  /** Always-denied destinations (`except` blocks) in addition to the built-in link-local/IMDS/loopback: cluster, pod and service CIDRs. */
+  denyCidrs: z.array(z.string()).default([]),
+  /** Air-gapped mode (OAX_AIRGAPPED): a step may not declare any egress. */
+  airgapped: z.boolean().default(false),
   /** UID/GID the step container runs as; must match the image's non-root user. */
   runAsUser: z.number().int().min(1).default(65532),
   /** Allow DNS to kube-dns in `kube-system` (needed to resolve the control node). */
@@ -53,8 +68,10 @@ export const KubernetesJobRunnerConfigSchema = z.strictObject({
   /** Where the control node lives; the only cluster-internal destination a step may reach. */
   controlPlane: z
     .strictObject({
-      podSelector: z.record(z.string(), z.string()).optional(),
-      namespaceSelector: z.record(z.string(), z.string()).optional(),
+      /** Non-empty when set (an empty selector would match every pod). */
+      podSelector: selector.optional(),
+      /** Non-empty when set; prefer `kubernetes.io/metadata.name: <ns>`. */
+      namespaceSelector: selector.optional(),
       cidrs: z.array(z.string()).default([]),
       ports: z.array(z.number().int().min(1).max(65535)).default([443]),
     })

@@ -45,12 +45,16 @@ export interface KubeClient {
   /** JSON merge patch (`application/merge-patch+json`). */
   patchJob(namespace: string, name: string, patch: Record<string, unknown>): Promise<void>;
   getJob(namespace: string, name: string): Promise<JobStatus | null>;
-  /** Idempotent: a missing Job is not an error. Deletes the Pods in the background. */
-  deleteJob(namespace: string, name: string): Promise<void>;
-  createSecret(namespace: string, secret: KubeObject): Promise<void>;
-  deleteSecret(namespace: string, name: string): Promise<void>;
-  createNetworkPolicy(namespace: string, policy: KubeObject): Promise<void>;
-  deleteNetworkPolicy(namespace: string, name: string): Promise<void>;
+  /**
+   * Idempotent: a missing Job is not an error. Uses Foreground propagation, so the Job object
+   * only disappears after its Pods are gone. With `uid` the delete carries a uid precondition and
+   * never touches another object that happens to have the same name.
+   */
+  deleteJob(namespace: string, name: string, uid?: string): Promise<void>;
+  createSecret(namespace: string, secret: KubeObject): Promise<{ uid: string }>;
+  deleteSecret(namespace: string, name: string, uid?: string): Promise<void>;
+  createNetworkPolicy(namespace: string, policy: KubeObject): Promise<{ uid: string }>;
+  deleteNetworkPolicy(namespace: string, name: string, uid?: string): Promise<void>;
 }
 
 export interface RbacRule {
@@ -85,11 +89,20 @@ export interface InClusterOptions {
   token: string | (() => string);
   /** PEM CA bundle of the API server. */
   ca?: string;
+  /** Plain http would send the bearer token in clear text; only for local tests/`kubectl proxy`. */
+  allowInsecure?: boolean;
   /** Test seam; defaults to node:http(s). */
   transport?: KubeTransport;
 }
 
 const SA_DIR = '/var/run/secrets/kubernetes.io/serviceaccount';
+
+function uidOf(res: HttpResponse): string {
+  const uid = (res.body as { metadata?: { uid?: string } } | null)?.metadata?.uid;
+  if (!uid)
+    throw new OaxError('kubernetes_api_error', 'Kubernetes API returned an object without uid');
+  return uid;
+}
 
 function failure(op: string, res: HttpResponse): OaxError {
   const msg =
@@ -108,6 +121,9 @@ export class InClusterKubeClient implements KubeClient {
   private readonly token: () => string;
 
   constructor(opts: InClusterOptions) {
+    if (!opts.transport && !opts.allowInsecure && !opts.apiServer.startsWith('https://')) {
+      throw new OaxError('config_invalid', 'the Kubernetes API server URL must use https');
+    }
     this.token = typeof opts.token === 'function' ? opts.token : () => opts.token as string;
     this.transport = opts.transport ?? defaultTransport(opts.apiServer, this.token, opts.ca);
   }
@@ -196,49 +212,54 @@ export class InClusterKubeClient implements KubeClient {
     };
   }
 
-  async deleteJob(namespace: string, name: string): Promise<void> {
+  async deleteJob(namespace: string, name: string, uid?: string): Promise<void> {
     await this.remove(
       `/apis/batch/v1/namespaces/${this.ns(namespace)}/jobs/${encodeURIComponent(name)}`,
       'delete Job',
-      { propagationPolicy: 'Background' },
+      { propagationPolicy: 'Foreground', ...(uid ? { preconditions: { uid } } : {}) },
     );
   }
 
-  async createSecret(namespace: string, secret: KubeObject): Promise<void> {
+  async createSecret(namespace: string, secret: KubeObject): Promise<{ uid: string }> {
     const res = await this.transport({
       method: 'POST',
       path: `/api/v1/namespaces/${this.ns(namespace)}/secrets`,
       body: secret,
     });
     if (res.status !== 201 && res.status !== 200) throw failure('create Secret', res);
+    return { uid: uidOf(res) };
   }
 
-  async deleteSecret(namespace: string, name: string): Promise<void> {
+  async deleteSecret(namespace: string, name: string, uid?: string): Promise<void> {
     await this.remove(
       `/api/v1/namespaces/${this.ns(namespace)}/secrets/${encodeURIComponent(name)}`,
       'delete Secret',
+      uid ? { preconditions: { uid } } : undefined,
     );
   }
 
-  async createNetworkPolicy(namespace: string, policy: KubeObject): Promise<void> {
+  async createNetworkPolicy(namespace: string, policy: KubeObject): Promise<{ uid: string }> {
     const res = await this.transport({
       method: 'POST',
       path: `/apis/networking.k8s.io/v1/namespaces/${this.ns(namespace)}/networkpolicies`,
       body: policy,
     });
     if (res.status !== 201 && res.status !== 200) throw failure('create NetworkPolicy', res);
+    return { uid: uidOf(res) };
   }
 
-  async deleteNetworkPolicy(namespace: string, name: string): Promise<void> {
+  async deleteNetworkPolicy(namespace: string, name: string, uid?: string): Promise<void> {
     await this.remove(
       `/apis/networking.k8s.io/v1/namespaces/${this.ns(namespace)}/networkpolicies/${encodeURIComponent(name)}`,
       'delete NetworkPolicy',
+      uid ? { preconditions: { uid } } : undefined,
     );
   }
 
   private async remove(path: string, op: string, body?: unknown): Promise<void> {
     const res = await this.transport({ method: 'DELETE', path, ...(body ? { body } : {}) });
-    if (res.status === 404) return;
+    // 404: already gone. 409: the uid precondition failed, i.e. the object is not ours any more.
+    if (res.status === 404 || (res.status === 409 && body)) return;
     if (res.status < 200 || res.status >= 300) throw failure(op, res);
   }
 }

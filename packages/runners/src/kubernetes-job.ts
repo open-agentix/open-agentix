@@ -1,5 +1,6 @@
 import { NotImplementedError, OaxError, type RunnerKind } from '@openagentix/core';
 import type { z } from 'zod';
+import { ALWAYS_DENIED_CIDRS, cidrContains, minPrefix, parseCidr, type Cidr } from './cidr.js';
 import type {
   IsolatingRunner,
   RunNodeExit,
@@ -23,34 +24,28 @@ export const LABEL_RUN = 'openagentix.io/run-id';
 export const LABEL_NODE = 'openagentix.io/node-id';
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IMAGE_DIGEST = /@sha256:[0-9a-f]{64}$/;
-const CIDR4 = /^(\d{1,3}\.){3}\d{1,3}\/(\d|[12]\d|3[0-2])$/;
-const CIDR6 = /^[0-9a-fA-F:]+:[0-9a-fA-F:]*\/(\d{1,2}|1[01]\d|12[0-8])$/;
+const MIN_CPU = 0.05;
+const MIN_MEMORY_MB = 32;
 
 export function isCidr(value: string): boolean {
-  if (CIDR4.test(value)) {
-    return value
-      .split('/')[0]!
-      .split('.')
-      .every((o) => Number(o) <= 255);
-  }
-  return CIDR6.test(value);
+  return parseCidr(value) !== undefined;
 }
 
 function bad(message: string): OaxError {
   return new OaxError('runner_invalid', message);
 }
 
+/** The node id must be a UUID (never slugified, so distinct nodes can never share a name). */
+export function normalizeNodeId(nodeId: string): string {
+  if (!UUID.test(nodeId)) throw bad('nodeId must be a UUID');
+  return nodeId.toLowerCase();
+}
+
 /** Kubernetes object name for the Job, Secret and NetworkPolicy of a node. */
 export function nodeObjectName(nodeId: string): string {
-  const slug = nodeId
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48)
-    .replace(/-+$/g, '');
-  if (!slug) throw bad('nodeId does not yield a valid Kubernetes name');
-  return `oax-step-${slug}`;
+  return `oax-step-${normalizeNodeId(nodeId)}`;
 }
 
 function labelValue(name: string, v: string): string {
@@ -59,39 +54,40 @@ function labelValue(name: string, v: string): string {
 }
 
 /**
- * Checks the run node image: under the configured registry, pinned by digest, and allowlisted.
- * Toolbox images are `toolbox-<name>` and are checked against `toolboxAllowlist` (empty = any);
- * any other image must be listed in `runNodeImages`.
+ * Checks the run node image: under the configured registry, pinned by digest, and allowlisted by
+ * its exact repository path. `toolbox-<name>` images must be in `toolboxAllowlist` (an empty list
+ * allows none); any other image must be listed verbatim in `runNodeImages`. Case-insensitive.
  */
 export function validateImage(image: string, cfg: KubernetesJobRunnerConfig): void {
-  const registry = cfg.registry.replace(/\/+$/, '');
-  if (!image.startsWith(`${registry}/`)) {
+  const registry = cfg.registry.replace(/\/+$/, '').toLowerCase();
+  const lower = image.toLowerCase();
+  if (!lower.startsWith(`${registry}/`)) {
     throw bad(`image "${image}" is not under the configured registry "${registry}"`);
   }
-  if (!IMAGE_DIGEST.test(image))
+  if (!IMAGE_DIGEST.test(lower))
     throw bad(`image "${image}" must be pinned by digest (@sha256:...)`);
-  const repo = image.slice(0, image.indexOf('@'));
-  if (/\s/.test(image) || repo.includes(':', registry.length)) {
-    throw bad(`image "${image}" must not carry a tag`);
+  const repo = lower.slice(0, lower.indexOf('@'));
+  const rel = repo.slice(registry.length + 1);
+  if (/\s/.test(image) || rel.includes(':') || !/^[a-z0-9][a-z0-9._/-]*$/.test(rel)) {
+    throw bad(`image "${image}" must be a plain repository path without a tag`);
   }
-  const base = repo
-    .slice(registry.length + 1)
-    .split('/')
-    .pop()!;
-  if (base.startsWith('toolbox-')) {
-    const name = base.slice('toolbox-'.length);
-    const allowed = cfg.toolboxAllowlist.map((t) => t.replace(/\+/g, '-'));
-    if (allowed.length > 0 && !allowed.includes(name)) {
-      throw bad(`toolbox "${name}" is not in the toolbox allowlist`);
-    }
-  } else if (!cfg.runNodeImages.includes(base)) {
-    throw bad(`image "${base}" is not an allowed run node image`);
+  if (/^toolbox-[a-z0-9][a-z0-9-]*$/.test(rel)) {
+    const name = rel.slice('toolbox-'.length);
+    const allowed = cfg.toolboxAllowlist.map((t) => t.toLowerCase().replace(/\+/g, '-'));
+    if (!allowed.includes(name)) throw bad(`toolbox "${name}" is not in the toolbox allowlist`);
+  } else if (!cfg.runNodeImages.map((i) => i.toLowerCase()).includes(rel)) {
+    throw bad(`image "${rel}" is not an allowed run node image`);
   }
 }
 
+export interface EgressCidr {
+  cidr: string;
+  /** Always-denied ranges inside `cidr` (IMDS, link-local, loopback, cluster CIDRs). */
+  except: string[];
+}
+
 export interface NetworkPolicyPlan {
-  /** CIDRs opened for the step (cluster-wide `egress` plus the step's CIDR entries). */
-  cidrs: string[];
+  cidrs: EgressCidr[];
   /**
    * Host names cannot be expressed by a Kubernetes NetworkPolicy. They are NOT opened (fail
    * closed); they are handed to the node as `OAX_EGRESS_ALLOW` for an egress gateway/proxy.
@@ -99,17 +95,53 @@ export interface NetworkPolicyPlan {
   hosts: string[];
 }
 
-export function planEgress(stepEgress: string[], clusterEgress: string[]): NetworkPolicyPlan {
-  const cidrs = new Set<string>();
+function checkedCidr(raw: string, what: string): Cidr {
+  const c = parseCidr(raw);
+  if (!c) throw bad(`${what} "${raw}" is not a valid CIDR`);
+  if (c.bits < minPrefix(c.version)) {
+    throw bad(`${what} "${raw}" is too broad (minimum prefix /${minPrefix(c.version)})`);
+  }
+  return c;
+}
+
+/**
+ * Effective step egress. The operator list (`cfg.egress`) is an UPPER BOUND: every CIDR a step
+ * declares must lie inside one operator CIDR (the step can only narrow, never widen), must not be
+ * broader than /8 (v4) or /32 (v6) and must not be inside an always-denied range; denied ranges
+ * contained in an allowed CIDR are punched out with `except`. In air-gapped mode a step may not
+ * declare any egress.
+ */
+export function planEgress(
+  stepEgress: string[],
+  cfg: KubernetesJobRunnerConfig,
+): NetworkPolicyPlan {
+  const entries = stepEgress.map((e) => e.trim()).filter(Boolean);
+  if (entries.length > 0 && cfg.airgapped) {
+    throw bad('air-gapped mode: steps must not declare egress');
+  }
+  const ceiling = cfg.egress.map((e) => checkedCidr(e, 'operator egress entry'));
+  const denied = [...ALWAYS_DENIED_CIDRS, ...cfg.denyCidrs].map((d) => {
+    const c = parseCidr(d);
+    if (!c) throw bad(`deny CIDR "${d}" is not a valid CIDR`);
+    return c;
+  });
+  const cidrs = new Map<string, EgressCidr>();
   const hosts = new Set<string>();
-  for (const raw of [...clusterEgress, ...stepEgress]) {
-    const e = raw.trim();
-    if (!e) continue;
+  for (const e of entries) {
     if (e.includes('/') || /^[0-9.]+$/.test(e) || e.includes(':')) {
-      if (!isCidr(e)) throw bad(`egress entry "${e}" is not a valid CIDR`);
-      const mask = Number(e.split('/')[1]);
-      if (mask === 0) throw bad(`egress entry "${e}" would open all destinations`);
-      cidrs.add(e);
+      const c = checkedCidr(e, 'egress entry');
+      if (!ceiling.some((o) => cidrContains(o, c))) {
+        throw bad(`egress entry "${e}" is outside the operator egress allowlist`);
+      }
+      if (denied.some((d) => cidrContains(d, c))) {
+        throw bad(`egress entry "${e}" is inside an always-denied range`);
+      }
+      cidrs.set(e, {
+        cidr: e,
+        except: denied
+          .filter((d) => d.version === c.version && cidrContains(c, d))
+          .map((d) => d.text),
+      });
     } else {
       if (!/^(\*\.)?[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/i.test(e)) {
         throw bad(`egress entry "${e}" is neither a CIDR nor a host name`);
@@ -117,7 +149,53 @@ export function planEgress(stepEgress: string[], clusterEgress: string[]): Netwo
       hosts.add(e.toLowerCase());
     }
   }
-  return { cidrs: [...cidrs].sort(), hosts: [...hosts].sort() };
+  return {
+    cidrs: [...cidrs.values()].sort((a, b) => a.cidr.localeCompare(b.cidr)),
+    hosts: [...hosts].sort(),
+  };
+}
+
+/** Parses a Kubernetes cpu quantity (`500m`, `2`) into cores. */
+export function parseCpu(q: string): number {
+  const m = /^(\d+(?:\.\d+)?)(m?)$/.exec(q.trim());
+  if (!m) throw bad(`invalid cpu quantity "${q}"`);
+  return m[2] ? Number(m[1]) / 1000 : Number(m[1]);
+}
+
+/** Parses a Kubernetes memory quantity (`512Mi`, `1Gi`, `256M`) into MiB. */
+export function parseMemoryMb(q: string): number {
+  const m = /^(\d+(?:\.\d+)?)(Ki|Mi|Gi|K|M|G)?$/.exec(q.trim());
+  if (!m) throw bad(`invalid memory quantity "${q}"`);
+  const mult: Record<string, number> = {
+    '': 1 / (1024 * 1024),
+    Ki: 1 / 1024,
+    Mi: 1,
+    Gi: 1024,
+    K: 1000 / (1024 * 1024),
+    M: 1e6 / (1024 * 1024),
+    G: 1e9 / (1024 * 1024),
+  };
+  return Number(m[1]) * mult[m[2] ?? '']!;
+}
+
+/** Step limits clamped into [floor, operator ceiling] (`resources`); never zero or unbounded. */
+export function effectiveResources(
+  limits: RunNodeSpec['limits'],
+  cfg: KubernetesJobRunnerConfig,
+): { cpu: string; memory: string } {
+  if (
+    ![limits.cpus, limits.memoryMb, limits.timeoutSeconds].every((n) => Number.isFinite(n) && n > 0)
+  ) {
+    throw bad('run node limits must be positive finite numbers');
+  }
+  const maxCpu = parseCpu(cfg.resources.cpu);
+  const maxMem = Math.floor(parseMemoryMb(cfg.resources.memory));
+  const cpu = Math.min(Math.max(limits.cpus, Math.min(MIN_CPU, maxCpu)), maxCpu);
+  const mem = Math.min(
+    Math.max(Math.ceil(limits.memoryMb), Math.min(MIN_MEMORY_MB, maxMem)),
+    maxMem,
+  );
+  return { cpu: `${Math.max(1, Math.round(cpu * 1000))}m`, memory: `${mem}Mi` };
 }
 
 function selectorPeer(
@@ -136,7 +214,7 @@ function commonLabels(spec: RunNodeSpec): Record<string, string> {
     [LABEL_APP]: APP_NAME,
     'app.kubernetes.io/managed-by': 'openagentix',
     [LABEL_RUN]: labelValue('runId', spec.runId),
-    [LABEL_NODE]: labelValue('nodeId', spec.nodeId),
+    [LABEL_NODE]: normalizeNodeId(spec.nodeId),
   };
 }
 
@@ -153,7 +231,7 @@ export function buildSecret(spec: RunNodeSpec, namespace: string): KubeObject {
 }
 
 export function buildNetworkPolicy(spec: RunNodeSpec, cfg: KubernetesJobRunnerConfig): KubeObject {
-  const plan = planEgress(spec.egress, cfg.egress);
+  const plan = planEgress(spec.egress, cfg);
   const egress: Record<string, unknown>[] = [];
   if (cfg.dnsEgress) {
     egress.push({
@@ -174,13 +252,16 @@ export function buildNetworkPolicy(spec: RunNodeSpec, cfg: KubernetesJobRunnerCo
   const peer = selectorPeer(cp.podSelector, cp.namespaceSelector);
   if (peer) cpTo.push(peer);
   for (const c of cp.cidrs) {
-    if (!isCidr(c) || Number(c.split('/')[1]) === 0) throw bad(`invalid control plane CIDR "${c}"`);
+    const pc = parseCidr(c);
+    if (!pc || pc.bits === 0) throw bad(`invalid control plane CIDR "${c}"`);
     cpTo.push({ ipBlock: { cidr: c } });
   }
   if (cpTo.length > 0) {
     egress.push({ to: cpTo, ports: cp.ports.map((port) => ({ protocol: 'TCP', port })) });
   }
-  for (const cidr of plan.cidrs) egress.push({ to: [{ ipBlock: { cidr } }] });
+  for (const { cidr, except } of plan.cidrs) {
+    egress.push({ to: [{ ipBlock: { cidr, ...(except.length > 0 ? { except } : {}) } }] });
+  }
   return {
     apiVersion: 'networking.k8s.io/v1',
     kind: 'NetworkPolicy',
@@ -190,7 +271,7 @@ export function buildNetworkPolicy(spec: RunNodeSpec, cfg: KubernetesJobRunnerCo
       labels: commonLabels(spec),
     },
     spec: {
-      podSelector: { matchLabels: { [LABEL_NODE]: spec.nodeId } },
+      podSelector: { matchLabels: { [LABEL_NODE]: normalizeNodeId(spec.nodeId) } },
       policyTypes: ['Ingress', 'Egress'],
       // No ingress rule at all: nothing can connect to a step Pod.
       ingress: [],
@@ -203,15 +284,12 @@ export function buildJob(spec: RunNodeSpec, cfg: KubernetesJobRunnerConfig): Kub
   validateImage(spec.image, cfg);
   if (spec.steps.length === 0) throw bad('a run node needs at least one step');
   const l = spec.limits;
-  if (!(l.cpus > 0) || !(l.memoryMb > 0) || !(l.timeoutSeconds > 0)) {
-    throw bad('run node limits must be positive');
-  }
-  if (!/^https?:\/\/[^\s]+$/.test(spec.controlUrl)) throw bad('controlUrl must be an http(s) URL');
+  const res = effectiveResources(l, cfg);
+  if (!/^https:\/\/[^\s]+$/.test(spec.controlUrl)) throw bad('controlUrl must be an https URL');
   const name = nodeObjectName(spec.nodeId);
   const labels = commonLabels(spec);
-  const plan = planEgress(spec.egress, cfg.egress);
-  const cpu = String(Number(spec.limits.cpus.toFixed(3)));
-  const memory = `${Math.ceil(l.memoryMb)}Mi`;
+  const plan = planEgress(spec.egress, cfg);
+  const { cpu, memory } = res;
   const deadline = Math.min(cfg.activeDeadlineSeconds, Math.ceil(l.timeoutSeconds));
   return {
     apiVersion: 'batch/v1',
@@ -259,7 +337,7 @@ export function buildJob(spec: RunNodeSpec, cfg: KubernetesJobRunnerConfig): Kub
               env: [
                 { name: 'OAX_CONTROL_URL', value: spec.controlUrl },
                 { name: 'OAX_RUN_ID', value: spec.runId },
-                { name: 'OAX_NODE_ID', value: spec.nodeId },
+                { name: 'OAX_NODE_ID', value: normalizeNodeId(spec.nodeId) },
                 { name: 'OAX_STEP_IDS', value: spec.steps.join(',') },
                 { name: 'OAX_RUN_TOKEN_FILE', value: RUN_TOKEN_FILE },
                 { name: 'OAX_EGRESS_ALLOW', value: plan.hosts.join(',') },
@@ -300,6 +378,8 @@ export interface KubernetesJobRunnerOptions {
   config?: KubernetesJobRunnerConfigInput;
   /** Job status poll interval; the API server is never watched, only polled. */
   pollMs?: number;
+  /** How long stop() waits for the Pods to be gone before it gives up (default 60 s). */
+  cleanupTimeoutMs?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Receives non-fatal findings, e.g. egress host names that a NetworkPolicy cannot enforce. */
   warn?: (message: string) => void;
@@ -322,7 +402,10 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Runs one run node per step as a Kubernetes Job (ADR 0008 3.5). Per step it creates, in the run
  * namespace only: a suspended Job, a NetworkPolicy (deny all ingress, egress allowlist) and a
  * Secret with the run token only (both owner-referenced to the Job), then unsuspends the Job.
- * Everything is deleted when the node stops.
+ * Everything this call created (and nothing else) is deleted when the node stops.
+ *
+ * Prerequisites: a CNI that enforces NetworkPolicy and a namespace-wide default-deny policy
+ * (docs/examples/kubernetes-job-runner-rbac.yaml) so that per-step policies are purely additive.
  *
  * INTEGRATION POINTS (W1-3a): the orchestrator's `dispatchStep` seam calls `startNode`; session
  * creation/revocation, the step-scoped run token and the `runnode.*` audit entries live there.
@@ -332,13 +415,21 @@ export class KubernetesJobRunner implements IsolatingRunner {
   readonly config: KubernetesJobRunnerConfig;
   private readonly client: KubeClient;
   private readonly pollMs: number;
+  private readonly cleanupPolls: number;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly warn: (message: string) => void;
 
   constructor(opts: KubernetesJobRunnerOptions) {
     this.config = KubernetesJobRunnerConfigSchema.parse(opts.config ?? {});
+    if (this.config.serviceAccountName === this.config.workerServiceAccount) {
+      throw bad('the step ServiceAccount must differ from the worker ServiceAccount');
+    }
+    if (this.config.workerNamespace && this.config.namespace === this.config.workerNamespace) {
+      throw bad('the run namespace must differ from the worker namespace');
+    }
     this.client = opts.client;
     this.pollMs = opts.pollMs ?? 2000;
+    this.cleanupPolls = Math.max(1, Math.ceil((opts.cleanupTimeoutMs ?? 60_000) / this.pollMs));
     this.sleep = opts.sleep ?? defaultSleep;
     this.warn = opts.warn ?? (() => undefined);
   }
@@ -357,31 +448,42 @@ export class KubernetesJobRunner implements IsolatingRunner {
     const job = buildJob(spec, this.config);
     const policy = buildNetworkPolicy(spec, this.config);
     const secret = buildSecret(spec, ns);
-    const plan = planEgress(spec.egress, this.config.egress);
+    const plan = planEgress(spec.egress, this.config);
     if (plan.hosts.length > 0) {
       this.warn(
         `egress host names are not enforced by a NetworkPolicy (${plan.hosts.join(', ')}); use an egress gateway`,
       );
     }
     const name = job.metadata.name;
-    const handle = new JobHandle(this.client, ns, name, spec.nodeId, this.pollMs, this.sleep);
+    const handle = new JobHandle(
+      this.client,
+      ns,
+      name,
+      normalizeNodeId(spec.nodeId),
+      this.pollMs,
+      this.cleanupPolls,
+      this.sleep,
+    );
+    // A failed createJob (e.g. 409 for an existing name) created nothing: nothing is deleted.
+    const { uid } = await this.client.createJob(ns, job);
+    handle.created.job = uid;
     try {
-      const { uid } = await this.client.createJob(ns, job);
       const owner: OwnerReference = {
         apiVersion: 'batch/v1',
         kind: 'Job',
         name,
         uid,
         controller: true,
-        blockOwnerDeletion: true,
+        // No blockOwnerDeletion: it would need `jobs/finalizers` RBAC under
+        // OwnerReferencesPermissionEnforcement.
       };
       policy.metadata.ownerReferences = [owner];
       secret.metadata.ownerReferences = [owner];
-      await this.client.createNetworkPolicy(ns, policy);
-      await this.client.createSecret(ns, secret);
+      handle.created.policy = (await this.client.createNetworkPolicy(ns, policy)).uid;
+      handle.created.secret = (await this.client.createSecret(ns, secret)).uid;
       await this.client.patchJob(ns, name, { spec: { suspend: false } });
     } catch (err) {
-      // Never leave a half-created node behind.
+      // Never leave a half-created node behind (only what this call created is removed).
       await handle.stop('cancelled').catch(() => undefined);
       throw err;
     }
@@ -390,6 +492,8 @@ export class KubernetesJobRunner implements IsolatingRunner {
 }
 
 class JobHandle implements RunNodeHandle {
+  /** uids of exactly the objects this invocation created. */
+  readonly created: { job?: string; secret?: string; policy?: string } = {};
   private stopped: Promise<void> | undefined;
 
   constructor(
@@ -398,6 +502,7 @@ class JobHandle implements RunNodeHandle {
     private readonly name: string,
     readonly nodeId: string,
     private readonly pollMs: number,
+    private readonly cleanupPolls: number,
     private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>,
   ) {}
 
@@ -405,7 +510,8 @@ class JobHandle implements RunNodeHandle {
     for (;;) {
       if (signal?.aborted) return { exitCode: null, reason: 'cancelled' };
       const st = await this.client.getJob(this.ns, this.name);
-      if (!st) return { exitCode: null, reason: 'job_missing' };
+      // A different uid means the Job was replaced by someone else: not our node any more.
+      if (!st || st.uid !== this.created.job) return { exitCode: null, reason: 'job_missing' };
       if (st.condition?.type === 'Complete' || (st.succeeded > 0 && !st.condition)) {
         return { exitCode: 0 };
       }
@@ -426,26 +532,55 @@ class JobHandle implements RunNodeHandle {
     return this.stopped;
   }
 
+  private async podsGone(): Promise<boolean> {
+    for (let i = 0; i < this.cleanupPolls; i++) {
+      const st = await this.client.getJob(this.ns, this.name);
+      if (!st || st.uid !== this.created.job) return true; // Foreground delete finished
+      await this.sleep(this.pollMs);
+    }
+    return false;
+  }
+
+  /**
+   * Order matters: the Job goes first with Foreground propagation (its Pods are gone before it
+   * disappears), the NetworkPolicy last and only once the Pods are gone, so a terminating Pod is
+   * never without its policy. If the Pods do not vanish in time the policy is left in place for
+   * the owner garbage collection and the error is reported.
+   */
   private async cleanup(): Promise<void> {
-    // Delete the Job first (stops the Pod), then the explicit objects; try all, report once.
-    const errors: unknown[] = [];
-    for (const op of [
-      () => this.client.deleteJob(this.ns, this.name),
-      () => this.client.deleteSecret(this.ns, this.name),
-      () => this.client.deleteNetworkPolicy(this.ns, this.name),
-    ]) {
+    const errors: string[] = [];
+    const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    let jobDeleted = this.created.job === undefined;
+    if (this.created.job !== undefined) {
       try {
-        await op();
+        await this.client.deleteJob(this.ns, this.name, this.created.job);
+        jobDeleted = true;
       } catch (e) {
-        errors.push(e);
+        errors.push(msg(e));
+      }
+    }
+    if (this.created.secret !== undefined) {
+      try {
+        await this.client.deleteSecret(this.ns, this.name, this.created.secret);
+      } catch (e) {
+        errors.push(msg(e));
+      }
+    }
+    if (this.created.policy !== undefined) {
+      if (jobDeleted && (this.created.job === undefined || (await this.podsGone()))) {
+        try {
+          await this.client.deleteNetworkPolicy(this.ns, this.name, this.created.policy);
+        } catch (e) {
+          errors.push(msg(e));
+        }
+      } else {
+        errors.push('NetworkPolicy kept: the Pods are not confirmed gone (left to owner GC)');
       }
     }
     if (errors.length > 0) {
       throw new OaxError(
         'runner_cleanup_failed',
-        `cleanup of run node ${this.nodeId} failed: ${errors
-          .map((e) => (e instanceof Error ? e.message : String(e)))
-          .join('; ')}`,
+        `cleanup of run node ${this.nodeId} failed: ${errors.join('; ')}`,
       );
     }
   }
