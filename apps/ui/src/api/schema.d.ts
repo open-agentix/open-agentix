@@ -1365,6 +1365,16 @@ export interface paths {
                             definition: {
                                 [key: string]: unknown;
                             };
+                            /** @description profile grants as expanded at publish (also inside `definition`) */
+                            expansion?: {
+                                agentId: string;
+                                server: string;
+                                profile: string;
+                                tools: string[];
+                                connectionVersion: string;
+                            }[];
+                            /** @description SHA-256 over the expanded grants and the tool classification at publish */
+                            expansionDigest?: string;
                         };
                     };
                 };
@@ -6969,6 +6979,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        McpToolAccess: {
+            /** @enum {string} */
+            access: "read" | "write";
+        };
+        /** @description Tool classes and named profiles inside the config of an `mcp` connection (alongside transport, url, ...). A tool that is not declared counts as `write`; profile members must be declared tools; a profile named `read` may only hold read tools. */
+        McpConnectionAccess: {
+            tools?: {
+                [key: string]: components["schemas"]["McpToolAccess"];
+            };
+            /** @description profile name (slug) -> declared tool names */
+            profiles?: {
+                [key: string]: string[];
+            };
+        };
         Error: {
             /** @description stable error code */
             error: string;

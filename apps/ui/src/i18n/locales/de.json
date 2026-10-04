@@ -216,6 +216,12 @@
       "approval": "Menschliche Freigabe",
       "approvalRequired": "Erforderlich",
       "approvalNone": "Nein",
+      "access": "Zugriff des Schritts",
+      "accessValues": {
+        "read-only": "Schreibgeschützt (keine Schreib-Werkzeuge)",
+        "write": "Schreiben"
+      },
+      "via": "(aus Profil {profile})",
       "noTools": "Dieser Agent hat keine Tools."
     },
     "publish": {
@@ -521,6 +527,27 @@
     "scope": "Wer darf es nutzen",
     "scopeHint": "Plattform-Verbindungen stehen jedem Mandanten zur Verfügung und werden vom Plattformbetreiber verwaltet.",
     "scopes": { "platform": "Plattform", "tenant": "Mandant", "team": "Team", "agent": "Agent" },
+    "profiles": {
+      "title": "Werkzeugzugriff und Profile",
+      "hint": "Stufe jedes Werkzeug als Lesen oder Schreiben ein (nicht deklarierte Werkzeuge gelten als Schreiben) und fasse sie zu benannten Profilen wie read oder write zusammen. Agenten erhalten ein Profil (zum Beispiel jira:read); schreibgeschützte Schritte bekommen nie ein Schreib-Werkzeug.",
+      "summary": {
+        "one": "{count} Werkzeug eingestuft, Profile",
+        "other": "{count} Werkzeuge eingestuft, Profile"
+      },
+      "tools": "Eingestufte Werkzeuge",
+      "tool": "Werkzeug",
+      "access": "Zugriff",
+      "read": "Lesen",
+      "write": "Schreiben",
+      "accessOf": "Zugriff von {tool}",
+      "newTool": "Name des neuen Werkzeugs",
+      "addTool": "Werkzeug hinzufügen",
+      "removeTool": "Werkzeug {tool} entfernen",
+      "newProfile": "Name des neuen Profils",
+      "addProfile": "Profil hinzufügen",
+      "removeProfile": "Profil {profile} entfernen",
+      "problems": "Diese Profileinträge werden abgelehnt: {items}"
+    },
     "modelsCount": { "one": "{count} Modell mit Preis", "other": "{count} Modelle mit Preisen" },
     "proposeHint": "Bring your own key: Der Schlüssel wird per Geheimnisname referenziert. Preise werden aus dem eingefrorenen Modellkatalog vorgeschlagen und lassen sich pro Modell überschreiben.",
     "propose": "Modelle und Preise vorschlagen",
