@@ -8,7 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- **agents.md data flow fields (parsed and validated, no runtime effect yet)**: `schemas`,
+- **Typed handovers and conditional steps (W1-1)**: `output.schema` / `input.schema` are validated at
+  runtime (ajv 8, strict, JSON Schema subset, size and depth limits) with `onInvalid: fail|retry`,
+  `input.from` gives a step only the JSON it names, and `when` is evaluated by a strictly typed,
+  non-`eval` evaluator (false skips the step, an error fails the run). New run steps `condition` and
+  `handover` (status `skipped`), audit entries `step.skipped`, `condition.error`, `handover.invalid`,
+  `handover.retry` (never with the offending values), error codes `handover_invalid`,
+  `handover_missing`, `condition_error`. `examples/ticket-triage.agents.md`, `docs/pipelines.md`.
+- **agents.md data flow fields (parsed and validated; `schemas`, `input`, `output` and `when` now run, see above)**: `schemas`,
   `agents[].input`/`output` (JSON Schema subset with size, depth and safe-regex limits), `when`
   (bounded expression grammar, parsed at publish), `access`, `tools[].profile`, `credentials`
   (secret references per step) and `runtime` per step. Existing files parse unchanged.
