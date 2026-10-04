@@ -16,7 +16,15 @@ import { newToken, parseToken, secretMatches } from '../auth/tokens.js';
 import { cached } from '../cache.js';
 import { mapGroupsToBindings, type MappedBinding } from '../config.js';
 import type { AppContext } from '../context.js';
-import { agents, apiTokens, oidcStates, teamMembers, teams, users } from '../db/schema.js';
+import {
+  agentRoleBindings,
+  agents,
+  apiTokens,
+  oidcStates,
+  teamMembers,
+  teams,
+  users,
+} from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
 
@@ -106,7 +114,65 @@ export class IdentityService {
       .map((role) => ({ role, teamId: null }));
     for (const m of memberships)
       if (isRole(m.role)) bindings.push({ role: m.role, teamId: m.teamId });
+    const agentBindings = await this.ctx.db
+      .select({
+        role: agentRoleBindings.role,
+        agentId: agentRoleBindings.agentId,
+        teamId: agents.teamId,
+      })
+      .from(agentRoleBindings)
+      .innerJoin(agents, eq(agents.id, agentRoleBindings.agentId))
+      .where(eq(agentRoleBindings.userId, user.id));
+    for (const b of agentBindings)
+      if (isRole(b.role)) bindings.push({ role: b.role, teamId: b.teamId, agentId: b.agentId });
     return bindings;
+  }
+
+  /** Users with a role on exactly one agent (resource-scoped bindings). */
+  async agentMembers(
+    agentId: string,
+  ): Promise<{ userId: string; email: string; displayName: string; role: string }[]> {
+    return this.ctx.db
+      .select({
+        userId: users.id,
+        email: users.email,
+        displayName: users.displayName,
+        role: agentRoleBindings.role,
+      })
+      .from(agentRoleBindings)
+      .innerJoin(users, eq(users.id, agentRoleBindings.userId))
+      .where(eq(agentRoleBindings.agentId, agentId))
+      .orderBy(users.email);
+  }
+
+  async setAgentMembers(
+    actor: string,
+    agentId: string,
+    members: { userId: string; role: Role }[],
+  ): Promise<void> {
+    const previous = await this.ctx.db
+      .select({ userId: agentRoleBindings.userId })
+      .from(agentRoleBindings)
+      .where(eq(agentRoleBindings.agentId, agentId));
+    await this.ctx.db.transaction(async (tx) => {
+      await tx.delete(agentRoleBindings).where(eq(agentRoleBindings.agentId, agentId));
+      if (members.length)
+        await tx
+          .insert(agentRoleBindings)
+          .values(members.map((m) => ({ agentId, userId: m.userId, role: m.role })))
+          .onConflictDoNothing();
+    });
+    await Promise.all(
+      [...new Set([...previous.map((p) => p.userId), ...members.map((m) => m.userId)])].map((u) =>
+        this.invalidateUserTokens(u),
+      ),
+    );
+    await this.audit.append({
+      actor,
+      action: 'agent.members.set',
+      target: agentId,
+      payload: { members },
+    });
   }
 
   /** Principal of a user (e.g. for stream tokens), optionally restricted to scopes. */
