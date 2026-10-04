@@ -27,7 +27,7 @@ part of the platform instead of part of the prompt:
   and pauses or kills it.
 - **Revision-safe audit trail** – SHA-256 hash chain with Ed25519-signed checkpoints and a
   `verify` endpoint; the table is append-only.
-- **Costs** – tokens and tool calls priced per step, budgets per agent and team with a hard stop.
+- **Costs** – tokens and tool calls priced per step, budgets per agent, use case, team and tenant with a hard stop and alerts.
 - **Bring your own model and key** – Claude API, AWS Bedrock (VPC endpoints, proxies, IRSA), OpenAI,
   Azure OpenAI, OpenRouter, vLLM, Ollama, LM Studio or any OpenAI-compatible server, as connections
   with keys as secret references scoped to platform, tenant, team or agent. Models and prices come

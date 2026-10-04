@@ -7163,11 +7163,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /v1/demo/scenarios:
+  /v1/budgets:
     get:
-      summary: "Demo mode: fixed scenarios, limits and the live-model budget"
+      summary: Monthly budgets of the tenant with spend and alerts raised this month
       tags:
-        - demo
+        - budgets
       security:
         - bearer: []
       responses:
@@ -7178,69 +7178,135 @@ paths:
               schema:
                 type: object
                 properties:
-                  llm:
+                  month:
+                    type: string
+                    description: first day of the current month
+                  tenant:
                     type: object
                     properties:
-                      mode:
+                      scope:
                         type: string
                         enum:
-                          - simulated
-                          - claude-code
-                      model:
+                          - tenant
+                          - use_case
+                          - team
+                      key:
+                        description: tenant slug, use case label or team slug
                         type:
                           - string
                           - "null"
-                      dailyBudgetUsd:
+                      limitUsd:
+                        description: monthly limit, null when no budget is set
+                        type:
+                          - number
+                          - "null"
+                      spentUsd:
                         type: number
-                      spentTodayUsd:
-                        type: number
-                      remainingUsd:
-                        type: number
+                        description: spend of the current UTC month
+                      percentUsed:
+                        type:
+                          - number
+                          - "null"
+                      alerts:
+                        type: array
+                        items:
+                          type: number
+                        description: alert thresholds (50, 80, 100) raised this month
                     required:
-                      - mode
-                      - model
-                      - dailyBudgetUsd
-                      - spentTodayUsd
-                      - remainingUsd
+                      - scope
+                      - key
+                      - limitUsd
+                      - spentUsd
+                      - percentUsed
+                      - alerts
                     additionalProperties: false
-                  rateLimit:
-                    type: object
-                    properties:
-                      runs:
-                        type: integer
-                        minimum: -9007199254740991
-                        maximum: 9007199254740991
-                      windowSeconds:
-                        type: integer
-                        minimum: -9007199254740991
-                        maximum: 9007199254740991
-                    required:
-                      - runs
-                      - windowSeconds
-                    additionalProperties: false
-                  scenarios:
+                  useCases:
                     type: array
                     items:
                       type: object
                       properties:
-                        id:
+                        scope:
                           type: string
-                        title:
-                          type: string
-                        description:
-                          type: string
-                        agent:
-                          type: string
+                          enum:
+                            - tenant
+                            - use_case
+                            - team
+                        key:
+                          description: tenant slug, use case label or team slug
+                          type:
+                            - string
+                            - "null"
+                        limitUsd:
+                          description: monthly limit, null when no budget is set
+                          type:
+                            - number
+                            - "null"
+                        spentUsd:
+                          type: number
+                          description: spend of the current UTC month
+                        percentUsed:
+                          type:
+                            - number
+                            - "null"
+                        alerts:
+                          type: array
+                          items:
+                            type: number
+                          description: alert thresholds (50, 80, 100) raised this month
                       required:
-                        - id
-                        - title
-                        - description
-                        - agent
+                        - scope
+                        - key
+                        - limitUsd
+                        - spentUsd
+                        - percentUsed
+                        - alerts
+                      additionalProperties: false
+                  teams:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        scope:
+                          type: string
+                          enum:
+                            - tenant
+                            - use_case
+                            - team
+                        key:
+                          description: tenant slug, use case label or team slug
+                          type:
+                            - string
+                            - "null"
+                        limitUsd:
+                          description: monthly limit, null when no budget is set
+                          type:
+                            - number
+                            - "null"
+                        spentUsd:
+                          type: number
+                          description: spend of the current UTC month
+                        percentUsed:
+                          type:
+                            - number
+                            - "null"
+                        alerts:
+                          type: array
+                          items:
+                            type: number
+                          description: alert thresholds (50, 80, 100) raised this month
+                      required:
+                        - scope
+                        - key
+                        - limitUsd
+                        - spentUsd
+                        - percentUsed
+                        - alerts
                       additionalProperties: false
                 required:
-                  - llm
-                  - rateLimit
-                  - scenarios
+                  - month
+                  - tenant
+                  - useCases
+                  - teams
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -7254,50 +7320,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "404":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                  details: {}
-                required:
-                  - error
-                  - message
-                additionalProperties: false
-  /v1/demo/scenarios/{scenario}/run:
-    post:
-      summary: "Demo mode: run a fixed scenario (no free-text input; rate limited per visitor)"
+  /v1/budgets/use-cases/{useCase}:
+    put:
+      summary: Set the monthly budget of a use case (hard stop, alerts at 50, 80 and 100 %)
       tags:
-        - demo
+        - budgets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                monthlyBudgetUsd:
+                  type: number
+                  minimum: 0
+                  maximum: 1000000000
+              required:
+                - monthlyBudgetUsd
       parameters:
         - schema:
             type: string
             minLength: 1
-            maxLength: 64
+            maxLength: 200
           in: path
-          name: scenario
+          name: useCase
           required: true
       security:
         - bearer: []
       responses:
-        "202":
+        "204":
           description: Default Response
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  runId:
-                    type: string
-                required:
-                  - runId
-                additionalProperties: false
         "401":
           description: Missing or invalid credentials
           content:
@@ -7305,12 +7358,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "403":
-          description: Insufficient permissions
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "404":
           description: Default Response
           content:
             application/json:
@@ -7326,7 +7373,42 @@ paths:
                   - error
                   - message
                 additionalProperties: false
-        "429":
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Remove the monthly budget of a use case
+      tags:
+        - budgets
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          in: path
+          name: useCase
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "204":
+          description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
           description: Default Response
           content:
             application/json:
@@ -7702,6 +7784,79 @@ paths:
                     type: boolean
                 required:
                   - cancelled
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/worker/runs/{id}/budget:
+    get:
+      summary: Monthly tenant, use case and team budgets of a run (hard stop)
+      tags:
+        - worker
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - runToken: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  blocked:
+                    type: boolean
+                  breaches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        scope:
+                          type: string
+                          enum:
+                            - tenant
+                            - use_case
+                            - team
+                        key:
+                          type: string
+                        limitMicros:
+                          type: number
+                        spentMicros:
+                          type: number
+                        message:
+                          type: string
+                      required:
+                        - scope
+                        - key
+                        - limitMicros
+                        - spentMicros
+                        - message
+                      additionalProperties: false
+                required:
+                  - blocked
+                  - breaches
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials

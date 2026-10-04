@@ -35,6 +35,8 @@ export type Approval = ResponseOf<'/v1/approvals', 'get'>['items'][number];
 export type EventSource = ResponseOf<'/v1/event-sources', 'get'>['items'][number];
 export type EventSourceInput = BodyOf<'/v1/event-sources', 'post'>;
 export type IngestedEvent = ResponseOf<'/v1/events', 'get'>['items'][number];
+export type BudgetOverview = ResponseOf<'/v1/budgets', 'get'>;
+export type BudgetLine = BudgetOverview['tenant'];
 export type CostRow = ResponseOf<'/v1/costs/summary', 'get'>['items'][number];
 export type CostGroupBy = NonNullable<
   NonNullable<paths['/v1/costs/summary']['get']['parameters']['query']>['groupBy']
