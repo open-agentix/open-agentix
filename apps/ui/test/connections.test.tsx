@@ -8,6 +8,19 @@ import { server } from './server';
 import { asViewer, expectNoA11yViolations, heading, renderApp } from './utils';
 
 describe('connections', () => {
+  it('rejects pasted API keys in reference fields', () => {
+    expect(findInlineSecrets({ kind: 'openai', apiKeySecret: 'sk-live-123' })).toEqual([
+      'apiKeySecret',
+    ]);
+    expect(findInlineSecrets({ kind: 'openai', apiKeySecret: 'OPENAI_API_KEY' })).toEqual([]);
+  });
+
+  it('finds secret references of model connections', () => {
+    expect(
+      secretReferences({ kind: 'bedrock', accessKeyIdSecret: 'A', secretAccessKeySecret: 'B' }),
+    ).toEqual(['A', 'B']);
+  });
+
   it('lists MCP servers with secret references and is accessible', async () => {
     await renderApp('/connections');
     await heading('Connections');
@@ -45,7 +58,40 @@ describe('connections', () => {
     expect(body).toEqual({
       name: 'cve-db',
       kind: 'mcp',
+      scope: 'tenant',
       config: { url: 'https://x.internal', envSecrets: { TOKEN: 'CVE_TOKEN' } },
+    });
+  });
+
+  it('creates a model connection with proposed prices (bring your own key)', async () => {
+    let body: { name?: string; kind?: string; config?: { models?: { id: string }[] } } = {};
+    server.use(
+      http.post(api('/v1/connections'), async ({ request }) => {
+        body = (await request.json()) as typeof body;
+        return HttpResponse.json(
+          { ...f.connections[0]!, name: 'claude', kind: 'model' },
+          { status: 201 },
+        );
+      }),
+    );
+    const { user } = await renderApp('/connections');
+    await heading('Connections');
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    const dialog = await screen.findByRole('dialog', { name: 'New connection' });
+    await user.selectOptions(within(dialog).getByLabelText('Type'), 'model');
+    expect(within(dialog).getByLabelText('Provider')).toHaveValue('anthropic');
+    await user.type(within(dialog).getByLabelText(/^name/i), 'claude');
+    await user.click(within(dialog).getByRole('button', { name: 'Propose models and prices' }));
+    expect(await within(dialog).findByText('claude-sonnet-5-5')).toBeInTheDocument();
+    expect(within(dialog).getByText('$2')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Add' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Connection claude saved.')).toBeInTheDocument();
+    expect(body).toMatchObject({ name: 'claude', kind: 'model', scope: 'tenant' });
+    expect(body.config).toMatchObject({
+      kind: 'anthropic',
+      apiKeySecret: 'ANTHROPIC_API_KEY',
+      models: [{ id: 'claude-sonnet-5-5' }],
     });
   });
 

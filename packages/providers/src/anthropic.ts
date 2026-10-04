@@ -46,6 +46,8 @@ export class AnthropicProvider implements ModelProvider {
   readonly kind = 'anthropic' as const;
   readonly name: string;
   readonly clearance: Classification;
+  readonly family = 'anthropic';
+  readonly catalogProvider = 'anthropic';
   private readonly client: AnthropicMessagesClient;
 
   constructor(private readonly opts: AnthropicOptions) {

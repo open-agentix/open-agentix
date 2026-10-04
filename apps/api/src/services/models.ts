@@ -1,0 +1,158 @@
+import {
+  CATALOG_PROVIDER_FOR,
+  ProviderRegistry,
+  ProviderSettingsSchema,
+  UnavailableProvider,
+  createProvider,
+  modelPriceEntries,
+  withName,
+  type ModelEntry,
+  type ProviderConfig,
+  type ProviderKind,
+} from '@openagentix/providers';
+import { CostModel, type TenantActor } from '@openagentix/core';
+import type { AppContext } from '../context.js';
+import { notFound } from '../errors.js';
+import type { AuditService } from './audit.js';
+import type { CatalogService, ConnectionRow, RunScope } from './catalog.js';
+
+const ADAPTER_KIND: Record<string, ProviderKind> = {
+  anthropic: 'anthropic',
+  bedrock: 'bedrock',
+  ollama: 'ollama',
+  simulated: 'simulated',
+};
+
+/** Settings of a stored `model` connection bound to the connection name. */
+export function connectionProviderConfig(
+  row: Pick<ConnectionRow, 'name' | 'config'>,
+): ProviderConfig {
+  return withName(ProviderSettingsSchema.parse(row.config), row.name);
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  costMicros: number;
+  error: string | null;
+}
+
+/**
+ * Resolves the model providers a run may use: platform providers from `OAX_PROVIDERS` plus the
+ * `model` connections of the run's tenant (most specific scope wins: agent, team, tenant, platform).
+ * Keys are secret references resolved here, per run, never stored or logged.
+ */
+export class ModelsService {
+  private platform: Promise<ProviderRegistry> | null = null;
+
+  constructor(
+    private readonly ctx: AppContext,
+    private readonly catalog: CatalogService,
+    private readonly audit: AuditService,
+  ) {}
+
+  /** Providers of `OAX_PROVIDERS` (built once, secrets resolved at first use). */
+  platformRegistry(): Promise<ProviderRegistry> {
+    this.platform ??= ProviderRegistry.create(this.ctx.config.providers, {
+      secrets: this.ctx.secrets,
+      fetchImpl: this.ctx.fetchImpl,
+    });
+    return this.platform;
+  }
+
+  private async build(rows: readonly ConnectionRow[]): Promise<ProviderRegistry> {
+    const providers = [];
+    for (const row of rows) {
+      const cfg = connectionProviderConfig(row);
+      try {
+        providers.push(
+          await createProvider(cfg, { secrets: this.ctx.secrets, fetchImpl: this.ctx.fetchImpl }),
+        );
+      } catch (e) {
+        this.ctx.logger.warn(
+          { connection: row.name, err: (e as Error).message },
+          'model connection unavailable',
+        );
+        providers.push(
+          new UnavailableProvider(
+            row.name,
+            ADAPTER_KIND[cfg.kind] ?? 'openai',
+            (e as Error).message,
+          ),
+        );
+      }
+    }
+    return ProviderRegistry.of(providers);
+  }
+
+  async registryFor(scope: RunScope): Promise<ProviderRegistry> {
+    const rows = await this.catalog.connectionsForRun('model', scope);
+    return (await this.platformRegistry()).with(await this.build(rows));
+  }
+
+  /** Base prices (catalog + `OAX_PRICE_TABLE`) plus the price overrides of the run's connections. */
+  async costModelFor(scope: RunScope): Promise<CostModel> {
+    const rows = await this.catalog.connectionsForRun('model', scope);
+    const extra = rows.flatMap((r) =>
+      modelPriceEntries(r.name, (r.config as { models?: ModelEntry[] }).models),
+    );
+    return extra.length
+      ? new CostModel([...this.ctx.costModel.entries(), ...extra], false)
+      : this.ctx.costModel;
+  }
+
+  /** Catalog provider id a connection maps to (for proposals and price lookups). */
+  catalogProviderOf(row: Pick<ConnectionRow, 'config'>): string | null {
+    const cfg = ProviderSettingsSchema.parse(row.config);
+    return cfg.catalogProvider ?? CATALOG_PROVIDER_FOR[cfg.kind];
+  }
+
+  /** One tiny completion to prove that the endpoint, the key reference and the model work. */
+  async test(actor: TenantActor, id: string, model: string): Promise<ConnectionTestResult> {
+    const row = await this.catalog.getConnection(actor, id);
+    if (row.kind !== 'model') throw notFound('model connection');
+    const started = Date.now();
+    let result: ConnectionTestResult;
+    try {
+      const provider = await createProvider(connectionProviderConfig(row), {
+        secrets: this.ctx.secrets,
+        fetchImpl: this.ctx.fetchImpl,
+      });
+      const res = await provider.complete({
+        model,
+        messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
+        maxTokens: 16,
+      });
+      const cost = (
+        await this.costModelFor({ tenantId: row.tenantId, teamId: null, agentId: '' })
+      ).modelCall(row.name, model, res.usage);
+      result = {
+        ok: true,
+        latencyMs: Date.now() - started,
+        inputTokens: res.usage.inputTokens,
+        outputTokens: res.usage.outputTokens,
+        costMicros: cost.totalMicros,
+        error: null,
+      };
+    } catch (e) {
+      result = {
+        ok: false,
+        latencyMs: Date.now() - started,
+        inputTokens: 0,
+        outputTokens: 0,
+        costMicros: 0,
+        error: (e as Error).message.slice(0, 300),
+      };
+    }
+    await this.audit.append({
+      actor: actor.userId,
+      tenantId: actor.tenantId,
+      action: 'connection.tested',
+      target: id,
+      payload: { model, ok: result.ok, error: result.error },
+    });
+    return result;
+  }
+}

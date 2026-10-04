@@ -17,6 +17,16 @@ export interface OpenAICompatibleOptions {
   headers?: Record<string, string> | undefined;
   /** Extra query string, e.g. `api-version=2024-10-21` for Azure OpenAI. */
   query?: string | undefined;
+  /**
+   * Azure OpenAI: requests go to `<baseUrl>/openai/deployments/<deployment>/chat/completions`.
+   * Without a fixed `deployment` the agent's `model` is the deployment name.
+   */
+  azure?: { apiVersion: string; deployment?: string | undefined } | undefined;
+  /** Newer OpenAI models reject `max_tokens`; most compatible servers still expect it. */
+  maxTokensParam?: 'max_tokens' | 'max_completion_tokens' | undefined;
+  /** Registry metadata (provider family and catalog id for price lookups). */
+  family?: string | undefined;
+  catalogProvider?: string | undefined;
   clearance?: Classification;
   proxyUrl?: string | undefined;
   timeoutMs?: number | undefined;
@@ -51,11 +61,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
   readonly kind = 'openai' as const;
   readonly name: string;
   readonly clearance: Classification;
+  readonly family: string;
+  readonly catalogProvider: string | undefined;
   private readonly fetch: FetchLike;
 
   constructor(private readonly opts: OpenAICompatibleOptions) {
     this.name = opts.name;
     this.clearance = opts.clearance ?? 'internal';
+    this.family = opts.family ?? 'openai';
+    this.catalogProvider = opts.catalogProvider;
     this.fetch = createGuardedFetch({
       allowedOrigins: [opts.baseUrl],
       proxyUrl: opts.proxyUrl,
@@ -91,13 +105,24 @@ export class OpenAICompatibleProvider implements ModelProvider {
         function: { name: t.name, description: t.description ?? '', parameters: t.inputSchema },
       }));
     }
-    if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
+    if (req.maxTokens !== undefined) body[this.opts.maxTokensParam ?? 'max_tokens'] = req.maxTokens;
     if (req.temperature !== undefined) body.temperature = req.temperature;
     return body;
   }
 
   async complete(req: ChatRequest, opts: CompleteOptions = {}): Promise<ChatResponse> {
-    const url = `${this.opts.baseUrl.replace(/\/$/, '')}/chat/completions${this.opts.query ? `?${this.opts.query}` : ''}`;
+    const base = this.opts.baseUrl.replace(/\/$/, '');
+    const azure = this.opts.azure;
+    const path = azure
+      ? `/openai/deployments/${encodeURIComponent(azure.deployment ?? req.model)}/chat/completions`
+      : '/chat/completions';
+    const query = [
+      azure ? `api-version=${encodeURIComponent(azure.apiVersion)}` : '',
+      this.opts.query ?? '',
+    ]
+      .filter(Boolean)
+      .join('&');
+    const url = `${base}${path}${query ? `?${query}` : ''}`;
     const headers: Record<string, string> = { ...this.opts.headers };
     if (this.opts.apiKey) headers.authorization = `Bearer ${this.opts.apiKey}`;
     const res = await postJson<OpenAIResponse>(this.fetch, url, this.toRequestBody(req), {
