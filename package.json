@@ -17,7 +17,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:ui": "pnpm --filter @openagentix/ui test:coverage"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
