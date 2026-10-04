@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Claude Code harness**: the adapter now runs `claude -p` (stream-json, `--tools ""`, `dontAsk`,
+  explicit allowlist, `--restricted`) in a temporary directory with a minimal environment. The policy
+  gate is served as a loopback MCP bridge (`serveGateHttp`) so every tool call is policy-checked,
+  approved, audited and costed; agent limits map to `--max-turns`/`--max-budget-usd` and are enforced
+  by the platform. `oax run --harness claude-code`, opt-in real-run test (`OAX_TEST_CLAUDE=1`),
+  `docs/harnesses.md`, `docs/verification/claude-code-harness.md`. Other harnesses stay documented stubs.
 - **Air-gapped mode** (`OAX_AIRGAPPED`, `OAX_AIRGAPPED_ALLOW`): fail-closed start-up self-check,
   process-wide egress policy and network guard (TCP, DNS, UDP), vendored model catalog only,
   `airgapped` state on `/readyz`, tests proving no outbound traffic, and `docs/airgapped.md`.
