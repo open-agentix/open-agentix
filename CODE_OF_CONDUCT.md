@@ -60,8 +60,8 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-github@openagentix.si (the maintainers listed in
-[GOVERNANCE.md](GOVERNANCE.md)).
+info@openagentix.si or through a private security advisory on this repository
+(the maintainers listed in [GOVERNANCE.md](GOVERNANCE.md)).
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
