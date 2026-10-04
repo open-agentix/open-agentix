@@ -29,6 +29,11 @@ export const tenants = pgTable('tenants', {
   slug: text('slug').notNull().unique(),
   name: text('name').notNull(),
   monthlyBudgetMicros: micros('monthly_budget_micros'),
+  /**
+   * Secret reference globs the credential broker may hand out for this tenant's runs (ADR 0008).
+   * Empty = no secret at all (fail closed); the default tenant is migrated to `["*"]`.
+   */
+  secretRefs: jsonb('secret_refs').$type<string[]>().notNull().default([]),
   createdAt: created(),
 });
 
@@ -268,6 +273,8 @@ export const runSteps = pgTable(
     durationMs: integer('duration_ms'),
     provider: text('provider'),
     model: text('model'),
+    /** `node:<id>` for steps reported by an untrusted run node; null for the trusted worker. */
+    reportedBy: text('reported_by'),
     createdAt: created(),
   },
   (t) => [
@@ -300,6 +307,43 @@ export const approvals = pgTable(
   (t) => [
     index('approvals_status_idx').on(t.status, t.requestedAt.desc(), t.id.desc()),
     index('approvals_run_idx').on(t.runId),
+  ],
+);
+
+/**
+ * One row per isolated run node session (ADR 0008, section 3.3): the unit the credential broker
+ * and every worker API call are scoped to. A revoked or expired session kills its run token at
+ * once, long before the token's own expiry.
+ */
+export const runNodeSessions = pgTable(
+  'run_node_sessions',
+  {
+    id: uuid('id').primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => runs.id),
+    tenantId: tenant(),
+    /** Token worker id of the node. */
+    nodeId: text('node_id').notNull(),
+    /** The worker that holds the run's lease and created the session; must still hold it. */
+    orchestratorId: text('orchestrator_id').notNull(),
+    /** Opaque handles of dynamic credentials, recalled on revoke (any control node instance). */
+    credentialHandles: jsonb('credential_handles').$type<string[]>().notNull().default([]),
+    steps: jsonb('steps').$type<string[]>().notNull(),
+    expiresAt: ts('expires_at').notNull(),
+    revokedAt: ts('revoked_at'),
+    revokeReason: text('revoke_reason'),
+    /** Agent ids whose credentials were already issued (once per step and session). */
+    credentialsIssued: jsonb('credentials_issued').$type<string[]>().notNull().default([]),
+    /** What the node may fetch: its step's spec, input, output schema (no other step's data). */
+    handover: jsonb('handover'),
+    /** The result the node posted; the orchestrator validates it again. */
+    result: jsonb('result'),
+    createdAt: created(),
+  },
+  (t) => [
+    uniqueIndex('run_node_sessions_node_uq').on(t.nodeId),
+    index('run_node_sessions_run_idx').on(t.runId),
   ],
 );
 

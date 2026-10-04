@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
+  hasTenantPrefix,
   type AccessCatalog,
   evaluateToolCall,
   expandProfiles,
@@ -132,6 +133,15 @@ export class CatalogService {
     );
   }
 
+  /** Names of the MCP servers of a run that come from PLATFORM-scope connections. */
+  async platformMcpNames(scope: RunScope): Promise<Set<string>> {
+    return new Set(
+      (await this.connectionsForRun('mcp', scope))
+        .filter((c) => c.scope === 'platform')
+        .map((c) => c.name),
+    );
+  }
+
   /** MCP server configs for a run (secrets stay references). */
   async mcpConfigs(scope: RunScope): Promise<McpServerConfig[]> {
     return (await this.connectionsForRun('mcp', scope)).map((c) =>
@@ -242,7 +252,8 @@ export class CatalogService {
     if (scope !== 'platform' && actor.tenantId !== DEFAULT_TENANT_ID && refs.length) {
       const [t] = await this.ctx.db.select().from(tenants).where(eq(tenants.id, actor.tenantId));
       const prefix = `${t?.slug ?? actor.tenantId}.`;
-      const foreign = refs.filter((r) => !r.startsWith(prefix));
+      // Canonical comparison: the resolver maps `a.b-c` and `a-b.c` to the same secret.
+      const foreign = refs.filter((r) => !hasTenantPrefix(t?.slug ?? actor.tenantId, r));
       if (foreign.length)
         throw new HttpError(
           400,

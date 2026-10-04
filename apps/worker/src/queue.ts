@@ -16,6 +16,8 @@ export class RunQueue {
   constructor(
     private readonly ctx: AppContext,
     private readonly workerId: string,
+    /** Called for every run whose lease was lost (its run node sessions must die with it). */
+    private readonly onLeaseLost?: (runId: string) => Promise<void>,
   ) {}
 
   async claim(max: number): Promise<ClaimedRun[]> {
@@ -62,6 +64,7 @@ export class RunQueue {
       .from(runs)
       .where(and(inArray(runs.status, ['running', 'awaiting_approval']), lt(runs.leaseUntil, now)));
     for (const r of expired) {
+      await this.onLeaseLost?.(r.id).catch(() => undefined);
       if (r.attempts >= this.ctx.config.worker.maxAttempts) {
         await this.ctx.db
           .update(runs)

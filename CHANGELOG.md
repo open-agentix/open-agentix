@@ -8,6 +8,26 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Run node, per-step credential broker and container runner (W1-3a, opt-in)**: steps whose effective
+  runner is `container` (pipeline `runtime.runner` or per-step `runtime.runner`) run in their own
+  short-lived container, started by the worker through a socket proxy or rootless Podman: digest-pinned
+  image, numeric non-root user, read-only root filesystem, all capabilities dropped,
+  `no-new-privileges`, CPU/memory/PID limits, tmpfs, an `internal` network (verified before every
+  start), no engine socket inside, never started through the raw Docker socket unless explicitly
+  allowed. The step-scoped run token (claims `sid`, `steps`) reaches the node through its stdin, never
+  through the environment. The new run node (`apps/worker/src/run-node.ts`, entry `run-node-cli.js`, image target
+  `run-node`) talks to the control node only and never to PostgreSQL. The credential broker
+  (`POST /v1/worker/runs/{id}/credentials`) hands out exactly the step's secrets once per step and
+  session, only for references the tenant allows (`tenants.secret_refs`, empty = nothing, migration
+  `0009`; `PATCH /v1/tenants/{id}` `secretRefs`), audited as `runnode.started`, `credential.issued`,
+  `credential.denied`, `credential.revoked`, `runnode.stopped`, `runner.unsafe_socket` without values.
+  A revoked or expired session kills its token immediately (also when another worker takes the run
+  over); node-reported cost and tokens are dropped, nodes may only report model/tool/output/error steps (marked `node:<id>`) and receive the remaining budget; a node token can never complete a run or
+  act for another step. A separate egress proxy service (`CONNECT`, signed per-node grants, operator ceiling
+  `OAX_CONTAINER_EGRESS_ALLOW`, private/metadata/loopback ranges closed, air-gapped policy on top)
+  enforces `runtime.egress`. New `GET /v1/worker/runs/{id}/handover`,
+  `POST .../handover/result`; Compose profile `container-runner`; `docs/runners.md`. **Not yet**: run
+  nodes cannot call models except the keyless `simulated` provider until the model proxy (W1-3b).
 - **Kubernetes Job runner (W1-4)**: `KubernetesJobRunner` implements the isolating-runner contract
   of ADR 0008: one suspended Job per step plus an owner-referenced deny-by-default NetworkPolicy
   (DNS, control node and egress CIDR allowlist) and a Secret holding only the run token, then
@@ -111,6 +131,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **Breaking (pre-1.0)**: MCP connection secrets of in-process runs are resolved through the tenant
+  allowlist `tenants.secret_refs` (empty by default, canonical comparison); set it for tenants whose
+  connections use secrets. Tenant slugs that overlap in canonical form (`acme`, `acme-corp`) cannot
+  be created together, and the tenant prefix check of connection secrets is canonical.
+- A step whose effective runner is isolating is never executed inline by the worker: without an
+  enabled runner the run fails with `runner_unavailable`. The `container` runner is no longer a stub;
+  publishing also refuses per-step runners that are not enabled.
 - The tenant limit `tenants.monthly_budget_micros`, stored but not enforced before, is now a hard
   stop. Runs refused at admission by a tenant or use case budget carry the error codes
   `tenant_budget_exceeded` and `use_case_budget_exceeded` (team budgets keep
@@ -121,6 +148,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- `docker-compose.yml`: the `volumes:` section contained a copy of the `ui` service and a dangling
+  `ollama:` key; it now declares `pgdata` and `ollama`.
 - **Release workflow**: the api image is built for linux/amd64 only; the QEMU arm64 build exceeded the 60 minute job timeout and the api image was never published (worker and ui keep amd64 and arm64).
 
 - **Costs page "request validation failed"**: `GET /v1/costs/summary` and `/v1/costs/export` now accept

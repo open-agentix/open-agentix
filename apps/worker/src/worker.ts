@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { createServices, withSpan, type AppContext, type Services } from '@openagentix/api';
 import { ToolGateway, type InMemoryTransportFactory } from '@openagentix/mcp';
 import type { ProviderRegistry } from '@openagentix/providers';
-import { InProcessRunner, type RunResult, type Runner } from '@openagentix/runners';
+import {
+  InProcessRunner,
+  type IsolatingRunner,
+  type RunResult,
+  type Runner,
+} from '@openagentix/runners';
+import type { RunnerKind } from '@openagentix/core';
+import { NodeDispatcher } from './node-dispatcher.js';
 import { RunQueue } from './queue.js';
 
 export interface WorkerOptions {
@@ -11,6 +18,17 @@ export interface WorkerOptions {
   /** In-process MCP servers (demo/test); real deployments use stdio or streamable-http connections. */
   inMemoryMcp?: InMemoryTransportFactory;
   runner?: Runner;
+  /**
+   * Isolating runners (container, ...) by kind plus how run nodes reach the control node. Steps
+   * whose effective runner is isolating are executed by short-lived run nodes (ADR 0008).
+   */
+  isolation?: {
+    runners: Partial<Record<RunnerKind, IsolatingRunner & { imageFor(toolbox?: string): string }>>;
+    controlUrl: string;
+    limits: { cpus: number; memoryMb: number; pids: number };
+    /** How often a running node's run is checked for cancellation (default 2 s). */
+    cancelPollMs?: number;
+  };
 }
 
 /**
@@ -34,7 +52,9 @@ export class Worker {
   ) {
     this.id = opts.workerId ?? `worker-${randomUUID().slice(0, 8)}`;
     this.services = createServices(ctx);
-    this.queue = new RunQueue(ctx, this.id);
+    this.queue = new RunQueue(ctx, this.id, (runId) =>
+      this.services.runNodes.revokeRun(runId, 'lease_lost'),
+    );
     this.providers = opts.providers ?? null;
     this.runner = opts.runner ?? new InProcessRunner();
   }
@@ -56,17 +76,16 @@ export class Worker {
     const control = this.services.control.forToken(token);
     // Tool servers resolve per run: only connections of the run's tenant (and platform ones) exist.
     const run = await this.services.runs.get(runId);
-    const tools = new ToolGateway(
-      await this.services.catalog.mcpConfigs({
-        tenantId: run.tenantId,
-        teamId: run.teamId,
-        agentId: run.agentId,
-      }),
-      {
-        secrets: this.ctx.secrets,
-        ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
-      },
-    );
+    const toolScope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
+    const tools = new ToolGateway(await this.services.catalog.mcpConfigs(toolScope), {
+      // Tenant allowlist (tenants.secret_refs) applies in-process exactly as it does for nodes;
+      // only connections of PLATFORM scope keep the unrestricted (operator-chosen) resolver.
+      ...(await this.services.runNodes.resolverForRun(
+        run.tenantId,
+        await this.services.catalog.platformMcpNames(toolScope),
+      )),
+      ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
+    });
     try {
       return await withSpan('oax.run', { 'oax.run_id': runId, 'oax.worker': this.id }, async () => {
         const prepared = await this.services.control.prepare(runId);
@@ -82,6 +101,21 @@ export class Worker {
           control,
           costModel: await this.services.models.costModelFor(scope),
           signal: abort.signal,
+          // Without isolation configured, a step that asks for an isolating runner has nowhere
+          // to run: the dispatcher still exists and fails it closed instead of running it inline.
+          dispatcher: new NodeDispatcher(
+            {
+              services: this.services,
+              runners: this.opts.isolation?.runners ?? {},
+              workerId: this.id,
+              controlUrl: this.opts.isolation?.controlUrl ?? '',
+              limits: this.opts.isolation?.limits ?? { cpus: 1, memoryMb: 512, pids: 256 },
+              ...(this.opts.isolation?.cancelPollMs
+                ? { cancelPollMs: this.opts.isolation.cancelPollMs }
+                : {}),
+            },
+            prepared.definition,
+          ),
         });
         log.info(
           { status: result.status, usage: result.usage, error: result.error },

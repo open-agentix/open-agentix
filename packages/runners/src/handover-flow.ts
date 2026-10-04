@@ -3,6 +3,7 @@ import {
   describeViolations,
   evaluateWhen,
   redact,
+  resolveSchema,
   validateHandover,
   type AgentSpec,
   type HandoverCheck,
@@ -18,6 +19,14 @@ export class HandoverFailure extends Error {
   ) {
     super(message);
   }
+}
+
+/** The output schema of a step with named schemas inlined (what a run node validates against). */
+export function resolveOutputSchema(
+  schema: unknown,
+  named: Readonly<Record<string, unknown>> | undefined,
+): unknown {
+  return resolveSchema(schema, named);
 }
 
 /** The value of a step's output as later steps see it: the parsed JSON, else the text. */

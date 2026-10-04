@@ -503,3 +503,37 @@ generated files. Any change to sections 1-4 of this ADR needs an amendment PR fi
   lets a node misreport usage. Rejected.
 - **Validating handovers in the run node only**: a compromised node could skip it. Rejected; the
   orchestrator validates authoritatively.
+
+## Amendment 1 (W1-3a, 2026-10-04): what the implementation settled
+
+Found while implementing the run node and the container runner; sections 1 to 4 otherwise stand.
+
+- **Token delivery (3.3 step 2, 3.5)**: the engine refuses to copy files into a container with a
+  read-only root filesystem (`docker cp`: "container rootfs is marked read-only", also for tmpfs
+  mounts; verified on Docker 29.8), so `/run/oax/token` cannot be populated. The container runner
+  attaches the container's **stdin before the start** and writes the token once (line 1; line 2 is
+  the node's egress proxy account), then closes stdin. The node reads it from the file named by
+  `OAX_RUN_TOKEN_FILE` (`/dev/stdin` in a container, a mounted Secret path for Jobs). Stdin is not
+  visible through `inspect`, the environment or the command line. `/run/oax` stays a tmpfs for
+  per-step files.
+- **Session row (3.3)**: `run_node_sessions` additionally holds `handover` (the step's spec, input,
+  output schema, stripped MCP configs), `result` (what the node posted) and `credentials_issued`
+  (the once-per-step-and-session guard); `tenant_id` partitions it like every other table.
+- **Handover payload (section 6)**: `StepHandover` also carries `run` (`name`, `version`,
+  `classification`, `budget`) and `mcp` (the MCP connections of the step with secret references
+  stripped; values arrive through the broker). `StepHandoverResult` also carries `usage` and, instead
+  of an output, `failure { status, code, message }` so that a policy block stays a policy block.
+- **Egress proxy (3.5)**: a separate, stateless service (HTTP `CONNECT`, image target
+  `egress-proxy`) on the node network and an egress network only. Nodes authenticate with signed,
+  expiring grants minted by the runner; the proxy applies the operator ceiling, the grant's rules
+  and a check of the resolved address (private, shared, metadata, loopback and link-local ranges are
+  closed to step authors; only an operator can open private ranges). No port means 443.
+- **Credential scope (section 2)**: the tenant allowlist compares canonical names (the resolver maps
+  `a.b-c` and `a-b.c` to the same secret), every tenant starts with an empty allowlist, platform
+  secrets (provider keys, event sources, platform connections) are never delivered, and the same
+  allowlist applies to in-process runs. Cost and token numbers of a node are not recorded until the
+  model proxy (W1-3b) measures them on the control node; a node receives the REMAINING budget.
+- **Migration number**: `0009_run_node_sessions.sql` keeps the reserved number; the journal index is
+  5 because 0005 to 0008 are not used yet.
+- **Model calls (3.4)** are **not** part of W1-3a: until W1-3b, a run node can only use the keyless
+  `simulated` provider; every other provider fails the step with `model_proxy_unavailable`.

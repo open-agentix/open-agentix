@@ -2,6 +2,7 @@
 # Multi-target image build for the control node (api) and the worker.
 #   docker build --target api -t ghcr.io/open-agentix/open-agentix-api:dev .
 #   docker build --target worker -t ghcr.io/open-agentix/open-agentix-worker:dev .
+#   docker build --target run-node -t ghcr.io/open-agentix/open-agentix-run-node:dev .
 ARG NODE_IMAGE=node:22-alpine
 
 FROM ${NODE_IMAGE} AS base
@@ -70,6 +71,35 @@ USER node
 EXPOSE 9090
 HEALTHCHECK --interval=15s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1:9090/healthz >/dev/null || exit 1
 CMD ["node", "dist/main.js"]
+
+# Run node: executes ONE isolated step in a short-lived container started by the container runner
+# (docs/runners.md). It reads a step-scoped run token from a file, talks only to the control node and
+# never connects to PostgreSQL. Started by the worker with a read-only root filesystem, a numeric
+# non-root user and no capabilities; the image must be referenced by digest.
+FROM runtime AS run-node
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.title="open-agentix-run-node" \
+      org.opencontainers.image.source="https://github.com/open-agentix/open-agentix" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${VERSION}"
+COPY --from=build /src/apps/worker/dist /app/apps/worker/dist
+WORKDIR /app/apps/worker
+USER 10001:10001
+CMD ["node", "dist/run-node-cli.js"]
+
+# Egress proxy for run nodes (docs/runners.md): its own service, attached to the internal node network
+# and an egress network only. Stateless; verifies signed per-node grants.
+FROM runtime AS egress-proxy
+ARG VERSION=0.0.0-dev
+LABEL org.opencontainers.image.title="open-agentix-egress-proxy" \
+      org.opencontainers.image.source="https://github.com/open-agentix/open-agentix" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${VERSION}"
+COPY --from=build /src/apps/worker/dist /app/apps/worker/dist
+WORKDIR /app/apps/worker
+USER 10001:10001
+EXPOSE 3128
+CMD ["node", "dist/egress-proxy-cli.js"]
 
 # Optional demo worker with the Claude Code CLI (OAX_DEMO_LLM=claude-code, see docs/demo.md).
 # Pinned version; the CLI is installed at build time only, nothing is downloaded at run time.

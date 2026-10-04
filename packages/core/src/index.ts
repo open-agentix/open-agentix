@@ -23,3 +23,4 @@ export * from './run-token.js';
 export * from './guidelines.js';
 export * from './egress.js';
 export * from './plan/index.js';
+export * from './credentials.js';
