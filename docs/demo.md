@@ -20,6 +20,33 @@ CVE-triage scenarios and opens the run.
 Without the compose file (single process, in-memory database): `pnpm seed:demo` and the API with
 `OAX_DEMO_MODE=true`.
 
+## Guided tour
+
+Visitors get a guided tour in demo mode only (`GET /v1/settings` reports `demo: true`; outside demo
+mode neither the tour nor its menu entry exist).
+
+- **What it is**: a modal dialog with 8 short steps (who you are, "Try a scenario", the run view,
+  the audit hash chain, costs, agents/tenants/roles, connections and policies, links). Each step
+  spotlights the matching part of the UI through its `data-tour` anchor and shows the page it is
+  about. Without the anchor (hidden, missing) or on screens up to 900 px wide (bottom sheet) the
+  card is shown without a spotlight.
+- **Keyboard**: Esc closes, Left/Right arrows go back and forward, Tab stays inside the dialog,
+  focus returns to where the tour was opened. Reduced motion is respected.
+- **Start**: it starts once per browser session after the first landing on the dashboard, unless
+  "Don't show this again" was ticked. "Take the tour" in the sidebar starts it any time and ignores
+  the dismissal. On the sign-in page (image built with `VITE_OAX_DEMO=true`, set in
+  `docker-compose.demo.yml`; the page has no API data before sign-in) a hint box shows the shared
+  fake credentials, the nightly reset and a "Take the tour" link that starts it after sign-in.
+- **Persistence**: the dismissal is `localStorage` key `oax.tour.dismissed` (`1`). If storage is
+  blocked it falls back to `sessionStorage` and then to memory (no cookies, nothing is sent to the
+  server). The "started in this session" flag is `oax.tour.autostarted` in `sessionStorage`.
+- **Reset the dismissal**: untick the checkbox in any step, use "Take the tour", or run
+  `localStorage.removeItem('oax.tour.dismissed')` in the browser console.
+- **Code**: `apps/ui/src/features/tour/` (steps and anchors in `steps.ts`, texts under `tour` in the
+  locale files, the dialog is a lazy chunk so the initial bundle is unchanged). The links of the
+  last step are plain `<a>` elements; the offline check allows `github.com` and `openagentix.si`
+  for them only.
+
 ## Scenarios
 
 `GET /v1/demo/scenarios` lists them with the limits; `POST /v1/demo/scenarios/{id}/run` (no body)
@@ -76,5 +103,7 @@ worker run through the real CLI, policy-gated tool calls, cost and audit chain.
 - API: scenario endpoints, rate limits, daily caps, budget and concurrency in `claude-code` mode.
 - Worker: `DemoLlmRunner` with a recording harness (fixed data, forged-event protection, budget
   caps, non-demo runs untouched, setup failures).
-- UI: the dashboard card (simulated and live labels, limit errors).
+- UI: the dashboard card (simulated and live labels, limit errors); the guided tour (steps,
+  persistence incl. blocked storage, auto-start rules, restart, keyboard and focus, spotlight
+  fallback, en/de).
 - Opt-in real run: `OAX_TEST_CLAUDE=1 pnpm vitest run apps/worker/test/demo-llm.integration.test.ts`.
