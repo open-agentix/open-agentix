@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Claude Code harness**: the adapter now runs `claude -p` (stream-json, `--tools ""`, `dontAsk`,
+  explicit allowlist, `--restricted`) in a temporary directory with a minimal environment. The policy
+  gate is served as a loopback MCP bridge (`serveGateHttp`) so every tool call is policy-checked,
+  approved, audited and costed; agent limits map to `--max-turns`/`--max-budget-usd` and are enforced
+  by the platform. `oax run --harness claude-code`, opt-in real-run test (`OAX_TEST_CLAUDE=1`),
+  `docs/harnesses.md`, `docs/verification/claude-code-harness.md`. Other harnesses stay documented stubs.
 - **Tenant isolation**: every request-facing query is filtered by the caller's tenant; other
   tenants' resources answer 404 (denied agent/run access is audited), names are unique per tenant,
   workers resolve tool servers per run and tenant, cross-tenant references are refused. Tenants API
