@@ -119,3 +119,56 @@ describe('HttpControlPlane', () => {
     expect(new HttpControlPlane({ baseUrl: 'http://x', runToken: 't' })).toBeTruthy();
   });
 });
+
+describe('HttpControlPlane run node protocol', () => {
+  const calls: { url: string; method: string; body?: string }[] = [];
+  const mk = (reply: () => Response) =>
+    new HttpControlPlane({
+      baseUrl: 'http://api:8080/',
+      runToken: 'oaxrt.a.b',
+      fetchImpl: async (url, init) => {
+        calls.push({
+          url,
+          method: init?.method ?? 'GET',
+          ...(init?.body ? { body: String(init.body) } : {}),
+        });
+        return reply();
+      },
+    });
+  const handover = {
+    agentId: 'a',
+    agent: { id: 'a', provider: 'simulated', model: 'sim-1', instructions: 'x' },
+    input: { x: 1 },
+    attempt: 1,
+    run: { name: 'n', version: '1.0.0', classification: 'internal', budget: {} },
+    mcp: [],
+  };
+  it('fetches and parses the handover, credentials and posts the result', async () => {
+    calls.length = 0;
+    const cp = mk(() => Response.json(handover));
+    const h = await cp.fetchHandover('run-1', 'a b');
+    expect(h.agent.id).toBe('a');
+    expect(calls[0]!.url).toBe('http://api:8080/v1/worker/runs/run-1/handover?agentId=a%20b');
+    const cred = mk(() =>
+      Response.json({ agentId: 'a', expiresAt: 'x', credentials: [], connections: [] }),
+    );
+    await cred.fetchCredentials('run-1', 'a');
+    expect(calls[1]).toMatchObject({ method: 'POST', body: '{"agentId":"a"}' });
+    const post = mk(() => new Response(null, { status: 204 }));
+    await post.postHandoverResult('run-1', { agentId: 'a', format: 'json', content: '{}' });
+    expect(calls[2]!.url).toBe('http://api:8080/v1/worker/runs/run-1/handover/result');
+  });
+  it('refuses a malformed handover and exposes the HTTP status of errors', async () => {
+    await expect(
+      mk(() => Response.json({ ...handover, extra: 1 })).fetchHandover('r', 'a'),
+    ).rejects.toThrow();
+    await expect(
+      mk(() => Response.json({ ...handover, agent: {} })).fetchHandover('r', 'a'),
+    ).rejects.toThrow();
+    const err = await mk(() => new Response('{}', { status: 409 }))
+      .fetchCredentials('r', 'a')
+      .catch((e) => e);
+    expect(err.details).toEqual({ status: 409 });
+    expect(err.message).toContain('HTTP 409');
+  });
+});

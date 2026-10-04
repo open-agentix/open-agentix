@@ -1,9 +1,15 @@
 import {
   OaxError,
   type BudgetVerdict,
+  type StepCredentials,
   type PolicyDecision,
   type ToolCallRequest,
 } from '@openagentix/core';
+import {
+  StepHandoverSchema,
+  type StepHandover,
+  type StepHandoverResult,
+} from './run-node-protocol.js';
 import type { ApprovalOutcome, ControlPlane, RunResult, StepInput } from './types.js';
 
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
@@ -47,6 +53,7 @@ export class HttpControlPlane implements ControlPlane {
       throw new OaxError(
         'control_plane_error',
         `control node returned HTTP ${res.status} for ${method} ${path}`,
+        { status: res.status },
       );
     }
     return (res.status === 204 ? undefined : await res.json()) as T;
@@ -89,6 +96,26 @@ export class HttpControlPlane implements ControlPlane {
   async isCancelled(runId: string): Promise<boolean> {
     return (await this.request<{ cancelled: boolean }>('GET', `/v1/worker/runs/${runId}/status`))
       .cancelled;
+  }
+
+  // ---------- run node protocol (step-scoped run token only) ----------
+
+  /** The step's own agent spec, input and output schema (nothing about other steps). */
+  async fetchHandover(runId: string, agentId: string): Promise<StepHandover> {
+    const raw = await this.request<unknown>(
+      'GET',
+      `/v1/worker/runs/${runId}/handover?agentId=${encodeURIComponent(agentId)}`,
+    );
+    return StepHandoverSchema.parse(raw);
+  }
+
+  /** Step credentials from the broker: issued once per step and session. */
+  fetchCredentials(runId: string, agentId: string): Promise<StepCredentials> {
+    return this.request('POST', `/v1/worker/runs/${runId}/credentials`, { agentId });
+  }
+
+  async postHandoverResult(runId: string, result: StepHandoverResult): Promise<void> {
+    await this.request('POST', `/v1/worker/runs/${runId}/handover/result`, result);
   }
 
   checkBudget(runId: string): Promise<BudgetVerdict> {
