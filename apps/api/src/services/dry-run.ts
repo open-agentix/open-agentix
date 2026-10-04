@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { CostModel, loadAgentDefinition, type PolicyBundle } from '@openagentix/core';
+import { HttpError } from '../errors.js';
+import {
+  CostModel,
+  expandProfiles,
+  loadAgentDefinition,
+  type AccessCatalog,
+  type PolicyBundle,
+} from '@openagentix/core';
 import { createEvent, isCloudEvent, parseCloudEvent } from '@openagentix/events';
 import {
   modelToolName,
@@ -78,9 +85,16 @@ export async function dryRunAgent(
   data: unknown,
   bundles: PolicyBundle[],
   approve: 'all' | 'none',
+  catalog: AccessCatalog = {},
 ): Promise<DryRunResult> {
-  const def = loadAgentDefinition(source);
-  const definition = { ...def, agents: def.agents.map((a) => ({ ...a, provider: 'simulated' })) };
+  // Same expansion as publish, so a draft is tested with the grants a version would get.
+  const { definition: expanded, errors } = expandProfiles(loadAgentDefinition(source), catalog);
+  if (errors.length > 0)
+    throw new HttpError(400, 'validation_failed', 'tool grants are not allowed', errors);
+  const definition = {
+    ...expanded,
+    agents: expanded.agents.map((a) => ({ ...a, provider: 'simulated' })),
+  };
   const control = new LocalControlPlane({
     definition,
     policies: bundles,

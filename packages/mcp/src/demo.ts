@@ -128,3 +128,16 @@ export function demoServerFactories(
 ): Record<string, () => Server> {
   return { 'cve-db': cveDbServer, tickets: () => ticketsServer(ticketStore) };
 }
+
+/** Access classes of the built-in demo servers, so read-only steps can use their read tools. */
+export const DEMO_TOOL_ACCESS: Readonly<
+  Record<string, Record<string, { access: 'read' | 'write' }>>
+> = {
+  'cve-db': { lookup_cve: { access: 'read' } },
+  tickets: {
+    get_ticket: { access: 'read' },
+    add_comment: { access: 'write' },
+    update_ticket: { access: 'write' },
+    delete_ticket: { access: 'write' },
+  },
+};

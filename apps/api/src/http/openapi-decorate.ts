@@ -60,6 +60,28 @@ export function decorateOpenApi<T>(input: T): T {
   doc.components ??= {};
   doc.components.schemas = {
     ...(doc.components.schemas ?? {}),
+    McpToolAccess: {
+      type: 'object',
+      required: ['access'],
+      additionalProperties: false,
+      properties: { access: { type: 'string', enum: ['read', 'write'] } },
+    },
+    McpConnectionAccess: {
+      type: 'object',
+      description:
+        'Tool classes and named profiles inside the config of an `mcp` connection (alongside transport, url, ...). A tool that is not declared counts as `write`; profile members must be declared tools; a profile named `read` may only hold read tools.',
+      properties: {
+        tools: {
+          type: 'object',
+          additionalProperties: { $ref: '#/components/schemas/McpToolAccess' },
+        },
+        profiles: {
+          type: 'object',
+          description: 'profile name (slug) -> declared tool names',
+          additionalProperties: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        },
+      },
+    },
     Error: {
       type: 'object',
       required: ['error', 'message'],

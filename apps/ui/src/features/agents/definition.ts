@@ -5,6 +5,8 @@ export interface ToolView {
   approval: boolean;
   maxCallsPerRun?: number;
   args: string[];
+  /** `server:profile` this grant was expanded from at publish, if any. */
+  via?: string;
 }
 export interface AgentSpecView {
   id: string;
@@ -13,6 +15,7 @@ export interface AgentSpecView {
   toolbox?: string;
   outputs: string[];
   tools: ToolView[];
+  access?: 'read-only' | 'write';
 }
 export interface TriggerView {
   type: string;
@@ -48,6 +51,17 @@ export function readDefinition(definition: unknown): DefinitionView {
   const runtime = obj(d.runtime);
   const budget: Record<string, number> = {};
   for (const [k, v] of Object.entries(obj(d.budget))) if (typeof v === 'number') budget[k] = v;
+  // Profile expansion stored with the version: which profile each concrete grant came from.
+  const origin = new Map<string, string>();
+  for (const rec of arr(d.expansion)) {
+    const r = obj(rec);
+    for (const tool of arr(r.tools))
+      if (typeof tool === 'string')
+        origin.set(
+          `${str(r.agentId)}/${str(r.server)}/${tool}`,
+          `${str(r.server)}:${str(r.profile)}`,
+        );
+  }
   const agents = arr(d.agents).map((a): AgentSpecView => {
     const spec = obj(a);
     const view: AgentSpecView = {
@@ -64,11 +78,14 @@ export function readDefinition(definition: unknown): DefinitionView {
           args: Object.keys(obj(g.args)),
         };
         if (typeof g.maxCallsPerRun === 'number') tool.maxCallsPerRun = g.maxCallsPerRun;
+        const via = origin.get(`${str(spec.id)}/${tool.server}/${tool.tool}`);
+        if (via) tool.via = via;
         return tool;
       }),
     };
     const toolbox = str(spec.toolbox);
     if (toolbox) view.toolbox = toolbox;
+    if (spec.access === 'read-only' || spec.access === 'write') view.access = spec.access;
     return view;
   });
   const view: DefinitionView = {

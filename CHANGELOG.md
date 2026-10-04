@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Named read/write tool profiles per MCP connection**: an `mcp` connection declares
+  `tools: { <name>: { access: read | write } }` and `profiles: { <name>: [tool, ...] }` (unknown tools
+  in a profile are refused when it is saved). `agents[].tools[].profile` grants such a profile; it is
+  expanded into concrete grants when a version is published and stored in the immutable version
+  (`expansion`, `toolAccess`, `expansionDigest`), so later profile edits never widen a published
+  version. A step with `access: read-only` can never receive a write tool: refused at publish and
+  denied by the policy gate at run time (`profile_write_denied`). Expansion and refusals are audited
+  (`agent.profiles.expanded`, `agent.publish.denied`). Connections page and agent overview show
+  classes, profiles and where a grant came from. `docs/mcp.md`.
 - **Typed handovers and conditional steps (W1-1)**: `output.schema` / `input.schema` are validated at
   runtime (ajv 8, strict, JSON Schema subset, size and depth limits) with `onInvalid: fail|retry`,
   `input.from` gives a step only the JSON it names, and `when` is evaluated by a strictly typed,

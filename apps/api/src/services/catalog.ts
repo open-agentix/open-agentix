@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
+  type AccessCatalog,
   evaluateToolCall,
+  expandProfiles,
   loadAgentDefinition,
   type PolicyBundle,
   type PolicyDecision,
@@ -135,6 +137,25 @@ export class CatalogService {
     return (await this.connectionsForRun('mcp', scope)).map((c) =>
       McpServerConfigSchema.parse(c.config),
     );
+  }
+
+  /**
+   * Tool classification and profiles of the MCP connections that apply to an agent (most specific
+   * scope wins per name). Connections that do not parse are left out, so they are unknown to
+   * expansion (fail closed).
+   */
+  async accessCatalog(scope: RunScope): Promise<AccessCatalog> {
+    const out: Record<string, AccessCatalog[string]> = {};
+    for (const c of await this.connectionsForRun('mcp', scope)) {
+      const parsed = McpServerConfigSchema.safeParse(c.config);
+      if (!parsed.success) continue;
+      out[c.name] = {
+        tools: Object.fromEntries(Object.entries(parsed.data.tools).map(([n, v]) => [n, v.access])),
+        profiles: parsed.data.profiles,
+        version: c.updatedAt.toISOString(),
+      };
+    }
+    return out;
   }
 
   /** Validates scope/scopeId against the actor's tenant (404 for foreign teams/agents). */
@@ -455,9 +476,16 @@ export class CatalogService {
     const agent = def.agents.find((a) => a.id === agentId);
     if (!agent)
       throw new HttpError(400, 'validation_failed', `agent "${agentId}" not found in definition`);
+    const { definition, errors } = expandProfiles(
+      def,
+      await this.accessCatalog({ tenantId, teamId: null, agentId: '' }),
+    );
+    if (errors.length)
+      throw new HttpError(400, 'validation_failed', 'tool grants are not allowed', errors);
     return evaluateToolCall(call, {
-      definition: def,
-      agent,
+      definition,
+      agent: definition.agents.find((a) => a.id === agentId) ?? agent,
+      toolAccess: definition.toolAccess,
       bundles: [...(await this.enabledBundles(tenantId)), ...extraBundles],
     });
   }
