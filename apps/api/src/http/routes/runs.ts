@@ -1,4 +1,5 @@
 import { isTerminal, type RunStatus } from '@openagentix/core';
+import { issueStreamToken } from '../../auth/stream-token.js';
 import { encodeSeqCursor } from '../../pagination.js';
 import { z } from 'zod';
 import type { Deps } from '../app.js';
@@ -82,13 +83,19 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
   app.get(
     '/v1/runs/:id/stream',
     {
-      config: { access: 'runs:read' },
+      config: { access: 'runs:read', streamToken: true },
       schema: {
         tags,
         summary:
           'Stream run steps as Server-Sent Events (`step`, `status`, `end`); resumes from Last-Event-ID',
         security: sec,
         params: IdParams,
+        querystring: z.object({
+          access_token: z
+            .string()
+            .optional()
+            .describe('stream token from POST /v1/runs/{id}/stream-token (for EventSource)'),
+        }),
         produces: ['text/event-stream'],
       },
     },
@@ -130,6 +137,32 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
         await new Promise((r) => setTimeout(r, ctx.config.ssePollMs));
       }
       reply.raw.end();
+    },
+  );
+
+  app.post(
+    '/v1/runs/:id/stream-token',
+    {
+      config: { access: 'runs:read' },
+      schema: {
+        tags,
+        summary: 'Issue a 60 s token for EventSource access to the run stream (`?access_token=`)',
+        security: sec,
+        params: IdParams,
+        response: { 201: z.object({ token: z.string(), expiresAt: z.string() }) },
+      },
+    },
+    async (req, reply) => {
+      const p = principalOf(req);
+      await runs.getVisible(p, req.params.id);
+      const t = issueStreamToken(
+        ctx.config.runToken.secret,
+        p.userId,
+        req.params.id,
+        60,
+        ctx.now().getTime(),
+      );
+      return reply.status(201).send({ token: t.token, expiresAt: t.expiresAt.toISOString() });
     },
   );
 

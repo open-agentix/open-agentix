@@ -109,6 +109,19 @@ export class IdentityService {
     return bindings;
   }
 
+  /** Principal of a user (e.g. for stream tokens), optionally restricted to scopes. */
+  async principalForUser(userId: string, scopes?: Permission[]): Promise<Principal> {
+    const [user] = await this.ctx.db.select().from(users).where(eq(users.id, userId));
+    if (!user || user.disabled) throw unauthenticated('user not found or disabled');
+    return {
+      kind: 'user',
+      userId: user.id,
+      displayName: user.displayName,
+      bindings: await this.bindingsFor(user),
+      scopes,
+    };
+  }
+
   /** Resolves a bearer token to a principal; cached for min(auth cache TTL, token lifetime). */
   async authenticate(bearer: string): Promise<Principal> {
     const parsed = parseToken(bearer);

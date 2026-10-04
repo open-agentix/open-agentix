@@ -376,6 +376,46 @@ describe('runs API', () => {
     expect(res.body).toContain('event: step');
     expect(res.body).toContain('event: status');
     expect(res.body).toContain('event: end');
+    const st = await n.req({ method: 'POST', url: `/v1/runs/${run.id}/stream-token` });
+    expect(st.statusCode).toBe(201);
+    const viaQuery = await n.req({
+      method: 'GET',
+      url: `/v1/runs/${run.id}/stream?access_token=${st.json().token}`,
+      token: null,
+    });
+    expect(viaQuery.body).toContain('event: end');
+    expect(
+      (
+        await n.req({
+          method: 'GET',
+          url: `/v1/runs/${run.id}/stream?access_token=oaxst.x.y`,
+          token: null,
+        })
+      ).statusCode,
+    ).toBe(401);
+    const other = (await n.req({ method: 'GET', url: '/v1/runs?limit=2' }))
+      .json()
+      .items.find((r: { id: string }) => r.id !== run.id);
+    expect(
+      (
+        await n.req({
+          method: 'GET',
+          url: `/v1/runs/${other.id}/stream?access_token=${st.json().token}`,
+          token: null,
+        })
+      ).statusCode,
+    ).toBe(403);
+    const { issueStreamToken } = await import('../src/auth/stream-token.js');
+    const expired = issueStreamToken('r'.repeat(40), 'u', run.id, 1, Date.now() - 10_000).token;
+    expect(
+      (
+        await n.req({
+          method: 'GET',
+          url: `/v1/runs/${run.id}/stream?access_token=${expired}`,
+          token: null,
+        })
+      ).statusCode,
+    ).toBe(401);
     const resumed = await n.req({
       method: 'GET',
       url: `/v1/runs/${run.id}/stream`,
