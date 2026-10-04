@@ -1,0 +1,63 @@
+{
+  "meta": {
+    "date": "2026-10-03T17:17:58.235Z",
+    "node": "v20.19.2",
+    "database": "pglite",
+    "duration": 10,
+    "connections": 10
+  },
+  "results": [
+    {
+      "name": "GET /v1/runs?limit=50",
+      "requests": 1070,
+      "rps": 107,
+      "p50": 84.59,
+      "p95": 196.81,
+      "p99": 247.22,
+      "non2xx": 0,
+      "statuses": {
+        "200": 1070
+      },
+      "errors": 0
+    },
+    {
+      "name": "GET /v1/runs/:id",
+      "requests": 4705,
+      "rps": 471,
+      "p50": 20.6,
+      "p95": 29.81,
+      "p99": 35.87,
+      "non2xx": 0,
+      "statuses": {
+        "200": 4705
+      },
+      "errors": 0
+    },
+    {
+      "name": "GET /v1/agents",
+      "requests": 5640,
+      "rps": 564,
+      "p50": 16.39,
+      "p95": 27.88,
+      "p99": 31.97,
+      "non2xx": 0,
+      "statuses": {
+        "200": 5640
+      },
+      "errors": 0
+    },
+    {
+      "name": "POST /v1/ingest/webhook/:id",
+      "requests": 1075,
+      "rps": 108,
+      "p50": 94.52,
+      "p95": 110.15,
+      "p99": 123.53,
+      "non2xx": 0,
+      "statuses": {
+        "202": 1075
+      },
+      "errors": 0
+    }
+  ]
+}
