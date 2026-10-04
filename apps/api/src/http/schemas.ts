@@ -460,6 +460,16 @@ export const HealthSchema = z.object({
 });
 export const ReadySchema = HealthSchema.extend({
   schema: z.object({ expected: z.number().int(), applied: z.number().int(), ok: z.boolean() }),
+  airgapped: z
+    .object({
+      enabled: z.boolean(),
+      allowlist: z
+        .number()
+        .int()
+        .describe('Number of entries on OAX_AIRGAPPED_ALLOW (not their values)'),
+      blockedAttempts: z.number().int().describe('Outbound attempts refused since start'),
+    })
+    .describe('Air-gapped (fail-closed egress) state of this process'),
 });
 
 // ---------- worker contract (run token) ----------

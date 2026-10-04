@@ -9,6 +9,7 @@ import {
   type TenantActor,
   type ToolCallRequest,
 } from '@openagentix/core';
+import { assertConnectionAllowed } from '../airgap.js';
 import { McpServerConfigSchema, type McpServerConfig } from '@openagentix/mcp';
 import { and, asc, eq, or } from 'drizzle-orm';
 import { cached } from '../cache.js';
@@ -172,6 +173,7 @@ export class CatalogService {
     const scopeId = input.scopeId ?? null;
     await this.assertScope(actor, scope, scopeId);
     const config = McpServerConfigSchema.parse({ ...(input.config as object), name: input.name });
+    assertConnectionAllowed(config);
     const [exists] = await this.ctx.db
       .select({ id: connections.id })
       .from(connections)
@@ -216,6 +218,7 @@ export class CatalogService {
   async updateConnection(actor: Principal, id: string, config: unknown): Promise<ConnectionRow> {
     const current = await this.getOwnConnection(actor, id);
     const parsed = McpServerConfigSchema.parse({ ...(config as object), name: current.name });
+    assertConnectionAllowed(parsed);
     const [row] = await this.ctx.db
       .update(connections)
       .set({ config: parsed, updatedAt: this.ctx.now() })
