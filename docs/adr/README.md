@@ -13,5 +13,6 @@ are immutable; a later ADR may supersede one.
 | [0006](0006-control-node-and-worker-nodes.md) | Control node and worker nodes | Accepted |
 | [0007](0007-tenants-as-isolation-boundary.md) | Tenants as the isolation boundary | Accepted |
 | [0008](0008-agents-md-data-flow-and-isolation-contract.md) | agents.md data flow and isolation contract (handovers, `when`, tool profiles, per-step credentials, run node) | Accepted |
+| [0009](0009-model-proxy.md) | Model proxy on the control node (run node model access, measured cost, budget reservations, harnesses through the proxy) | Proposed |
 
 Template: Context, Decision, Consequences (positive/negative), Alternatives considered.
