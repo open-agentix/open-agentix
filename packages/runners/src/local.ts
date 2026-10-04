@@ -10,10 +10,12 @@ import {
 } from '@openagentix/core';
 import { EVENT_TYPES, createEvent, isCloudEvent, parseCloudEvent } from '@openagentix/events';
 import {
+  DEMO_TOOL_ACCESS,
   McpServerConfigSchema,
   ToolGateway,
   demoServerFactories,
   inMemoryServers,
+  toolAccessOfConfigs,
   type McpServerConfigInput,
 } from '@openagentix/mcp';
 import { DEFAULT_PROVIDERS, ProviderRegistry, type ProviderConfig } from '@openagentix/providers';
@@ -71,11 +73,17 @@ export async function runLocal(opts: LocalRunOptions): Promise<LocalRunReport> {
   const providers = await ProviderRegistry.create(opts.providers ?? DEFAULT_PROVIDERS, { secrets });
   const referenced = [...new Set(definition.agents.flatMap((a) => a.tools.map((t) => t.server)))];
   const mcp = (
-    opts.mcpServers ?? referenced.map((name) => ({ name, transport: 'in-memory' as const }))
+    opts.mcpServers ??
+    referenced.map((name) => ({
+      name,
+      transport: 'in-memory' as const,
+      ...(DEMO_TOOL_ACCESS[name] ? { tools: DEMO_TOOL_ACCESS[name] } : {}),
+    }))
   ).map((c) => McpServerConfigSchema.parse(c));
   const tools = new ToolGateway(mcp, { secrets, inMemory: inMemoryServers(demoServerFactories()) });
   const control = new LocalControlPlane({
     definition,
+    toolAccess: toolAccessOfConfigs(mcp),
     policies: opts.policies ?? [],
     approve: () => (opts.approve === 'all' ? 'approved' : 'rejected'),
     ...(opts.onStep ? { onStep: (_id: string, s: StepInput) => opts.onStep?.(s) } : {}),

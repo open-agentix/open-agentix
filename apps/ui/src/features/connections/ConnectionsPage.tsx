@@ -27,12 +27,17 @@ import { useI18n } from '../../i18n/i18n';
 import { useDocumentTitle } from '../../lib/hooks';
 import { redact } from '../../lib/redact';
 import { findInlineSecrets, secretReferences } from './secrets';
+import { ToolAccessSummary, ToolProfilesEditor } from './ToolProfiles';
 
 const EXAMPLE = `{
   "transport": "streamable-http",
   "url": "https://mcp.example.internal/mcp",
   "headerSecrets": { "authorization": "TICKETS_MCP_TOKEN" },
-  "tools": ["get_ticket", "update_ticket"],
+  "tools": {
+    "get_ticket": { "access": "read" },
+    "update_ticket": { "access": "write" }
+  },
+  "profiles": { "read": ["get_ticket"], "write": ["update_ticket"] },
   "timeoutMs": 15000
 }`;
 
@@ -135,6 +140,7 @@ export function ConnectionsPage() {
                   <span className="muted">{t('connections.secretRefs')}</span>
                   {refs.length ? refs.map((r) => <Code key={r}>{r}</Code>) : <span>–</span>}
                 </p>
+                {c.kind === 'mcp' ? <ToolAccessSummary config={c.config} /> : null}
                 <details>
                   <summary>{t('connections.config')}</summary>
                   <JsonBlock value={redact(c.config)} />
@@ -252,6 +258,16 @@ function ConnectionDialog({
     },
     onError: (e) => setError(errorMessage(e)),
   });
+  const parsedConfig = (() => {
+    try {
+      const v: unknown = JSON.parse(config);
+      return v && typeof v === 'object' && !Array.isArray(v)
+        ? (v as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  })();
   /** Adds a catalog model to `models`; the control node fills the proposed price on save. */
   const addModel = (id: string) => {
     try {
@@ -349,6 +365,12 @@ function ConnectionDialog({
           onChange={(e) => setConfig(e.target.value)}
           error={error}
         />
+        {kind === 'mcp' && parsedConfig ? (
+          <ToolProfilesEditor
+            config={parsedConfig}
+            onChange={(next) => setConfig(JSON.stringify(next, null, 2))}
+          />
+        ) : null}
         {kind === 'model' ? (
           <div className="stack">
             <p className="muted">{t('connections.proposeHint')}</p>

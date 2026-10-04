@@ -10,6 +10,8 @@ export interface McpTool {
   name: string;
   description?: string | undefined;
   inputSchema: Record<string, unknown>;
+  /** MCP tool annotations (`readOnlyHint`, `destructiveHint`, ...), advisory hints from the server. */
+  annotations?: { readOnlyHint?: unknown; destructiveHint?: unknown } | undefined;
 }
 
 export interface ToolResult {
@@ -133,6 +135,7 @@ export class McpConnection {
           name: t.name,
           description: t.description,
           inputSchema: t.inputSchema as Record<string, unknown>,
+          annotations: t.annotations,
         });
       cursor = page.nextCursor;
     } while (cursor);

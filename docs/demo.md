@@ -42,6 +42,11 @@ mode neither the tour nor its menu entry exist).
   server). The "started in this session" flag is `oax.tour.autostarted` in `sessionStorage`.
 - **Reset the dismissal**: untick the checkbox in any step, use "Take the tour", or run
   `localStorage.removeItem('oax.tour.dismissed')` in the browser console.
+- **Docker build argument**: the UI image reads `VITE_OAX_DEMO` at build time (`ARG VITE_OAX_DEMO` in
+  `apps/ui/Dockerfile`, baked into the bundle by Vite). Build the public demo image with
+  `docker build -f apps/ui/Dockerfile --build-arg VITE_OAX_DEMO=true -t open-agentix-ui:demo .`
+  (`docker-compose.demo.yml` already passes it). Without it the sign-in hint is not shown; the tour
+  itself needs no flag.
 - **Code**: `apps/ui/src/features/tour/` (steps and anchors in `steps.ts`, texts under `tour` in the
   locale files, the dialog is a lazy chunk so the initial bundle is unchanged). The links of the
   last step are plain `<a>` elements; the offline check allows `github.com` and `openagentix.si`

@@ -30,8 +30,8 @@ export interface Services {
 export function createServices(ctx: AppContext): Services {
   const audit = new AuditService(ctx);
   const identity = new IdentityService(ctx, audit);
-  const agents = new AgentsService(ctx, audit);
   const catalog = new CatalogService(ctx, audit);
+  const agents = new AgentsService(ctx, audit, catalog);
   const budgets = new BudgetsService(ctx, audit, agents);
   const runs = new RunsService(ctx, audit, agents, budgets);
   const ingest = new IngestService(ctx, audit, runs);
