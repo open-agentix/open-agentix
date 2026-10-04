@@ -15,6 +15,7 @@ CREATE TABLE "run_node_sessions" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+ALTER TABLE "run_steps" ADD COLUMN "reported_by" text;--> statement-breakpoint
 ALTER TABLE "tenants" ADD COLUMN "secret_refs" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
 ALTER TABLE "run_node_sessions" ADD CONSTRAINT "run_node_sessions_run_id_runs_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."runs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "run_node_sessions_node_uq" ON "run_node_sessions" USING btree ("node_id");--> statement-breakpoint

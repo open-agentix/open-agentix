@@ -76,18 +76,16 @@ export class Worker {
     const control = this.services.control.forToken(token);
     // Tool servers resolve per run: only connections of the run's tenant (and platform ones) exist.
     const run = await this.services.runs.get(runId);
-    const tools = new ToolGateway(
-      await this.services.catalog.mcpConfigs({
-        tenantId: run.tenantId,
-        teamId: run.teamId,
-        agentId: run.agentId,
-      }),
-      {
-        // Tenant allowlist (tenants.secret_refs) applies in-process exactly as it does for nodes.
-        secrets: await this.services.runNodes.resolverFor(run.tenantId),
-        ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
-      },
-    );
+    const toolScope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
+    const tools = new ToolGateway(await this.services.catalog.mcpConfigs(toolScope), {
+      // Tenant allowlist (tenants.secret_refs) applies in-process exactly as it does for nodes;
+      // only connections of PLATFORM scope keep the unrestricted (operator-chosen) resolver.
+      ...(await this.services.runNodes.resolverForRun(
+        run.tenantId,
+        await this.services.catalog.platformMcpNames(toolScope),
+      )),
+      ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
+    });
     try {
       return await withSpan('oax.run', { 'oax.run_id': runId, 'oax.worker': this.id }, async () => {
         const prepared = await this.services.control.prepare(runId);

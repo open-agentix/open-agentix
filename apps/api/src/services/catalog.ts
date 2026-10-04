@@ -133,6 +133,15 @@ export class CatalogService {
     );
   }
 
+  /** Names of the MCP servers of a run that come from PLATFORM-scope connections. */
+  async platformMcpNames(scope: RunScope): Promise<Set<string>> {
+    return new Set(
+      (await this.connectionsForRun('mcp', scope))
+        .filter((c) => c.scope === 'platform')
+        .map((c) => c.name),
+    );
+  }
+
   /** MCP server configs for a run (secrets stay references). */
   async mcpConfigs(scope: RunScope): Promise<McpServerConfig[]> {
     return (await this.connectionsForRun('mcp', scope)).map((c) =>

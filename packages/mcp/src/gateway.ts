@@ -61,7 +61,10 @@ export class ToolGateway {
     if (existing) return existing;
     const cfg = this.configs.find((c) => c.name === server);
     if (!cfg) throw new OaxError('mcp_unknown_server', `MCP server "${server}" is not configured`);
-    const conn = await McpConnection.connect(cfg, this.deps);
+    const deps = this.deps.secretsFor
+      ? { ...this.deps, secrets: this.deps.secretsFor(cfg.name) }
+      : this.deps;
+    const conn = await McpConnection.connect(cfg, deps);
     this.connections.set(server, conn);
     return conn;
   }

@@ -273,6 +273,8 @@ export const runSteps = pgTable(
     durationMs: integer('duration_ms'),
     provider: text('provider'),
     model: text('model'),
+    /** `node:<id>` for steps reported by an untrusted run node; null for the trusted worker. */
+    reportedBy: text('reported_by'),
     createdAt: created(),
   },
   (t) => [

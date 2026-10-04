@@ -118,6 +118,8 @@ export const PRIVATE_CIDRS: readonly string[] = [
   '224.0.0.0/3', // multicast and reserved
   '::/128',
   'fc00::/7', // unique local addresses
+  '::/96', // IPv4-compatible (deprecated); the embedded address is judged separately
+  '::ffff:0:0:0/96', // SIIT; the embedded address is judged separately
   '64:ff9b::/96', // NAT64: embeds any IPv4 address, including private ones
   '64:ff9b:1::/48',
   '2002::/16', // 6to4: embeds an IPv4 address
@@ -129,32 +131,70 @@ const PARSED = (list: readonly string[]) =>
 const DENIED = PARSED(ALWAYS_DENIED_CIDRS);
 const PRIVATE = PARSED(PRIVATE_CIDRS);
 
-/** Normalises an address; IPv4-mapped IPv6 (`::ffff:a.b.c.d` or `::ffff:aabb:ccdd`) becomes IPv4. */
-export function normalizeAddress(address: string): Cidr | undefined {
+/**
+ * Parses an address into a CIDR-style value. A dotted IPv4 tail (`::ffff:1.2.3.4`, `::1.2.3.4`) is
+ * rewritten to two hex groups first, so every spelling of an IPv6 address reaches the numeric checks.
+ */
+function parseAddress(address: string): Cidr | undefined {
   const a = address
     .toLowerCase()
     .replace(/^\[|\]$/g, '')
     .split('%')[0]!;
-  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(a);
-  if (dotted) return addrToCidr(dotted[1]!);
-  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(a);
-  if (hex) {
-    const hi = parseInt(hex[1]!, 16);
-    const lo = parseInt(hex[2]!, 16);
-    return addrToCidr(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  const dotted = /^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a);
+  if (dotted) {
+    const o = dotted.slice(2).map(Number);
+    if (o.some((x) => x > 255)) return undefined;
+    return addrToCidr(
+      `${dotted[1]}${((o[0]! << 8) | o[1]!).toString(16)}:${((o[2]! << 8) | o[3]!).toString(16)}`,
+    );
   }
   return addrToCidr(a);
 }
 
+/** IPv6 prefixes that carry an IPv4 address in their low 32 bits (checked numerically). */
+const V4_EMBEDDING_PREFIXES: readonly bigint[] = [
+  0xffffn, // ::ffff:0:0/96   IPv4-mapped
+  0n, //        ::/96           IPv4-compatible (deprecated)
+  0xffff0000n, // ::ffff:0:0:0/96 SIIT (IPv4-translated)
+];
+
+/** The IPv4 address inside an IPv6 one, whatever its spelling, or `undefined`. */
+function embeddedV4(c: Cidr): Cidr | undefined {
+  if (c.version !== 6) return undefined;
+  const high = c.base >> 32n;
+  if (!V4_EMBEDDING_PREFIXES.includes(high)) return undefined;
+  const v = c.base & 0xffffffffn;
+  return addrToCidr([24n, 16n, 8n, 0n].map((sh) => Number((v >> sh) & 255n)).join('.'));
+}
+
+/** Normalises an address; IPv4 embedded in IPv6 (any spelling) becomes IPv4. */
+export function normalizeAddress(address: string): Cidr | undefined {
+  const c = parseAddress(address);
+  if (!c) return undefined;
+  return embeddedV4(c) ?? c;
+}
+
 export type AddressVerdict = 'ok' | 'denied' | 'private';
 
-/** Never reachable (`denied`), reachable only with an operator allowance (`private`), or `ok`. */
-export function classifyAddress(address: string): AddressVerdict {
-  const c = normalizeAddress(address);
-  if (!c) return 'denied';
+const RANK: Record<AddressVerdict, number> = { ok: 0, private: 1, denied: 2 };
+
+function verdictOf(c: Cidr): AddressVerdict {
   if (DENIED.some((d) => cidrContains(d, c))) return 'denied';
   if (PRIVATE.some((p) => cidrContains(p, c))) return 'private';
   return 'ok';
+}
+
+/**
+ * Never reachable (`denied`), reachable only with an operator allowance (`private`), or `ok`. An
+ * IPv6 address that embeds an IPv4 one is judged as BOTH (the stricter verdict wins), so no
+ * spelling of `10.0.0.1` or `169.254.169.254` gets through.
+ */
+export function classifyAddress(address: string): AddressVerdict {
+  const c = parseAddress(address);
+  if (!c) return 'denied';
+  const inner = embeddedV4(c);
+  const verdicts = [verdictOf(c), ...(inner ? [verdictOf(inner)] : [])];
+  return verdicts.reduce((a, b) => (RANK[b] > RANK[a] ? b : a));
 }
 
 /** Does a rule allow this target (host name or address literal) and port? Ports default to 443. */

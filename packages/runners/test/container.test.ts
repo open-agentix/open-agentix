@@ -420,31 +420,61 @@ describe('hard lifetime and orphan reaper', () => {
     expect(expires - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(30 + 90);
     expect(body.Env).toContain('OAX_NODE_DEADLINE_SECONDS=60');
   });
-  it('removes expired and unlabelled-expiry containers and keeps live ones', async () => {
+  it('filters on both labels, removes only expired ones and skips unparsable expiries', async () => {
     const removed: string[] = [];
+    const queries: string[] = [];
     const now = 1_000_000_000_000;
+    const L = (expires: string | undefined, over: Record<string, string> = {}) => ({
+      'io.openagentix.run-node': 'true',
+      'io.openagentix.instance': 'default',
+      ...(expires === undefined ? {} : { 'io.openagentix.expires': expires }),
+      ...over,
+    });
     const transport: EngineTransport = async (req) => {
       const p = req.path.replace('/v1.43', '');
-      if (p.startsWith('/containers/json'))
+      if (p.startsWith('/containers/json')) {
+        queries.push(decodeURIComponent(p.split('filters=')[1]!));
         return {
           status: 200,
           body: Buffer.from(
             JSON.stringify([
-              { Id: 'a'.repeat(64), Labels: { 'io.openagentix.expires': String(now / 1000 - 5) } },
+              { Id: 'a'.repeat(64), Labels: L(String(now / 1000 - 5)) }, // expired -> removed
+              { Id: 'b'.repeat(64), Labels: L(String(now / 1000 + 500)) }, // live -> kept
+              { Id: 'c'.repeat(64), Labels: L(undefined) }, // no expiry -> skipped
+              { Id: 'd'.repeat(64), Labels: L('not-a-number') }, // NaN -> skipped
+              { Id: 'e'.repeat(64), Labels: L('') }, // empty -> skipped (Number('') is 0)
               {
-                Id: 'b'.repeat(64),
-                Labels: { 'io.openagentix.expires': String(now / 1000 + 500) },
+                Id: 'f'.repeat(64),
+                Labels: L(String(now / 1000 - 5), { 'io.openagentix.instance': 'other' }),
+              }, // foreign installation
+              {
+                Id: '1'.repeat(64),
+                Labels: L(String(now / 1000 - 5), { 'io.openagentix.run-node': 'false' }),
               },
-              { Id: 'c'.repeat(64), Labels: {} },
             ]),
           ),
         };
+      }
       if (req.method === 'DELETE') removed.push(p.split('/')[2]!.split('?')[0]!);
       return { status: 204, body: Buffer.alloc(0) };
     };
     const r = new ContainerRunner(baseConfig, { transport });
-    expect(await r.reapOrphans(now)).toBe(2);
-    expect(removed.sort()).toEqual(['a'.repeat(64), 'c'.repeat(64)]);
+    expect(await r.reapOrphans(now)).toBe(1);
+    expect(removed).toEqual(['a'.repeat(64)]);
+    expect(JSON.parse(queries[0]!)).toEqual({
+      label: ['io.openagentix.run-node=true', 'io.openagentix.instance=default'],
+    });
+    const other = new ContainerRunner({ ...baseConfig, instanceId: 'prod-1' }, { transport });
+    await other.reapOrphans(now);
+    expect(JSON.parse(queries[1]!).label[1]).toBe('io.openagentix.instance=prod-1');
+  });
+  it('labels nodes with the installation id', () => {
+    expect(
+      runner(fakeEngine(), { instanceId: 'prod-1' }).buildCreateBody(spec()).Labels[
+        'io.openagentix.instance'
+      ],
+    ).toBe('prod-1');
+    expect(() => new ContainerRunner({ ...baseConfig, instanceId: 'Bad Id' })).toThrow();
   });
 });
 

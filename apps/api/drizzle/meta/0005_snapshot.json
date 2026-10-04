@@ -1,5 +1,5 @@
 {
-  "id": "dc708ea6-06b4-47ef-85d7-037d29c2b747",
+  "id": "d0b5195b-aa23-482e-bac6-304fea53796e",
   "prevId": "e690c516-ea57-4dd6-b8ff-cc8dff67ce1e",
   "version": "7",
   "dialect": "postgresql",
@@ -1999,6 +1999,12 @@
         },
         "model": {
           "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reported_by": {
+          "name": "reported_by",
           "type": "text",
           "primaryKey": false,
           "notNull": false

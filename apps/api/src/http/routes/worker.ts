@@ -68,7 +68,11 @@ export function registerWorkerRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req, reply) => {
       const claims = await control.authorizeStep(token(req), req.params.id, req.body.agentId);
-      await control.recordStep(req.params.id, req.body, claims.sid ? 'node' : 'trusted');
+      await control.recordStep(
+        req.params.id,
+        req.body,
+        claims.sid ? { id: claims.workerId } : undefined,
+      );
       return reply.status(204).send();
     },
   );

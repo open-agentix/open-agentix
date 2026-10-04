@@ -24,9 +24,9 @@ x-container-env: &container-env
   # Run node image pinned by digest, e.g. ghcr.io/open-agentix/open-agentix-run-node@sha256:...
   OAX_CONTAINER_IMAGE: ${OAX_CONTAINER_IMAGE:-}
   OAX_CONTAINER_NETWORK: openagentix-nodes
-  # Step egress is off unless BOTH are set; the operator ceiling decides what steps may declare.
+  # Step egress is off unless a grant secret is set; the operator ceiling decides what steps may
+  # declare. The secret itself is NOT part of this block: only the worker and the proxy receive it.
   OAX_CONTAINER_EGRESS_PROXY_URL: ${OAX_CONTAINER_EGRESS_GRANT_SECRET:+http://egress-proxy:3128}
-  OAX_CONTAINER_EGRESS_GRANT_SECRET: ${OAX_CONTAINER_EGRESS_GRANT_SECRET:-}
   OAX_CONTAINER_EGRESS_ALLOW: ${OAX_CONTAINER_EGRESS_ALLOW:-}
   OAX_NODE_CONTROL_URL: http://api:8080
 
@@ -124,13 +124,15 @@ services:
   # The egress proxy: its OWN service, on the internal node network and an egress network only
   # (never on `default` or `socket`). Stateless: it verifies per-node grants signed with
   # OAX_CONTAINER_EGRESS_GRANT_SECRET. Private ranges stay closed unless
-  # OAX_CONTAINER_EGRESS_PRIVATE_ALLOW lists them. Without a grant secret it is not started.
+  # OAX_CONTAINER_EGRESS_PRIVATE_ALLOW lists them. Compose evaluates variables of services in
+  # inactive profiles too, so the secret defaults to empty here (a `:?` would break every
+  # `docker compose up`); the proxy refuses to start without a secret of at least 32 characters.
   egress-proxy:
     build: { context: ., target: egress-proxy }
     image: ghcr.io/open-agentix/open-agentix-egress-proxy:dev
     profiles: ['container-runner']
     environment:
-      OAX_CONTAINER_EGRESS_GRANT_SECRET: ${OAX_CONTAINER_EGRESS_GRANT_SECRET:?set a random secret of at least 32 characters}
+      OAX_CONTAINER_EGRESS_GRANT_SECRET: ${OAX_CONTAINER_EGRESS_GRANT_SECRET:-}
       OAX_CONTAINER_EGRESS_ALLOW: ${OAX_CONTAINER_EGRESS_ALLOW:-}
       OAX_CONTAINER_EGRESS_PRIVATE_ALLOW: ${OAX_CONTAINER_EGRESS_PRIVATE_ALLOW:-}
       OAX_AIRGAPPED: ${OAX_AIRGAPPED:-false}
@@ -149,6 +151,7 @@ services:
     profiles: ['container-runner']
     environment:
       <<: [*common-env, *container-env]
+      OAX_CONTAINER_EGRESS_GRANT_SECRET: ${OAX_CONTAINER_EGRESS_GRANT_SECRET:-}
       OAX_DB_MIGRATE_ON_START: 'false'
       OAX_WORKER_CONCURRENCY: '4'
       OAX_WORKER_HTTP_PORT: '9090'

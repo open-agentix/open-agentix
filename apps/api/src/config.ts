@@ -163,6 +163,7 @@ export const EnvSchema = z.object({
   OAX_CONTAINER_EGRESS_ALLOW: z.string().default(''),
   /** Private ranges (CIDRs) steps may reach where a rule matches; proxy-side, validated here. */
   OAX_CONTAINER_EGRESS_PRIVATE_ALLOW: z.string().default(''),
+  OAX_CONTAINER_INSTANCE_ID: z.string().default('default'),
   OAX_CONTAINER_MAX_CPUS: z.coerce.number().positive().default(1),
   OAX_CONTAINER_MAX_MEMORY_MB: int(512),
   OAX_CONTAINER_MAX_PIDS: int(256),
@@ -481,10 +482,16 @@ function containerConfig(e: z.infer<typeof EnvSchema>): Config['runners']['conta
       );
     return value;
   };
-  if (!!e.OAX_CONTAINER_EGRESS_PROXY_URL !== !!e.OAX_CONTAINER_EGRESS_GRANT_SECRET)
+  // The grant secret signs egress grants; it must not be the run token secret (one leak, two keys).
+  // It is only ever needed by the worker: the control node does not receive it (the runner refuses a
+  // proxy URL without it at worker start).
+  if (
+    e.OAX_CONTAINER_EGRESS_GRANT_SECRET &&
+    e.OAX_CONTAINER_EGRESS_GRANT_SECRET === e.OAX_RUN_TOKEN_SECRET
+  )
     throw new OaxError(
       'config_invalid',
-      'invalid configuration: set both OAX_CONTAINER_EGRESS_PROXY_URL and OAX_CONTAINER_EGRESS_GRANT_SECRET, or neither (no step egress)',
+      'invalid configuration: OAX_CONTAINER_EGRESS_GRANT_SECRET must differ from OAX_RUN_TOKEN_SECRET',
     );
   for (const c of list(e.OAX_CONTAINER_EGRESS_PRIVATE_ALLOW))
     if (!parseCidr(c))
@@ -510,10 +517,13 @@ function containerConfig(e: z.infer<typeof EnvSchema>): Config['runners']['conta
     ...(e.OAX_CONTAINER_EGRESS_PROXY_URL
       ? {
           egressProxyUrl: e.OAX_CONTAINER_EGRESS_PROXY_URL,
-          egressGrantSecret: e.OAX_CONTAINER_EGRESS_GRANT_SECRET,
+          ...(e.OAX_CONTAINER_EGRESS_GRANT_SECRET
+            ? { egressGrantSecret: e.OAX_CONTAINER_EGRESS_GRANT_SECRET }
+            : {}),
         }
       : {}),
     egressAllow: list(e.OAX_CONTAINER_EGRESS_ALLOW),
+    instanceId: e.OAX_CONTAINER_INSTANCE_ID,
     maxCpus: e.OAX_CONTAINER_MAX_CPUS,
     maxMemoryMb: e.OAX_CONTAINER_MAX_MEMORY_MB,
     maxPids: e.OAX_CONTAINER_MAX_PIDS,

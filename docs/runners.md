@@ -96,13 +96,14 @@ complete a run (`403`).
   reason `platform_secret`). A platform connection that needs a secret therefore only works for
   in-process steps.
 - **The same allowlist applies in-process**: the worker's tool gateway resolves a tenant's MCP
-  connection secrets through a tenant-scoped resolver (`tenants.secret_refs`; references of
-  platform connections stay resolvable). Existing installations must set `secretRefs` for tenants
+  connection secrets through a tenant-scoped resolver (`tenants.secret_refs`). Only servers of
+  platform-scope connections use the unrestricted, operator-chosen resolver (chosen per server, so a
+  tenant connection cannot borrow a secret by naming the same reference). Existing installations must set `secretRefs` for tenants
   whose connections use secrets (breaking, pre-1.0).
 - Response is `Cache-Control: no-store`. Values live in the node's memory and reach tool processes
   as their environment and HTTP headers, nothing else. Nothing secret is kept in the control node's
   memory: for scrubbing, the values a run's nodes received are re-resolved from the secret store
-  (static source only). Step records, gate and approval arguments, audit payloads, the node's
+  (static source only). A node may only report steps of kind `model_call`, `tool_call`, `output` and `error`; others are ignored, so it cannot create entries like `step.skipped`, `condition.error` or `handover.invalid`, and its records carry provenance (`run_steps.reported_by`, audit actor `node:<id>`). Step records, gate and approval arguments, audit payloads, the node's
   result (content, JSON, failure message) are scrubbed with them, and the result is deleted once the
   orchestrator read it. **This is a net for accidental leaks only**: a compromised node holds the
   plain values and can encode them, send them through allowed egress or into tool arguments.
@@ -123,6 +124,7 @@ Opt-in: nothing isolating runs by default. Enable it with `OAX_RUNNERS_ENABLED=i
 | `OAX_CONTAINER_TOOLBOX_IMAGES` | JSON map toolbox name -> digest-pinned image. A step with an unknown toolbox fails closed (`toolbox_image_unknown`). Toolbox build, signing and verification are W2-1. |
 | `OAX_CONTAINER_NETWORK` | required. A pre-created network with `internal: true`; the runner inspects it before every start and refuses anything else (`network_not_internal`). |
 | `OAX_NODE_CONTROL_URL` | required. Base URL of the control node **as seen from the node** (on the internal network), not the public URL. |
+| `OAX_CONTAINER_INSTANCE_ID` | installation id (default `default`); containers are labelled with it and the orphan reaper only touches its own installation's containers. Set a distinct value per installation on a shared engine. |
 | `OAX_CONTAINER_EGRESS_PROXY_URL`, `_GRANT_SECRET`, `_ALLOW`, `_PRIVATE_ALLOW` | the separate egress proxy, see Egress below; without URL and secret no step can declare egress. |
 | `OAX_CONTAINER_MAX_CPUS`, `_MAX_MEMORY_MB`, `_MAX_PIDS` | upper bounds (defaults 1, 512, 256); a step's limits are clamped to them. |
 | `OAX_CONTAINER_ENGINE`, `OAX_CONTAINER_ALLOW_RAW_SOCKET` | `docker` (default) or `podman`; the unsafe-socket switch. |
@@ -158,14 +160,15 @@ proxy password. Per connection the proxy applies, in this order:
 3. the **resolved address**: loopback, link-local, metadata (`169.254.0.0/16`, `fd00:ec2::254`,
    `100.100.100.200`, `168.63.129.16`) and unspecified addresses are never reachable. Private
    destinations (RFC 1918 incl. the Docker bridges and their gateways, `100.64.0.0/10`,
-   `198.18.0.0/15`, `fc00::/7`, NAT64 `64:ff9b::/96`, 6to4, multicast, and IPv4-mapped forms of
-   them) are refused unless an **operator** opened that range in
+   `198.18.0.0/15`, `fc00::/7`, NAT64 `64:ff9b::/96`, 6to4, multicast) are refused, and so is any IPv6
+   address that embeds an IPv4 one (mapped, compatible, SIIT, in any spelling) when the embedded
+   address is private, loopback, link-local or metadata; the check is numeric (CIDR), not textual are refused unless an **operator** opened that range in
    `OAX_CONTAINER_EGRESS_PRIVATE_ALLOW` (CIDRs); an `agents.md` can never open them, so an author
    cannot reach `socket-proxy:2375`, `postgres:5432` or `172.17.0.1` by naming them. Every address a
    name resolves to must pass;
 4. in **air-gapped mode** the process-wide `OAX_AIRGAPPED_ALLOW` policy on top.
 
-Plain HTTP requests get `405`. Limits: connections, concurrent tunnels per node (8), a short header
+The grant secret must differ from `OAX_RUN_TOKEN_SECRET` (refused at startup) and is passed to the worker and the proxy only, never to the control node. Plain HTTP requests get `405`. Limits: connections, concurrent tunnels per node (8), a short header
 timeout for silent clients, an idle timeout per tunnel.
 
 ### Docker Compose (evaluation only)

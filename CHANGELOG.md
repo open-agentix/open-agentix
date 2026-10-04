@@ -22,7 +22,7 @@ All notable changes to this project are documented here. The format follows
   `0009`; `PATCH /v1/tenants/{id}` `secretRefs`), audited as `runnode.started`, `credential.issued`,
   `credential.denied`, `credential.revoked`, `runnode.stopped`, `runner.unsafe_socket` without values.
   A revoked or expired session kills its token immediately (also when another worker takes the run
-  over); node-reported cost and tokens are dropped, nodes receive the remaining budget; a node token can never complete a run or
+  over); node-reported cost and tokens are dropped, nodes may only report model/tool/output/error steps (marked `node:<id>`) and receive the remaining budget; a node token can never complete a run or
   act for another step. A separate egress proxy service (`CONNECT`, signed per-node grants, operator ceiling
   `OAX_CONTAINER_EGRESS_ALLOW`, private/metadata/loopback ranges closed, air-gapped policy on top)
   enforces `runtime.egress`. New `GET /v1/worker/runs/{id}/handover`,

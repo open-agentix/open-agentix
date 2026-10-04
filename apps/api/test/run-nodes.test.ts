@@ -1,4 +1,5 @@
 import { issueRunToken } from '@openagentix/core';
+import { ContainerRunner } from '@openagentix/runners';
 import type { StepCredentials } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -698,13 +699,22 @@ describe('platform configuration of the container runner', () => {
     expect(c.config?.egressProxyUrl).toBe('http://egress-proxy:3128');
     expect(c.config?.egressGrantSecret).toBe('g'.repeat(40));
     expect(c.config?.egressAllow).toEqual(['jira.example.org', '*.corp.example']);
-    const noProxy = { ...ENV } as Record<string, string>;
-    delete noProxy.OAX_CONTAINER_EGRESS_PROXY_URL;
-    expect(() => cfg(noProxy)).toThrow(/both/);
+    // The control node does not need the grant secret (only the worker and the proxy do): a proxy
+    // URL without it loads here and is refused when the worker builds its runner.
     const noSecret = { ...ENV } as Record<string, string>;
     delete noSecret.OAX_CONTAINER_EGRESS_GRANT_SECRET;
-    expect(() => cfg(noSecret)).toThrow(/both/);
+    const loaded = cfg(noSecret).runners.container;
+    expect(loaded.config?.egressProxyUrl).toBe('http://egress-proxy:3128');
+    expect(loaded.config?.egressGrantSecret).toBeUndefined();
+    expect(() => new ContainerRunner(loaded.config!)).toThrow(/together/);
+    // one key must not serve two purposes
+    expect(() => cfg({ ...ENV, OAX_CONTAINER_EGRESS_GRANT_SECRET: RUN_TOKEN_SECRET })).toThrow(
+      /must differ from OAX_RUN_TOKEN_SECRET/,
+    );
     expect(() => cfg({ ...ENV, OAX_CONTAINER_EGRESS_GRANT_SECRET: 'short' })).toThrow();
+    expect(
+      cfg({ ...ENV, OAX_CONTAINER_INSTANCE_ID: 'prod-1' }).runners.container.config?.instanceId,
+    ).toBe('prod-1');
     expect(() => cfg({ ...ENV, OAX_CONTAINER_EGRESS_PRIVATE_ALLOW: 'not-a-cidr' })).toThrow(
       /not a CIDR/,
     );
@@ -764,10 +774,9 @@ describe('platform secrets are never handed to a node', () => {
 });
 
 describe('in-process runs obey the same tenant allowlist', () => {
-  it('resolves allowed references, platform connection references, and refuses everything else', async () => {
+  it('a tenant connection resolves only allowed references', async () => {
     const r = await n.services.runNodes.resolverFor(tenantId);
     expect(await r.resolve('mail-hook')).toBe('mail-secret-1');
-    expect(await r.resolve('plat-secret').catch((e) => e.code)).not.toBe('secret_not_allowed');
     await n.req({
       method: 'PATCH',
       url: `/v1/tenants/${tenantId}`,
@@ -782,10 +791,11 @@ describe('in-process runs obey the same tenant allowlist', () => {
       await expect(narrow.resolve('MAIL.hook')).rejects.toMatchObject({
         code: 'secret_not_allowed',
       });
-      // platform connections keep working: their references are operator-chosen
-      expect(await narrow.resolve('plat-secret').catch((e) => e.code)).not.toBe(
-        'secret_not_allowed',
-      );
+      // a platform secret name is NOT resolvable by a tenant connection just because a platform
+      // connection uses it
+      await expect(narrow.resolve('plat-secret')).rejects.toMatchObject({
+        code: 'secret_not_allowed',
+      });
     } finally {
       await n.req({
         method: 'PATCH',
@@ -797,6 +807,30 @@ describe('in-process runs obey the same tenant allowlist', () => {
     try {
       const none = await n.services.runNodes.resolverFor(tenantId);
       await expect(none.resolve('mail-hook')).rejects.toMatchObject({ code: 'secret_not_allowed' });
+    } finally {
+      await n.req({
+        method: 'PATCH',
+        url: `/v1/tenants/${tenantId}`,
+        payload: { secretRefs: ALLOWED },
+      });
+    }
+  });
+
+  it('only PLATFORM-scope servers get the unrestricted resolver, chosen per server', async () => {
+    const platform = await n.services.catalog.platformMcpNames({ tenantId, teamId: null, agentId });
+    expect([...platform]).toEqual(['platform-tool']);
+    await n.req({ method: 'PATCH', url: `/v1/tenants/${tenantId}`, payload: { secretRefs: [] } });
+    try {
+      const { secretsFor, secrets } = await n.services.runNodes.resolverForRun(tenantId, platform);
+      // the platform connection keeps working with the operator's secret ...
+      expect(await secretsFor('platform-tool').resolve('trivy-hook')).toBe('hook-secret-1');
+      // ... a tenant connection (even one with the very same reference) does not
+      await expect(secretsFor('jira').resolve('trivy-hook')).rejects.toMatchObject({
+        code: 'secret_not_allowed',
+      });
+      await expect(secrets.resolve('trivy-hook')).rejects.toMatchObject({
+        code: 'secret_not_allowed',
+      });
     } finally {
       await n.req({
         method: 'PATCH',
@@ -1157,5 +1191,74 @@ describe('step egress is bounded by the operator ceiling at publish', () => {
     expect(
       (await n.req({ method: 'POST', url: `/v1/agents/${ok.json().id}/publish` })).statusCode,
     ).toBe(201);
+  });
+});
+
+describe('what a node may report, and who said it', () => {
+  const post = (runId: string, token: string, payload: object) =>
+    n.req({ method: 'POST', url: `/v1/worker/runs/${runId}/steps`, token, payload });
+  it.each(['condition', 'handover', 'control', 'policy_decision', 'approval'])(
+    'ignores a %s step reported by a node (no row, no audit entry)',
+    async (kind) => {
+      const runId = await newRun();
+      const s = await session(runId);
+      const res = await post(runId, s.token, {
+        kind,
+        agentId: 'research',
+        name: 'when',
+        status: kind === 'condition' ? 'skipped' : 'error',
+        output: { when: 'x', reason: 'forged' },
+      });
+      expect(res.statusCode).toBe(204);
+      expect(await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId))).toEqual([]);
+      const forged = (await auditOf(runId)).filter((e) =>
+        /^(step|condition|handover)\./.test(e.action),
+      );
+      expect(forged).toEqual([]);
+    },
+  );
+  it('records model_call, tool_call, output and error with provenance', async () => {
+    const runId = await newRun();
+    const s = await session(runId);
+    for (const kind of ['model_call', 'tool_call', 'output', 'error'])
+      expect(
+        (await post(runId, s.token, { kind, agentId: 'research', name: kind, status: 'ok' }))
+          .statusCode,
+      ).toBe(204);
+    const rows = await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId));
+    expect(rows.map((r) => r.kind).sort()).toEqual(['error', 'model_call', 'output', 'tool_call']);
+    expect(rows.every((r) => r.reportedBy === `node:${s.nodeId}`)).toBe(true);
+    const entries = (
+      await n.req({ method: 'GET', url: `/v1/audit?runId=${runId}&limit=200` })
+    ).json().items as {
+      action: string;
+      actor: string;
+      payload: { reportedBy?: string };
+    }[];
+    const derived = entries.filter((e) => e.action.startsWith('step.'));
+    expect(derived).toHaveLength(4);
+    expect(
+      derived.every(
+        (e) => e.actor === `node:${s.nodeId}` && e.payload.reportedBy === `node:${s.nodeId}`,
+      ),
+    ).toBe(true);
+  });
+  it('steps of the trusted worker carry no node provenance', async () => {
+    const runId = await newRun();
+    const token = n.services.control.issueToken(runId, 'w1');
+    expect(
+      (
+        await post(runId, token, {
+          kind: 'condition',
+          agentId: 'research',
+          name: 'when',
+          status: 'skipped',
+          output: { when: 'x' },
+        })
+      ).statusCode,
+    ).toBe(204);
+    const [row] = await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId));
+    expect(row).toMatchObject({ kind: 'condition', reportedBy: null });
+    expect((await auditOf(runId)).some((e) => e.action === 'step.skipped')).toBe(true);
   });
 });

@@ -148,6 +148,11 @@ describe('address classification', () => {
   it('normalises IPv4-mapped forms and brackets', () => {
     expect(normalizeAddress('::ffff:1.2.3.4')?.version).toBe(4);
     expect(normalizeAddress('::ffff:102:304')?.version).toBe(4);
+    expect(normalizeAddress('0:0:0:0:0:ffff:102:304')?.version).toBe(4);
+    expect(normalizeAddress('::ffff:0:102:304')?.version).toBe(4);
+    expect(normalizeAddress('::102:304')?.version).toBe(4);
+    expect(normalizeAddress('::1')?.version).toBe(4); // numeric low bits; classification stays "denied"
+    expect(normalizeAddress('::ffff:999.1.1.1')).toBeUndefined();
     expect(normalizeAddress('[2001:db8::1]')?.version).toBe(6);
     expect(normalizeAddress('fe80::1%eth0')?.version).toBe(6);
   });

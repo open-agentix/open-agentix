@@ -35,6 +35,13 @@ import { monthOf } from './runs.js';
 const ACTIVE = ['running', 'awaiting_approval'];
 /** Largest input or output a run node may attach to one step record. */
 const NODE_STEP_MAX_BYTES = 64 * 1024;
+/** Step kinds a run node may report. */
+const NODE_STEP_KINDS: ReadonlySet<string> = new Set([
+  'model_call',
+  'tool_call',
+  'output',
+  'error',
+]);
 
 /**
  * The control node side of the worker contract. Every method is scoped by a signed run token,
@@ -249,13 +256,17 @@ export class ControlPlaneService {
   async recordStep(
     runId: string,
     rawStep: StepInput,
-    from: 'trusted' | 'node' = 'trusted',
+    /** Set when an untrusted run node reports the step (never for the trusted worker). */
+    node?: { id: string },
   ): Promise<void> {
+    // A node may only report what it can observe itself. Everything that decides or documents the
+    // run (conditions, handover validation, control decisions, policy decisions, approvals) is
+    // recorded by the control node and the orchestrator; a node's claim of such a step is ignored,
+    // so it can neither forge nor trigger the audit entries derived from them (step.skipped,
+    // condition.error, handover.invalid, ...).
+    if (node && !NODE_STEP_KINDS.has(rawStep.kind)) return;
     // Values the broker handed out for this run never reach step rows or audit payloads.
-    const step = await this.nodes.scrub(
-      runId,
-      from === 'node' ? this.sanitizeNodeStep(rawStep) : rawStep,
-    );
+    const step = await this.nodes.scrub(runId, node ? this.sanitizeNodeStep(rawStep) : rawStep);
     await this.ctx.db.transaction(async (tx) => {
       const [run] = await tx
         .update(runs)
@@ -290,6 +301,7 @@ export class ControlPlaneService {
         durationMs: step.durationMs ?? null,
         provider: step.provider ?? null,
         model: step.model ?? null,
+        reportedBy: node ? `node:${node.id}` : null,
         createdAt: this.ctx.now(),
       });
       if ((step.costMicros ?? 0) > 0 || (step.tokensIn ?? 0) > 0 || (step.tokensOut ?? 0) > 0) {
@@ -325,13 +337,14 @@ export class ControlPlaneService {
       }
     });
     // Redaction of secrets happens inside the audit entry creation.
-    const special = stepAuditEntry(step);
+    const special = node ? undefined : stepAuditEntry(step);
     await this.audit.append({
-      actor: `agent:${step.agentId ?? 'executor'}`,
+      // Provenance: entries derived from a node's report are marked as such.
+      actor: node ? `node:${node.id}` : `agent:${step.agentId ?? 'executor'}`,
       action: special?.action ?? `step.${step.kind}`,
       target: step.name,
       runId,
-      payload: special?.payload ?? step,
+      payload: node ? { reportedBy: `node:${node.id}`, ...step } : (special?.payload ?? step),
     });
   }
 

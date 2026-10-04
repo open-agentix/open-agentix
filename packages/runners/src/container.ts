@@ -65,6 +65,11 @@ export const ContainerRunnerConfigSchema = z.strictObject({
   maxCpus: z.number().positive().default(1),
   maxMemoryMb: z.number().int().min(64).default(512),
   maxPids: z.number().int().positive().default(256),
+  /** Identifies this installation on a shared engine; set a distinct value per installation. */
+  instanceId: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
+    .default('default'),
   /** Numeric non-root user and group of the node process. */
   uid: z.number().int().min(1000).max(65534).default(10001),
   tmpMb: z.number().int().positive().default(64),
@@ -74,6 +79,8 @@ export type ContainerRunnerConfig = z.infer<typeof ContainerRunnerConfigSchema>;
 export type ContainerRunnerConfigInput = z.input<typeof ContainerRunnerConfigSchema>;
 
 export const NODE_LABEL = 'io.openagentix.run-node';
+/** Installation id: the reaper only ever touches containers of its own installation. */
+export const INSTANCE_LABEL = 'io.openagentix.instance';
 /** Unix seconds after which the container must not exist any more (hard lifetime). */
 export const EXPIRES_LABEL = 'io.openagentix.expires';
 const TOKEN_DIR = '/run/oax';
@@ -206,9 +213,20 @@ export class ContainerRunner implements IsolatingRunner {
    */
   async reapOrphans(now: number = Date.now()): Promise<number> {
     let removed = 0;
-    for (const c of await this.engine.listContainers(NODE_LABEL)) {
-      const expires = Number(c.Labels?.[EXPIRES_LABEL]);
-      if (Number.isFinite(expires) && expires * 1000 > now) continue;
+    for (const c of await this.engine.listContainers([
+      `${NODE_LABEL}=true`,
+      `${INSTANCE_LABEL}=${this.config.instanceId}`,
+    ])) {
+      // Defence in depth on top of the engine-side filter: both labels must really be there.
+      if (
+        c.Labels?.[NODE_LABEL] !== 'true' ||
+        c.Labels?.[INSTANCE_LABEL] !== this.config.instanceId
+      )
+        continue;
+      const raw = c.Labels[EXPIRES_LABEL] ?? '';
+      const expires = /^\d{1,12}$/.test(raw) ? Number(raw) : Number.NaN;
+      // An unparsable or missing expiry is not "expired": leave the container alone.
+      if (!Number.isFinite(expires) || expires * 1000 > now) continue;
       await this.engine.removeContainer(c.Id).catch(() => undefined);
       removed++;
     }
@@ -298,6 +316,7 @@ export class ContainerRunner implements IsolatingRunner {
       ],
       Labels: {
         [NODE_LABEL]: 'true',
+        [INSTANCE_LABEL]: this.config.instanceId,
         [EXPIRES_LABEL]: String(
           Math.floor(Date.now() / 1000) + Math.ceil(spec.limits.timeoutSeconds) + 90,
         ),

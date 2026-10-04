@@ -238,8 +238,10 @@ export class EngineClient {
   }
 
   /** Containers (running or not) that carry the label. */
-  async listContainers(label: string): Promise<{ Id: string; Labels?: Record<string, string> }[]> {
-    const filters = encodeURIComponent(JSON.stringify({ label: [label] }));
+  async listContainers(
+    labels: string[],
+  ): Promise<{ Id: string; Labels?: Record<string, string> }[]> {
+    const filters = encodeURIComponent(JSON.stringify({ label: labels }));
     const r = await this.call('GET', `/containers/json?all=1&filters=${filters}`);
     return JSON.parse(r.body.toString('utf8')) as { Id: string; Labels?: Record<string, string> }[];
   }

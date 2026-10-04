@@ -136,6 +136,10 @@ describe('egress proxy', () => {
       ['db.internal', '64:ff9b::a00:1'], // NAT64 embedding 10.0.0.1
       ['db.internal', '::ffff:10.0.0.1'], // IPv4-mapped
       ['db.internal', '::ffff:a00:1'],
+      ['db.internal', '0::ffff:a00:1'],
+      ['db.internal', '0:0:0:0:0:ffff:a00:1'],
+      ['db.internal', '::ffff:0:a00:1'],
+      ['db.internal', '::a00:1'],
       ['db.internal', '2002:a00:1::1'], // 6to4 embedding 10.0.0.1
     ])('%s -> %s is refused as private', async (host, ip) => {
       RESOLVE[host] = [ip];

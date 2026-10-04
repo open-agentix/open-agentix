@@ -155,9 +155,10 @@ export class RunNodesService {
   }
 
   /**
-   * The secret resolver of IN-PROCESS runs of a tenant: the same allowlist as the broker. A tenant
-   * connection may only use references the tenant allows (`tenants.secret_refs`); references of
-   * platform connections are operator-chosen and stay resolvable for them.
+   * The secret resolver of a TENANT connection in an in-process run: the same allowlist as the
+   * broker (`tenants.secret_refs`). Platform-scope connections are operator-chosen and use the
+   * unrestricted resolver instead (see {@link resolverForRun}); a tenant connection can never use a
+   * secret just because a platform connection happens to reference the same name.
    */
   async resolverFor(tenantId: string): Promise<SecretResolver> {
     const [t] = await this.ctx.db
@@ -165,26 +166,28 @@ export class RunNodesService {
       .from(tenants)
       .where(eq(tenants.id, tenantId));
     const allowed = t?.refs ?? [];
-    const platform = new Set<string>();
-    for (const c of await this.ctx.db
-      .select({ config: connections.config })
-      .from(connections)
-      .where(and(eq(connections.kind, 'mcp'), eq(connections.scope, 'platform'))))
-      for (const k of ['envSecrets', 'headerSecrets'])
-        for (const v of Object.values(
-          ((c.config as Record<string, unknown>)[k] ?? {}) as Record<string, string>,
-        ))
-          platform.add(canonicalSecretRef(v));
     const inner = this.ctx.secrets;
     return {
       resolve: async (ref: string) => {
-        if (!secretRefAllowed(allowed, ref) && !platform.has(canonicalSecretRef(ref)))
+        if (!secretRefAllowed(allowed, ref))
           throw new OaxError(
             'secret_not_allowed',
             `secret "${ref}" is not allowed for this tenant (tenants.secret_refs)`,
           );
         return inner.resolve(ref);
       },
+    };
+  }
+
+  /** Per-server resolvers for a run: platform connections unrestricted, all others allowlisted. */
+  async resolverForRun(
+    tenantId: string,
+    platformServers: ReadonlySet<string>,
+  ): Promise<{ secrets: SecretResolver; secretsFor: (server: string) => SecretResolver }> {
+    const strict = await this.resolverFor(tenantId);
+    return {
+      secrets: strict,
+      secretsFor: (server) => (platformServers.has(server) ? this.ctx.secrets : strict),
     };
   }
 
