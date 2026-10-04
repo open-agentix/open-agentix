@@ -8,7 +8,7 @@ import {
   type RoleBinding,
 } from '@openagentix/core';
 import { parseProviderConfigs, type ProviderConfig } from '@openagentix/providers';
-import { KubernetesJobRunnerConfigSchema } from '@openagentix/runners';
+import { KubernetesJobRunnerConfigSchema, validateResourceCeiling } from '@openagentix/runners';
 import { z } from 'zod';
 import { loadDatabaseConfig, type DatabaseConfig } from './db/settings.js';
 
@@ -126,7 +126,12 @@ export const EnvSchema = z.object({
   OAX_RUNNERS_ENABLED: z.string().default('in-process'),
   OAX_K8S_JOB_ENABLED: bool.default(false),
   OAX_K8S_NAMESPACE: z.string().default('openagentix-runs'),
-  OAX_K8S_SERVICE_ACCOUNT: z.string().default('openagentix-worker'),
+  OAX_K8S_SERVICE_ACCOUNT: z.string().default('openagentix-run-node'),
+  OAX_K8S_WORKER_SERVICE_ACCOUNT: z.string().default('openagentix-worker'),
+  OAX_K8S_WORKER_NAMESPACE: z.string().optional(),
+  OAX_K8S_RUN_NODE_IMAGES: z.string().default(''),
+  OAX_K8S_DENY_CIDRS: z.string().default(''),
+  OAX_K8S_SIGNATURES_VERIFIED_BY_ADMISSION: bool.default(false),
   OAX_K8S_TTL_SECONDS_AFTER_FINISHED: int(600),
   OAX_K8S_ACTIVE_DEADLINE_SECONDS: int(3600),
   OAX_K8S_IMAGE_PULL_SECRETS: z.string().default(''),
@@ -443,18 +448,48 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
   const job = KubernetesJobRunnerConfigSchema.parse({
     namespace: e.OAX_K8S_NAMESPACE,
     serviceAccountName: e.OAX_K8S_SERVICE_ACCOUNT,
+    workerServiceAccount: e.OAX_K8S_WORKER_SERVICE_ACCOUNT,
+    ...(e.OAX_K8S_WORKER_NAMESPACE ? { workerNamespace: e.OAX_K8S_WORKER_NAMESPACE } : {}),
     registry: e.OAX_TOOLBOX_REGISTRY,
+    toolboxAllowlist: list(e.OAX_TOOLBOX_ALLOWLIST),
+    runNodeImages: list(e.OAX_K8S_RUN_NODE_IMAGES),
+    denyCidrs: list(e.OAX_K8S_DENY_CIDRS),
+    airgapped: e.OAX_AIRGAPPED,
     ttlSecondsAfterFinished: e.OAX_K8S_TTL_SECONDS_AFTER_FINISHED,
     activeDeadlineSeconds: e.OAX_K8S_ACTIVE_DEADLINE_SECONDS,
     egress: list(e.OAX_K8S_EGRESS),
     resources: { cpu: e.OAX_K8S_RESOURCES_CPU, memory: e.OAX_K8S_RESOURCES_MEMORY },
     nodeSelector: e.OAX_K8S_NODE_SELECTOR ?? {},
   });
+  try {
+    validateResourceCeiling(job.resources);
+  } catch (err) {
+    throw new OaxError(
+      'config_invalid',
+      `invalid configuration: OAX_K8S_RESOURCES_*: ${(err as Error).message}`,
+    );
+  }
   if (enabled.includes('kubernetes-job') && !e.OAX_K8S_JOB_ENABLED) {
     throw new OaxError(
       'config_invalid',
       'invalid configuration: runner "kubernetes-job" requires OAX_K8S_JOB_ENABLED=true (v0.2 feature flag)',
     );
+  }
+  if (enabled.includes('kubernetes-job')) {
+    // Fail closed: without an allowlist the runner would start no image at all.
+    if (job.toolboxAllowlist.length === 0 && job.runNodeImages.length === 0) {
+      throw new OaxError(
+        'config_invalid',
+        'invalid configuration: runner "kubernetes-job" needs OAX_TOOLBOX_ALLOWLIST and/or OAX_K8S_RUN_NODE_IMAGES (an empty allowlist would allow nothing)',
+      );
+    }
+    // The runner does not verify cosign signatures itself; an admission policy must.
+    if (e.OAX_TOOLBOX_REQUIRE_SIGNATURE && !e.OAX_K8S_SIGNATURES_VERIFIED_BY_ADMISSION) {
+      throw new OaxError(
+        'config_invalid',
+        'invalid configuration: OAX_TOOLBOX_REQUIRE_SIGNATURE=true is not enforced by the kubernetes-job runner itself; verify signatures with an admission policy (Kyverno/policy-controller) and set OAX_K8S_SIGNATURES_VERIFIED_BY_ADMISSION=true, or set OAX_TOOLBOX_REQUIRE_SIGNATURE=false',
+      );
+    }
   }
   return {
     enabled: enabled as RunnerKind[],

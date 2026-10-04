@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Kubernetes Job runner (W1-4)**: `KubernetesJobRunner` implements the isolating-runner contract
+  of ADR 0008: one suspended Job per step plus an owner-referenced deny-by-default NetworkPolicy
+  (DNS, control node and egress CIDR allowlist) and a Secret holding only the run token, then
+  unsuspend; everything is deleted on stop. Hardened Pods (non-root, read-only rootfs, drop ALL,
+  seccomp RuntimeDefault, no ServiceAccount token, resource limits, `activeDeadlineSeconds`,
+  `ttlSecondsAfterFinished`, no secrets in env), digest-pinned and allowlisted images only, minimal
+  namespaced RBAC (`docs/examples/kubernetes-job-runner-rbac.yaml`), in-cluster API client without
+  extra dependencies. Security-reviewed: operator egress is an upper bound (steps can only narrow,
+  min prefix /8 and /32, IMDS/link-local/loopback and `OAX_K8S_DENY_CIDRS` excluded, no step egress
+  when air-gapped), Foreground Job deletion with the NetworkPolicy removed last, a static
+  default-deny policy, uid-tracked cleanup, UUID-only node ids, clamped resources with LimitRange
+  and ResourceQuota, a dedicated step ServiceAccount (`openagentix-run-node`), fail-closed toolbox
+  allowlist and an explicit admission-signature acknowledgement. The `kubernetes-job` `StubRunner` is gone. `docs/kubernetes-job-runner.md`.
 - **Agent Check and Agent Plan v1 (advisory)**: strict `AgentPlan` schema, deterministic
   least-privilege lint `LP001`-`LP008` with a fixed JSON output, optional model-assisted notes that
   can only add `info`/`warning` findings (untrusted, schema-validated, costed and budget-checked),

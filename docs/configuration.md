@@ -204,24 +204,29 @@ proxied either.
 
 ## Runners and toolboxes (v0.2 contract, feature-flagged off)
 
-These variables are parsed and validated today so the Helm chart can expose them; the
-`kubernetes-job` runner itself ships in v0.2.
+These variables are consumed by the `kubernetes-job` runner (see
+[kubernetes-job-runner.md](kubernetes-job-runner.md)); it stays opt-in behind `OAX_K8S_JOB_ENABLED`
+until the run node (W1-3) ships.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `OAX_RUNNERS_ENABLED` | `in-process` | Comma list of runners agents may use (`in-process`, `local`, `container`, `kubernetes-job`, `aws-lambda`, `github-actions`, `gitlab-ci`). Publishing an agent with another `runtime.runner` fails. |
 | `OAX_K8S_JOB_ENABLED` | `false` | Feature flag; required when `kubernetes-job` is enabled. |
 | `OAX_K8S_NAMESPACE` | `openagentix-runs` | Namespace for run Jobs. |
-| `OAX_K8S_SERVICE_ACCOUNT` | `openagentix-worker` | ServiceAccount of run Jobs (annotate for IRSA on EKS). |
+| `OAX_K8S_SERVICE_ACCOUNT` | `openagentix-run-node` | ServiceAccount of run Jobs (annotate for IRSA on EKS); must differ from the worker's. |
+| `OAX_K8S_WORKER_SERVICE_ACCOUNT` / `OAX_K8S_WORKER_NAMESPACE` | `openagentix-worker` / – | Worker identity the runner refuses to reuse for step Pods. |
+| `OAX_K8S_RUN_NODE_IMAGES` | – | Comma list of non-toolbox images (repository path below the registry) allowed as run node. |
+| `OAX_K8S_DENY_CIDRS` | – | Always-denied CIDRs (pod, service, node, API server) punched out of allowed egress, in addition to the built-in link-local/IMDS/loopback. |
+| `OAX_K8S_SIGNATURES_VERIFIED_BY_ADMISSION` | `false` | Confirms an admission policy verifies image signatures; required when `OAX_TOOLBOX_REQUIRE_SIGNATURE=true` and `kubernetes-job` is enabled. |
 | `OAX_K8S_TTL_SECONDS_AFTER_FINISHED` | `600` | Job TTL. |
 | `OAX_K8S_ACTIVE_DEADLINE_SECONDS` | `3600` | Job deadline. |
 | `OAX_K8S_IMAGE_PULL_SECRETS` | – | Comma list of image pull secret names. |
 | `OAX_K8S_NODE_SELECTOR` | `{}` | JSON node selector for run Pods. |
 | `OAX_K8S_RESOURCES_CPU` / `OAX_K8S_RESOURCES_MEMORY` | `500m` / `512Mi` | Requests/limits of run Pods. |
-| `OAX_K8S_EGRESS` | – | Comma list of allowed egress CIDRs/hosts (rendered into NetworkPolicies). |
+| `OAX_K8S_EGRESS` | – | Operator upper bound for step egress CIDRs (a step can only narrow it; prefix >= /8 or /32). Host names are not enforceable by NetworkPolicies. |
 | `OAX_TOOLBOX_REGISTRY` | `ghcr.io/open-agentix` | Registry of toolbox images. |
-| `OAX_TOOLBOX_ALLOWLIST` | – | Comma list of toolbox names agents may declare (`runtime.toolbox`); empty = any catalog toolbox. Enforced at publish. |
-| `OAX_TOOLBOX_REQUIRE_SIGNATURE` | `true` | Only run cosign-verified toolbox images (enforced by the v0.2 runners/admission policy). |
+| `OAX_TOOLBOX_ALLOWLIST` | – | Comma list of toolbox names agents may declare (`runtime.toolbox`). Enforced at publish; the `kubernetes-job` runner treats an empty list as "no toolbox allowed" and refuses to start without it. |
+| `OAX_TOOLBOX_REQUIRE_SIGNATURE` | `true` | Only run cosign-verified toolbox images. **Not enforced by the runner itself**: with `kubernetes-job` enabled the node refuses to start unless `OAX_K8S_SIGNATURES_VERIFIED_BY_ADMISSION=true` (an admission policy verifies). |
 
 ## Webhooks
 
