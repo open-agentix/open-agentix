@@ -9,9 +9,9 @@ import {
 } from '@openagentix/mcp';
 import { ProviderRegistry, SimulatedProvider } from '@openagentix/providers';
 import { HttpControlPlane, InProcessRunner } from '@openagentix/runners';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runs } from '../src/db/schema.js';
+import { auditLog, runs } from '../src/db/schema.js';
 import { CVE_TRIAGE, JIRA_EVENT, TICKET_UPDATER, TRIVY_EVENT, example } from './fixtures.js';
 import { injectFetch, testNode, testSecrets, type TestNode } from './helpers.js';
 
@@ -450,6 +450,46 @@ describe('runs API', () => {
     expect(resumed.body.match(/event: step/g)).toHaveLength(1);
   });
 
+  it('accepts a date or an ISO timestamp as period bounds and rejects garbage', async () => {
+    const all = (await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=agent' })).json();
+    const month = new Date().toISOString().slice(0, 7);
+    const urls = [
+      `from=${month}-01`, // date
+      `from=${month}-17`, // any day of the month
+      `from=${encodeURIComponent(`${month}-01T00:00:00.000Z`)}`, // what the UI used to send
+      `from=${encodeURIComponent(new Date(Date.now() - 30 * 86_400_000).toISOString())}`, // last 30 days
+      `to=${encodeURIComponent(`${month}-01T00:00:00+02:00`)}`,
+    ];
+    for (const q of urls) {
+      const res = await n.req({ method: 'GET', url: `/v1/costs/summary?groupBy=agent&${q}` });
+      expect(res.statusCode, q).toBe(200);
+    }
+    // 'This month' keeps the rows booked this month, 'All time' (no bound) returns everything.
+    const thisMonth = (
+      await n.req({
+        method: 'GET',
+        url: `/v1/costs/summary?groupBy=agent&from=${encodeURIComponent(`${month}-01T00:00:00.000Z`)}`,
+      })
+    ).json();
+    expect(thisMonth.items).toEqual(all.items);
+    const future = await n.req({
+      method: 'GET',
+      url: '/v1/costs/summary?groupBy=agent&from=2999-01-15T00:00:00Z',
+    });
+    expect(future.json().items).toEqual([]);
+    for (const bad of ['from=yesterday', 'from=2026-13-01', 'from=2026-02-31', 'to=2026-10']) {
+      expect(
+        (await n.req({ method: 'GET', url: `/v1/costs/summary?${bad}` })).statusCode,
+        bad,
+      ).toBe(400);
+    }
+    const exp = await n.req({
+      method: 'GET',
+      url: `/v1/costs/export?format=json&from=${encodeURIComponent(`${month}-01T00:00:00.000Z`)}`,
+    });
+    expect(exp.statusCode).toBe(200);
+  });
+
   it('summarises costs and enforces team budgets', async () => {
     const byAgent = (await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=agent' })).json();
     expect(byAgent.items[0]).toMatchObject({ key: triageId, label: 'cve-triage' });
@@ -526,6 +566,39 @@ describe('audit API', () => {
     expect(slice).toMatchObject({ valid: true, checkedEntries: 8 });
     const small = await n.services.audit.verify(1, undefined, 7);
     expect(small.valid).toBe(true);
+  });
+
+  it('still detects a modified entry (tamper test)', async () => {
+    // The table is append-only (trigger), so simulate someone with raw storage access.
+    const mutate = async (action: string) => {
+      await n.ctx.db.execute(sql`set session_replication_role = replica`);
+      try {
+        await n.ctx.db.update(auditLog).set({ action }).where(eq(auditLog.seq, 7));
+      } finally {
+        await n.ctx.db.execute(sql`set session_replication_role = origin`);
+      }
+    };
+    const [row] = await n.ctx.db.select().from(auditLog).where(eq(auditLog.seq, 7));
+    await mutate('run.tampered');
+    try {
+      const r = (await n.req({ method: 'POST', url: '/v1/audit/verify', payload: {} })).json();
+      expect(r.valid).toBe(false);
+      expect(r.issues.some((i: { seq: number }) => i.seq === 7)).toBe(true);
+    } finally {
+      await mutate(row!.action);
+    }
+    expect(
+      (await n.req({ method: 'POST', url: '/v1/audit/verify', payload: {} })).json().valid,
+    ).toBe(true);
+  });
+
+  it('reports the real head (last sequence number and its hash) of the verified chain', async () => {
+    const r = (await n.req({ method: 'POST', url: '/v1/audit/verify', payload: {} })).json();
+    const last = (await n.req({ method: 'GET', url: '/v1/audit?limit=1' })).json().items[0];
+    expect(r.headSeq).toBe(last.seq);
+    expect(r.headSeq).toBeGreaterThan(0);
+    expect(r.headHash).toBe(last.hash);
+    expect(r.headHash).not.toBe('0'.repeat(64));
   });
 
   it('lists, filters, exports and checkpoints', async () => {

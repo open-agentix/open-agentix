@@ -3117,8 +3117,9 @@ export interface paths {
             parameters: {
                 query?: {
                     groupBy?: "run" | "agent" | "team" | "tenant" | "use_case" | "month" | "provider" | "model";
-                    /** @description first day of a month, inclusive */
+                    /** @description start of the period, inclusive: YYYY-MM-DD or ISO 8601 timestamp, rounded down to the first day of its month (UTC) */
                     from?: string;
+                    /** @description end of the period, inclusive: same formats as `from` */
                     to?: string;
                     limit?: number;
                     /** @description platform operators only: span every tenant instead of the acting tenant */

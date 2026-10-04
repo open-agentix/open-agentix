@@ -19,7 +19,7 @@ import {
   Tabs,
 } from '../../components/ui';
 import { useI18n } from '../../i18n/i18n';
-import { shortId, startOfMonth, useDocumentTitle } from '../../lib/hooks';
+import { localDate, monthStartDate, shortId, useDocumentTitle } from '../../lib/hooks';
 import { BudgetsSection } from './BudgetsSection';
 
 const route = getRouteApi('/_app/costs');
@@ -27,8 +27,8 @@ const GROUPS: CostGroupBy[] = ['agent', 'team', 'month', 'model', 'provider', 'r
 type Period = 'month' | '30d' | 'all';
 
 export function periodStart(period: Period, now = new Date()): string | undefined {
-  if (period === 'month') return startOfMonth(now);
-  if (period === '30d') return new Date(now.getTime() - 30 * 86_400_000).toISOString();
+  if (period === 'month') return monthStartDate(now);
+  if (period === '30d') return localDate(new Date(now.getTime() - 30 * 86_400_000));
   return undefined;
 }
 
@@ -155,7 +155,7 @@ export function CostsPage() {
 function TeamBudgets() {
   const { t, fmt } = useI18n();
   const teams = useQuery(teamsQuery);
-  const spend = useQuery(costsQuery('team', startOfMonth()));
+  const spend = useQuery(costsQuery('team', monthStartDate()));
   const budgeted = (teams.data?.items ?? []).filter((tm) => tm.monthlyBudgetUsd);
   if (!budgeted.length) return null;
   const spentBy = new Map((spend.data?.items ?? []).map((r) => [r.key, r.costUsd]));

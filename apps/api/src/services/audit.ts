@@ -239,22 +239,28 @@ export class AuditService {
   /**
    * Chain verification for a tenant. The chain itself is global, so the whole chain is verified,
    * but only issues that concern the tenant's own entries are reported and no other tenant's
-   * entry counts or head hashes are revealed.
+   * entry counts or head hashes are revealed (the head is the tenant's own latest entry).
    */
   async verifyForTenant(tenantId: string): Promise<VerifyResult> {
     const full = await this.verify();
     const own = await this.ctx.db
-      .select({ seq: auditLog.seq })
+      .select({ seq: auditLog.seq, hash: auditLog.hash })
       .from(auditLog)
       .where(eq(auditLog.tenantId, tenantId));
     const seqs = new Set(own.map((r) => r.seq));
+    // The head reported to a tenant is the tenant's own latest entry (its sequence number and
+    // real hash), never the global head, which would reveal how much other tenants write.
+    const head = own.reduce<{ seq: number; hash: string } | null>(
+      (h, r) => (h === null || r.seq > h.seq ? r : h),
+      null,
+    );
     const issues = full.issues.filter((i) => seqs.has(i.seq));
     return {
       valid: full.valid,
       checkedEntries: own.length,
       checkedCheckpoints: 0,
-      headSeq: 0,
-      headHash: '0'.repeat(64),
+      headSeq: head?.seq ?? 0,
+      headHash: head?.hash ?? '0'.repeat(64),
       issues,
     };
   }

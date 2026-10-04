@@ -11,6 +11,7 @@ import {
   ApprovalQuery,
   ApprovalSchema,
   CostQuery,
+  MonthBound,
   CostRowSchema,
   DecisionBody,
   ErrorSchema,
@@ -280,14 +281,8 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
         security: sec,
         querystring: z.object({
           format: z.enum(['csv', 'json']).default('csv'),
-          from: z
-            .string()
-            .regex(/^\d{4}-\d{2}-01$/)
-            .optional(),
-          to: z
-            .string()
-            .regex(/^\d{4}-\d{2}-01$/)
-            .optional(),
+          from: MonthBound.optional(),
+          to: MonthBound.optional(),
           allTenants: AllTenantsQuery.shape.allTenants,
         }),
       },

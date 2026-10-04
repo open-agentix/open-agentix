@@ -3939,13 +3939,13 @@ paths:
           required: false
         - schema:
             type: string
-            pattern: ^\d{4}-\d{2}-01$
+            pattern: ^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$
           in: query
           name: from
           required: false
         - schema:
             type: string
-            pattern: ^\d{4}-\d{2}-01$
+            pattern: ^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$
           in: query
           name: to
           required: false
@@ -4000,17 +4000,18 @@ paths:
           required: false
         - schema:
             type: string
-            pattern: ^\d{4}-\d{2}-01$
+            pattern: ^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$
           in: query
           name: from
           required: false
-          description: first day of a month, inclusive
+          description: "start of the period, inclusive: YYYY-MM-DD or ISO 8601 timestamp, rounded down to the first day of its month (UTC)"
         - schema:
             type: string
-            pattern: ^\d{4}-\d{2}-01$
+            pattern: ^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$
           in: query
           name: to
           required: false
+          description: "end of the period, inclusive: same formats as `from`"
         - schema:
             default: 100
             type: integer
