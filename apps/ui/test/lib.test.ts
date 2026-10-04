@@ -14,7 +14,7 @@ import {
 import de from '../src/i18n/locales/de.json';
 import en from '../src/i18n/locales/en.json';
 import { diffLines, diffStats } from '../src/lib/diff';
-import { shortId, startOfMonth, startOfToday } from '../src/lib/hooks';
+import { localDate, monthStartDate, shortId, startOfToday } from '../src/lib/hooks';
 import { REDACTED, redact, redactString } from '../src/lib/redact';
 import { parseSse } from '../src/lib/sse';
 import { applyTheme, storedTheme } from '../src/theme/theme';
@@ -196,7 +196,8 @@ describe('misc helpers', () => {
   it('computes day and month starts', () => {
     const d = new Date(2026, 9, 3, 15, 30);
     expect(new Date(startOfToday(d)).getHours()).toBe(0);
-    expect(new Date(startOfMonth(d)).getDate()).toBe(1);
+    expect(monthStartDate(d)).toBe('2026-10-01');
+    expect(localDate(d)).toBe('2026-10-03');
     expect(shortId('1234567890')).toBe('12345678');
     expect(isTerminal('failed')).toBe(true);
     expect(isTerminal('running')).toBe(false);

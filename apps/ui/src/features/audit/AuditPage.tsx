@@ -149,13 +149,18 @@ export function AuditPage() {
                 <Icon name="check" /> {t('audit.verifyOk')}
               </p>
               <p>
-                {t('audit.verifyDetails', {
-                  entries: fmt.number(result.checkedEntries),
-                  checkpoints: fmt.number(result.checkedCheckpoints),
-                  seq: result.headSeq,
-                })}
+                {result.headSeq > 0
+                  ? t('audit.verifyDetails', {
+                      entries: fmt.number(result.checkedEntries),
+                      checkpoints: fmt.number(result.checkedCheckpoints),
+                      seq: result.headSeq,
+                    })
+                  : t('audit.verifyDetailsEmpty', {
+                      entries: fmt.number(result.checkedEntries),
+                      checkpoints: fmt.number(result.checkedCheckpoints),
+                    })}
               </p>
-              <p className="mono break">{result.headHash}</p>
+              {result.headSeq > 0 ? <p className="mono break">{result.headHash}</p> : null}
             </div>
           ) : (
             <div className="verdict verdict-deny" role="alert">

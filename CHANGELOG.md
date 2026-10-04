@@ -108,6 +108,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Costs page "request validation failed"**: `GET /v1/costs/summary` and `/v1/costs/export` now accept
+  `from`/`to` as a date (`YYYY-MM-DD`) or a full ISO 8601 timestamp and round it down to the first
+  day of its month (UTC); the UI sends plain `YYYY-MM-DD` dates (local calendar, no timezone shift on
+  the first of the month). Affects "This month", "Last 30 days" and the dashboard spend tile.
+- **Audit "Verify hash chain" showed head #0 with an all-zero hash for tenants**: the tenant-scoped
+  result now reports the tenant's own latest entry (real sequence number and hash) instead of a
+  placeholder; the UI no longer prints a head for an empty trail.
 - **UI unknown routes**: signed-out visitors opening an unknown path are redirected to `/login` instead of seeing the "Page not found" page; signed-in users still get the not-found page.
 - **Database password override**: `OAX_DATABASE_PASSWORD` / `PGPASSWORD` were ignored with pg 8.23 when the connection string contained no password (SCRAM error "client password must be a string"); the password is now injected into the connection string (URL-encoded).
 

@@ -19,8 +19,15 @@ export function useDocumentTitle(title: string): void {
 export function startOfToday(now = new Date()): string {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 }
-export function startOfMonth(now = new Date()): string {
-  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+/** Local calendar date as `YYYY-MM-DD` (what the cost API takes for period bounds). */
+export function localDate(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** First day of the local month as `YYYY-MM-01`. */
+export function monthStartDate(now = new Date()): string {
+  return `${localDate(now).slice(0, 7)}-01`;
 }
 
 export function shortId(id: string): string {
