@@ -87,7 +87,7 @@ export class BudgetsService {
     const out: ScopedUsage[] = [];
     const inTenant = eq(costLedger.tenantId, target.tenantId);
     const [tenant] = await db.select().from(tenants).where(eq(tenants.id, target.tenantId));
-    if (tenant?.monthlyBudgetMicros !== null) {
+    if (tenant && tenant.monthlyBudgetMicros !== null) {
       out.push({
         scope: 'tenant',
         key: tenant.slug,
@@ -121,7 +121,7 @@ export class BudgetsService {
     }
     if (target.teamId) {
       const [team] = await db.select().from(teams).where(eq(teams.id, target.teamId));
-      if (team?.monthlyBudgetMicros !== null) {
+      if (team && team.monthlyBudgetMicros !== null) {
         out.push({
           scope: 'team',
           key: team.slug,
