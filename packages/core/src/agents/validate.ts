@@ -2,8 +2,40 @@ import { classificationRank } from '../classification.js';
 import { DARK_FACTORY_NOTICE } from '../guidelines.js';
 import { OaxError, ValidationError, type ValidationIssue } from '../errors.js';
 import { compareSemver, isSemver } from '../semver.js';
-import { parseAgentDefinition, type AgentDefinition } from './parser.js';
-import type { ArgConstraint } from './schema.js';
+import { checkJsonSchemaSubset, JSON_SCHEMA_LIMITS, SCHEMA_REF_PREFIX } from './json-schema.js';
+import { parseAgentDefinition, type AgentDefinition, type AgentSpec } from './parser.js';
+import { HANDOVER_EVENT_SOURCE, type ArgConstraint, type CredentialRef } from './schema.js';
+import { parseWhen, whenStepRefs } from './when.js';
+
+/** Publish-time knowledge the core cannot have on its own (filled by the control node). */
+export interface DefinitionContext {
+  /** Profile names per connection (`server -> profiles`); enables the profile name check. */
+  profiles?: Readonly<Record<string, readonly string[]>>;
+}
+
+/** Environment variable a step credential is exposed as (explicit `env` or derived from the ref). */
+export function credentialEnvName(c: CredentialRef): string {
+  if (c.env) return c.env;
+  const name = c.secret.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+  return /^[0-9]/.test(name) ? `_${name}` : name;
+}
+
+const RESERVED_ENV = new Set([
+  'PATH',
+  'HOME',
+  'USER',
+  'SHELL',
+  'PWD',
+  'TMPDIR',
+  'LANG',
+  'NODE_OPTIONS',
+  'NODE_PATH',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'ALL_PROXY',
+]);
+const RESERVED_ENV_PREFIXES = ['OAX_', 'LD_', 'DYLD_'];
 
 export interface ValidationResult {
   valid: boolean;
@@ -43,8 +75,126 @@ function checkConstraint(c: ArgConstraint, path: string, errors: ValidationIssue
   }
 }
 
+function checkHandovers(
+  def: AgentDefinition,
+  context: DefinitionContext,
+  errors: ValidationIssue[],
+  warnings: ValidationIssue[],
+): void {
+  const named = def.schemas ?? {};
+  const names = Object.keys(named);
+  if (names.length > JSON_SCHEMA_LIMITS.maxNamedSchemas) {
+    errors.push({
+      path: 'schemas',
+      message: `more than ${JSON_SCHEMA_LIMITS.maxNamedSchemas} named schemas`,
+    });
+  }
+  for (const name of names)
+    errors.push(...checkJsonSchemaSubset(named[name], `schemas.${name}`, named));
+  const referenced = new Set<string>();
+  const collectRefs = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(collectRefs);
+    else if (typeof v === 'object' && v !== null) {
+      for (const [k, x] of Object.entries(v)) {
+        if (k === '$ref' && typeof x === 'string' && x.startsWith(SCHEMA_REF_PREFIX))
+          referenced.add(x.slice(SCHEMA_REF_PREFIX.length));
+        else collectRefs(x);
+      }
+    }
+  };
+  collectRefs(named);
+  const order = new Map(def.pipeline.map((id, i) => [id, i]));
+  const byId = new Map(def.agents.map((a) => [a.id, a]));
+  const checkStepRef = (a: AgentSpec, ref: string, path: string): void => {
+    const target = order.get(ref);
+    const self = order.get(a.id);
+    if (target === undefined) {
+      errors.push({ path, message: `"${ref}" is not a step of the pipeline` });
+    } else if (self !== undefined && target >= self) {
+      errors.push({ path, message: `"${ref}" does not run before "${a.id}"` });
+    } else if (!byId.get(ref)?.output) {
+      warnings.push({
+        path,
+        message: `step "${ref}" has no output schema; its output is not validated`,
+      });
+    }
+  };
+  def.agents.forEach((a, i) => {
+    const base = `agents.${i}`;
+    if (a.input?.schema) {
+      collectRefs(a.input.schema);
+      errors.push(...checkJsonSchemaSubset(a.input.schema, `${base}.input.schema`, named));
+    }
+    if (a.output) {
+      collectRefs(a.output.schema);
+      errors.push(...checkJsonSchemaSubset(a.output.schema, `${base}.output.schema`, named));
+      if (!a.outputs.some((o) => o.format === 'json'))
+        errors.push({
+          path: `${base}.output`,
+          message: 'output.schema needs an "outputs" entry with format "json"',
+        });
+    }
+    const seenFrom = new Set<string>();
+    a.input?.from?.forEach((src, j) => {
+      const path = `${base}.input.from.${j}`;
+      if (seenFrom.has(src)) errors.push({ path, message: `duplicate source "${src}"` });
+      seenFrom.add(src);
+      if (src !== HANDOVER_EVENT_SOURCE) checkStepRef(a, src, path);
+    });
+    if (a.when !== undefined) {
+      try {
+        for (const ref of whenStepRefs(parseWhen(a.when))) checkStepRef(a, ref, `${base}.when`);
+      } catch (e) {
+        errors.push({ path: `${base}.when`, message: (e as Error).message });
+      }
+    }
+    checkCredentials(a.credentials ?? [], `${base}.credentials`, errors);
+    a.runtime?.egress?.forEach((host, j) => {
+      if (!def.runtime.egress.includes(host))
+        errors.push({
+          path: `${base}.runtime.egress.${j}`,
+          message: `"${host}" is not in the pipeline's runtime.egress; a step can only narrow it`,
+        });
+    });
+    const profileKeys = new Set<string>();
+    a.profileGrants?.forEach((p, j) => {
+      const path = `${base}.tools (profile ${j + 1})`;
+      const key = `${p.server}:${p.profile}`;
+      if (profileKeys.has(key)) errors.push({ path, message: `duplicate profile grant "${key}"` });
+      profileKeys.add(key);
+      if (context.profiles && !context.profiles[p.server]?.includes(p.profile))
+        errors.push({ path, message: `connection "${p.server}" has no profile "${p.profile}"` });
+    });
+  });
+  for (const name of names)
+    if (!referenced.has(name))
+      warnings.push({ path: `schemas.${name}`, message: `schema "${name}" is never used` });
+}
+
+function checkCredentials(
+  creds: readonly CredentialRef[],
+  path: string,
+  errors: ValidationIssue[],
+): void {
+  const secrets = new Set<string>();
+  const envs = new Set<string>();
+  creds.forEach((c, i) => {
+    const env = credentialEnvName(c);
+    if (secrets.has(c.secret))
+      errors.push({ path: `${path}.${i}`, message: `duplicate secret "${c.secret}"` });
+    secrets.add(c.secret);
+    if (envs.has(env)) errors.push({ path: `${path}.${i}`, message: `duplicate env "${env}"` });
+    envs.add(env);
+    if (RESERVED_ENV.has(env) || RESERVED_ENV_PREFIXES.some((p) => env.startsWith(p)))
+      errors.push({ path: `${path}.${i}.env`, message: `env "${env}" is reserved` });
+  });
+}
+
 /** Semantic checks on top of the schema: references, regexes, budgets, classification. */
-export function checkDefinition(def: AgentDefinition): {
+export function checkDefinition(
+  def: AgentDefinition,
+  context: DefinitionContext = {},
+): {
   errors: ValidationIssue[];
   warnings: ValidationIssue[];
 } {
@@ -110,11 +260,13 @@ export function checkDefinition(def: AgentDefinition): {
     }
     a.simulation?.responses.forEach((r, k) =>
       r.toolCalls?.forEach((c, m) => {
-        const granted = a.tools.some(
-          (t) =>
-            t.server === c.server &&
-            (t.tool === c.tool || (t.tool.endsWith('*') && c.tool.startsWith(t.tool.slice(0, -1)))),
-        );
+        const granted =
+          a.tools.some(
+            (t) =>
+              t.server === c.server &&
+              (t.tool === c.tool ||
+                (t.tool.endsWith('*') && c.tool.startsWith(t.tool.slice(0, -1)))),
+          ) || (a.profileGrants ?? []).some((p) => p.server === c.server);
         if (!granted) {
           warnings.push({
             path: `agents.${i}.simulation.responses.${k}.toolCalls.${m}`,
@@ -124,6 +276,7 @@ export function checkDefinition(def: AgentDefinition): {
       }),
     );
   });
+  checkHandovers(def, context, errors, warnings);
   if (def.mode === 'dark-factory') {
     warnings.push({ path: 'mode', message: `dark-factory mode: ${DARK_FACTORY_NOTICE}` });
   }
@@ -134,7 +287,10 @@ export function checkDefinition(def: AgentDefinition): {
 }
 
 /** Parses and validates an `agents.md` source without throwing. */
-export function validateAgentSource(source: string): ValidationResult {
+export function validateAgentSource(
+  source: string,
+  context: DefinitionContext = {},
+): ValidationResult {
   let def: AgentDefinition;
   try {
     def = parseAgentDefinition(source);
@@ -144,7 +300,7 @@ export function validateAgentSource(source: string): ValidationResult {
     }
     throw e;
   }
-  const { errors, warnings } = checkDefinition(def);
+  const { errors, warnings } = checkDefinition(def, context);
   return {
     valid: errors.length === 0,
     definition: errors.length === 0 ? def : null,
@@ -154,8 +310,11 @@ export function validateAgentSource(source: string): ValidationResult {
 }
 
 /** Parses + validates, throwing {@link ValidationError} on any error. */
-export function loadAgentDefinition(source: string): AgentDefinition {
-  const result = validateAgentSource(source);
+export function loadAgentDefinition(
+  source: string,
+  context: DefinitionContext = {},
+): AgentDefinition {
+  const result = validateAgentSource(source, context);
   if (!result.valid || !result.definition) {
     throw new ValidationError('invalid agents.md', result.errors);
   }

@@ -3,13 +3,25 @@ import { sha256Hex } from '../canonical.js';
 import { ValidationError, type ValidationIssue } from '../errors.js';
 import {
   PipelineFrontMatterSchema,
+  isProfileGrant,
   type AgentSpecSchema,
   type Budget,
   type PipelineFrontMatter,
+  type ProfileGrant,
+  type ToolGrant,
 } from './schema.js';
 import type { z } from 'zod';
 
-export type AgentSpec = z.infer<typeof AgentSpecSchema> & { instructions: string };
+export type AgentSpec = Omit<z.infer<typeof AgentSpecSchema>, 'tools'> & {
+  instructions: string;
+  /** Concrete tool grants (what the policy engine evaluates). */
+  tools: ToolGrant[];
+  /**
+   * Profile grants (`tools[].profile`), only present when the file declares some. Expanded into
+   * `tools` at publish (ADR 0008); definitions stored before 0.2 never carry this field.
+   */
+  profileGrants?: ProfileGrant[];
+};
 
 /** A parsed, structurally valid `agents.md` document. */
 export interface AgentDefinition extends Omit<PipelineFrontMatter, 'agents' | 'pipeline'> {
@@ -123,7 +135,15 @@ export function parseAgentDefinition(source: string): AgentDefinition {
         message: `agent "${a.id}" needs instructions (section "## Agent: ${a.id}" or field "instructions")`,
       });
     }
-    return { ...a, instructions };
+    const tools: ToolGrant[] = [];
+    const profileGrants: ProfileGrant[] = [];
+    for (const t of a.tools) {
+      if (isProfileGrant(t)) profileGrants.push(t);
+      else tools.push(t);
+    }
+    return profileGrants.length > 0
+      ? { ...a, instructions, tools, profileGrants }
+      : { ...a, instructions, tools };
   });
   for (const id of agentSections.keys()) {
     if (!fm.agents.some((a) => a.id === id)) {
