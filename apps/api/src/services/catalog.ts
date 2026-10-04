@@ -10,10 +10,17 @@ import {
   type ToolCallRequest,
 } from '@openagentix/core';
 import { McpServerConfigSchema, type McpServerConfig } from '@openagentix/mcp';
+import {
+  CATALOG_PROVIDER_FOR,
+  ProviderSettingsSchema,
+  proposeModels,
+  secretRefsOf,
+  type ModelEntry,
+} from '@openagentix/providers';
 import { and, asc, eq, or } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
-import { agents, connections, policies, teams } from '../db/schema.js';
+import { DEFAULT_TENANT_ID, agents, connections, policies, teams, tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
 
@@ -42,6 +49,7 @@ export interface RunScope {
 }
 
 export type ConnectionScope = 'platform' | 'tenant' | 'team' | 'agent';
+export type ConnectionKind = 'mcp' | 'model';
 const SCOPE_RANK: Record<string, number> = { platform: 0, tenant: 1, team: 2, agent: 3 };
 
 /** Picks, per name, the most specific connection that applies to the run scope. */
@@ -158,11 +166,76 @@ export class CatalogService {
     if (!owned) throw notFound(scope);
   }
 
+  /**
+   * Validates a connection config by kind and returns what is stored. Model connections get
+   * proposed prices from the pinned catalog for every listed model without a price; explicit
+   * prices are kept as overrides. Secret references of tenant-owned connections must live in the
+   * tenant's own namespace (`<tenant-slug>.<name>`) so that one tenant cannot spend another's keys.
+   */
+  async prepareConfig(
+    actor: Principal,
+    kind: ConnectionKind,
+    name: string,
+    scope: ConnectionScope,
+    config: unknown,
+  ): Promise<Record<string, unknown>> {
+    let stored: Record<string, unknown>;
+    let refs: string[];
+    if (kind === 'mcp') {
+      const parsed = McpServerConfigSchema.parse({ ...(config as object), name });
+      stored = parsed;
+      refs = [
+        ...Object.values((parsed as { envSecrets?: Record<string, string> }).envSecrets ?? {}),
+        ...Object.values(
+          (parsed as { headerSecrets?: Record<string, string> }).headerSecrets ?? {},
+        ),
+      ];
+    } else {
+      const parsed = ProviderSettingsSchema.parse(config);
+      const { name: _ignored, ...settings } = parsed;
+      const catalogProvider = settings.catalogProvider ?? CATALOG_PROVIDER_FOR[settings.kind];
+      const models = (settings.models ?? []).map((m): ModelEntry => {
+        const [proposal] = proposeModels(this.ctx.modelCatalog, catalogProvider, [m]);
+        const explicit = m.inputPerMTok !== undefined && m.outputPerMTok !== undefined;
+        if (explicit)
+          return {
+            ...m,
+            priceSource:
+              proposal!.inputPerMTok === m.inputPerMTok &&
+              proposal!.outputPerMTok === m.outputPerMTok
+                ? proposal!.priceSource
+                : 'override',
+          };
+        return {
+          ...m,
+          ...(proposal!.inputPerMTok !== null && proposal!.outputPerMTok !== null
+            ? { inputPerMTok: proposal!.inputPerMTok, outputPerMTok: proposal!.outputPerMTok }
+            : {}),
+          priceSource: proposal!.priceSource,
+        };
+      });
+      stored = { ...settings, ...(settings.models ? { models } : {}) } as Record<string, unknown>;
+      refs = secretRefsOf(parsed);
+    }
+    if (scope !== 'platform' && actor.tenantId !== DEFAULT_TENANT_ID && refs.length) {
+      const [t] = await this.ctx.db.select().from(tenants).where(eq(tenants.id, actor.tenantId));
+      const prefix = `${t?.slug ?? actor.tenantId}.`;
+      const foreign = refs.filter((r) => !r.startsWith(prefix));
+      if (foreign.length)
+        throw new HttpError(
+          400,
+          'validation_failed',
+          `secret references of tenant connections must start with "${prefix}" (got: ${foreign.join(', ')})`,
+        );
+    }
+    return stored;
+  }
+
   async createConnection(
     actor: Principal,
     input: {
       name: string;
-      kind: 'mcp';
+      kind: ConnectionKind;
       config: unknown;
       scope?: ConnectionScope | undefined;
       scopeId?: string | null | undefined;
@@ -171,7 +244,7 @@ export class CatalogService {
     const scope = input.scope ?? 'tenant';
     const scopeId = input.scopeId ?? null;
     await this.assertScope(actor, scope, scopeId);
-    const config = McpServerConfigSchema.parse({ ...(input.config as object), name: input.name });
+    const config = await this.prepareConfig(actor, input.kind, input.name, scope, input.config);
     const [exists] = await this.ctx.db
       .select({ id: connections.id })
       .from(connections)
@@ -215,7 +288,13 @@ export class CatalogService {
 
   async updateConnection(actor: Principal, id: string, config: unknown): Promise<ConnectionRow> {
     const current = await this.getOwnConnection(actor, id);
-    const parsed = McpServerConfigSchema.parse({ ...(config as object), name: current.name });
+    const parsed = await this.prepareConfig(
+      actor,
+      current.kind as ConnectionKind,
+      current.name,
+      current.scope as ConnectionScope,
+      config,
+    );
     const [row] = await this.ctx.db
       .update(connections)
       .set({ config: parsed, updatedAt: this.ctx.now() })
