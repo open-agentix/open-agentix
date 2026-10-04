@@ -82,7 +82,11 @@ export class CronScheduler {
     if (inserted.length === 0) return null;
     if (sourceId) {
       const source = await this.services.ingest.getSource(sourceId);
-      return (await this.services.ingest.ingestEvent(source, event, `cron:${source.name}`)).runId;
+      const gate = await this.services.ingest.changeGate(source);
+      // Change gate: no event, no run, no tokens when the probe did not change.
+      if (gate && !gate.changed) return null;
+      const gated = gate ? { ...event, data: { ...(event.data as object), change: gate } } : event;
+      return (await this.services.ingest.ingestEvent(source, gated, `cron:${source.name}`)).runId;
     }
     const run = await this.services.runs.enqueue({
       agentId,

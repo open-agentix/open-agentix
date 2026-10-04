@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { OaxEvent } from '@openagentix/core';
 import {
+  ChangeCheckSchema,
+  decideChange,
+  probeDigest,
+  type ChangeDecision,
+  type ProbeDeps,
   WebhookError,
   validateCronExpression,
   mailToEvent,
@@ -13,7 +18,8 @@ import {
 import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
-import { eventSources, events, webhookDeliveries } from '../db/schema.js';
+import { changeChecks, eventSources, events, webhookDeliveries } from '../db/schema.js';
+import { createProxyAwareFetch } from '@openagentix/providers';
 import { HttpError, conflict, notFound } from '../errors.js';
 import { decodeTimeCursor, encodeTimeCursor, page } from '../pagination.js';
 import type { AuditService } from './audit.js';
@@ -96,6 +102,15 @@ export class IngestService {
   }
 
   async createSource(actor: string, input: SourceInput): Promise<SourceRow> {
+    if (input.config?.changeCheck !== undefined) {
+      if (input.kind !== 'cron')
+        throw new HttpError(
+          400,
+          'validation_failed',
+          'changeCheck is only supported on cron sources',
+        );
+      ChangeCheckSchema.parse(input.config.changeCheck);
+    }
     if (input.kind === 'cron') {
       const schedule = input.config?.schedule;
       if (typeof schedule !== 'string')
@@ -152,6 +167,48 @@ export class IngestService {
     await this.ctx.cache.del(`source:${id}`);
     await this.audit.append({ actor, action: 'source.updated', target: id, payload: patch });
     return row!;
+  }
+
+  /** Injectable probe dependencies (tests); defaults use the proxy-aware fetch and the file system. */
+  probeDeps: ProbeDeps = { fetch: (u, i) => createProxyAwareFetch()(u, i) };
+
+  /**
+   * Deterministic change gate of a schedule source: returns null when the source has no
+   * changeCheck; otherwise probes, stores the digest and audits the result. No tokens are used.
+   */
+  async changeGate(
+    source: Pick<SourceRow, 'id' | 'name' | 'config'>,
+  ): Promise<ChangeDecision | null> {
+    const raw = (source.config as { changeCheck?: unknown }).changeCheck;
+    if (raw === undefined) return null;
+    const { probe } = ChangeCheckSchema.parse(raw);
+    const digest = await probeDigest(probe, this.probeDeps);
+    const [prev] = await this.ctx.db
+      .select()
+      .from(changeChecks)
+      .where(eq(changeChecks.sourceId, source.id));
+    const decision = decideChange(digest, prev?.digest ?? null);
+    const now = this.ctx.now();
+    await this.ctx.db
+      .insert(changeChecks)
+      .values({ sourceId: source.id, digest, checkedAt: now, changedAt: now })
+      .onConflictDoUpdate({
+        target: changeChecks.sourceId,
+        set: decision.changed ? { digest, checkedAt: now, changedAt: now } : { checkedAt: now },
+      });
+    await this.audit.append({
+      actor: `source:${source.name}`,
+      action: decision.changed ? 'change_check.changed' : 'change_check.unchanged',
+      target: source.id,
+      payload: {
+        probe:
+          probe.type === 'http'
+            ? { type: 'http', url: probe.url }
+            : { type: 'file', path: probe.path },
+        ...decision,
+      },
+    });
+    return decision;
   }
 
   async deleteSource(actor: string, id: string): Promise<void> {
