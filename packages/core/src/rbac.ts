@@ -89,6 +89,11 @@ export interface RoleBinding {
   role: Role;
   /** `null` = global (all teams). */
   teamId: string | null;
+  /**
+   * Resource-scoped binding: the role applies to exactly this agent and grants no team-wide
+   * visibility (person A may be agent-engineer for agent 1 without seeing agents 3-5).
+   */
+  agentId?: string | null;
 }
 
 export interface Principal {
@@ -117,13 +122,19 @@ export function hasPermission(
   principal: Principal,
   permission: Permission,
   teamId?: string | null,
+  agentId?: string | null,
 ): boolean {
   if (principal.scopes && !principal.scopes.includes(permission)) return false;
-  return principal.bindings.some(
-    (b) =>
-      ROLE_PERMISSIONS[b.role].includes(permission) &&
-      (teamId === undefined || b.teamId === null || b.teamId === teamId),
-  );
+  return principal.bindings.some((b) => {
+    if (!ROLE_PERMISSIONS[b.role].includes(permission)) return false;
+    if (b.agentId) {
+      // Route-level check (no resource given) passes; resource checks need the same agent.
+      return teamId === undefined
+        ? agentId === undefined || agentId === b.agentId
+        : agentId === b.agentId;
+    }
+    return teamId === undefined || b.teamId === null || b.teamId === teamId;
+  });
 }
 
 /** Team ids the principal can see for `permission`; `'all'` for global bindings. */
@@ -131,11 +142,21 @@ export function visibleTeams(principal: Principal, permission: Permission): 'all
   if (principal.scopes && !principal.scopes.includes(permission)) return [];
   const teams = new Set<string>();
   for (const b of principal.bindings) {
-    if (!ROLE_PERMISSIONS[b.role].includes(permission)) continue;
+    if (!ROLE_PERMISSIONS[b.role].includes(permission) || b.agentId) continue;
     if (b.teamId === null) return 'all';
     teams.add(b.teamId);
   }
   return [...teams];
+}
+
+/** Agent ids visible through agent-scoped bindings only (in addition to `visibleTeams`). */
+export function visibleAgents(principal: Principal, permission: Permission): string[] {
+  if (principal.scopes && !principal.scopes.includes(permission)) return [];
+  const agents = new Set<string>();
+  for (const b of principal.bindings) {
+    if (b.agentId && ROLE_PERMISSIONS[b.role].includes(permission)) agents.add(b.agentId);
+  }
+  return [...agents];
 }
 
 /** Union of permissions over all bindings (used to cap the scopes of newly created API tokens). */
