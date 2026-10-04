@@ -2,7 +2,7 @@ import { effectivePermissions } from '@openagentix/core';
 import type { Deps } from '../app.js';
 import { bearerOf, principalOf } from '../app.js';
 import { userDto } from '../dto.js';
-import { ErrorSchema, LoginBody, LoginResponse, MeSchema } from '../schemas.js';
+import { AuthMethodsSchema, ErrorSchema, LoginBody, LoginResponse, MeSchema } from '../schemas.js';
 import type { ZApp } from '../zapp.js';
 
 const loginDto = (r: { token: string; expiresAt: Date; user: Parameters<typeof userDto>[0] }) => ({
@@ -30,6 +30,25 @@ export function registerAuthRoutes(app: ZApp, { ctx, services }: Deps): void {
       loginDto(
         await services.identity.login(req.body.username, req.body.password, req.body.method),
       ),
+  );
+
+  app.get(
+    '/v1/auth/methods',
+    {
+      config: { access: 'public' },
+      schema: {
+        tags: ['auth'],
+        summary: 'Enabled login methods (for the sign-in page)',
+        response: { 200: AuthMethodsSchema },
+      },
+    },
+    async () => ({
+      local: true,
+      ldap: !!ctx.config.auth.ldap,
+      oidc: ctx.config.auth.oidc
+        ? { enabled: true, loginUrl: '/v1/auth/oidc/login' }
+        : { enabled: false, loginUrl: null },
+    }),
   );
 
   app.post(
@@ -69,10 +88,10 @@ export function registerAuthRoutes(app: ZApp, { ctx, services }: Deps): void {
     async (req, reply) => {
       const url = new URL(req.url, ctx.config.publicUrl);
       const session = await services.identity.oidcCallback(url);
-      if (ctx.config.uiUrl)
-        return reply.redirect(
-          `${ctx.config.uiUrl}/auth/callback#token=${encodeURIComponent(session.token)}`,
-        );
+      if (ctx.config.uiUrl) {
+        const fragment = `token=${encodeURIComponent(session.token)}&expiresAt=${encodeURIComponent(session.expiresAt.toISOString())}`;
+        return reply.redirect(`${ctx.config.uiUrl}/auth/callback#${fragment}`);
+      }
       return loginDto(session);
     },
   );

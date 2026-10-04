@@ -384,8 +384,44 @@ describe('OIDC', () => {
     ).toBe('function');
   });
 
+  it('lists enabled login methods and redirects to the UI with token and expiry', async () => {
+    expect((await n.req({ method: 'GET', url: '/v1/auth/methods', token: null })).json()).toEqual({
+      local: true,
+      ldap: true,
+      oidc: { enabled: true, loginUrl: '/v1/auth/oidc/login' },
+    });
+    const ui = await testNode(
+      {
+        OAX_UI_URL: 'https://ui.example.com',
+        OAX_OIDC_ISSUER: 'https://idp.example.com',
+        OAX_OIDC_CLIENT_ID: 'oax',
+        OAX_OIDC_REDIRECT_URI: 'http://localhost:8080/v1/auth/oidc/callback',
+      },
+      { oidcClient: oidc },
+    );
+    const start = await ui.req({ method: 'GET', url: '/v1/auth/oidc/login', token: null });
+    const state = new URL(start.headers.location as string).searchParams.get('state')!;
+    const cb = await ui.req({
+      method: 'GET',
+      url: `/v1/auth/oidc/callback?code=x&state=${state}`,
+      token: null,
+    });
+    expect(cb.statusCode).toBe(302);
+    expect(cb.headers.location).toMatch(
+      /^https:\/\/ui\.example\.com\/auth\/callback#token=oax_[^&]+&expiresAt=\d{4}-/,
+    );
+    await ui.close();
+  });
+
   it('returns 404 when OIDC is not configured', async () => {
     const plain = await testNode();
+    expect(
+      (await plain.req({ method: 'GET', url: '/v1/auth/methods', token: null })).json(),
+    ).toEqual({
+      local: true,
+      ldap: false,
+      oidc: { enabled: false, loginUrl: null },
+    });
     expect(
       (await plain.req({ method: 'GET', url: '/v1/auth/oidc/login', token: null })).statusCode,
     ).toBe(404);

@@ -350,6 +350,11 @@ export const LoginBody = z.object({
   password: z.string().min(1).max(1000),
   method: z.enum(['auto', 'local', 'ldap']).default('auto'),
 });
+export const AuthMethodsSchema = z.object({
+  local: z.boolean(),
+  ldap: z.boolean(),
+  oidc: z.object({ enabled: z.boolean(), loginUrl: z.string().nullable() }),
+});
 export const LoginResponse = z.object({ token: z.string(), expiresAt: Iso, user: UserSchema });
 export const MeSchema = z.object({
   user: UserSchema,
@@ -367,6 +372,7 @@ export const SettingsSchema = z.object({
   auth: z.object({ local: z.boolean(), ldap: z.boolean(), oidc: z.boolean() }),
   roles: z.array(z.string()),
   permissions: z.array(z.string()),
+  rolePermissions: z.record(z.string(), z.array(z.string())).describe('role -> permissions'),
 });
 export const VersionInfoSchema = z.object({ name: z.literal('openagentix'), version: z.string() });
 export const HealthSchema = z.object({

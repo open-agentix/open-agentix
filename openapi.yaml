@@ -274,6 +274,15 @@ paths:
                     type: array
                     items:
                       type: string
+                  rolePermissions:
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: string
+                    description: role -> permissions
                 required:
                   - version
                   - providers
@@ -281,6 +290,7 @@ paths:
                   - auth
                   - roles
                   - permissions
+                  - rolePermissions
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -410,6 +420,41 @@ paths:
                 required:
                   - error
                   - message
+                additionalProperties: false
+  /v1/auth/methods:
+    get:
+      summary: Enabled login methods (for the sign-in page)
+      tags:
+        - auth
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  local:
+                    type: boolean
+                  ldap:
+                    type: boolean
+                  oidc:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                      loginUrl:
+                        type:
+                          - string
+                          - "null"
+                    required:
+                      - enabled
+                      - loginUrl
+                    additionalProperties: false
+                required:
+                  - local
+                  - ldap
+                  - oidc
                 additionalProperties: false
   /v1/auth/logout:
     post:
