@@ -1,5 +1,6 @@
 import { CostModel, DefaultSecretResolver, type SecretResolver } from '@openagentix/core';
 import pino, { type Logger } from 'pino';
+import { catalogPriceTable, loadModelCatalog } from '@openagentix/providers';
 import { createCache, type Cache } from './cache.js';
 import type { Config } from './config.js';
 import { createDatabase, waitForDatabase, type Database, type Db } from './db/client.js';
@@ -65,7 +66,10 @@ export async function createContext(
     metrics: overrides.metrics ?? new Metrics(),
     logger,
     secrets: overrides.secrets ?? new DefaultSecretResolver(process.env, config.secrets.dir),
-    costModel: overrides.costModel ?? new CostModel(config.priceTable),
+    // Prices: pinned model catalog snapshot, overridden by OAX_PRICE_TABLE.
+    costModel:
+      overrides.costModel ??
+      new CostModel([...catalogPriceTable(loadModelCatalog()), ...config.priceTable]),
     now: overrides.now ?? (() => new Date()),
     ...(overrides.ldapFactory ? { ldapFactory: overrides.ldapFactory } : {}),
     ...(overrides.oidcClient ? { oidcClient: overrides.oidcClient } : {}),
