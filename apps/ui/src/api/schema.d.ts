@@ -2541,11 +2541,11 @@ export interface paths {
                             items: {
                                 seq: number;
                                 /** @enum {string} */
-                                kind: "model_call" | "tool_call" | "policy_decision" | "approval" | "control" | "output" | "error";
+                                kind: "model_call" | "tool_call" | "policy_decision" | "approval" | "control" | "output" | "condition" | "handover" | "error";
                                 agentId: string | null;
                                 name: string;
                                 /** @enum {string} */
-                                status: "ok" | "error" | "denied" | "pending" | "approved" | "rejected";
+                                status: "ok" | "error" | "denied" | "pending" | "approved" | "rejected" | "skipped";
                                 input: unknown;
                                 output: unknown;
                                 tokensIn: number;
@@ -6349,11 +6349,11 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        kind: "model_call" | "tool_call" | "policy_decision" | "approval" | "control" | "output" | "error";
+                        kind: "model_call" | "tool_call" | "policy_decision" | "approval" | "control" | "output" | "condition" | "handover" | "error";
                         agentId: string | null;
                         name: string;
                         /** @enum {string} */
-                        status: "ok" | "error" | "denied" | "pending" | "approved" | "rejected";
+                        status: "ok" | "error" | "denied" | "pending" | "approved" | "rejected" | "skipped";
                         input?: unknown;
                         output?: unknown;
                         tokensIn?: number;
