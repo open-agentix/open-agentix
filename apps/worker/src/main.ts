@@ -3,6 +3,7 @@ import { demoServerFactories, inMemoryServers } from '@openagentix/mcp';
 import { createWorkerHttpServer } from './http.js';
 import { KafkaSources } from './sources.js';
 import { CronScheduler } from './scheduler.js';
+import { DemoLlmRunner } from './demo-runner.js';
 import { Worker } from './worker.js';
 
 const config = loadConfig();
@@ -14,10 +15,13 @@ const ctx = await createContext(config, {
   logger: createLogger(config.logLevel, 'openagentix-worker'),
 });
 // OAX_DEMO_MCP=true registers the built-in demo MCP servers (cve-db, tickets) for `in-memory` connections.
-const worker = new Worker(
-  ctx,
-  config.demoMcp ? { inMemoryMcp: inMemoryServers(demoServerFactories()) } : {},
-);
+const worker = new Worker(ctx, {
+  ...(config.demoMcp ? { inMemoryMcp: inMemoryServers(demoServerFactories()) } : {}),
+  // Demo scenarios may run through the Claude Code harness (fixed scenarios, strict limits).
+  ...(config.demo.enabled && config.demo.llm === 'claude-code'
+    ? { runner: new DemoLlmRunner(config.demo) }
+    : {}),
+});
 const scheduler = new CronScheduler(ctx, worker.services);
 const kafka = new KafkaSources(ctx, worker.services);
 worker.start();
