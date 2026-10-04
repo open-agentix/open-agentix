@@ -28,6 +28,13 @@ describe('system endpoints', () => {
       providers: [{ name: 'simulated', kind: 'simulated' }],
       auth: { local: true, ldap: false, oidc: false },
     });
+    expect(settings.rolePermissions.viewer).toEqual([
+      'agents:read',
+      'runs:read',
+      'events:read',
+      'costs:read',
+    ]);
+    expect(settings.rolePermissions.admin).toContain('settings:write');
     expect((await n.req({ method: 'GET', url: '/v1/settings', token: null })).statusCode).toBe(401);
   });
 

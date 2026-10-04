@@ -41,6 +41,7 @@ describe('route access declarations', () => {
       'GET /metrics',
       'GET /openapi.json',
       'GET /readyz',
+      'GET /v1/auth/methods',
       'GET /v1/auth/oidc/callback',
       'GET /v1/auth/oidc/login',
       'GET /v1/version',

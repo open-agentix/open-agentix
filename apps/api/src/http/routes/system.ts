@@ -1,4 +1,4 @@
-import { PERMISSIONS, ROLES, RUNNER_KINDS } from '@openagentix/core';
+import { PERMISSIONS, ROLES, ROLE_PERMISSIONS, RUNNER_KINDS } from '@openagentix/core';
 import { z } from 'zod';
 import { HttpError } from '../../errors.js';
 import { VERSION } from '../../version.js';
@@ -112,6 +112,7 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
       auth: { local: true, ldap: !!ctx.config.auth.ldap, oidc: !!ctx.config.auth.oidc },
       roles: [...ROLES],
       permissions: [...PERMISSIONS],
+      rolePermissions: Object.fromEntries(ROLES.map((r) => [r, [...ROLE_PERMISSIONS[r]]])),
     }),
   );
 }
