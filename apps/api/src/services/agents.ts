@@ -230,6 +230,16 @@ export class AgentsService {
         message: `runner "${def.runtime.runner}" is not enabled (OAX_RUNNERS_ENABLED=${runners.enabled.join(',')})`,
       });
     }
+    // Per-step runners (ADR 0008): a step may run elsewhere than the pipeline, never on a runner
+    // that is not enabled.
+    def.agents.forEach((a, i) => {
+      const r = a.runtime?.runner;
+      if (r && !runners.enabled.includes(r))
+        issues.push({
+          path: `agents.${i}.runtime.runner`,
+          message: `runner "${r}" is not enabled (OAX_RUNNERS_ENABLED=${runners.enabled.join(',')})`,
+        });
+    });
     if (toolboxes.allowlist.length > 0) {
       const used = [def.runtime.toolbox, ...def.agents.map((a) => a.toolbox)].filter(
         (t): t is string => !!t,

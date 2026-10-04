@@ -6975,6 +6975,11 @@ paths:
                           type:
                             - number
                             - "null"
+                        secretRefs:
+                          type: array
+                          items:
+                            type: string
+                          description: secret reference globs the credential broker may hand out for this tenant
                         createdAt:
                           type: string
                           description: ISO 8601 timestamp
@@ -6983,6 +6988,7 @@ paths:
                         - slug
                         - name
                         - monthlyBudgetUsd
+                        - secretRefs
                         - createdAt
                       additionalProperties: false
                 required:
@@ -7066,6 +7072,11 @@ paths:
                     type:
                       - number
                       - "null"
+                  secretRefs:
+                    type: array
+                    items:
+                      type: string
+                    description: secret reference globs the credential broker may hand out for this tenant
                   createdAt:
                     type: string
                     description: ISO 8601 timestamp
@@ -7074,6 +7085,7 @@ paths:
                   - slug
                   - name
                   - monthlyBudgetUsd
+                  - secretRefs
                   - createdAt
                 additionalProperties: false
         "401":
@@ -7149,6 +7161,11 @@ paths:
                     type:
                       - number
                       - "null"
+                  secretRefs:
+                    type: array
+                    items:
+                      type: string
+                    description: secret reference globs the credential broker may hand out for this tenant
                   createdAt:
                     type: string
                     description: ISO 8601 timestamp
@@ -7157,6 +7174,7 @@ paths:
                   - slug
                   - name
                   - monthlyBudgetUsd
+                  - secretRefs
                   - createdAt
                 additionalProperties: false
         "401":
@@ -7197,6 +7215,13 @@ paths:
                     - type: number
                       exclusiveMinimum: 0
                     - type: "null"
+                secretRefs:
+                  description: secret reference globs (`*` wildcard only); an empty list allows no secret
+                  maxItems: 64
+                  type: array
+                  items:
+                    type: string
+                    maxLength: 128
       parameters:
         - schema:
             type: string
@@ -7227,6 +7252,11 @@ paths:
                     type:
                       - number
                       - "null"
+                  secretRefs:
+                    type: array
+                    items:
+                      type: string
+                    description: secret reference globs the credential broker may hand out for this tenant
                   createdAt:
                     type: string
                     description: ISO 8601 timestamp
@@ -7235,6 +7265,7 @@ paths:
                   - slug
                   - name
                   - monthlyBudgetUsd
+                  - secretRefs
                   - createdAt
                 additionalProperties: false
         "401":
@@ -8263,6 +8294,349 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/worker/runs/{id}/handover:
+    get:
+      summary: "Run node: the handover of its own step (spec, input, output schema)"
+      tags:
+        - worker
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+          in: query
+          name: agentId
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - runToken: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agentId:
+                    type: string
+                  agent:
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties: {}
+                    description: the step's own AgentSpec
+                  input:
+                    description: the validated input of the step
+                  outputSchema:
+                    description: output schema with named schemas inlined
+                  attempt:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  run:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      version:
+                        type: string
+                      classification:
+                        type: string
+                        enum:
+                          - public
+                          - internal
+                          - confidential
+                          - restricted
+                      budget:
+                        type: object
+                        propertyNames:
+                          type: string
+                        additionalProperties: {}
+                    required:
+                      - name
+                      - version
+                      - classification
+                      - budget
+                    additionalProperties: false
+                  mcp:
+                    type: array
+                    items:
+                      type: object
+                      propertyNames:
+                        type: string
+                      additionalProperties: {}
+                    description: MCP connections of the step with all secret references stripped
+                required:
+                  - agentId
+                  - agent
+                  - input
+                  - attempt
+                  - run
+                  - mcp
+                additionalProperties: false
+        "401":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/worker/runs/{id}/handover/result:
+    post:
+      summary: "Run node: post the final result of its step"
+      tags:
+        - worker
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentId:
+                  type: string
+                format:
+                  type: string
+                  maxLength: 64
+                content:
+                  type: string
+                  maxLength: 1000000
+                json: {}
+                failure:
+                  description: set instead of an output when the step did not succeed
+                  type: object
+                  properties:
+                    status:
+                      type: string
+                      enum:
+                        - failed
+                        - blocked_by_policy
+                        - cancelled
+                    code:
+                      type: string
+                      maxLength: 100
+                    message:
+                      type: string
+                      maxLength: 2000
+                  required:
+                    - status
+                    - code
+                    - message
+                usage:
+                  type: object
+                  properties:
+                    tokensIn:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                    tokensOut:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                    costMicros:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                    steps:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                    toolCalls:
+                      type: integer
+                      minimum: 0
+                      maximum: 9007199254740991
+                  required:
+                    - tokensIn
+                    - tokensOut
+                    - costMicros
+                    - steps
+                    - toolCalls
+              required:
+                - agentId
+                - format
+                - content
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - runToken: []
+      responses:
+        "200":
+          description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/worker/runs/{id}/credentials:
+    post:
+      summary: "Credential broker: the secret values of exactly this step, once per step and session"
+      tags:
+        - worker
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentId:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+              required:
+                - agentId
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - runToken: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agentId:
+                    type: string
+                  expiresAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  credentials:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        secret:
+                          type: string
+                        env:
+                          type: string
+                        value:
+                          type: string
+                      required:
+                        - secret
+                        - env
+                        - value
+                      additionalProperties: false
+                  connections:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        server:
+                          type: string
+                        env:
+                          type: object
+                          propertyNames:
+                            type: string
+                          additionalProperties:
+                            type: string
+                        headers:
+                          type: object
+                          propertyNames:
+                            type: string
+                          additionalProperties:
+                            type: string
+                      required:
+                        - server
+                      additionalProperties: false
+                required:
+                  - agentId
+                  - expiresAt
+                  - credentials
+                  - connections
+                additionalProperties: false
+        "401":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
         "404":
           description: Not found
           content:

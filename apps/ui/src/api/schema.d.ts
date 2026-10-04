@@ -5603,6 +5603,8 @@ export interface paths {
                                 slug: string;
                                 name: string;
                                 monthlyBudgetUsd: number | null;
+                                /** @description secret reference globs the credential broker may hand out for this tenant */
+                                secretRefs: string[];
                                 /** @description ISO 8601 timestamp */
                                 createdAt: string;
                             }[];
@@ -5667,6 +5669,8 @@ export interface paths {
                             slug: string;
                             name: string;
                             monthlyBudgetUsd: number | null;
+                            /** @description secret reference globs the credential broker may hand out for this tenant */
+                            secretRefs: string[];
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                         };
@@ -5746,6 +5750,8 @@ export interface paths {
                             slug: string;
                             name: string;
                             monthlyBudgetUsd: number | null;
+                            /** @description secret reference globs the credential broker may hand out for this tenant */
+                            secretRefs: string[];
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                         };
@@ -5800,6 +5806,8 @@ export interface paths {
                     "application/json": {
                         name?: string;
                         monthlyBudgetUsd?: number | null;
+                        /** @description secret reference globs (`*` wildcard only); an empty list allows no secret */
+                        secretRefs?: string[];
                     };
                 };
             };
@@ -5816,6 +5824,8 @@ export interface paths {
                             slug: string;
                             name: string;
                             monthlyBudgetUsd: number | null;
+                            /** @description secret reference globs the credential broker may hand out for this tenant */
+                            secretRefs: string[];
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                         };
@@ -6780,6 +6790,284 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/worker/runs/{id}/handover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run node: the handover of its own step (spec, input, output schema) */
+        get: {
+            parameters: {
+                query: {
+                    agentId: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            agentId: string;
+                            /** @description the step's own AgentSpec */
+                            agent: {
+                                [key: string]: unknown;
+                            };
+                            /** @description the validated input of the step */
+                            input: unknown;
+                            /** @description output schema with named schemas inlined */
+                            outputSchema?: unknown;
+                            attempt: number;
+                            run: {
+                                name: string;
+                                version: string;
+                                /** @enum {string} */
+                                classification: "public" | "internal" | "confidential" | "restricted";
+                                budget: {
+                                    [key: string]: unknown;
+                                };
+                            };
+                            /** @description MCP connections of the step with all secret references stripped */
+                            mcp: {
+                                [key: string]: unknown;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/worker/runs/{id}/handover/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run node: post the final result of its step */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        agentId: string;
+                        format: string;
+                        content: string;
+                        json?: unknown;
+                        /** @description set instead of an output when the step did not succeed */
+                        failure?: {
+                            /** @enum {string} */
+                            status: "failed" | "blocked_by_policy" | "cancelled";
+                            code: string;
+                            message: string;
+                        };
+                        usage?: {
+                            tokensIn: number;
+                            tokensOut: number;
+                            costMicros: number;
+                            steps: number;
+                            toolCalls: number;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/worker/runs/{id}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Credential broker: the secret values of exactly this step, once per step and session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        agentId: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            agentId: string;
+                            /** @description ISO 8601 timestamp */
+                            expiresAt: string;
+                            credentials: {
+                                secret: string;
+                                env: string;
+                                value: string;
+                            }[];
+                            connections: {
+                                server: string;
+                                env?: {
+                                    [key: string]: string;
+                                };
+                                headers?: {
+                                    [key: string]: string;
+                                };
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
                     };
                 };
                 /** @description Not found */

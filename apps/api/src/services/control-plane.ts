@@ -3,6 +3,7 @@ import type { OaxError } from '@openagentix/core';
 import {
   evaluateToolCall,
   issueRunToken,
+  redact,
   stepAuditEntry,
   verifyRunToken,
   type AgentDefinition,
@@ -29,6 +30,7 @@ import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
 import type { CatalogService } from './catalog.js';
 import type { GuidelinesService } from './guidelines.js';
+import type { RunNodesService } from './run-nodes.js';
 import { monthOf } from './runs.js';
 
 const ACTIVE = ['running', 'awaiting_approval'];
@@ -44,6 +46,7 @@ export class ControlPlaneService {
     private readonly agents: AgentsService,
     private readonly catalog: CatalogService,
     private readonly budgets: BudgetsService,
+    private readonly nodes: RunNodesService,
     private readonly guidelines?: GuidelinesService,
   ) {}
 
@@ -72,6 +75,12 @@ export class ControlPlaneService {
     }
     if (claims.runId !== runId)
       throw new HttpError(403, 'forbidden', 'run token is not valid for this run');
+    // Step-scoped token of an isolated run node: the session must be live; the lease belongs to
+    // the orchestrator, so the lockedBy check below does not apply to it.
+    if (claims.sid) {
+      await this.nodes.checkSession(claims, runId);
+      return claims;
+    }
     const [run] = await this.ctx.db
       .select({ status: runs.status, lockedBy: runs.lockedBy })
       .from(runs)
@@ -79,6 +88,37 @@ export class ControlPlaneService {
     if (!run || !ACTIVE.includes(run.status) || run.lockedBy !== claims.workerId) {
       throw new HttpError(409, 'invalid_state', 'run is not active for this worker');
     }
+    return claims;
+  }
+
+  /** {@link authorize} plus the step scope: a node token may only act for its own steps. */
+  async authorizeStep(
+    token: string,
+    runId: string,
+    agentId: string | null,
+  ): Promise<RunTokenClaims> {
+    const claims = await this.authorize(token, runId);
+    if (claims.sid) {
+      if (agentId === null)
+        throw new HttpError(403, 'credential_scope', 'a run node must name the agent it acts for');
+      this.nodes.assertStep(claims, agentId);
+    }
+    return claims;
+  }
+
+  /** Like {@link authorizeStep}, but only for step-scoped (run node) tokens. */
+  async authorizeNodeStep(token: string, runId: string, agentId: string): Promise<RunTokenClaims> {
+    const claims = await this.authorizeStep(token, runId, agentId);
+    if (!claims.sid)
+      throw new HttpError(403, 'credential_scope', 'a step-scoped run node token is required');
+    return claims;
+  }
+
+  /** Only the trusted worker that holds the lease may complete a run, never a run node. */
+  async authorizeOrchestrator(token: string, runId: string): Promise<RunTokenClaims> {
+    const claims = await this.authorize(token, runId);
+    if (claims.sid)
+      throw new HttpError(403, 'forbidden', 'a run node token cannot perform this operation');
     return claims;
   }
 
@@ -177,7 +217,10 @@ export class ControlPlaneService {
     return decision;
   }
 
-  async recordStep(runId: string, step: StepInput): Promise<void> {
+  async recordStep(runId: string, rawStep: StepInput): Promise<void> {
+    // Values the broker handed out for this run never reach step rows or audit payloads.
+    const known = this.nodes.knownSecrets(runId);
+    const step = known.length > 0 ? redact(rawStep, { knownSecrets: known }) : rawStep;
     await this.ctx.db.transaction(async (tx) => {
       const [run] = await tx
         .update(runs)
@@ -385,6 +428,7 @@ export class ControlPlaneService {
       .update(approvals)
       .set({ status: 'rejected', decidedAt: this.ctx.now(), comment: 'run finished' })
       .where(and(eq(approvals.runId, runId), eq(approvals.status, 'pending')));
+    await this.nodes.revokeRun(runId, 'run_completed');
     await this.ctx.cache.delPrefix('costs:');
     this.ctx.metrics.runsFinished.inc({ status: result.status });
     await this.audit.append({

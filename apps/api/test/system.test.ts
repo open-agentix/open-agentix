@@ -18,7 +18,7 @@ describe('system endpoints', () => {
     expect((await n.req({ method: 'GET', url: '/readyz', token: null })).json()).toEqual({
       status: 'ok',
       checks: { database: true, schema: true },
-      schema: { expected: 5, applied: 5, ok: true },
+      schema: { expected: 6, applied: 6, ok: true },
       airgapped: { enabled: false, allowlist: 0, blockedAttempts: 0 },
     });
     expect((await n.req({ method: 'GET', url: '/v1/version', token: null })).json()).toMatchObject({
@@ -42,7 +42,7 @@ describe('system endpoints', () => {
   it('reports not ready when the database is down or the schema is behind', async () => {
     const ping = n.ctx.database.ping;
     const status = n.ctx.database.schemaStatus;
-    n.ctx.database.schemaStatus = async () => ({ expected: 5, applied: 2, ok: false });
+    n.ctx.database.schemaStatus = async () => ({ expected: 6, applied: 2, ok: false });
     const behind = await n.req({ method: 'GET', url: '/readyz', token: null });
     expect(behind.statusCode).toBe(503);
     expect(behind.json().checks).toEqual({ database: true, schema: false });

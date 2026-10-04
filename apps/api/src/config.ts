@@ -8,7 +8,7 @@ import {
   type RoleBinding,
 } from '@openagentix/core';
 import { parseProviderConfigs, type ProviderConfig } from '@openagentix/providers';
-import { KubernetesJobRunnerConfigSchema } from '@openagentix/runners';
+import { ContainerRunnerConfigSchema, KubernetesJobRunnerConfigSchema } from '@openagentix/runners';
 import { z } from 'zod';
 import { loadDatabaseConfig, type DatabaseConfig } from './db/settings.js';
 
@@ -134,6 +134,25 @@ export const EnvSchema = z.object({
   OAX_K8S_RESOURCES_CPU: z.string().default('500m'),
   OAX_K8S_RESOURCES_MEMORY: z.string().default('512Mi'),
   OAX_K8S_EGRESS: z.string().default(''),
+  // Container runner (W1-3a): opt-in, one hardened container per isolated step.
+  OAX_CONTAINER_RUNNER_ENABLED: bool.default(false),
+  OAX_CONTAINER_ENGINE: z.enum(['docker', 'podman']).default('docker'),
+  /** `unix:///run/user/1000/podman/podman.sock` or a socket proxy `http://socket-proxy:2375`. */
+  OAX_CONTAINER_ENGINE_URL: z.string().optional(),
+  OAX_CONTAINER_ALLOW_RAW_SOCKET: bool.default(false),
+  /** Run node image pinned by digest (`...@sha256:<64 hex>`). */
+  OAX_CONTAINER_IMAGE: z.string().optional(),
+  OAX_CONTAINER_TOOLBOX_IMAGES: json(z.record(z.string(), z.string())).optional(),
+  /** Pre-created network with `internal: true`. */
+  OAX_CONTAINER_NETWORK: z.string().optional(),
+  /** Egress proxy: where the worker listens and the URL nodes use. */
+  OAX_CONTAINER_EGRESS_PROXY_LISTEN: z.string().optional(),
+  OAX_CONTAINER_EGRESS_PROXY_URL: z.string().url().optional(),
+  OAX_CONTAINER_MAX_CPUS: z.coerce.number().positive().default(1),
+  OAX_CONTAINER_MAX_MEMORY_MB: int(512),
+  OAX_CONTAINER_MAX_PIDS: int(256),
+  /** Base URL of the control node as seen from run nodes (internal network, not the public URL). */
+  OAX_NODE_CONTROL_URL: z.string().url().optional(),
   OAX_TOOLBOX_REGISTRY: z.string().default('ghcr.io/open-agentix'),
   OAX_TOOLBOX_ALLOWLIST: z.string().default(''),
   OAX_TOOLBOX_REQUIRE_SIGNATURE: bool.default(true),
@@ -233,6 +252,15 @@ export interface Config {
     kubernetesJob: { enabled: boolean } & z.infer<typeof KubernetesJobRunnerConfigSchema> & {
         imagePullSecrets: string[];
       };
+    /** `config` is set exactly when the runner is enabled and complete (fail closed otherwise). */
+    container: {
+      enabled: boolean;
+      config?: z.infer<typeof ContainerRunnerConfigSchema>;
+      /** `host:port` the worker's egress proxy listens on (when step egress is used). */
+      egressProxyListen?: { host: string; port: number };
+      /** Control node base URL as seen from run nodes. */
+      nodeControlUrl?: string;
+    };
   };
   toolboxes: { registry: string; allowlist: string[]; requireSignature: boolean };
   airgap: {
@@ -430,6 +458,59 @@ export function secretEnvRefs(env: NodeJS.ProcessEnv): string[] {
   return out.sort();
 }
 
+function containerConfig(e: z.infer<typeof EnvSchema>): Config['runners']['container'] {
+  if (!e.OAX_CONTAINER_RUNNER_ENABLED) return { enabled: false };
+  const need = (value: string | undefined, name: string): string => {
+    if (!value)
+      throw new OaxError(
+        'config_invalid',
+        `invalid configuration: ${name} is required when OAX_CONTAINER_RUNNER_ENABLED=true`,
+      );
+    return value;
+  };
+  const listen = e.OAX_CONTAINER_EGRESS_PROXY_LISTEN;
+  let egressProxyListen: { host: string; port: number } | undefined;
+  if (listen) {
+    const m = /^(.+):(\d{1,5})$/.exec(listen);
+    if (!m || Number(m[2]) < 1 || Number(m[2]) > 65535)
+      throw new OaxError(
+        'config_invalid',
+        'invalid configuration: OAX_CONTAINER_EGRESS_PROXY_LISTEN must be host:port',
+      );
+    egressProxyListen = { host: m[1]!, port: Number(m[2]) };
+  }
+  if (!!listen !== !!e.OAX_CONTAINER_EGRESS_PROXY_URL)
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: set both OAX_CONTAINER_EGRESS_PROXY_LISTEN and OAX_CONTAINER_EGRESS_PROXY_URL, or neither (no step egress)',
+    );
+  const parsed = ContainerRunnerConfigSchema.safeParse({
+    engine: e.OAX_CONTAINER_ENGINE,
+    engineUrl: need(e.OAX_CONTAINER_ENGINE_URL, 'OAX_CONTAINER_ENGINE_URL'),
+    allowRawSocket: e.OAX_CONTAINER_ALLOW_RAW_SOCKET,
+    image: need(e.OAX_CONTAINER_IMAGE, 'OAX_CONTAINER_IMAGE'),
+    toolboxImages: e.OAX_CONTAINER_TOOLBOX_IMAGES ?? {},
+    network: need(e.OAX_CONTAINER_NETWORK, 'OAX_CONTAINER_NETWORK'),
+    ...(e.OAX_CONTAINER_EGRESS_PROXY_URL
+      ? { egressProxyUrl: e.OAX_CONTAINER_EGRESS_PROXY_URL }
+      : {}),
+    maxCpus: e.OAX_CONTAINER_MAX_CPUS,
+    maxMemoryMb: e.OAX_CONTAINER_MAX_MEMORY_MB,
+    maxPids: e.OAX_CONTAINER_MAX_PIDS,
+  });
+  if (!parsed.success)
+    throw new OaxError(
+      'config_invalid',
+      `invalid configuration: container runner: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
+    );
+  return {
+    enabled: true,
+    config: parsed.data,
+    ...(egressProxyListen ? { egressProxyListen } : {}),
+    nodeControlUrl: need(e.OAX_NODE_CONTROL_URL, 'OAX_NODE_CONTROL_URL'),
+  };
+}
+
 function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
   const enabled = list(e.OAX_RUNNERS_ENABLED);
   for (const r of enabled) {
@@ -456,8 +537,16 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
       'invalid configuration: runner "kubernetes-job" requires OAX_K8S_JOB_ENABLED=true (v0.2 feature flag)',
     );
   }
+  const container = containerConfig(e);
+  if (enabled.includes('container') && !container.enabled) {
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: runner "container" requires OAX_CONTAINER_RUNNER_ENABLED=true',
+    );
+  }
   return {
     enabled: enabled as RunnerKind[],
+    container,
     kubernetesJob: {
       enabled: e.OAX_K8S_JOB_ENABLED,
       ...job,

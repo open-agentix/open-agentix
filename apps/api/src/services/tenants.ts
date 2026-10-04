@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { Principal } from '@openagentix/core';
+import { parseSecretRefPatterns, type Principal } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import { tenants } from '../db/schema.js';
-import { conflict, forbidden, notFound } from '../errors.js';
+import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
 import type { IdentityService, TenantRow } from './identity.js';
 
@@ -74,7 +74,11 @@ export class TenantsService {
   async update(
     p: Principal,
     id: string,
-    patch: { name?: string | undefined; monthlyBudgetUsd?: number | null | undefined },
+    patch: {
+      name?: string | undefined;
+      monthlyBudgetUsd?: number | null | undefined;
+      secretRefs?: string[] | undefined;
+    },
   ): Promise<TenantRow> {
     this.assertOperator(p);
     await this.get(p, id);
@@ -83,6 +87,13 @@ export class TenantsService {
     if (patch.monthlyBudgetUsd !== undefined)
       set.monthlyBudgetMicros =
         patch.monthlyBudgetUsd === null ? null : Math.round(patch.monthlyBudgetUsd * 1e6);
+    if (patch.secretRefs !== undefined) {
+      try {
+        set.secretRefs = parseSecretRefPatterns(patch.secretRefs);
+      } catch (e) {
+        throw new HttpError(400, 'validation_failed', (e as Error).message);
+      }
+    }
     const [row] = await this.ctx.db.update(tenants).set(set).where(eq(tenants.id, id)).returning();
     await this.audit.append({
       actor: p.userId,

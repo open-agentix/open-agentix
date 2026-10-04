@@ -180,6 +180,7 @@ export const tenantDto = (t: TenantRow) => ({
   slug: t.slug,
   name: t.name,
   monthlyBudgetUsd: t.monthlyBudgetMicros === null ? null : Number(t.monthlyBudgetMicros) / 1e6,
+  secretRefs: t.secretRefs,
   createdAt: iso(t.createdAt),
 });
 
