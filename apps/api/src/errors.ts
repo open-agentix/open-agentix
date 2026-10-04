@@ -24,6 +24,8 @@ const STATUS: Record<string, number> = {
   invalid_state: 409,
   not_implemented: 501,
   team_budget_exceeded: 402,
+  tenant_budget_exceeded: 402,
+  use_case_budget_exceeded: 402,
 };
 
 export class HttpError extends OaxError {

@@ -5,6 +5,7 @@ import {
   limitsFromBudget,
   newRunMetrics,
   recordModelCall,
+  recordBudgetBreaches,
   recordPolicyDenial,
   recordStepResult,
   recordToolCall,
@@ -115,6 +116,10 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
         status: 'cancelled',
         error: { code: 'cancelled', message: 'run was cancelled' },
       });
+    }
+    // Hard stop: the control node knows what ALL runs of the tenant and use case spent so far.
+    if (ctx.control.checkBudget) {
+      recordBudgetBreaches(metrics, (await ctx.control.checkBudget(run.runId)).breaches);
     }
     const d = await controller.check(metrics, now());
     if (d.action === 'continue') return;

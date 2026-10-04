@@ -7,13 +7,12 @@ import {
   type Ticket,
 } from '@openagentix/mcp';
 import { ProviderRegistry, SimulatedProvider } from '@openagentix/providers';
-import { HttpControlPlane, InProcessRunner, type FetchFn } from '@openagentix/runners';
+import { HttpControlPlane, InProcessRunner } from '@openagentix/runners';
 import { eq } from 'drizzle-orm';
-import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runs } from '../src/db/schema.js';
 import { CVE_TRIAGE, JIRA_EVENT, TICKET_UPDATER, TRIVY_EVENT } from './fixtures.js';
-import { testNode, testSecrets, type TestNode } from './helpers.js';
+import { injectFetch, testNode, testSecrets, type TestNode } from './helpers.js';
 
 const keys = generateAuditKeyPair();
 let n: TestNode;
@@ -21,22 +20,6 @@ let teamId: string;
 let operator: string;
 let viewerOther: string;
 const store = new Map<string, Ticket>();
-
-export function injectFetch(app: FastifyInstance): FetchFn {
-  return async (url, init) => {
-    const u = new URL(url);
-    const res = await app.inject({
-      method: (init?.method ?? 'GET') as 'GET',
-      url: u.pathname + u.search,
-      headers: init?.headers as Record<string, string>,
-      ...(init?.body ? { payload: String(init.body) } : {}),
-    });
-    return new Response(res.statusCode === 204 ? null : res.body, {
-      status: res.statusCode,
-      headers: { 'content-type': String(res.headers['content-type'] ?? 'application/json') },
-    });
-  };
-}
 
 async function claim(runId: string, worker = 'w1') {
   await n.ctx.db

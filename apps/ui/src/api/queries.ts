@@ -102,6 +102,11 @@ export const costsQuery = (groupBy: CostGroupBy, from?: string, to?: string) =>
       ),
   });
 
+export const budgetsQuery = queryOptions({
+  queryKey: ['budgets'],
+  queryFn: () => call(api.GET('/v1/budgets')),
+});
+
 export const connectionsQuery = queryOptions({
   queryKey: ['connections'],
   queryFn: () => call(api.GET('/v1/connections')),

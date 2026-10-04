@@ -621,7 +621,19 @@
     "budgetOf": "Budgetverbrauch von {team}",
     "exceeded": "Budget überschritten",
     "nearLimit": "Über 80 %",
-    "onTrack": "Im Rahmen"
+    "onTrack": "Im Rahmen",
+    "monthlyBudgets": "Monatsbudgets",
+    "monthlyBudgetsText": "Läufe stoppen hart, sobald ein Budget erreicht ist, auch mitten im Lauf. Alarme gibt es bei 50, 80 und 100 %.",
+    "tenantBudget": "Gesamter Mandant",
+    "stopped": "Läufe gestoppt",
+    "alertAt": "Alarm bei {percent} %",
+    "useCase": "Anwendungsfall",
+    "monthlyLimit": "Monatslimit (USD)",
+    "setBudget": "Budget setzen",
+    "removeBudget": "Budget von {useCase} entfernen",
+    "budgetSaved": "Budget von {useCase} gespeichert",
+    "budgetRemoved": "Budget von {useCase} entfernt",
+    "budgetInvalid": "Gib einen Anwendungsfall und ein Limit ab 0 an."
   },
   "users": {
     "title": "Benutzer & Teams",
