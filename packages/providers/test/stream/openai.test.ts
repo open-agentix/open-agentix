@@ -136,6 +136,30 @@ describe('OpenAIStreamTransport', () => {
     });
   });
 
+  it('reads Ollama native usage fields (nested and top level)', async () => {
+    const nested =
+      openaiChunk({ content: 'ab' }, 'stop') +
+      openaiUsage({ prompt_eval_count: 7, eval_count: 3 }) +
+      DONE;
+    const s = await open(write(nested));
+    await collect(s.events);
+    expect(s.result()).toMatchObject({
+      usageReported: true,
+      usage: { inputTokens: 7, outputTokens: 3 },
+    });
+    await server?.close();
+    const top =
+      openaiChunk({ content: 'ab' }) +
+      frame(undefined, { done: true, prompt_eval_count: 5, eval_count: 2, choices: [] }) +
+      DONE;
+    const s2 = await open(write(top));
+    await collect(s2.events);
+    expect(s2.result()).toMatchObject({
+      usageReported: true,
+      usage: { inputTokens: 5, outputTokens: 2 },
+    });
+  });
+
   it('flags a missing usage chunk for the estimator fallback', async () => {
     const body = openaiChunk({ content: 'abcdef' }) + openaiChunk({}, 'stop') + DONE;
     const s = await open(write(body), {}, { model: 'm', messages: [] }, { inputEstimate: 77 });

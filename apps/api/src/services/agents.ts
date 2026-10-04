@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { assertWithinCeiling, parseEgressEntry } from '@openagentix/runners';
 import {
   checkPublish,
   expandProfiles,
@@ -230,6 +231,26 @@ export class AgentsService {
         message: `runner "${def.runtime.runner}" is not enabled (OAX_RUNNERS_ENABLED=${runners.enabled.join(',')})`,
       });
     }
+    // Per-step runners (ADR 0008): a step may run elsewhere than the pipeline, never on a runner
+    // that is not enabled.
+    def.agents.forEach((a, i) => {
+      const r = a.runtime?.runner;
+      if (r && !runners.enabled.includes(r))
+        issues.push({
+          path: `agents.${i}.runtime.runner`,
+          message: `runner "${r}" is not enabled (OAX_RUNNERS_ENABLED=${runners.enabled.join(',')})`,
+        });
+    });
+    // Step egress of container steps must lie inside the operator ceiling (never a union with it).
+    const ceiling = (runners.container.config?.egressAllow ?? []).map(parseEgressEntry);
+    def.agents.forEach((a, i) => {
+      if ((a.runtime?.runner ?? def.runtime.runner) !== 'container') return;
+      try {
+        assertWithinCeiling(a.runtime?.egress ?? def.runtime.egress, ceiling);
+      } catch (e) {
+        issues.push({ path: `agents.${i}.runtime.egress`, message: (e as Error).message });
+      }
+    });
     if (toolboxes.allowlist.length > 0) {
       const used = [def.runtime.toolbox, ...def.agents.map((a) => a.toolbox)].filter(
         (t): t is string => !!t,

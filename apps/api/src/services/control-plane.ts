@@ -29,9 +29,19 @@ import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
 import type { CatalogService } from './catalog.js';
 import type { GuidelinesService } from './guidelines.js';
+import type { RunNodesService } from './run-nodes.js';
 import { monthOf } from './runs.js';
 
 const ACTIVE = ['running', 'awaiting_approval'];
+/** Largest input or output a run node may attach to one step record. */
+const NODE_STEP_MAX_BYTES = 64 * 1024;
+/** Step kinds a run node may report. */
+const NODE_STEP_KINDS: ReadonlySet<string> = new Set([
+  'model_call',
+  'tool_call',
+  'output',
+  'error',
+]);
 
 /**
  * The control node side of the worker contract. Every method is scoped by a signed run token,
@@ -44,6 +54,7 @@ export class ControlPlaneService {
     private readonly agents: AgentsService,
     private readonly catalog: CatalogService,
     private readonly budgets: BudgetsService,
+    private readonly nodes: RunNodesService,
     private readonly guidelines?: GuidelinesService,
   ) {}
 
@@ -72,6 +83,12 @@ export class ControlPlaneService {
     }
     if (claims.runId !== runId)
       throw new HttpError(403, 'forbidden', 'run token is not valid for this run');
+    // Step-scoped token of an isolated run node: the session must be live; the lease belongs to
+    // the orchestrator, so the lockedBy check below does not apply to it.
+    if (claims.sid) {
+      await this.nodes.checkSession(claims, runId);
+      return claims;
+    }
     const [run] = await this.ctx.db
       .select({ status: runs.status, lockedBy: runs.lockedBy })
       .from(runs)
@@ -79,6 +96,37 @@ export class ControlPlaneService {
     if (!run || !ACTIVE.includes(run.status) || run.lockedBy !== claims.workerId) {
       throw new HttpError(409, 'invalid_state', 'run is not active for this worker');
     }
+    return claims;
+  }
+
+  /** {@link authorize} plus the step scope: a node token may only act for its own steps. */
+  async authorizeStep(
+    token: string,
+    runId: string,
+    agentId: string | null,
+  ): Promise<RunTokenClaims> {
+    const claims = await this.authorize(token, runId);
+    if (claims.sid) {
+      if (agentId === null)
+        throw new HttpError(403, 'credential_scope', 'a run node must name the agent it acts for');
+      this.nodes.assertStep(claims, agentId);
+    }
+    return claims;
+  }
+
+  /** Like {@link authorizeStep}, but only for step-scoped (run node) tokens. */
+  async authorizeNodeStep(token: string, runId: string, agentId: string): Promise<RunTokenClaims> {
+    const claims = await this.authorizeStep(token, runId, agentId);
+    if (!claims.sid)
+      throw new HttpError(403, 'credential_scope', 'a step-scoped run node token is required');
+    return claims;
+  }
+
+  /** Only the trusted worker that holds the lease may complete a run, never a run node. */
+  async authorizeOrchestrator(token: string, runId: string): Promise<RunTokenClaims> {
+    const claims = await this.authorize(token, runId);
+    if (claims.sid)
+      throw new HttpError(403, 'forbidden', 'a run node token cannot perform this operation');
     return claims;
   }
 
@@ -172,12 +220,53 @@ export class ControlPlaneService {
       action: 'policy.decision',
       target: `${call.server}/${call.tool}`,
       runId,
-      payload: { args: call.args, effect: decision.effect, reasons: decision.reasons },
+      payload: {
+        args: await this.nodes.scrub(runId, call.args),
+        effect: decision.effect,
+        reasons: decision.reasons,
+      },
     });
     return decision;
   }
 
-  async recordStep(runId: string, step: StepInput): Promise<void> {
+  /**
+   * A step reported by an untrusted run node. Cost, token counts, provider and model are measured
+   * by the control node only (from W1-3b, through the model proxy); a node's own numbers would feed
+   * the cost ledger and the budget alerts, so they are dropped. Everything else is bounded.
+   */
+  private sanitizeNodeStep(step: StepInput): StepInput {
+    const cap = (v: unknown): unknown => {
+      if (v === undefined || v === null) return v;
+      const text = JSON.stringify(v);
+      return text.length <= NODE_STEP_MAX_BYTES ? v : { truncated: true, bytes: text.length };
+    };
+    return {
+      kind: step.kind,
+      agentId: step.agentId,
+      name: step.name.slice(0, 200),
+      status: step.status,
+      ...(step.input !== undefined ? { input: cap(step.input) } : {}),
+      ...(step.output !== undefined ? { output: cap(step.output) } : {}),
+      ...(step.durationMs !== undefined
+        ? { durationMs: Math.min(step.durationMs, 86_400_000) }
+        : {}),
+    };
+  }
+
+  async recordStep(
+    runId: string,
+    rawStep: StepInput,
+    /** Set when an untrusted run node reports the step (never for the trusted worker). */
+    node?: { id: string },
+  ): Promise<void> {
+    // A node may only report what it can observe itself. Everything that decides or documents the
+    // run (conditions, handover validation, control decisions, policy decisions, approvals) is
+    // recorded by the control node and the orchestrator; a node's claim of such a step is ignored,
+    // so it can neither forge nor trigger the audit entries derived from them (step.skipped,
+    // condition.error, handover.invalid, ...).
+    if (node && !NODE_STEP_KINDS.has(rawStep.kind)) return;
+    // Values the broker handed out for this run never reach step rows or audit payloads.
+    const step = await this.nodes.scrub(runId, node ? this.sanitizeNodeStep(rawStep) : rawStep);
     await this.ctx.db.transaction(async (tx) => {
       const [run] = await tx
         .update(runs)
@@ -212,6 +301,7 @@ export class ControlPlaneService {
         durationMs: step.durationMs ?? null,
         provider: step.provider ?? null,
         model: step.model ?? null,
+        reportedBy: node ? `node:${node.id}` : null,
         createdAt: this.ctx.now(),
       });
       if ((step.costMicros ?? 0) > 0 || (step.tokensIn ?? 0) > 0 || (step.tokensOut ?? 0) > 0) {
@@ -247,13 +337,14 @@ export class ControlPlaneService {
       }
     });
     // Redaction of secrets happens inside the audit entry creation.
-    const special = stepAuditEntry(step);
+    const special = node ? undefined : stepAuditEntry(step);
     await this.audit.append({
-      actor: `agent:${step.agentId ?? 'executor'}`,
+      // Provenance: entries derived from a node's report are marked as such.
+      actor: node ? `node:${node.id}` : `agent:${step.agentId ?? 'executor'}`,
       action: special?.action ?? `step.${step.kind}`,
       target: step.name,
       runId,
-      payload: special?.payload ?? step,
+      payload: node ? { reportedBy: `node:${node.id}`, ...step } : (special?.payload ?? step),
     });
   }
 
@@ -273,7 +364,7 @@ export class ControlPlaneService {
       teamId,
       agentId,
       tool: `${call.server}/${call.tool}`,
-      args: call.args,
+      args: await this.nodes.scrub(runId, call.args),
       reasons: (reasons ?? []) as object,
       approverRoles: definition.approvals.approverRoles,
       status: 'pending',
@@ -286,7 +377,10 @@ export class ControlPlaneService {
       action: 'approval.requested',
       target: id,
       runId,
-      payload: { tool: `${call.server}/${call.tool}`, args: call.args },
+      payload: {
+        tool: `${call.server}/${call.tool}`,
+        args: await this.nodes.scrub(runId, call.args),
+      },
     });
     return id;
   }
@@ -385,6 +479,7 @@ export class ControlPlaneService {
       .update(approvals)
       .set({ status: 'rejected', decidedAt: this.ctx.now(), comment: 'run finished' })
       .where(and(eq(approvals.runId, runId), eq(approvals.status, 'pending')));
+    await this.nodes.revokeRun(runId, 'run_completed');
     await this.ctx.cache.delPrefix('costs:');
     this.ctx.metrics.runsFinished.inc({ status: result.status });
     await this.audit.append({

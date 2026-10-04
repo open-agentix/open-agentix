@@ -1,5 +1,6 @@
 import type {
   AgentDefinition,
+  AgentSpec,
   ControlLimits,
   CostModel,
   OaxEvent,
@@ -95,6 +96,12 @@ export interface ControlPlane {
 }
 
 export interface RunnerContext {
+  /**
+   * Where isolated steps run (ADR 0008, section 3). Without a dispatcher every step runs inline in
+   * this process, as before. With one, steps whose effective runner is isolating are executed by a
+   * short-lived run node and only their validated result comes back.
+   */
+  dispatcher?: StepDispatcher;
   providers: ProviderRegistry;
   tools: ToolGateway;
   control: ControlPlane;
@@ -108,4 +115,84 @@ export interface RunnerContext {
 export interface Runner {
   readonly kind: RunnerKind;
   execute(run: PreparedRun, ctx: RunnerContext): Promise<RunResult>;
+}
+
+// ---------- isolated steps: run nodes (ADR 0008, section 3) ----------
+
+/** What the orchestrator asks a runner to start for one step (one node per step in v0.2). */
+export interface RunNodeSpec {
+  runId: string;
+  /** Node id; also the worker id claim of the step-scoped run token. */
+  nodeId: string;
+  /** Agent ids of this session (v0.2: exactly one). */
+  steps: string[];
+  /** Image pinned by digest (`name@sha256:<64 hex>`). */
+  image: string;
+  /** Base URL of the control node as seen from the node (internal network). */
+  controlUrl: string;
+  /** Step-scoped run token. Delivered as a file (`/run/oax/token`), never as environment. */
+  runToken: string;
+  limits: { cpus: number; memoryMb: number; timeoutSeconds: number; pids: number };
+  /** Effective step egress (only ever narrower than the pipeline's `runtime.egress`). */
+  egress: string[];
+}
+
+export type RunNodeStopReason = 'step_end' | 'cancelled' | 'timeout' | 'lease_lost';
+
+export interface RunNodeExit {
+  exitCode: number | null;
+  /** Set when the runner ended the node itself (`timeout`, `cancelled`). */
+  reason?: string;
+}
+
+export interface RunNodeHandle {
+  readonly nodeId: string;
+  wait(signal?: AbortSignal): Promise<RunNodeExit>;
+  /** Idempotent; removes the node (container) and everything that belongs to it. */
+  stop(reason: RunNodeStopReason): Promise<void>;
+}
+
+/** A runner that executes steps in a separate, isolated process (container, Kubernetes Job). */
+export interface IsolatingRunner extends Runner {
+  startNode(spec: RunNodeSpec, ctx: { signal?: AbortSignal }): Promise<RunNodeHandle>;
+}
+
+export function isIsolatingRunner(r: Runner): r is IsolatingRunner {
+  return typeof (r as Partial<IsolatingRunner>).startNode === 'function';
+}
+
+/** Everything the orchestrator hands to the dispatcher for one step. */
+export interface StepDispatchRequest {
+  runId: string;
+  agent: AgentSpec;
+  /** The validated input of the step (the orchestrator already ran `when` and input handover). */
+  input: unknown;
+  /** Resolved output schema (named schemas inlined); the orchestrator validates it again. */
+  outputSchema?: unknown;
+  signal?: AbortSignal;
+}
+
+export interface StepDispatchResult {
+  output: AgentOutput;
+  /** Usage reported by the node (the model proxy of W1-3b will measure it on the control node). */
+  usage: RunUsage;
+}
+
+/** The `dispatchStep` seam of the executor (ADR 0008, section 5). */
+export interface StepDispatcher {
+  /** `true` when the step's effective runner is isolating (per-step `runtime.runner` wins). */
+  isolates(agent: AgentSpec): boolean;
+  /** Runs the step in a run node and returns its result. Throws (fail closed) on any failure. */
+  dispatch(req: StepDispatchRequest): Promise<StepDispatchResult>;
+}
+
+/** A run node reported that its step did not succeed (carried over to the run's result). */
+export class NodeStepFailure extends Error {
+  constructor(
+    readonly status: 'failed' | 'blocked_by_policy' | 'cancelled',
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }

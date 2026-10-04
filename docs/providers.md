@@ -62,6 +62,15 @@ document it was generated from.
   the provider family, then `OAX_PRICE_TABLE`/defaults. Azure deployments and aliases use
   `catalogModel` to borrow limits and prices from a catalog entry.
 
+### Prompt cache prices
+
+A price entry (`OAX_PRICE_TABLE`, catalog) may carry `cacheReadPerMTok` and `cacheWritePerMTok`.
+Cache tokens are reported separately from input tokens (`Usage.cacheReadTokens`,
+`cacheWriteTokens`). Without explicit prices, cache reads are priced like input tokens and cache
+writes at 1.25 x the input price. The catalog schema accepts `cost.cacheRead`/`cost.cacheWrite`;
+the pinned snapshot does not carry them yet, so cache prices come from overrides until the next
+snapshot refresh. This is groundwork for the model proxy ([ADR 0009](adr/0009-model-proxy.md)).
+
 ### Refreshing the snapshot
 
 A scheduled workflow (`.github/workflows/catalog-refresh.yml`, weekly or by hand) downloads

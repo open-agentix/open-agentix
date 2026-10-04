@@ -1,4 +1,5 @@
 import { OaxError } from '@openagentix/core';
+import type { Usage } from '../types.js';
 
 /** Strict size and time limits for one upstream stream (defaults follow ADR 0009 section 6). */
 export interface StreamLimits {
@@ -63,19 +64,21 @@ export class StreamError extends OaxError {
   }
 }
 
-/** One re-serializable upstream event. `event` is the protocol event type, `data` the JSON object. */
+/**
+ * One upstream event. `event` is the protocol event type, `data` the parsed JSON object **as the
+ * provider sent it**: unknown keys are kept on purpose. The allowlist re-serialization before
+ * anything reaches a client belongs to the proxy surfaces (W1-3b-6, ADR 0009 section 6).
+ */
 export interface UpstreamEvent {
   event: string;
   data: Record<string, unknown>;
 }
 
-/** Normalised usage. `inputTokens` excludes cache reads and writes (Anthropic convention). */
-export interface StreamUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-}
+/**
+ * Normalised usage; same field names as `Usage` of `../types.ts`, but the cache fields are
+ * always present. `inputTokens` excludes cache reads and writes (Anthropic convention).
+ */
+export type StreamUsage = Required<Usage>;
 
 export type UsageSource = 'provider' | 'estimated' | 'floor';
 

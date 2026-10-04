@@ -27,6 +27,11 @@ export type InMemoryTransportFactory = (serverName: string) => Promise<Transport
 
 export interface ConnectDeps {
   secrets: SecretResolver;
+  /**
+   * Resolver for one specific server (by name); wins over `secrets`. Lets a host give platform
+   * connections and tenant connections different resolvers.
+   */
+  secretsFor?: ((server: string) => SecretResolver) | undefined;
   /** Provides transports for `in-memory` servers. */
   inMemory?: InMemoryTransportFactory | undefined;
   /** Environment for proxy resolution (defaults to process.env). */

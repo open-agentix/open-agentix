@@ -31,17 +31,19 @@ export function reportOpenAIUsage(meter: UsageMeter, usage: unknown): boolean {
   const details = obj(u.prompt_tokens_details);
   const cached = typeof details?.cached_tokens === 'number' ? details.cached_tokens : 0;
   const written = typeof details?.cache_write_tokens === 'number' ? details.cache_write_tokens : 0;
-  const prompt = u.prompt_tokens;
+  // Ollama native counters (`prompt_eval_count`, `eval_count`) as a fallback.
+  const prompt = u.prompt_tokens ?? u.prompt_eval_count;
+  const completion = u.completion_tokens ?? u.eval_count;
   meter.report({
     inputTokens:
       typeof prompt === 'number'
         ? Math.max(0, prompt - Math.max(0, cached) - Math.max(0, written))
         : undefined,
-    outputTokens: u.completion_tokens,
+    outputTokens: completion,
     cacheReadTokens: typeof details?.cached_tokens === 'number' ? cached : undefined,
     cacheWriteTokens: typeof details?.cache_write_tokens === 'number' ? written : undefined,
   });
-  return typeof prompt === 'number' || typeof u.completion_tokens === 'number';
+  return typeof prompt === 'number' || typeof completion === 'number';
 }
 
 /** Event handler for Chat Completions chunks. */
@@ -83,7 +85,12 @@ export function createOpenAIHandler(secrets: readonly string[]): ProtocolHandler
           }
         }
       }
-      if (data.usage !== undefined && data.usage !== null && reportOpenAIUsage(meter, data.usage)) {
+      const usage =
+        data.usage ??
+        (typeof data.eval_count === 'number' || typeof data.prompt_eval_count === 'number'
+          ? data
+          : undefined);
+      if (usage !== undefined && usage !== null && reportOpenAIUsage(meter, usage)) {
         usageSeen = true;
       }
       return { emit: { event: 'chunk', data } };

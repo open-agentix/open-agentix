@@ -15,7 +15,12 @@ const ModelSchema = z.object({
     .partial()
     .default({}),
   cost: z
-    .object({ input: z.number().nonnegative(), output: z.number().nonnegative() })
+    .object({
+      input: z.number().nonnegative(),
+      output: z.number().nonnegative(),
+      cacheRead: z.number().nonnegative(),
+      cacheWrite: z.number().nonnegative(),
+    })
     .partial()
     .optional(),
   toolCall: z.boolean().optional(),
@@ -49,6 +54,8 @@ export interface CatalogModel {
   outputTokens: number | null;
   inputPerMTok: number | null;
   outputPerMTok: number | null;
+  cacheReadPerMTok?: number;
+  cacheWritePerMTok?: number;
   toolCall: boolean | null;
   source: 'catalog' | 'override';
 }
@@ -91,6 +98,8 @@ export function catalogModels(
         outputTokens: m.limit.output ?? null,
         inputPerMTok: m.cost?.input ?? null,
         outputPerMTok: m.cost?.output ?? null,
+        ...(m.cost?.cacheRead !== undefined && { cacheReadPerMTok: m.cost.cacheRead }),
+        ...(m.cost?.cacheWrite !== undefined && { cacheWritePerMTok: m.cost.cacheWrite }),
         toolCall: m.toolCall ?? null,
         source: 'catalog',
       });
@@ -102,6 +111,11 @@ export function catalogModels(
     if (existing) {
       existing.inputPerMTok = o.inputPerMTok;
       existing.outputPerMTok = o.outputPerMTok;
+      // A contract price replaces the whole price: stale snapshot cache prices must not survive.
+      delete existing.cacheReadPerMTok;
+      delete existing.cacheWritePerMTok;
+      if (o.cacheReadPerMTok !== undefined) existing.cacheReadPerMTok = o.cacheReadPerMTok;
+      if (o.cacheWritePerMTok !== undefined) existing.cacheWritePerMTok = o.cacheWritePerMTok;
       existing.source = 'override';
     } else {
       out.push({
@@ -130,6 +144,8 @@ export function catalogPriceTable(catalog: ModelCatalog): PriceEntry[] {
       model: m.id,
       inputPerMTok: m.inputPerMTok!,
       outputPerMTok: m.outputPerMTok!,
+      ...(m.cacheReadPerMTok !== undefined && { cacheReadPerMTok: m.cacheReadPerMTok }),
+      ...(m.cacheWritePerMTok !== undefined && { cacheWritePerMTok: m.cacheWritePerMTok }),
       perToolCallUsd: 0,
     }));
 }
@@ -149,6 +165,8 @@ export interface ModelProposal {
   outputTokens: number | null;
   inputPerMTok: number | null;
   outputPerMTok: number | null;
+  cacheReadPerMTok?: number;
+  cacheWritePerMTok?: number;
   toolCall: boolean | null;
   /** `catalog` = from the pinned snapshot, `local` = free of charge self-hosted, `unknown` = enter prices. */
   priceSource: 'catalog' | 'local' | 'unknown';

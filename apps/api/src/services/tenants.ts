@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { Principal } from '@openagentix/core';
+import { parseSecretRefPatterns, slugsCollide, type Principal } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import { tenants } from '../db/schema.js';
-import { conflict, forbidden, notFound } from '../errors.js';
+import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
 import type { IdentityService, TenantRow } from './identity.js';
 
@@ -46,6 +46,15 @@ export class TenantsService {
     this.assertOperator(p);
     const [exists] = await this.ctx.db.select().from(tenants).where(eq(tenants.slug, input.slug));
     if (exists) throw conflict(`tenant ${input.slug} already exists`);
+    // `acme.corp.x` and `acme-corp.x` are the same secret for the resolver: tenants whose slugs
+    // overlap in canonical form could read each other's secrets, so they cannot coexist.
+    const clash = (await this.ctx.db.select({ slug: tenants.slug }).from(tenants)).find((t) =>
+      slugsCollide(t.slug, input.slug),
+    );
+    if (clash)
+      throw conflict(
+        `tenant slug ${input.slug} overlaps with ${clash.slug} in secret names (a. b-c and a-b.c are the same secret)`,
+      );
     const [row] = await this.ctx.db
       .insert(tenants)
       .values({
@@ -74,7 +83,11 @@ export class TenantsService {
   async update(
     p: Principal,
     id: string,
-    patch: { name?: string | undefined; monthlyBudgetUsd?: number | null | undefined },
+    patch: {
+      name?: string | undefined;
+      monthlyBudgetUsd?: number | null | undefined;
+      secretRefs?: string[] | undefined;
+    },
   ): Promise<TenantRow> {
     this.assertOperator(p);
     await this.get(p, id);
@@ -83,6 +96,13 @@ export class TenantsService {
     if (patch.monthlyBudgetUsd !== undefined)
       set.monthlyBudgetMicros =
         patch.monthlyBudgetUsd === null ? null : Math.round(patch.monthlyBudgetUsd * 1e6);
+    if (patch.secretRefs !== undefined) {
+      try {
+        set.secretRefs = parseSecretRefPatterns(patch.secretRefs);
+      } catch (e) {
+        throw new HttpError(400, 'validation_failed', (e as Error).message);
+      }
+    }
     const [row] = await this.ctx.db.update(tenants).set(set).where(eq(tenants.id, id)).returning();
     await this.audit.append({
       actor: p.userId,

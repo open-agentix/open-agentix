@@ -313,3 +313,29 @@ describe('change gate on schedule sources', () => {
     s.stop();
   });
 });
+
+describe('lease loss revokes run node sessions', () => {
+  it('calls the hook for every run whose lease expired, and a failing hook never blocks recovery', async () => {
+    await enqueue();
+    const lost: string[] = [];
+    const q = new RunQueue(n.ctx, 'wx', async (runId) => void lost.push(runId));
+    const [claimed] = await q.claim(1);
+    expect(claimed).toBeDefined();
+    await n.ctx.db
+      .update(schema.runs)
+      .set({ leaseUntil: new Date(Date.now() - 1000) })
+      .where(eq(schema.runs.id, claimed!.id));
+    expect(await q.reapExpired()).toBeGreaterThanOrEqual(1);
+    expect(lost).toContain(claimed!.id);
+    await enqueue();
+    const q2 = new RunQueue(n.ctx, 'wy', async () => {
+      throw new Error('boom');
+    });
+    const [c2] = await q2.claim(1);
+    await n.ctx.db
+      .update(schema.runs)
+      .set({ leaseUntil: new Date(Date.now() - 1000) })
+      .where(eq(schema.runs.id, c2!.id));
+    expect(await q2.reapExpired()).toBeGreaterThanOrEqual(1);
+  });
+});

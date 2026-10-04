@@ -77,3 +77,69 @@ describe('CostModel', () => {
     expect(usdToMicros(0.0000015)).toBe(2);
   });
 });
+
+describe('CostModel cache prices', () => {
+  const usage = {
+    inputTokens: 1000,
+    outputTokens: 100,
+    cacheReadTokens: 2000,
+    cacheWriteTokens: 400,
+  };
+
+  it('falls back to input price for reads and 1.25 x input for writes', () => {
+    const m = new CostModel([
+      entry({ provider: 'p', model: 'm', inputPerMTok: 4, outputPerMTok: 20 }),
+    ]);
+    expect(m.modelCall('p', 'm', usage)).toEqual({
+      inputMicros: 4000,
+      outputMicros: 2000,
+      cacheMicros: 8000 + 2000,
+      totalMicros: 4000 + 2000 + 10_000,
+      priced: true,
+    });
+  });
+
+  it('uses explicit cache prices when present (including zero)', () => {
+    const m = new CostModel([
+      entry({
+        provider: 'p',
+        model: 'm',
+        inputPerMTok: 4,
+        outputPerMTok: 20,
+        cacheReadPerMTok: 0.4,
+        cacheWritePerMTok: 5,
+      }),
+      entry({
+        provider: 'p',
+        model: 'free',
+        inputPerMTok: 4,
+        outputPerMTok: 20,
+        cacheReadPerMTok: 0,
+        cacheWritePerMTok: 0,
+      }),
+    ]);
+    expect(m.modelCall('p', 'm', usage).cacheMicros).toBe(800 + 2000);
+    expect(m.modelCall('p', 'free', usage).cacheMicros).toBe(0);
+  });
+
+  it('keeps the old shape without cache tokens and ignores negative counts', () => {
+    const m = new CostModel([
+      entry({ provider: 'p', model: 'm', inputPerMTok: 4, outputPerMTok: 20 }),
+    ]);
+    expect(m.modelCall('p', 'm', { inputTokens: 10, outputTokens: 1 })).not.toHaveProperty(
+      'cacheMicros',
+    );
+    expect(
+      m.modelCall('p', 'm', { inputTokens: 0, outputTokens: 0, cacheReadTokens: -5 }),
+    ).not.toHaveProperty('cacheMicros');
+  });
+
+  it('an unpriced model stays unpriced with cache tokens', () => {
+    expect(new CostModel().modelCall('x', 'y', usage)).toEqual({
+      inputMicros: 0,
+      outputMicros: 0,
+      totalMicros: 0,
+      priced: false,
+    });
+  });
+});

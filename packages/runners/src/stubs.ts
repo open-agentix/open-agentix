@@ -13,18 +13,6 @@ const selector = z
   .record(z.string(), z.string())
   .refine((r) => Object.keys(r).length > 0, 'selector must not be empty');
 
-export const ContainerRunnerConfigSchema = z.strictObject({
-  engine: z.enum(['docker', 'podman']).default('docker'),
-  socketPath: z.string().default('/var/run/docker.sock'),
-  /** Toolbox image registry prefix; images are pinned by digest from the toolbox catalog. */
-  registry: z.string().default('ghcr.io/open-agentix'),
-  network: z.string().optional(),
-  egress,
-  cpus: z.number().positive().default(1),
-  memoryMb: z.number().int().positive().default(512),
-  readOnlyRootFs: z.literal(true).default(true),
-});
-
 export const KubernetesJobRunnerConfigSchema = z.strictObject({
   namespace: z.string().default('openagentix-runs'),
   /** ServiceAccount of the Job; on EKS annotate it for IRSA (`eks.amazonaws.com/role-arn`). */
@@ -111,7 +99,6 @@ export const GitlabCiRunnerConfigSchema = z.strictObject({
 });
 
 export const RUNNER_CONFIG_SCHEMAS = {
-  container: ContainerRunnerConfigSchema,
   'kubernetes-job': KubernetesJobRunnerConfigSchema,
   'aws-lambda': AwsLambdaRunnerConfigSchema,
   'github-actions': GithubActionsRunnerConfigSchema,
@@ -121,7 +108,6 @@ export const RUNNER_CONFIG_SCHEMAS = {
 export type RemoteRunnerKind = keyof typeof RUNNER_CONFIG_SCHEMAS;
 
 const MILESTONE: Record<StubRunnerKind, string> = {
-  container: 'v0.2',
   'aws-lambda': 'v0.3',
   'github-actions': 'v0.3',
   'gitlab-ci': 'v0.3',

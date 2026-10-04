@@ -14,6 +14,11 @@ import {
   RunIdParams,
   RunResultBody,
   StepBody,
+  StepCredentialsRequestBody,
+  StepCredentialsSchema,
+  StepHandoverQuery,
+  StepHandoverResultBody,
+  StepHandoverSchema,
 } from '../schemas.js';
 import type { ZApp } from '../zapp.js';
 
@@ -43,7 +48,7 @@ export function registerWorkerRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => {
-      await control.authorize(token(req), req.params.id);
+      await control.authorizeStep(token(req), req.params.id, req.body.agentId);
       const d = await control.decide(req.params.id, req.body.agentId, req.body.call);
       return { effect: d.effect, reasons: d.reasons };
     },
@@ -62,8 +67,12 @@ export function registerWorkerRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) => {
-      await control.authorize(token(req), req.params.id);
-      await control.recordStep(req.params.id, req.body);
+      const claims = await control.authorizeStep(token(req), req.params.id, req.body.agentId);
+      await control.recordStep(
+        req.params.id,
+        req.body,
+        claims.sid ? { id: claims.workerId } : undefined,
+      );
       return reply.status(204).send();
     },
   );
@@ -82,7 +91,7 @@ export function registerWorkerRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) => {
-      await control.authorize(token(req), req.params.id);
+      await control.authorizeStep(token(req), req.params.id, req.body.agentId);
       const approvalId = await control.requestApproval(
         req.params.id,
         req.body.agentId,
@@ -160,9 +169,72 @@ export function registerWorkerRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) => {
-      await control.authorize(token(req), req.params.id);
+      await control.authorizeOrchestrator(token(req), req.params.id);
       await control.completeRun(req.params.id, req.body);
       return reply.status(204).send();
+    },
+  );
+
+  // ---------- run node protocol: step-scoped run tokens only ----------
+
+  app.get(
+    '/v1/worker/runs/:id/handover',
+    {
+      config: { access: 'run-token' },
+      schema: {
+        tags,
+        summary: 'Run node: the handover of its own step (spec, input, output schema)',
+        security: sec,
+        params: RunIdParams,
+        querystring: StepHandoverQuery,
+        response: { 200: StepHandoverSchema, 401: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      const claims = await control.authorizeNodeStep(token(req), req.params.id, req.query.agentId);
+      reply.header('cache-control', 'no-store');
+      return services.runNodes.handover(claims, req.params.id, req.query.agentId);
+    },
+  );
+
+  app.post(
+    '/v1/worker/runs/:id/handover/result',
+    {
+      config: { access: 'run-token' },
+      schema: {
+        tags,
+        summary: 'Run node: post the final result of its step',
+        security: sec,
+        params: RunIdParams,
+        body: StepHandoverResultBody,
+      },
+    },
+    async (req, reply) => {
+      const claims = await control.authorizeNodeStep(token(req), req.params.id, req.body.agentId);
+      await services.runNodes.submitResult(claims, req.params.id, req.body);
+      return reply.status(204).send();
+    },
+  );
+
+  app.post(
+    '/v1/worker/runs/:id/credentials',
+    {
+      config: { access: 'run-token' },
+      schema: {
+        tags,
+        summary:
+          'Credential broker: the secret values of exactly this step, once per step and session',
+        security: sec,
+        params: RunIdParams,
+        body: StepCredentialsRequestBody,
+        response: { 200: StepCredentialsSchema, 401: ErrorSchema, 403: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      const claims = await control.authorizeNodeStep(token(req), req.params.id, req.body.agentId);
+      // Values must never be cached by an intermediary or end up in a log.
+      reply.header('cache-control', 'no-store');
+      return services.runNodes.issueCredentials(claims, req.params.id, req.body.agentId);
     },
   );
 }

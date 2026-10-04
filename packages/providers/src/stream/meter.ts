@@ -1,9 +1,5 @@
+import { estimateOutputTokensFromBytes, outputFloorFromBytes } from '@openagentix/core';
 import type { MeterSnapshot, StreamSettlement, StreamUsage } from './types.js';
-
-/** Output estimate: `ceil(utf8 bytes / 3)` (ADR 0009 section 4.1). */
-export const OUTPUT_BYTES_PER_TOKEN_ESTIMATE = 3;
-/** Floor against endpoints that report implausibly low usage: `ceil(utf8 bytes / 8)`. */
-export const OUTPUT_BYTES_PER_TOKEN_FLOOR = 8;
 
 export interface UsageUpdate {
   inputTokens?: unknown;
@@ -77,8 +73,8 @@ export class UsageMeter {
    *   never settled below what was streamed. Input falls back to `inputEstimate`.
    */
   settle(complete: boolean, inputEstimate = 0): StreamSettlement {
-    const est = Math.ceil(this.bytes / OUTPUT_BYTES_PER_TOKEN_ESTIMATE);
-    const floor = Math.ceil(this.bytes / OUTPUT_BYTES_PER_TOKEN_FLOOR);
+    const est = estimateOutputTokensFromBytes(this.bytes);
+    const floor = outputFloorFromBytes(this.bytes);
     const reportedOut = this.reported.outputTokens;
     const inputReported = this.reported.inputTokens !== undefined;
     let output: number;

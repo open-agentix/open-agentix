@@ -8,7 +8,13 @@ import {
   type RoleBinding,
 } from '@openagentix/core';
 import { parseProviderConfigs, type ProviderConfig } from '@openagentix/providers';
-import { KubernetesJobRunnerConfigSchema, validateResourceCeiling } from '@openagentix/runners';
+import {
+  ContainerRunnerConfigSchema,
+  KubernetesJobRunnerConfigSchema,
+  parseCidr,
+  parseEgressEntries,
+  validateResourceCeiling,
+} from '@openagentix/runners';
 import { z } from 'zod';
 import { loadDatabaseConfig, type DatabaseConfig } from './db/settings.js';
 
@@ -139,6 +145,30 @@ export const EnvSchema = z.object({
   OAX_K8S_RESOURCES_CPU: z.string().default('500m'),
   OAX_K8S_RESOURCES_MEMORY: z.string().default('512Mi'),
   OAX_K8S_EGRESS: z.string().default(''),
+  // Container runner (W1-3a): opt-in, one hardened container per isolated step.
+  OAX_CONTAINER_RUNNER_ENABLED: bool.default(false),
+  OAX_CONTAINER_ENGINE: z.enum(['docker', 'podman']).default('docker'),
+  /** `unix:///run/user/1000/podman/podman.sock` or a socket proxy `http://socket-proxy:2375`. */
+  OAX_CONTAINER_ENGINE_URL: z.string().optional(),
+  OAX_CONTAINER_ALLOW_RAW_SOCKET: bool.default(false),
+  /** Run node image pinned by digest (`...@sha256:<64 hex>`). */
+  OAX_CONTAINER_IMAGE: z.string().optional(),
+  OAX_CONTAINER_TOOLBOX_IMAGES: json(z.record(z.string(), z.string())).optional(),
+  /** Pre-created network with `internal: true`. */
+  OAX_CONTAINER_NETWORK: z.string().optional(),
+  /** Egress proxy (a separate service, see docs/runners.md): URL nodes use and the shared grant key. */
+  OAX_CONTAINER_EGRESS_PROXY_URL: z.string().url().optional(),
+  OAX_CONTAINER_EGRESS_GRANT_SECRET: z.string().min(32).optional(),
+  /** Operator upper bound for step egress (intersection with what agents.md declares). */
+  OAX_CONTAINER_EGRESS_ALLOW: z.string().default(''),
+  /** Private ranges (CIDRs) steps may reach where a rule matches; proxy-side, validated here. */
+  OAX_CONTAINER_EGRESS_PRIVATE_ALLOW: z.string().default(''),
+  OAX_CONTAINER_INSTANCE_ID: z.string().default('default'),
+  OAX_CONTAINER_MAX_CPUS: z.coerce.number().positive().default(1),
+  OAX_CONTAINER_MAX_MEMORY_MB: int(512),
+  OAX_CONTAINER_MAX_PIDS: int(256),
+  /** Base URL of the control node as seen from run nodes (internal network, not the public URL). */
+  OAX_NODE_CONTROL_URL: z.string().url().optional(),
   OAX_TOOLBOX_REGISTRY: z.string().default('ghcr.io/open-agentix'),
   OAX_TOOLBOX_ALLOWLIST: z.string().default(''),
   OAX_TOOLBOX_REQUIRE_SIGNATURE: bool.default(true),
@@ -238,6 +268,13 @@ export interface Config {
     kubernetesJob: { enabled: boolean } & z.infer<typeof KubernetesJobRunnerConfigSchema> & {
         imagePullSecrets: string[];
       };
+    /** `config` is set exactly when the runner is enabled and complete (fail closed otherwise). */
+    container: {
+      enabled: boolean;
+      config?: z.infer<typeof ContainerRunnerConfigSchema>;
+      /** Control node base URL as seen from run nodes. */
+      nodeControlUrl?: string;
+    };
   };
   toolboxes: { registry: string; allowlist: string[]; requireSignature: boolean };
   airgap: {
@@ -435,6 +472,74 @@ export function secretEnvRefs(env: NodeJS.ProcessEnv): string[] {
   return out.sort();
 }
 
+function containerConfig(e: z.infer<typeof EnvSchema>): Config['runners']['container'] {
+  if (!e.OAX_CONTAINER_RUNNER_ENABLED) return { enabled: false };
+  const need = (value: string | undefined, name: string): string => {
+    if (!value)
+      throw new OaxError(
+        'config_invalid',
+        `invalid configuration: ${name} is required when OAX_CONTAINER_RUNNER_ENABLED=true`,
+      );
+    return value;
+  };
+  // The grant secret signs egress grants; it must not be the run token secret (one leak, two keys).
+  // It is only ever needed by the worker: the control node does not receive it (the runner refuses a
+  // proxy URL without it at worker start).
+  if (
+    e.OAX_CONTAINER_EGRESS_GRANT_SECRET &&
+    e.OAX_CONTAINER_EGRESS_GRANT_SECRET === e.OAX_RUN_TOKEN_SECRET
+  )
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: OAX_CONTAINER_EGRESS_GRANT_SECRET must differ from OAX_RUN_TOKEN_SECRET',
+    );
+  for (const c of list(e.OAX_CONTAINER_EGRESS_PRIVATE_ALLOW))
+    if (!parseCidr(c))
+      throw new OaxError(
+        'config_invalid',
+        `invalid configuration: OAX_CONTAINER_EGRESS_PRIVATE_ALLOW entry "${c}" is not a CIDR`,
+      );
+  try {
+    parseEgressEntries(list(e.OAX_CONTAINER_EGRESS_ALLOW));
+  } catch (err) {
+    throw new OaxError(
+      'config_invalid',
+      `invalid configuration: OAX_CONTAINER_EGRESS_ALLOW: ${(err as Error).message}`,
+    );
+  }
+  const parsed = ContainerRunnerConfigSchema.safeParse({
+    engine: e.OAX_CONTAINER_ENGINE,
+    engineUrl: need(e.OAX_CONTAINER_ENGINE_URL, 'OAX_CONTAINER_ENGINE_URL'),
+    allowRawSocket: e.OAX_CONTAINER_ALLOW_RAW_SOCKET,
+    image: need(e.OAX_CONTAINER_IMAGE, 'OAX_CONTAINER_IMAGE'),
+    toolboxImages: e.OAX_CONTAINER_TOOLBOX_IMAGES ?? {},
+    network: need(e.OAX_CONTAINER_NETWORK, 'OAX_CONTAINER_NETWORK'),
+    ...(e.OAX_CONTAINER_EGRESS_PROXY_URL
+      ? {
+          egressProxyUrl: e.OAX_CONTAINER_EGRESS_PROXY_URL,
+          ...(e.OAX_CONTAINER_EGRESS_GRANT_SECRET
+            ? { egressGrantSecret: e.OAX_CONTAINER_EGRESS_GRANT_SECRET }
+            : {}),
+        }
+      : {}),
+    egressAllow: list(e.OAX_CONTAINER_EGRESS_ALLOW),
+    instanceId: e.OAX_CONTAINER_INSTANCE_ID,
+    maxCpus: e.OAX_CONTAINER_MAX_CPUS,
+    maxMemoryMb: e.OAX_CONTAINER_MAX_MEMORY_MB,
+    maxPids: e.OAX_CONTAINER_MAX_PIDS,
+  });
+  if (!parsed.success)
+    throw new OaxError(
+      'config_invalid',
+      `invalid configuration: container runner: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
+    );
+  return {
+    enabled: true,
+    config: parsed.data,
+    nodeControlUrl: need(e.OAX_NODE_CONTROL_URL, 'OAX_NODE_CONTROL_URL'),
+  };
+}
+
 function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
   const enabled = list(e.OAX_RUNNERS_ENABLED);
   for (const r of enabled) {
@@ -475,6 +580,13 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
       'invalid configuration: runner "kubernetes-job" requires OAX_K8S_JOB_ENABLED=true (v0.2 feature flag)',
     );
   }
+  const container = containerConfig(e);
+  if (enabled.includes('container') && !container.enabled) {
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: runner "container" requires OAX_CONTAINER_RUNNER_ENABLED=true',
+    );
+  }
   if (enabled.includes('kubernetes-job')) {
     // Fail closed: without an allowlist the runner would start no image at all.
     if (job.toolboxAllowlist.length === 0 && job.runNodeImages.length === 0) {
@@ -493,6 +605,7 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
   }
   return {
     enabled: enabled as RunnerKind[],
+    container,
     kubernetesJob: {
       enabled: e.OAX_K8S_JOB_ENABLED,
       ...job,

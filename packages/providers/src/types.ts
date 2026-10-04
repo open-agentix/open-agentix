@@ -42,6 +42,9 @@ export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'o
 export interface Usage {
   inputTokens: number;
   outputTokens: number;
+  /** Prompt cache tokens, when the provider reports them (priced separately). */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 export interface ChatResponse {

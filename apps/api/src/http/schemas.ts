@@ -501,6 +501,9 @@ export const TenantSchema = z.object({
   slug: z.string(),
   name: z.string(),
   monthlyBudgetUsd: z.number().nullable(),
+  secretRefs: z
+    .array(z.string())
+    .describe('secret reference globs the credential broker may hand out for this tenant'),
   createdAt: Iso,
 });
 export const TenantCreateBody = z.object({
@@ -519,6 +522,11 @@ export const TenantCreateBody = z.object({
 export const TenantPatchBody = z.object({
   name: z.string().min(1).max(200).optional(),
   monthlyBudgetUsd: z.number().positive().nullable().optional(),
+  secretRefs: z
+    .array(z.string().max(128))
+    .max(64)
+    .optional()
+    .describe('secret reference globs (`*` wildcard only); an empty list allows no secret'),
 });
 export const MeSchema = z.object({
   user: UserSchema,
@@ -570,13 +578,69 @@ export const StepBody = z.object({
   status: z.enum(STEP_STATUSES),
   input: Json.optional(),
   output: Json.optional(),
-  tokensIn: z.number().int().nonnegative().optional(),
-  tokensOut: z.number().int().nonnegative().optional(),
-  costMicros: z.number().int().nonnegative().optional(),
-  durationMs: z.number().int().nonnegative().optional(),
-  provider: z.string().optional(),
-  model: z.string().optional(),
+  tokensIn: z.number().int().nonnegative().max(1e9).optional(),
+  tokensOut: z.number().int().nonnegative().max(1e9).optional(),
+  costMicros: z.number().int().nonnegative().max(1e12).optional(),
+  durationMs: z.number().int().nonnegative().max(86_400_000).optional(),
+  provider: z.string().max(100).optional(),
+  model: z.string().max(200).optional(),
 });
+
+/** Run node protocol (ADR 0008): the node's own step only; nothing about other steps. */
+export const StepHandoverQuery = z.object({ agentId: z.string().min(1).max(64) });
+export const StepHandoverSchema = z.object({
+  agentId: z.string(),
+  agent: z.record(z.string(), z.unknown()).describe("the step's own AgentSpec"),
+  input: z.unknown().describe('the validated input of the step'),
+  outputSchema: z.unknown().optional().describe('output schema with named schemas inlined'),
+  attempt: z.number().int(),
+  run: z.object({
+    name: z.string(),
+    version: z.string(),
+    classification: z.enum(CLASSIFICATIONS),
+    budget: z.record(z.string(), z.unknown()),
+  }),
+  mcp: z
+    .array(z.record(z.string(), z.unknown()))
+    .describe('MCP connections of the step with all secret references stripped'),
+});
+export const StepHandoverResultBody = z.object({
+  agentId: z.string(),
+  format: z.string().max(64),
+  content: z.string().max(1_000_000),
+  json: Json.optional(),
+  failure: z
+    .object({
+      status: z.enum(['failed', 'blocked_by_policy', 'cancelled']),
+      code: z.string().max(100),
+      message: z.string().max(2000),
+    })
+    .optional()
+    .describe('set instead of an output when the step did not succeed'),
+  usage: z
+    .object({
+      tokensIn: z.number().int().nonnegative(),
+      tokensOut: z.number().int().nonnegative(),
+      costMicros: z.number().int().nonnegative(),
+      steps: z.number().int().nonnegative(),
+      toolCalls: z.number().int().nonnegative(),
+    })
+    .optional(),
+});
+export const StepCredentialsRequestBody = z.object({ agentId: z.string().min(1).max(64) });
+export const StepCredentialsSchema = z.object({
+  agentId: z.string(),
+  expiresAt: Iso,
+  credentials: z.array(z.object({ secret: z.string(), env: z.string(), value: z.string() })),
+  connections: z.array(
+    z.object({
+      server: z.string(),
+      env: z.record(z.string(), z.string()).optional(),
+      headers: z.record(z.string(), z.string()).optional(),
+    }),
+  ),
+});
+
 export const ApprovalRequestBody = z.object({
   agentId: z.string(),
   call: ToolCallSchema,
