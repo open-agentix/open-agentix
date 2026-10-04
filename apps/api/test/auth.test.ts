@@ -460,6 +460,21 @@ describe('users and teams', () => {
       payload: { slug: 'team-ops', name: 'Ops', monthlyBudgetUsd: 25 },
     });
     expect(team.json()).toMatchObject({ slug: 'team-ops', monthlyBudgetUsd: 25 });
+    const patched = await n.req({
+      method: 'PATCH',
+      url: `/v1/teams/${team.json().id}`,
+      payload: { name: 'Operations', monthlyBudgetUsd: null },
+    });
+    expect(patched.json()).toMatchObject({ name: 'Operations', monthlyBudgetUsd: null });
+    expect(
+      (
+        await n.req({
+          method: 'PATCH',
+          url: `/v1/teams/${team.json().id}`,
+          payload: { monthlyBudgetUsd: 10 },
+        })
+      ).json().monthlyBudgetUsd,
+    ).toBe(10);
     expect(
       (
         await n.req({

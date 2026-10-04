@@ -9,7 +9,7 @@ import {
   type Principal,
   type ValidationResult,
 } from '@openagentix/core';
-import { and, desc, eq, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, lt, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import { agentVersions, agents, teams } from '../db/schema.js';
@@ -100,7 +100,7 @@ export class AgentsService {
     return row;
   }
 
-  async list(principal: Principal, limit: number, cursor?: string) {
+  async list(principal: Principal, limit: number, cursor?: string, q?: string) {
     const c = decodeTimeCursor(cursor);
     const teamsVisible = visibleTeams(principal, 'agents:read');
     if (Array.isArray(teamsVisible) && teamsVisible.length === 0)
@@ -111,6 +111,7 @@ export class AgentsService {
       .where(
         and(
           teamsVisible === 'all' ? undefined : inArray(agents.teamId, teamsVisible),
+          q ? ilike(agents.name, `%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`) : undefined,
           c
             ? or(lt(agents.createdAt, c.t), and(eq(agents.createdAt, c.t), lt(agents.id, c.id)))
             : undefined,

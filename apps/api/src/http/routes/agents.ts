@@ -35,12 +35,14 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
         tags,
         summary: 'List agents',
         security: sec,
-        querystring: PageQuery,
+        querystring: PageQuery.extend({
+          q: z.string().max(100).optional().describe('filter by name (substring)'),
+        }),
         response: { 200: pageOf(AgentSchema) },
       },
     },
     async (req) => {
-      const r = await agents.list(principalOf(req), req.query.limit, req.query.cursor);
+      const r = await agents.list(principalOf(req), req.query.limit, req.query.cursor, req.query.q);
       return { items: r.items.map(agentDto), nextCursor: r.nextCursor };
     },
   );

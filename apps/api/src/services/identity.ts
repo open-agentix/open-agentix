@@ -545,6 +545,23 @@ export class IdentityService {
     return row!;
   }
 
+  async updateTeam(
+    actor: string,
+    teamId: string,
+    patch: { name?: string | undefined; monthlyBudgetUsd?: number | null | undefined },
+  ): Promise<TeamRow> {
+    await this.getTeam(teamId);
+    const set: Partial<TeamRow> = {};
+    if (patch.name !== undefined) set.name = patch.name;
+    if (patch.monthlyBudgetUsd !== undefined)
+      set.monthlyBudgetMicros =
+        patch.monthlyBudgetUsd === null ? null : Math.round(patch.monthlyBudgetUsd * 1e6);
+    const [row] = await this.ctx.db.update(teams).set(set).where(eq(teams.id, teamId)).returning();
+    await this.ctx.cache.del('teams:all');
+    await this.audit.append({ actor, action: 'team.updated', target: teamId, payload: patch });
+    return row!;
+  }
+
   async teamMembers(
     teamId: string,
   ): Promise<{ userId: string; email: string; displayName: string; role: string }[]> {

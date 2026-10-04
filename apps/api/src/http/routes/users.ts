@@ -90,6 +90,26 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
     async (req) => ({ items: await identity.teamMembers(req.params.id) }),
   );
 
+  app.patch(
+    '/v1/teams/:id',
+    {
+      config: { access: 'users:write' },
+      schema: {
+        tags: ['users'],
+        summary: 'Rename a team or change its monthly budget (null removes it)',
+        security: sec,
+        params: IdParams,
+        body: z.object({
+          name: z.string().min(1).max(200).optional(),
+          monthlyBudgetUsd: z.number().positive().nullable().optional(),
+        }),
+        response: { 200: TeamSchema },
+      },
+    },
+    async (req) =>
+      teamDto(await identity.updateTeam(principalOf(req).userId, req.params.id, req.body)),
+  );
+
   app.delete(
     '/v1/teams/:id',
     {

@@ -636,6 +636,13 @@ paths:
           in: query
           name: cursor
           required: false
+        - schema:
+            type: string
+            maxLength: 100
+          in: query
+          name: q
+          required: false
+          description: filter by name (substring)
       security:
         - bearer: []
       responses:
@@ -5339,6 +5346,84 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   /v1/teams/{id}:
+    patch:
+      summary: Rename a team or change its monthly budget (null removes it)
+      tags:
+        - users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                monthlyBudgetUsd:
+                  anyOf:
+                    - type: number
+                      exclusiveMinimum: 0
+                    - type: "null"
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  slug:
+                    type: string
+                  name:
+                    type: string
+                  monthlyBudgetUsd:
+                    type:
+                      - number
+                      - "null"
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                required:
+                  - id
+                  - slug
+                  - name
+                  - monthlyBudgetUsd
+                  - createdAt
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     delete:
       summary: Delete a team that owns no agents
       tags:
