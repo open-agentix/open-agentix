@@ -36,85 +36,85 @@ are in [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md). Dates are tar
 
 Wave 0:
 
-- [ ] **ADR 0008: agents.md data flow and isolation contract (handovers, when, tool profiles, per-step credentials, run node)** (W0-1, tbd) – *As an agent engineer, I want one reviewed design for the new agents.md fields and the worker contract so that the wave 1 items can be built in parallel without redesigning each other's interfaces.*
-- [ ] **Website and blog wording sync with the code (status badges, released features, planned items)** (W0-2, tbd) – *As a reader of openagentix.si and the blog, I want every status claim to match the code so that I can trust what is marked available and what is planned.*
+- [ ] **ADR 0008: agents.md data flow and isolation contract (handovers, when, tool profiles, per-step credentials, run node)** (W0-1, #23) – *As an agent engineer, I want one reviewed design for the new agents.md fields and the worker contract so that the wave 1 items can be built in parallel without redesigning each other's interfaces.*
+- [ ] **Website and blog wording sync with the code (status badges, released features, planned items)** (W0-2, #24) – *As a reader of openagentix.si and the blog, I want every status claim to match the code so that I can trust what is marked available and what is planned.*
 
 Wave 1:
 
-- [ ] **Typed handovers with JSON Schema validation and conditional steps (`when`)** (W1-1, tbd) – *As an agent engineer, I want each step to hand over a schema-validated JSON artifact and to run only when its condition holds so that agents never pass free text between each other and plans can branch without an orchestrator agent.*
-- [ ] **Named read/write tool profiles per MCP server** (W1-2, tbd) – *As an integrator, I want to publish named profiles per MCP server (for example `read` and `write`) with each tool classified as read or write so that agent engineers grant `jira:read` instead of hand-picking tools and a read-only step can never receive a write tool.*
+- [ ] **Typed handovers with JSON Schema validation and conditional steps (`when`)** (W1-1, #25) – *As an agent engineer, I want each step to hand over a schema-validated JSON artifact and to run only when its condition holds so that agents never pass free text between each other and plans can branch without an orchestrator agent.*
+- [ ] **Named read/write tool profiles per MCP server** (W1-2, #26) – *As an integrator, I want to publish named profiles per MCP server (for example `read` and `write`) with each tool classified as read or write so that agent engineers grant `jira:read` instead of hand-picking tools and a read-only step can never receive a write tool.*
 - [ ] **Remote run node, per-step credential broker and the container runner** (W1-3, #10) – *As a platform engineer, I want each run step in a short-lived container that receives only its own credentials and a short-lived run token so that a compromised tool cannot touch other runs or other steps' secrets.*
 - [ ] **Kubernetes Job runner (EKS/IRSA) with per-step credentials** (W1-4, #11) – *As an EKS operator, I want one Job per run step with its own ServiceAccount, IRSA role and NetworkPolicy so that credentials are scoped per agent step and nothing outlives the run.*
-- [ ] **Agent Check and Agent Plan v1 (advisory plan generation with a least-privilege lint)** (W1-5, tbd) – *As a business user, I want to describe a process in plain language and get a reviewable Agent Plan that splits it into least-privilege steps so that an agent engineer starts from a safe blueprint instead of a god agent.*
-- [ ] **OpenCode harness adapter behind the policy gate** (W1-6, tbd) – *As an agent engineer, I want to run an agent with OpenCode under openagentix so that its tool calls are policy-checked, approved, audited and costed exactly like native runs and like the Claude Code adapter.*
+- [ ] **Agent Check and Agent Plan v1 (advisory plan generation with a least-privilege lint)** (W1-5, #27) – *As a business user, I want to describe a process in plain language and get a reviewable Agent Plan that splits it into least-privilege steps so that an agent engineer starts from a safe blueprint instead of a god agent.*
+- [ ] **OpenCode harness adapter behind the policy gate** (W1-6, #28) – *As an agent engineer, I want to run an agent with OpenCode under openagentix so that its tool calls are policy-checked, approved, audited and costed exactly like native runs and like the Claude Code adapter.*
 
 Wave 2:
 
-- [ ] **Toolbox images in CI: build, cosign signing, SBOM, Trivy scan, digest pinning and verification** (W2-1, tbd) – *As a security engineer, I want toolbox images built, signed (cosign), SBOM'd (syft) and scanned (trivy) so that only verified binaries run as worker nodes.*
-- [ ] **mTLS between remote worker nodes and the control node** (W2-2, tbd) – *As an operator, I want mTLS between worker nodes and the control node so that run tokens are not the only protection.*
-- [ ] **Emergency security overrides (kill switch that always wins)** (W2-3, tbd) – *As a security lead, I want to block a tool, server, agent or tenant immediately during an incident, without editing reviewed policies, so that a security block always wins and takes effect within seconds.*
+- [ ] **Toolbox images in CI: build, cosign signing, SBOM, Trivy scan, digest pinning and verification** (W2-1, #29) – *As a security engineer, I want toolbox images built, signed (cosign), SBOM'd (syft) and scanned (trivy) so that only verified binaries run as worker nodes.*
+- [ ] **mTLS between remote worker nodes and the control node** (W2-2, #30) – *As an operator, I want mTLS between worker nodes and the control node so that run tokens are not the only protection.*
+- [ ] **Emergency security overrides (kill switch that always wins)** (W2-3, #31) – *As a security lead, I want to block a tool, server, agent or tenant immediately during an incident, without editing reviewed policies, so that a security block always wins and takes effect within seconds.*
 - [ ] **Agent test suites (`## Tests` in agents.md) and eval runner v1 incl. guideline evaluation** (W2-4, #8) – *As an agent engineer, I want scripted test cases run against the simulated provider on every publish, and guideline compliance measured in every eval run, so that regressions are caught before production.*
-- [ ] **Notification channels, budget alert delivery and per-agent monthly budgets** (W2-5, tbd) – *As a finance owner, I want a monthly limit per agent and budget alerts pushed to chat or mail, configured through the API, so that the hard stop is never a surprise.*
-- [ ] **Console support for wave 1: plans, handovers and conditions, tool profiles, runners and credentials** (W2-6, tbd) – *As an agent engineer, I want to see Agent Plans, step handovers, skipped steps, tool profiles and the runner of each step in the console so that every run is visible step by step.*
+- [ ] **Notification channels, budget alert delivery and per-agent monthly budgets** (W2-5, #32) – *As a finance owner, I want a monthly limit per agent and budget alerts pushed to chat or mail, configured through the API, so that the hard stop is never a surprise.*
+- [ ] **Console support for wave 1: plans, handovers and conditions, tool profiles, runners and credentials** (W2-6, #33) – *As an agent engineer, I want to see Agent Plans, step handovers, skipped steps, tool profiles and the runner of each step in the console so that every run is visible step by step.*
 
 Wave 3:
 
-- [ ] **Approval inbox with notifications and one-click decisions in Slack, Teams and mail** (W3-1, tbd) – *As an operator, I want approvals in Slack/Teams/mail with one-click decisions so that agents do not wait for me to open the UI.*
+- [ ] **Approval inbox with notifications and one-click decisions in Slack, Teams and mail** (W3-1, #34) – *As an operator, I want approvals in Slack/Teams/mail with one-click decisions so that agents do not wait for me to open the UI.*
 - [ ] **More change-gate probes: API with secrets, SQL query, MCP read** (W3-2, #4) – *As an integrator, I want schedules to run only when an authenticated API response, a database query or an MCP resource changes.*
-- [ ] **Policy bindings per team and agent, control-agent rule API and RE2 patterns** (W3-3, tbd) – *As a security engineer, I want to bind policy bundles to teams or agents, tune control-agent thresholds per team through the API and use ReDoS-safe patterns.*
-- [ ] **HTTP/API connections and delivery of agent outputs to targets** (W3-4, tbd) – *As an integrator, I want plain HTTP API connections next to MCP servers, and agent outputs delivered to their declared target, so that agents call REST APIs and post results without writing an MCP server.*
-- [ ] **Observability completion: step, model and tool spans and the missing metrics** (W3-5, tbd) – *As an operator, I want traces per run step, model call and tool call and metrics for tool calls, approvals, tokens and budget exhaustion so that I can see every run in my own monitoring.*
+- [ ] **Policy bindings per team and agent, control-agent rule API and RE2 patterns** (W3-3, #35) – *As a security engineer, I want to bind policy bundles to teams or agents, tune control-agent thresholds per team through the API and use ReDoS-safe patterns.*
+- [ ] **HTTP/API connections and delivery of agent outputs to targets** (W3-4, #36) – *As an integrator, I want plain HTTP API connections next to MCP servers, and agent outputs delivered to their declared target, so that agents call REST APIs and post results without writing an MCP server.*
+- [ ] **Observability completion: step, model and tool spans and the missing metrics** (W3-5, #37) – *As an operator, I want traces per run step, model call and tool call and metrics for tool calls, approvals, tokens and budget exhaustion so that I can see every run in my own monitoring.*
 - [ ] **Operations API: settings write API, agent archive, demo resets, lighter run list and PostgreSQL benchmark in CI** (W3-6, #9) – *As an admin, I want to manage providers and enabled runners from the UI (audited), archive agents instead of deleting them, a demo that resets itself and measured p95 numbers on PostgreSQL for every release.*
 
 Wave 4:
 
-- [ ] **Homelab example agents: CVE triage, log anomalies, auto-repair PRs, uptime incidents, backup verification** (W4-4, tbd) – *As a homelab owner, I want ready-made, tested example agents for daily CVE triage, log anomaly summaries, auto-repair PRs, incident summaries and backup restore tests.*
+- [ ] **Homelab example agents: CVE triage, log anomalies, auto-repair PRs, uptime incidents, backup verification** (W4-4, #41) – *As a homelab owner, I want ready-made, tested example agents for daily CVE triage, log anomaly summaries, auto-repair PRs, incident summaries and backup restore tests.*
 
 ## v0.3 – External runtimes and enterprise integration (target: Q2 2027)
 
 Wave 4:
 
-- [ ] **Hermes and OpenClaw harness adapters** (W4-1, tbd) – *As an agent engineer, I want to run Hermes or OpenClaw agents under openagentix with the same policy gate, audit and costs as native runs.*
-- [ ] **GitHub Actions and GitLab CI runners with signed callbacks** (W4-2, tbd) – *As a developer, I want code-changing agents to run in CI next to the repository with signed callbacks so that results arrive as reviewed PRs.*
-- [ ] **AWS Lambda runner** (W4-3, tbd) – *As a serverless team, I want one function per agent version inside our VPC so that runs scale to zero and reach Bedrock through VPC endpoints.*
-- [ ] **Model routing per step (classification, cost, latency)** (W4-5, tbd) – *As a platform owner, I want rules that choose the provider/model per step so that sensitive data stays on private models and cheap tasks use cheap models.*
+- [ ] **Hermes and OpenClaw harness adapters** (W4-1, #38) – *As an agent engineer, I want to run Hermes or OpenClaw agents under openagentix with the same policy gate, audit and costs as native runs.*
+- [ ] **GitHub Actions and GitLab CI runners with signed callbacks** (W4-2, #39) – *As a developer, I want code-changing agents to run in CI next to the repository with signed callbacks so that results arrive as reviewed PRs.*
+- [ ] **AWS Lambda runner** (W4-3, #40) – *As a serverless team, I want one function per agent version inside our VPC so that runs scale to zero and reach Bedrock through VPC endpoints.*
+- [ ] **Model routing per step (classification, cost, latency)** (W4-5, #42) – *As a platform owner, I want rules that choose the provider/model per step so that sensitive data stays on private models and cheap tasks use cheap models.*
 
 Wave 5:
 
-- [ ] **SCIM provisioning and tenant-scoped identity providers** (W5-1, tbd) – *As an IT admin, I want users and groups provisioned via SCIM from Entra ID/Okta, per tenant, so that leavers lose access immediately.*
-- [ ] **SIEM export of the audit trail (syslog, HTTP, S3)** (W5-2, tbd) – *As a SOC analyst, I want audit entries streamed to Splunk/Elastic/Sentinel so that agent activity is part of our detections.*
-- [ ] **Secret managers: HashiCorp Vault and AWS Secrets Manager with short-lived leases** (W5-3, tbd) – *As a security engineer, I want secret references resolved from Vault/AWS SM with short-lived leases that the credential broker revokes after each step.*
-- [ ] **Inbound Slack and Teams adapters and IMAP polling for mail** (W5-4, tbd) – *As a support lead, I want tasks created from shared mailboxes and chat mentions without writing a relay.*
-- [ ] **MCP catalog governance: review states, per-server egress and container MCP servers** (W5-5, tbd) – *As a platform admin, I want a catalog with review states that decides which MCP servers a tenant may register and use, with network rules per server, and MCP servers that run as containers.*
-- [ ] **OPA (Rego) adapter for the policy gate** (W5-6, tbd) – *As a compliance team, I want to reuse Rego policies in the gate, which can only make decisions stricter.*
+- [ ] **SCIM provisioning and tenant-scoped identity providers** (W5-1, #43) – *As an IT admin, I want users and groups provisioned via SCIM from Entra ID/Okta, per tenant, so that leavers lose access immediately.*
+- [ ] **SIEM export of the audit trail (syslog, HTTP, S3)** (W5-2, #44) – *As a SOC analyst, I want audit entries streamed to Splunk/Elastic/Sentinel so that agent activity is part of our detections.*
+- [ ] **Secret managers: HashiCorp Vault and AWS Secrets Manager with short-lived leases** (W5-3, #45) – *As a security engineer, I want secret references resolved from Vault/AWS SM with short-lived leases that the credential broker revokes after each step.*
+- [ ] **Inbound Slack and Teams adapters and IMAP polling for mail** (W5-4, #46) – *As a support lead, I want tasks created from shared mailboxes and chat mentions without writing a relay.*
+- [ ] **MCP catalog governance: review states, per-server egress and container MCP servers** (W5-5, #47) – *As a platform admin, I want a catalog with review states that decides which MCP servers a tenant may register and use, with network rules per server, and MCP servers that run as containers.*
+- [ ] **OPA (Rego) adapter for the policy gate** (W5-6, #48) – *As a compliance team, I want to reuse Rego policies in the gate, which can only make decisions stricter.*
 
 ## v0.4 – Agent lifecycle: Check, Plan, Build, Evaluate, Approve (target: Q3 2027)
 
 Wave 6:
 
-- [ ] **Agent Build v1: Agent Plan to agent scaffolding with schemas, tool bindings and eval cases** (W6-1, tbd) – *As an agent engineer, I want an approved Agent Plan turned into agents.md files with schemas, profile-based tool bindings, budgets, approvals and starter test cases so that I tune behaviour instead of writing boilerplate.*
-- [ ] **Evaluations v2: golden datasets, graders and a promotion gate** (W6-2, tbd) – *As an agent engineer, I want golden datasets and graders run on every new version and model so that quality regressions block promotion.*
-- [ ] **Version approval bound to digest, model, eval set and policy, with re-evaluation on material change** (W6-3, tbd) – *As a risk officer, I want an agent version approved for production only together with its model configuration, evaluation set and policy, and re-evaluated when any of them changes.*
-- [ ] **Dark software factory pipeline template, automatic hardening review of PRs and the LLM second opinion** (W6-4, #6, #7) – *As a founder, I want a spec -> code -> tests -> PR template for prototypes with the fixed notice, and the hardening agent reviewing every development agent's PR automatically (optionally with a model that can only add findings).*
-- [ ] **Console for the lifecycle: plans, evaluations, approvals of versions, guidelines and tenant admin** (W6-5, tbd) – *As a platform admin, I want Agent Plans, evaluations, version approvals, guidelines and tenants in the console so that the whole path from process to production is visible in one place.*
+- [ ] **Agent Build v1: Agent Plan to agent scaffolding with schemas, tool bindings and eval cases** (W6-1, #49) – *As an agent engineer, I want an approved Agent Plan turned into agents.md files with schemas, profile-based tool bindings, budgets, approvals and starter test cases so that I tune behaviour instead of writing boilerplate.*
+- [ ] **Evaluations v2: golden datasets, graders and a promotion gate** (W6-2, #50) – *As an agent engineer, I want golden datasets and graders run on every new version and model so that quality regressions block promotion.*
+- [ ] **Version approval bound to digest, model, eval set and policy, with re-evaluation on material change** (W6-3, #51) – *As a risk officer, I want an agent version approved for production only together with its model configuration, evaluation set and policy, and re-evaluated when any of them changes.*
+- [ ] **Dark software factory pipeline template, automatic hardening review of PRs and the LLM second opinion** (W6-4, #6) – *As a founder, I want a spec -> code -> tests -> PR template for prototypes with the fixed notice, and the hardening agent reviewing every development agent's PR automatically (optionally with a model that can only add findings).*
+- [ ] **Console for the lifecycle: plans, evaluations, approvals of versions, guidelines and tenant admin** (W6-5, #52) – *As a platform admin, I want Agent Plans, evaluations, version approvals, guidelines and tenants in the console so that the whole path from process to production is visible in one place.*
 
 ## v1.0 – Enterprise ready (target: H2 2027)
 
 Wave 7:
 
-- [ ] **Per-tenant audit chains and Merkle proofs** (W7-1, tbd) – *As an auditor, I want one chain per tenant and compact proofs for single entries.*
-- [ ] **Multi-step approval workflows (four-eyes, role chains, time windows)** (W7-2, tbd) – *As a risk officer, I want multi-step approvals for dangerous tools.*
-- [ ] **Cost chargeback reports per team and cost centre with ERP export** (W7-3, tbd) – *As a finance controller, I want monthly cost reports per team/cost centre with export to our ERP.*
-- [ ] **Data residency: region pinning of tenant data, models and audit storage** (W7-4, tbd) – *As an EU company, I want tenant data, models and audit storage pinned to a region.*
-- [ ] **Scale-out run queue on Valkey or Kafka** (W7-5, tbd) – *As an operator of large installations, I want higher run throughput than a Postgres queue provides.*
-- [ ] **Red-teaming campaigns against staging agents** (W7-6, tbd) – *As a security engineer, I want automated prompt-injection and tool-abuse campaigns against staging agents so that guardrail gaps are found before attackers find them.*
+- [ ] **Per-tenant audit chains and Merkle proofs** (W7-1, #53) – *As an auditor, I want one chain per tenant and compact proofs for single entries.*
+- [ ] **Multi-step approval workflows (four-eyes, role chains, time windows)** (W7-2, #54) – *As a risk officer, I want multi-step approvals for dangerous tools.*
+- [ ] **Cost chargeback reports per team and cost centre with ERP export** (W7-3, #55) – *As a finance controller, I want monthly cost reports per team/cost centre with export to our ERP.*
+- [ ] **Data residency: region pinning of tenant data, models and audit storage** (W7-4, #56) – *As an EU company, I want tenant data, models and audit storage pinned to a region.*
+- [ ] **Scale-out run queue on Valkey or Kafka** (W7-5, #57) – *As an operator of large installations, I want higher run throughput than a Postgres queue provides.*
+- [ ] **Red-teaming campaigns against staging agents** (W7-6, #58) – *As a security engineer, I want automated prompt-injection and tool-abuse campaigns against staging agents so that guardrail gaps are found before attackers find them.*
 
 Wave 8:
 
-- [ ] **Stable v1 API and `openagentix.io/v1` agents.md with a deprecation policy and documented upgrades** (W8-1, tbd) – *As an integrator, I want stable APIs and a stable agents.md schema with a deprecation policy so that upgrades do not break my automations.*
-- [ ] **Air-gapped offline bundle: images, charts, SBOMs, signatures** (W8-2, tbd) – *As a defence/critical-infrastructure operator, I want an offline bundle and no outbound calls at all.*
-- [ ] **Private model hosting managed by the Helm chart (vLLM/Ollama with GPU scheduling)** (W8-3, tbd) – *As a regulated enterprise, I want vLLM/Ollama deployments managed by the Helm chart with GPU scheduling so that restricted data never leaves our cluster.*
-- [ ] **Public demo at demo.openagentix.si on the release images** (W8-4, tbd) – *As a visitor, I want a live demo that I can trigger by curl or e-mail and whose audit chain I can verify.*
+- [ ] **Stable v1 API and `openagentix.io/v1` agents.md with a deprecation policy and documented upgrades** (W8-1, #59) – *As an integrator, I want stable APIs and a stable agents.md schema with a deprecation policy so that upgrades do not break my automations.*
+- [ ] **Air-gapped offline bundle: images, charts, SBOMs, signatures** (W8-2, #60) – *As a defence/critical-infrastructure operator, I want an offline bundle and no outbound calls at all.*
+- [ ] **Private model hosting managed by the Helm chart (vLLM/Ollama with GPU scheduling)** (W8-3, #61) – *As a regulated enterprise, I want vLLM/Ollama deployments managed by the Helm chart with GPU scheduling so that restricted data never leaves our cluster.*
+- [ ] **Public demo at demo.openagentix.si on the release images** (W8-4, #62) – *As a visitor, I want a live demo that I can trigger by curl or e-mail and whose audit chain I can verify.*
 
 Chart work (OCI publishing, signing, Kubernetes Job runner wiring, KEDA, multi-tenancy,
 dashboards, private model hosting, offline bundle) is tracked in

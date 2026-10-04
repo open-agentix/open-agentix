@@ -338,8 +338,8 @@ Milestone: **v0.2** (exceptions per item). Unblocks everything else: one reviewe
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W0-1 | ADR 0008: agents.md data flow and isolation contract (handovers, when, tool profiles, per-step credentials, run node) | S | opus | yes | - | docs/adr/0008-*.md, packages/core/src/agents/schema.ts, packages/core/src/agents/validate.ts, packages/core/test/agents*.test.ts | tbd |
-| W0-2 | Website and blog wording sync with the code (status badges, released features, planned items) | S | haiku | no | - | openagentix.si: src/content/docs/**, src/i18n/ui/{en,de}/*.ts, src/components/landing/*.astro; blog.openagentix.si: src/content/posts/{en,de}/*.md | tbd |
+| W0-1 | ADR 0008: agents.md data flow and isolation contract (handovers, when, tool profiles, per-step credentials, run node) | S | opus | yes | - | docs/adr/0008-*.md, packages/core/src/agents/schema.ts, packages/core/src/agents/validate.ts, packages/core/test/agents*.test.ts | #23 |
+| W0-2 | Website and blog wording sync with the code (status badges, released features, planned items) | S | haiku | no | - | openagentix.si: src/content/docs/**, src/i18n/ui/{en,de}/*.ts, src/components/landing/*.astro; blog.openagentix.si: src/content/posts/{en,de}/*.md | #24 |
 
 #### W0-1 ADR 0008: agents.md data flow and isolation contract (handovers, when, tool profiles, per-step credentials, run node)
 
@@ -376,12 +376,12 @@ Milestone: **v0.2** (exceptions per item). The claims the website and blog make 
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W1-1 | Typed handovers with JSON Schema validation and conditional steps (`when`) | L | sonnet | no | W0-1 | packages/core/src/handover.ts (new), packages/core/src/conditions.ts (new), packages/runners/src/executor.ts (output and loop head), packages/runners/test/*, examples/ticket-triage.agents.md (new), docs/pipelines.md | tbd |
-| W1-2 | Named read/write tool profiles per MCP server | M | sonnet | yes | W0-1 | packages/mcp/src/config.ts, apps/api/src/services/catalog.ts, apps/api/src/services/agents.ts (publish expansion), packages/core/src/policy/engine.ts, apps/ui/src/features/connections/*, openapi.yaml (regenerate on rebase) | tbd |
+| W1-1 | Typed handovers with JSON Schema validation and conditional steps (`when`) | L | sonnet | no | W0-1 | packages/core/src/handover.ts (new), packages/core/src/conditions.ts (new), packages/runners/src/executor.ts (output and loop head), packages/runners/test/*, examples/ticket-triage.agents.md (new), docs/pipelines.md | #25 |
+| W1-2 | Named read/write tool profiles per MCP server | M | sonnet | yes | W0-1 | packages/mcp/src/config.ts, apps/api/src/services/catalog.ts, apps/api/src/services/agents.ts (publish expansion), packages/core/src/policy/engine.ts, apps/ui/src/features/connections/*, openapi.yaml (regenerate on rebase) | #26 |
 | W1-3 | Remote run node, per-step credential broker and the container runner | L | sonnet | yes | W0-1 | apps/worker/src/run-node.ts (new), apps/api/src/http/routes/worker.ts, apps/api/src/services/control-plane.ts, packages/runners/src/container.ts (new), packages/runners/src/http-control-plane.ts, packages/runners/src/stubs.ts, Dockerfile, docker-compose.yml | #10 |
 | W1-4 | Kubernetes Job runner (EKS/IRSA) with per-step credentials | M | sonnet | yes | W0-1, W1-3 (run node, for the end-to-end test only) | packages/runners/src/kubernetes-job.ts (new), packages/runners/src/stubs.ts, apps/api/src/config.ts (existing OAX_K8S_* settings), open-agentix-helm: charts/open-agentix/templates/runners/* | #11 |
-| W1-5 | Agent Check and Agent Plan v1 (advisory plan generation with a least-privilege lint) | M | sonnet | yes | W0-1 (AgentPlan schema section, designed by opus) | packages/core/src/plan/* (new), apps/api/src/services/agent-check.ts (new), apps/api/src/http/routes/plans.ts (new), apps/api/drizzle/0005_agent_plans.sql (new), openapi.yaml | tbd |
-| W1-6 | OpenCode harness adapter behind the policy gate | M | sonnet | yes | - | packages/runners/src/harness.ts (split per adapter: harness/opencode.ts new), packages/runners/src/cli.ts, docs/harnesses.md | tbd |
+| W1-5 | Agent Check and Agent Plan v1 (advisory plan generation with a least-privilege lint) | M | sonnet | yes | W0-1 (AgentPlan schema section, designed by opus) | packages/core/src/plan/* (new), apps/api/src/services/agent-check.ts (new), apps/api/src/http/routes/plans.ts (new), apps/api/drizzle/0005_agent_plans.sql (new), openapi.yaml | #27 |
+| W1-6 | OpenCode harness adapter behind the policy gate | M | sonnet | yes | - | packages/runners/src/harness.ts (split per adapter: harness/opencode.ts new), packages/runners/src/cli.ts, docs/harnesses.md | #28 |
 
 #### W1-1 Typed handovers with JSON Schema validation and conditional steps (`when`)
 
@@ -484,12 +484,12 @@ Milestone: **v0.2** (exceptions per item). Makes wave 1 safe to operate: signed 
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W2-1 | Toolbox images in CI: build, cosign signing, SBOM, Trivy scan, digest pinning and verification | M | sonnet | yes | W1-3 | toolboxes/*, .github/workflows/toolboxes.yml (new), packages/runners/src/toolbox.ts (new) | tbd |
-| W2-2 | mTLS between remote worker nodes and the control node | M | sonnet | yes | W1-3 | apps/api/src/http/app.ts, apps/api/src/config.ts, packages/runners/src/http-control-plane.ts, apps/worker/src/run-node.ts | tbd |
-| W2-3 | Emergency security overrides (kill switch that always wins) | S | sonnet | yes | - | packages/core/src/policy/engine.ts (override input), apps/api/src/services/overrides.ts (new), apps/api/src/http/routes/overrides.ts (new), apps/api/drizzle/0006_security_overrides.sql (new), apps/ui/src/features/policies/* | tbd |
+| W2-1 | Toolbox images in CI: build, cosign signing, SBOM, Trivy scan, digest pinning and verification | M | sonnet | yes | W1-3 | toolboxes/*, .github/workflows/toolboxes.yml (new), packages/runners/src/toolbox.ts (new) | #29 |
+| W2-2 | mTLS between remote worker nodes and the control node | M | sonnet | yes | W1-3 | apps/api/src/http/app.ts, apps/api/src/config.ts, packages/runners/src/http-control-plane.ts, apps/worker/src/run-node.ts | #30 |
+| W2-3 | Emergency security overrides (kill switch that always wins) | S | sonnet | yes | - | packages/core/src/policy/engine.ts (override input), apps/api/src/services/overrides.ts (new), apps/api/src/http/routes/overrides.ts (new), apps/api/drizzle/0006_security_overrides.sql (new), apps/ui/src/features/policies/* | #31 |
 | W2-4 | Agent test suites (`## Tests` in agents.md) and eval runner v1 incl. guideline evaluation | L | sonnet | no | W1-1 | packages/core/src/evals/* (new), packages/runners/src/eval.ts (new), packages/runners/src/cli.ts, apps/api/src/services/agents.ts, apps/api/drizzle/0007_evaluations.sql (new) | #8 |
-| W2-5 | Notification channels, budget alert delivery and per-agent monthly budgets | M | sonnet | yes | - | packages/notify/* (new), apps/api/src/services/budgets.ts, apps/api/src/http/routes/budgets.ts, apps/api/drizzle/0008_agent_budgets_channels.sql (new), apps/ui/src/features/costs/* | tbd |
-| W2-6 | Console support for wave 1: plans, handovers and conditions, tool profiles, runners and credentials | M | sonnet | no | W1-1, W1-2, W1-3, W1-5 | apps/ui/src/features/{agents,runs,wizard,connections,plans}/*, apps/ui/src/i18n/locales/*.json, apps/ui/src/api/schema.d.ts (regenerated) | tbd |
+| W2-5 | Notification channels, budget alert delivery and per-agent monthly budgets | M | sonnet | yes | - | packages/notify/* (new), apps/api/src/services/budgets.ts, apps/api/src/http/routes/budgets.ts, apps/api/drizzle/0008_agent_budgets_channels.sql (new), apps/ui/src/features/costs/* | #32 |
+| W2-6 | Console support for wave 1: plans, handovers and conditions, tool profiles, runners and credentials | M | sonnet | no | W1-1, W1-2, W1-3, W1-5 | apps/ui/src/features/{agents,runs,wizard,connections,plans}/*, apps/ui/src/i18n/locales/*.json, apps/ui/src/api/schema.d.ts (regenerated) | #33 |
 
 #### W2-1 Toolbox images in CI: build, cosign signing, SBOM, Trivy scan, digest pinning and verification
 
@@ -588,11 +588,11 @@ Milestone: **v0.2** (exceptions per item). Closes the remaining v0.2 roadmap ite
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W3-1 | Approval inbox with notifications and one-click decisions in Slack, Teams and mail | M | sonnet | yes | W2-5 | apps/api/src/services/runs.ts (approvals), apps/api/src/http/routes/runs.ts, packages/notify/*, apps/ui/src/features/approvals/* (new) | tbd |
+| W3-1 | Approval inbox with notifications and one-click decisions in Slack, Teams and mail | M | sonnet | yes | W2-5 | apps/api/src/services/runs.ts (approvals), apps/api/src/http/routes/runs.ts, packages/notify/*, apps/ui/src/features/approvals/* (new) | #34 |
 | W3-2 | More change-gate probes: API with secrets, SQL query, MCP read | M | sonnet | yes | - | packages/events/src/change-gate.ts, apps/api/src/services/ingest.ts | #4 |
-| W3-3 | Policy bindings per team and agent, control-agent rule API and RE2 patterns | M | sonnet | yes | - | packages/core/src/policy/engine.ts, packages/core/src/control/controller.ts, apps/api/src/services/catalog.ts (policies), apps/api/src/http/routes/catalog.ts | tbd |
-| W3-4 | HTTP/API connections and delivery of agent outputs to targets | M | sonnet | yes | W1-2 | packages/mcp/src/* (http tool adapter), packages/runners/src/executor.ts (output delivery), apps/api/src/services/catalog.ts | tbd |
-| W3-5 | Observability completion: step, model and tool spans and the missing metrics | S | sonnet | no | - | apps/api/src/metrics.ts, apps/api/src/telemetry.ts, packages/runners/src/executor.ts (span hooks only) | tbd |
+| W3-3 | Policy bindings per team and agent, control-agent rule API and RE2 patterns | M | sonnet | yes | - | packages/core/src/policy/engine.ts, packages/core/src/control/controller.ts, apps/api/src/services/catalog.ts (policies), apps/api/src/http/routes/catalog.ts | #35 |
+| W3-4 | HTTP/API connections and delivery of agent outputs to targets | M | sonnet | yes | W1-2 | packages/mcp/src/* (http tool adapter), packages/runners/src/executor.ts (output delivery), apps/api/src/services/catalog.ts | #36 |
+| W3-5 | Observability completion: step, model and tool spans and the missing metrics | S | sonnet | no | - | apps/api/src/metrics.ts, apps/api/src/telemetry.ts, packages/runners/src/executor.ts (span hooks only) | #37 |
 | W3-6 | Operations API: settings write API, agent archive, demo resets, lighter run list and PostgreSQL benchmark in CI | M | sonnet | yes | - | apps/api/src/http/routes/system.ts, apps/api/src/services/agents.ts, apps/api/src/demo/*, apps/worker/src/scheduler.ts, scripts/bench.mjs, .github/workflows/ci.yml | #9 |
 
 #### W3-1 Approval inbox with notifications and one-click decisions in Slack, Teams and mail
@@ -688,11 +688,11 @@ Milestone: **v0.3** (exceptions per item). Everything that executes elsewhere, p
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W4-1 | Hermes and OpenClaw harness adapters | M | sonnet | yes | W1-6 | packages/runners/src/harness/{hermes,openclaw}.ts (new) | tbd |
-| W4-2 | GitHub Actions and GitLab CI runners with signed callbacks | L | sonnet | yes | W1-3 | packages/runners/src/{github-actions,gitlab-ci}.ts (new), apps/api/src/http/routes/worker.ts (callbacks) | tbd |
-| W4-3 | AWS Lambda runner | L | sonnet | yes | W1-3 | packages/runners/src/aws-lambda.ts (new) | tbd |
-| W4-4 | Homelab example agents: CVE triage, log anomalies, auto-repair PRs, uptime incidents, backup verification | M | sonnet | no | W1-1, W2-4 | examples/* only | tbd |
-| W4-5 | Model routing per step (classification, cost, latency) | M | sonnet | yes | - | packages/providers/src/registry.ts, packages/core/src/routing.ts (new), packages/runners/src/executor.ts (model selection hook) | tbd |
+| W4-1 | Hermes and OpenClaw harness adapters | M | sonnet | yes | W1-6 | packages/runners/src/harness/{hermes,openclaw}.ts (new) | #38 |
+| W4-2 | GitHub Actions and GitLab CI runners with signed callbacks | L | sonnet | yes | W1-3 | packages/runners/src/{github-actions,gitlab-ci}.ts (new), apps/api/src/http/routes/worker.ts (callbacks) | #39 |
+| W4-3 | AWS Lambda runner | L | sonnet | yes | W1-3 | packages/runners/src/aws-lambda.ts (new) | #40 |
+| W4-4 | Homelab example agents: CVE triage, log anomalies, auto-repair PRs, uptime incidents, backup verification | M | sonnet | no | W1-1, W2-4 | examples/* only | #41 |
+| W4-5 | Model routing per step (classification, cost, latency) | M | sonnet | yes | - | packages/providers/src/registry.ts, packages/core/src/routing.ts (new), packages/runners/src/executor.ts (model selection hook) | #42 |
 
 #### W4-1 Hermes and OpenClaw harness adapters
 
@@ -770,12 +770,12 @@ Milestone: **v0.3** (exceptions per item). Identity, audit export, secrets, chat
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W5-1 | SCIM provisioning and tenant-scoped identity providers | L | sonnet | yes | - | apps/api/src/services/identity.ts, apps/api/src/http/routes/scim.ts (new), apps/api/src/auth/* | tbd |
-| W5-2 | SIEM export of the audit trail (syslog, HTTP, S3) | M | sonnet | yes | - | apps/api/src/services/audit.ts, apps/worker/src/siem.ts (new) | tbd |
-| W5-3 | Secret managers: HashiCorp Vault and AWS Secrets Manager with short-lived leases | M | sonnet | yes | W1-3 | packages/core/src/secrets.ts, apps/api/src/services/control-plane.ts (broker) | tbd |
-| W5-4 | Inbound Slack and Teams adapters and IMAP polling for mail | M | sonnet | yes | - | packages/events/src/{slack,teams,imap}.ts (new), apps/api/src/services/ingest.ts | tbd |
-| W5-5 | MCP catalog governance: review states, per-server egress and container MCP servers | M | sonnet | yes | W1-2, W1-3 | apps/api/src/services/catalog.ts, packages/mcp/src/config.ts, packages/runners/src/{container,kubernetes-job}.ts | tbd |
-| W5-6 | OPA (Rego) adapter for the policy gate | M | sonnet | yes | - | packages/core/src/policy/opa.ts (new), apps/api/src/services/control-plane.ts | tbd |
+| W5-1 | SCIM provisioning and tenant-scoped identity providers | L | sonnet | yes | - | apps/api/src/services/identity.ts, apps/api/src/http/routes/scim.ts (new), apps/api/src/auth/* | #43 |
+| W5-2 | SIEM export of the audit trail (syslog, HTTP, S3) | M | sonnet | yes | - | apps/api/src/services/audit.ts, apps/worker/src/siem.ts (new) | #44 |
+| W5-3 | Secret managers: HashiCorp Vault and AWS Secrets Manager with short-lived leases | M | sonnet | yes | W1-3 | packages/core/src/secrets.ts, apps/api/src/services/control-plane.ts (broker) | #45 |
+| W5-4 | Inbound Slack and Teams adapters and IMAP polling for mail | M | sonnet | yes | - | packages/events/src/{slack,teams,imap}.ts (new), apps/api/src/services/ingest.ts | #46 |
+| W5-5 | MCP catalog governance: review states, per-server egress and container MCP servers | M | sonnet | yes | W1-2, W1-3 | apps/api/src/services/catalog.ts, packages/mcp/src/config.ts, packages/runners/src/{container,kubernetes-job}.ts | #47 |
+| W5-6 | OPA (Rego) adapter for the policy gate | M | sonnet | yes | - | packages/core/src/policy/opa.ts (new), apps/api/src/services/control-plane.ts | #48 |
 
 #### W5-1 SCIM provisioning and tenant-scoped identity providers
 
@@ -860,11 +860,11 @@ Milestone: **v0.4** (exceptions per item). From Agent Plan to an evaluated, appr
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W6-1 | Agent Build v1: Agent Plan to agent scaffolding with schemas, tool bindings and eval cases | M | sonnet | no | W1-5, W2-4 | packages/core/src/plan/build.ts (new), apps/api/src/services/agent-check.ts | tbd |
-| W6-2 | Evaluations v2: golden datasets, graders and a promotion gate | L | sonnet | no | W2-4 | packages/core/src/evals/*, apps/api/src/services/evaluations.ts (new) | tbd |
-| W6-3 | Version approval bound to digest, model, eval set and policy, with re-evaluation on material change | M | sonnet | yes | W6-2 | apps/api/src/services/agents.ts, apps/api/drizzle/*_version_approvals.sql (new) | tbd |
-| W6-4 | Dark software factory pipeline template, automatic hardening review of PRs and the LLM second opinion | M | sonnet | yes | W1-1, W2-4 | examples/dark-factory.agents.md (new), apps/api/src/services/guidelines.ts, packages/core/src/guidelines.ts, apps/ui (notice) | #6, #7 |
-| W6-5 | Console for the lifecycle: plans, evaluations, approvals of versions, guidelines and tenant admin | M | sonnet | no | W6-1, W6-2, W6-3 | apps/ui/src/features/{evaluations,guidelines,tenants,plans}/* | tbd |
+| W6-1 | Agent Build v1: Agent Plan to agent scaffolding with schemas, tool bindings and eval cases | M | sonnet | no | W1-5, W2-4 | packages/core/src/plan/build.ts (new), apps/api/src/services/agent-check.ts | #49 |
+| W6-2 | Evaluations v2: golden datasets, graders and a promotion gate | L | sonnet | no | W2-4 | packages/core/src/evals/*, apps/api/src/services/evaluations.ts (new) | #50 |
+| W6-3 | Version approval bound to digest, model, eval set and policy, with re-evaluation on material change | M | sonnet | yes | W6-2 | apps/api/src/services/agents.ts, apps/api/drizzle/*_version_approvals.sql (new) | #51 |
+| W6-4 | Dark software factory pipeline template, automatic hardening review of PRs and the LLM second opinion | M | sonnet | yes | W1-1, W2-4 | examples/dark-factory.agents.md (new), apps/api/src/services/guidelines.ts, packages/core/src/guidelines.ts, apps/ui (notice) | #6 |
+| W6-5 | Console for the lifecycle: plans, evaluations, approvals of versions, guidelines and tenant admin | M | sonnet | no | W6-1, W6-2, W6-3 | apps/ui/src/features/{evaluations,guidelines,tenants,plans}/* | #52 |
 
 #### W6-1 Agent Build v1: Agent Plan to agent scaffolding with schemas, tool bindings and eval cases
 
@@ -939,12 +939,12 @@ Milestone: **v1.0** (exceptions per item). Audit proofs, approval workflows, cha
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W7-1 | Per-tenant audit chains and Merkle proofs | L | opus | yes | - | packages/core/src/audit/chain.ts, apps/api/src/services/audit.ts, migrations | tbd |
-| W7-2 | Multi-step approval workflows (four-eyes, role chains, time windows) | M | sonnet | yes | W3-1 | apps/api/src/services/runs.ts, packages/core/src/policy/* | tbd |
-| W7-3 | Cost chargeback reports per team and cost centre with ERP export | S | sonnet | no | - | apps/api/src/services/costs.ts | tbd |
-| W7-4 | Data residency: region pinning of tenant data, models and audit storage | L | opus | yes | W4-5 | apps/api/src/services/tenants.ts, packages/core/src/routing.ts | tbd |
-| W7-5 | Scale-out run queue on Valkey or Kafka | L | opus | no | - | apps/worker/src/queue.ts, apps/api/src/services/runs.ts | tbd |
-| W7-6 | Red-teaming campaigns against staging agents | M | sonnet | yes | W6-2 | packages/core/src/evals/redteam/* (new) | tbd |
+| W7-1 | Per-tenant audit chains and Merkle proofs | L | opus | yes | - | packages/core/src/audit/chain.ts, apps/api/src/services/audit.ts, migrations | #53 |
+| W7-2 | Multi-step approval workflows (four-eyes, role chains, time windows) | M | sonnet | yes | W3-1 | apps/api/src/services/runs.ts, packages/core/src/policy/* | #54 |
+| W7-3 | Cost chargeback reports per team and cost centre with ERP export | S | sonnet | no | - | apps/api/src/services/costs.ts | #55 |
+| W7-4 | Data residency: region pinning of tenant data, models and audit storage | L | opus | yes | W4-5 | apps/api/src/services/tenants.ts, packages/core/src/routing.ts | #56 |
+| W7-5 | Scale-out run queue on Valkey or Kafka | L | opus | no | - | apps/worker/src/queue.ts, apps/api/src/services/runs.ts | #57 |
+| W7-6 | Red-teaming campaigns against staging agents | M | sonnet | yes | W6-2 | packages/core/src/evals/redteam/* (new) | #58 |
 
 #### W7-1 Per-tenant audit chains and Merkle proofs
 
@@ -1026,10 +1026,10 @@ Milestone: **v1.0** (exceptions per item). Stable APIs, offline bundle, private 
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W8-1 | Stable v1 API and `openagentix.io/v1` agents.md with a deprecation policy and documented upgrades | M | opus | no | W6-3 | packages/core/src/agents/*, openapi.yaml, docs/* | tbd |
-| W8-2 | Air-gapped offline bundle: images, charts, SBOMs, signatures | M | sonnet | yes | W2-1 | .github/workflows/release.yml, scripts/bundle.mjs (new) | tbd |
-| W8-3 | Private model hosting managed by the Helm chart (vLLM/Ollama with GPU scheduling) | M | sonnet | no | - | open-agentix-helm (charts), apps/api bootstrap of the connection | tbd |
-| W8-4 | Public demo at demo.openagentix.si on the release images | S | haiku | yes | W3-6 | deployment config only (homelab), website demo page | tbd |
+| W8-1 | Stable v1 API and `openagentix.io/v1` agents.md with a deprecation policy and documented upgrades | M | opus | no | W6-3 | packages/core/src/agents/*, openapi.yaml, docs/* | #59 |
+| W8-2 | Air-gapped offline bundle: images, charts, SBOMs, signatures | M | sonnet | yes | W2-1 | .github/workflows/release.yml, scripts/bundle.mjs (new) | #60 |
+| W8-3 | Private model hosting managed by the Helm chart (vLLM/Ollama with GPU scheduling) | M | sonnet | no | - | open-agentix-helm (charts), apps/api bootstrap of the connection | #61 |
+| W8-4 | Public demo at demo.openagentix.si on the release images | S | haiku | yes | W3-6 | deployment config only (homelab), website demo page | #62 |
 
 #### W8-1 Stable v1 API and `openagentix.io/v1` agents.md with a deprecation policy and documented upgrades
 
@@ -1155,52 +1155,54 @@ work is mirrored in `open-agentix/open-agentix-helm`.
 
 | Item | Issue | Milestone | Helm mirror |
 | --- | --- | --- | --- |
-| W0-1 | tbd | v0.2 | - |
-| W0-2 | tbd | v0.2 | - |
-| W1-1 | tbd | v0.2 | - |
-| W1-2 | tbd | v0.2 | - |
+| W0-1 | #23 | v0.2 | - |
+| W0-2 | #24 | v0.2 | - |
+| W1-1 | #25 | v0.2 | - |
+| W1-2 | #26 | v0.2 | - |
 | W1-3 | #10 | v0.2 | - |
-| W1-4 | #11 | v0.2 | - |
-| W1-5 | tbd | v0.2 | - |
-| W1-6 | tbd | v0.2 | - |
-| W2-1 | tbd | v0.2 | - |
-| W2-2 | tbd | v0.2 | - |
-| W2-3 | tbd | v0.2 | - |
+| W1-4 | #11 | v0.2 | open-agentix-helm#6 |
+| W1-5 | #27 | v0.2 | - |
+| W1-6 | #28 | v0.2 | - |
+| W2-1 | #29 | v0.2 | open-agentix-helm#6 |
+| W2-2 | #30 | v0.2 | open-agentix-helm#16 |
+| W2-3 | #31 | v0.2 | - |
 | W2-4 | #8 | v0.2 | - |
-| W2-5 | tbd | v0.2 | - |
-| W2-6 | tbd | v0.2 | - |
-| W3-1 | tbd | v0.2 | - |
+| W2-5 | #32 | v0.2 | - |
+| W2-6 | #33 | v0.2 | - |
+| W3-1 | #34 | v0.2 | - |
 | W3-2 | #4 | v0.2 | - |
-| W3-3 | tbd | v0.2 | - |
-| W3-4 | tbd | v0.2 | - |
-| W3-5 | tbd | v0.2 | - |
+| W3-3 | #35 | v0.2 | - |
+| W3-4 | #36 | v0.2 | - |
+| W3-5 | #37 | v0.2 | open-agentix-helm#12 |
 | W3-6 | #9 | v0.2 | - |
-| W4-1 | tbd | v0.3 | - |
-| W4-2 | tbd | v0.3 | - |
-| W4-3 | tbd | v0.3 | - |
-| W4-4 | tbd | v0.2 | - |
-| W4-5 | tbd | v0.3 | - |
-| W5-1 | tbd | v0.3 | - |
-| W5-2 | tbd | v0.3 | - |
-| W5-3 | tbd | v0.3 | - |
-| W5-4 | tbd | v0.3 | - |
-| W5-5 | tbd | v0.3 | - |
-| W5-6 | tbd | v0.3 | - |
-| W6-1 | tbd | v0.4 | - |
-| W6-2 | tbd | v0.4 | - |
-| W6-3 | tbd | v0.4 | - |
-| W6-4 | #6, #7 | v0.4 | - |
-| W6-5 | tbd | v0.4 | - |
-| W7-1 | tbd | v1.0 | - |
-| W7-2 | tbd | v1.0 | - |
-| W7-3 | tbd | v1.0 | - |
-| W7-4 | tbd | v1.0 | - |
-| W7-5 | tbd | v1.0 | - |
-| W7-6 | tbd | v1.0 | - |
-| W8-1 | tbd | v1.0 | - |
-| W8-2 | tbd | v1.0 | - |
-| W8-3 | tbd | v1.0 | - |
-| W8-4 | tbd | v1.0 | - |
+| W4-1 | #38 | v0.3 | - |
+| W4-2 | #39 | v0.3 | open-agentix-helm#10 |
+| W4-3 | #40 | v0.3 | open-agentix-helm#10 |
+| W4-4 | #41 | v0.2 | - |
+| W4-5 | #42 | v0.3 | - |
+| W5-1 | #43 | v0.3 | - |
+| W5-2 | #44 | v0.3 | - |
+| W5-3 | #45 | v0.3 | - |
+| W5-4 | #46 | v0.3 | - |
+| W5-5 | #47 | v0.3 | - |
+| W5-6 | #48 | v0.3 | - |
+| W6-1 | #49 | v0.4 | - |
+| W6-2 | #50 | v0.4 | - |
+| W6-3 | #51 | v0.4 | - |
+| W6-4 | #6 | v0.4 | - |
+| W6-5 | #52 | v0.4 | - |
+| W7-1 | #53 | v1.0 | - |
+| W7-2 | #54 | v1.0 | - |
+| W7-3 | #55 | v1.0 | - |
+| W7-4 | #56 | v1.0 | - |
+| W7-5 | #57 | v1.0 | open-agentix-helm#7 |
+| W7-6 | #58 | v1.0 | - |
+| W8-1 | #59 | v1.0 | - |
+| W8-2 | #60 | v1.0 | open-agentix-helm#17 |
+| W8-3 | #61 | v1.0 | open-agentix-helm#18 |
+| W8-4 | #62 | v1.0 | - |
+
+#7 (LLM second opinion) stays open as part of W6-4 next to #6.
 
 Closed by this sync after checking the code: #1 tenant isolation (PR #13), #2 BYOK model connections (PR #15), #5 model catalog refresh job (PR #15, `.github/workflows/catalog-refresh.yml`), #3 budgets (PR #18; the per-agent monthly budget and alert delivery continue in W2-5).
 
