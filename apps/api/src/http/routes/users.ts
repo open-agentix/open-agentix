@@ -9,6 +9,7 @@ import {
   IssuedTokenSchema,
   MembersBody,
   TeamCreateBody,
+  TeamMemberSchema,
   TeamSchema,
   TokenCreateBody,
   TokenIdParams,
@@ -57,6 +58,54 @@ export function registerUserRoutes(app: ZApp, { services }: Deps): void {
       reply
         .status(201)
         .send(userDto(await identity.createLocalUser(principalOf(req).userId, req.body))),
+  );
+
+  app.get(
+    '/v1/users/:id',
+    {
+      config: { access: 'users:read' },
+      schema: {
+        tags: ['users'],
+        summary: 'Get a user',
+        security: sec,
+        params: IdParams,
+        response: { 200: UserSchema },
+      },
+    },
+    async (req) => userDto(await identity.getUser(req.params.id)),
+  );
+
+  app.get(
+    '/v1/teams/:id/members',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['users'],
+        summary: 'List the members of a team',
+        security: sec,
+        params: IdParams,
+        response: { 200: z.object({ items: z.array(TeamMemberSchema) }) },
+      },
+    },
+    async (req) => ({ items: await identity.teamMembers(req.params.id) }),
+  );
+
+  app.delete(
+    '/v1/teams/:id',
+    {
+      config: { access: 'users:write' },
+      schema: {
+        tags: ['users'],
+        summary: 'Delete a team that owns no agents',
+        security: sec,
+        params: IdParams,
+        response: { 204: z.null(), 409: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      await identity.deleteTeam(principalOf(req).userId, req.params.id);
+      return reply.status(204).send(null);
+    },
   );
 
   app.patch(
