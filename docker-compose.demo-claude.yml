@@ -1,0 +1,24 @@
+# Optional overlay: demo scenario runs are executed by the Claude Code harness (OAX_DEMO_LLM=claude-code).
+# Fixed scenarios only, no free-text prompts, no built-in tools, per-visitor rate limit, daily budget cap.
+#
+# The OWNER supplies the token (this repository never contains one):
+#   claude setup-token                      # prints a long-lived token once; store it in a file, mode 0600
+#   mkdir -p secrets && (umask 077; cat > secrets/claude-oauth-token)   # paste the token, Ctrl-D; never in an env var or in Git
+#   docker compose -f docker-compose.demo.yml -f docker-compose.demo-claude.yml up --build
+#
+# The file is mounted read-only into the worker only; the API never sees it.
+services:
+  api:
+    environment: &llm
+      OAX_DEMO_LLM: claude-code
+      OAX_DEMO_LLM_MODEL: haiku
+      OAX_DEMO_LLM_DAILY_BUDGET_USD: '1'
+      OAX_DEMO_LLM_RUN_BUDGET_USD: '0.05'
+  worker:
+    build: { context: ., target: worker-claude }
+    environment:
+      <<: *llm
+      OAX_DEMO_LLM_TOKEN_FILE: /run/secrets/claude-oauth-token
+      OAX_DEMO_LLM_WORKDIR: /tmp
+    volumes:
+      - ${OAX_DEMO_LLM_TOKEN_FILE_HOST:-./secrets/claude-oauth-token}:/run/secrets/claude-oauth-token:ro

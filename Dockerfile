@@ -70,3 +70,15 @@ USER node
 EXPOSE 9090
 HEALTHCHECK --interval=15s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1:9090/healthz >/dev/null || exit 1
 CMD ["node", "dist/main.js"]
+
+# Optional demo worker with the Claude Code CLI (OAX_DEMO_LLM=claude-code, see docs/demo.md).
+# Pinned version; the CLI is installed at build time only, nothing is downloaded at run time.
+FROM base AS claude-cli
+ARG CLAUDE_CODE_VERSION=2.1.289
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+
+FROM worker AS worker-claude
+USER root
+COPY --from=claude-cli /usr/local/lib/node_modules/@anthropic-ai/claude-code /opt/claude-code
+RUN ln -s /opt/claude-code/bin/claude.exe /usr/local/bin/claude
+USER node

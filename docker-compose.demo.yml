@@ -1,13 +1,86 @@
-# Public demo profile (demo.openagentix.si): simulated provider only, built-in demo MCP servers,
-# fake data on example.org, read-only API. Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
+# Public demo profile (demo.openagentix.si): api, worker, ui and PostgreSQL in one standalone file.
+# Fake data on example.org, simulated provider, built-in demo MCP servers, read-only API.
+#   docker compose -f docker-compose.demo.yml up --build
+#   UI http://localhost:3000   API http://localhost:8080   login: admin@example.org / demo-password-2026
+# Live Claude Code runs (optional, owner supplies a token): add docker-compose.demo-claude.yml, see docs/demo.md.
+name: openagentix-demo
+
+x-env: &env
+  NODE_ENV: production
+  OAX_DATABASE_URL: postgres://openagentix@postgres:5432/openagentix
+  OAX_DATABASE_PASSWORD: demo-database-password
+  OAX_RUN_TOKEN_SECRET: demo-only-run-token-secret-not-for-production-0001
+  OAX_LOG_LEVEL: info
+  OAX_PROVIDERS: '[{"kind":"simulated","name":"simulated"}]'
+  OAX_DEMO_MODE: 'true'
+  OAX_DEMO_PASSWORD: demo-password-2026
+  # Who executes scenario runs: "simulated" (default) or "claude-code" (see the overlay file).
+  OAX_DEMO_LLM: simulated
+  # Per-visitor limit for scenario runs (the visitor is identified by a salted hash of the client IP).
+  OAX_DEMO_RATE_RUNS: '3'
+  OAX_DEMO_RATE_WINDOW_SECONDS: '600'
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: openagentix
+      POSTGRES_PASSWORD: demo-database-password
+      POSTGRES_DB: openagentix
+    volumes:
+      - demo-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U openagentix']
+      interval: 5s
+      retries: 20
+
   api:
+    build: { context: ., target: api }
+    image: ghcr.io/open-agentix/open-agentix-api:dev
     environment:
-      OAX_DEMO_MODE: 'true'
-      OAX_DEMO_PASSWORD: demo-password-2026
-      OAX_PROVIDERS: '[{"kind":"simulated","name":"simulated"}]'
+      <<: *env
+      OAX_PUBLIC_URL: http://localhost:8080
+      OAX_CORS_ORIGINS: http://localhost:3000
+      OAX_UI_URL: http://localhost:3000
+      # Behind an ingress/reverse proxy set this to true so the real client IP is rate limited.
+      OAX_TRUST_PROXY: 'false'
+    ports: ['127.0.0.1:8080:8080']
+    read_only: true
+    tmpfs: ['/tmp']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: ['ALL']
+    depends_on:
+      postgres: { condition: service_healthy }
+
   worker:
+    build: { context: ., target: '${OAX_DEMO_WORKER_TARGET:-worker}' }
+    image: ghcr.io/open-agentix/open-agentix-worker:dev
     environment:
+      <<: *env
+      OAX_DB_MIGRATE_ON_START: 'false'
       OAX_DEMO_MCP: 'true'
-      OAX_PROVIDERS: '[{"kind":"simulated","name":"simulated"}]'
+      OAX_WORKER_CONCURRENCY: '2'
+    read_only: true
+    tmpfs: ['/tmp']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: ['ALL']
+    depends_on:
+      api: { condition: service_healthy }
+
+  ui:
+    build:
+      context: .
+      dockerfile: apps/ui/Dockerfile
+      args:
+        VITE_OAX_API_URL: http://localhost:8080
+    image: ghcr.io/open-agentix/open-agentix-ui:dev
+    ports: ['127.0.0.1:3000:8080']
+    read_only: true
+    tmpfs: ['/tmp', '/var/cache/nginx']
+    security_opt: ['no-new-privileges:true']
+    cap_drop: ['ALL']
+    depends_on:
+      api: { condition: service_healthy }
+
+volumes:
+  demo-pgdata:
