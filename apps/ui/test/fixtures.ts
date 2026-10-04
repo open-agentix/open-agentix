@@ -40,8 +40,11 @@ export const ids = {
 const now = new Date();
 const iso = (offsetMs = 0) => new Date(now.getTime() + offsetMs).toISOString();
 
+const tenantId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
 export const adminUser: User = {
   id: ids.admin,
+  tenantId,
   email: 'ada@example.org',
   displayName: 'Ada Admin',
   source: 'local',
@@ -52,8 +55,12 @@ export const adminUser: User = {
   lastLoginAt: iso(-60_000),
 };
 
+const tenant = { id: tenantId, slug: 'acme', name: 'Acme' };
+
 export const meAdmin: Me = {
   user: adminUser,
+  tenant,
+  platformAdmin: false,
   kind: 'user',
   permissions: [...PERMISSIONS],
   bindings: [{ role: 'admin', teamId: null }],
@@ -67,6 +74,8 @@ export const meViewer: Me = {
     globalRoles: ['viewer'],
     teams: [],
   },
+  tenant,
+  platformAdmin: false,
   kind: 'user',
   permissions: ['agents:read', 'runs:read', 'events:read', 'costs:read'],
   bindings: [{ role: 'viewer', teamId: null }],
@@ -339,6 +348,9 @@ export const events: IngestedEvent[] = [
 export const connections: Connection[] = [
   {
     id: ids.connection,
+    tenantId,
+    scope: 'tenant',
+    scopeId: null,
     name: 'tickets',
     kind: 'mcp',
     config: {
@@ -354,6 +366,7 @@ export const connections: Connection[] = [
 export const policies: Policy[] = [
   {
     id: ids.policy,
+    scope: 'tenant',
     name: 'default',
     description: 'Baseline guardrails',
     bundle: {

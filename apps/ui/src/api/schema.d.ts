@@ -415,6 +415,8 @@ export interface paths {
                             user: {
                                 /** Format: uuid */
                                 id: string;
+                                /** Format: uuid */
+                                tenantId: string;
                                 email: string;
                                 displayName: string;
                                 source: string;
@@ -652,6 +654,8 @@ export interface paths {
                             user: {
                                 /** Format: uuid */
                                 id: string;
+                                /** Format: uuid */
+                                tenantId: string;
                                 email: string;
                                 displayName: string;
                                 source: string;
@@ -666,6 +670,13 @@ export interface paths {
                                 createdAt: string;
                                 lastLoginAt: string | null;
                             };
+                            tenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                name: string;
+                            };
+                            platformAdmin: boolean;
                             /** @enum {string} */
                             kind: "user" | "token";
                             permissions: string[];
@@ -3014,6 +3025,8 @@ export interface paths {
                     format?: "csv" | "json";
                     from?: string;
                     to?: string;
+                    /** @description platform operators only: span every tenant instead of the acting tenant */
+                    allTenants?: boolean;
                 };
                 header?: never;
                 path?: never;
@@ -3074,6 +3087,8 @@ export interface paths {
                     from?: string;
                     to?: string;
                     limit?: number;
+                    /** @description platform operators only: span every tenant instead of the acting tenant */
+                    allTenants?: boolean;
                 };
                 header?: never;
                 path?: never;
@@ -3156,6 +3171,11 @@ export interface paths {
                             items: {
                                 /** Format: uuid */
                                 id: string;
+                                /** Format: uuid */
+                                tenantId: string;
+                                /** @enum {string} */
+                                scope: "platform" | "tenant" | "team" | "agent";
+                                scopeId: string | null;
                                 name: string;
                                 /** @enum {string} */
                                 kind: "mcp";
@@ -3208,6 +3228,14 @@ export interface paths {
                          * @enum {string}
                          */
                         kind?: "mcp";
+                        /**
+                         * @description who may use it: platform (operators only), tenant, one team or one agent
+                         * @default tenant
+                         * @enum {string}
+                         */
+                        scope?: "platform" | "tenant" | "team" | "agent";
+                        /** @description team or agent id for team/agent scope */
+                        scopeId?: string | null;
                         /** @description MCP server config; secrets only as references (envSecrets/headerSecrets) */
                         config: {
                             [key: string]: unknown;
@@ -3225,6 +3253,11 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             id: string;
+                            /** Format: uuid */
+                            tenantId: string;
+                            /** @enum {string} */
+                            scope: "platform" | "tenant" | "team" | "agent";
+                            scopeId: string | null;
                             name: string;
                             /** @enum {string} */
                             kind: "mcp";
@@ -3305,6 +3338,11 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             id: string;
+                            /** Format: uuid */
+                            tenantId: string;
+                            /** @enum {string} */
+                            scope: "platform" | "tenant" | "team" | "agent";
+                            scopeId: string | null;
                             name: string;
                             /** @enum {string} */
                             kind: "mcp";
@@ -3376,6 +3414,11 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             id: string;
+                            /** Format: uuid */
+                            tenantId: string;
+                            /** @enum {string} */
+                            scope: "platform" | "tenant" | "team" | "agent";
+                            scopeId: string | null;
                             name: string;
                             /** @enum {string} */
                             kind: "mcp";
@@ -3499,6 +3542,8 @@ export interface paths {
                             items: {
                                 /** Format: uuid */
                                 id: string;
+                                /** @enum {string} */
+                                scope: "platform" | "tenant";
                                 name: string;
                                 description: string | null;
                                 bundle: {
@@ -3544,6 +3589,12 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /**
+                         * @description platform bundles apply to every tenant and need platform operator access
+                         * @default tenant
+                         * @enum {string}
+                         */
+                        scope?: "platform" | "tenant";
                         name: string;
                         description?: string;
                         bundle: {
@@ -3564,6 +3615,8 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             id: string;
+                            /** @enum {string} */
+                            scope: "platform" | "tenant";
                             name: string;
                             description: string | null;
                             bundle: {
@@ -3656,6 +3709,8 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             id: string;
+                            /** @enum {string} */
+                            scope: "platform" | "tenant";
                             name: string;
                             description: string | null;
                             bundle: {
@@ -3728,6 +3783,8 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             id: string;
+                            /** @enum {string} */
+                            scope: "platform" | "tenant";
                             name: string;
                             description: string | null;
                             bundle: {
@@ -4086,6 +4143,8 @@ export interface paths {
                 query?: {
                     limit?: number;
                     cursor?: string;
+                    /** @description platform operators only: span every tenant instead of the acting tenant */
+                    allTenants?: boolean;
                     runId?: string;
                     action?: string;
                     from?: string;
@@ -4232,6 +4291,8 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
+                    /** @description platform operators only: span every tenant instead of the acting tenant */
+                    allTenants?: boolean;
                     runId?: string;
                     action?: string;
                     from?: string;
@@ -4428,6 +4489,8 @@ export interface paths {
                             items: {
                                 /** Format: uuid */
                                 id: string;
+                                /** Format: uuid */
+                                tenantId: string;
                                 email: string;
                                 displayName: string;
                                 source: string;
@@ -4496,6 +4559,8 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             id: string;
+                            /** Format: uuid */
+                            tenantId: string;
                             email: string;
                             displayName: string;
                             source: string;
@@ -4579,6 +4644,8 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             id: string;
+                            /** Format: uuid */
+                            tenantId: string;
                             email: string;
                             displayName: string;
                             source: string;
@@ -4658,6 +4725,8 @@ export interface paths {
                         "application/json": {
                             /** Format: uuid */
                             id: string;
+                            /** Format: uuid */
+                            tenantId: string;
                             email: string;
                             displayName: string;
                             source: string;
@@ -5299,6 +5368,289 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List tenants (platform operators see all, everybody else only their own) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                name: string;
+                                monthlyBudgetUsd: number | null;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a tenant (platform operators only) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        slug: string;
+                        name: string;
+                        monthlyBudgetUsd?: number;
+                        /** @description first local administrator of the new tenant */
+                        admin?: {
+                            /** Format: email */
+                            email: string;
+                            displayName: string;
+                            password: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            slug: string;
+                            name: string;
+                            monthlyBudgetUsd: number | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a tenant */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            slug: string;
+                            name: string;
+                            monthlyBudgetUsd: number | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename a tenant or change its monthly budget (platform operators only) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        name?: string;
+                        monthlyBudgetUsd?: number | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            slug: string;
+                            name: string;
+                            monthlyBudgetUsd: number | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/v1/worker/runs/{id}/gate": {
