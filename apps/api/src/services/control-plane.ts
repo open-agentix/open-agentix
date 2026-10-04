@@ -24,6 +24,7 @@ import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
+import type { GuidelinesService } from './guidelines.js';
 import { monthOf } from './runs.js';
 
 const ACTIVE = ['running', 'awaiting_approval'];
@@ -38,7 +39,15 @@ export class ControlPlaneService {
     private readonly audit: AuditService,
     private readonly agents: AgentsService,
     private readonly catalog: CatalogService,
+    private readonly guidelines?: GuidelinesService,
   ) {}
+
+  /** Policy bundles + the hardening agent's guideline bundle (stricter only). */
+  private async bundlesFor(definition: AgentDefinition) {
+    const bundles = await this.catalog.enabledBundles();
+    const g = await this.guidelines?.bundleFor(definition);
+    return g ? [...bundles, g] : bundles;
+  }
 
   issueToken(runId: string, workerId: string): string {
     return issueRunToken(
@@ -111,7 +120,7 @@ export class ControlPlaneService {
         type: 'io.openagentix.manual',
         data: null,
       },
-      policies: await this.catalog.enabledBundles(),
+      policies: await this.bundlesFor(definition),
       limits: { maxToolCallsPerMinute: this.ctx.config.control.maxToolCallsPerMinute },
     };
   }
@@ -140,7 +149,7 @@ export class ControlPlaneService {
     const decision = evaluateToolCall(call, {
       definition,
       agent,
-      bundles: await this.catalog.enabledBundles(),
+      bundles: await this.bundlesFor(definition),
       callCounts: new Map(counts.map((c) => [c.name, Number(c.n)])),
     });
     this.ctx.metrics.policyDecisions.inc({ effect: decision.effect });

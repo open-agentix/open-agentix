@@ -154,3 +154,110 @@ describe('policies', () => {
     ).toBe(404);
   });
 });
+
+describe('guidelines and hardening agent', () => {
+  it('stores immutable versions, reviews changes and tightens the policy gate', async () => {
+    const g = await n.req({
+      method: 'POST',
+      url: '/v1/guidelines',
+      payload: {
+        scope: 'global',
+        name: 'company',
+        version: '1.0.0',
+        content: '# Rules',
+        rules: {
+          minCoverage: 80,
+          conventionalCommits: true,
+          requireApprovalTools: ['tickets/update_*'],
+        },
+      },
+    });
+    expect(g.statusCode).toBe(201);
+    expect(
+      (
+        await n.req({
+          method: 'POST',
+          url: '/v1/guidelines',
+          payload: { scope: 'global', name: 'company', version: '1.0.0', rules: {} },
+        })
+      ).statusCode,
+    ).toBe(409);
+    expect(
+      (
+        await n.req({
+          method: 'POST',
+          url: '/v1/guidelines',
+          payload: { scope: 'global', name: 'bad', version: 'one', rules: {} },
+        })
+      ).statusCode,
+    ).toBe(400);
+    await n.req({
+      method: 'POST',
+      url: '/v1/guidelines',
+      payload: {
+        scope: 'agent',
+        name: 'secure-coding',
+        version: '1.2.0',
+        rules: { forbiddenDependencies: ['left-pad'] },
+      },
+    });
+    await n.req({
+      method: 'POST',
+      url: '/v1/guidelines',
+      payload: {
+        scope: 'agent',
+        name: 'unused',
+        version: '1.0.0',
+        rules: { forbiddenDependencies: ['zod'] },
+      },
+    });
+    expect((await n.req({ method: 'GET', url: '/v1/guidelines' })).json().items).toHaveLength(3);
+    await n.req({
+      method: 'POST',
+      url: '/v1/teams',
+      payload: { slug: 'team-security', name: 'Security' },
+    });
+    const src = CVE_TRIAGE.replace(
+      'owner: team-security',
+      'owner: team-security\nguidelines: [secure-coding@1.2.0]',
+    );
+    const agent = (
+      await n.req({ method: 'POST', url: '/v1/agents', payload: { source: src } })
+    ).json();
+    const review = await n.req({
+      method: 'POST',
+      url: '/v1/guidelines/review',
+      payload: {
+        agentId: agent.id,
+        change: {
+          addedDependencies: ['left-pad', 'zod'],
+          coveragePercent: 60,
+          commitMessages: ['update stuff'],
+        },
+      },
+    });
+    expect(review.json()).toMatchObject({
+      passed: false,
+      applied: ['global:company@1.0.0', 'agent:secure-coding@1.2.0'],
+    });
+    expect(review.json().findings.map((f: { rule: string }) => f.rule)).toEqual([
+      'forbidden_dependency',
+      'coverage',
+      'conventional_commits',
+    ]);
+    await n.req({ method: 'POST', url: `/v1/agents/${agent.id}/publish` });
+    const ok = await n.req({
+      method: 'POST',
+      url: '/v1/guidelines/review',
+      payload: { agentId: agent.id, change: { coveragePercent: 95, commitMessages: ['fix: x'] } },
+    });
+    expect(ok.json().passed).toBe(true);
+    const bundle = await n.services.guidelines.bundleFor({ guidelines: [] });
+    expect(bundle?.requireApprovalTools).toEqual(['tickets/update_*']);
+    const audit = (await n.req({ method: 'GET', url: '/v1/audit?limit=50' }))
+      .json()
+      .items.map((e: { action: string }) => e.action);
+    expect(audit).toContain('hardening.blocked');
+    expect(audit).toContain('hardening.passed');
+  });
+});
