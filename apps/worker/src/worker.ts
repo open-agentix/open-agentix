@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { createServices, withSpan, type AppContext, type Services } from '@openagentix/api';
 import { ToolGateway, type InMemoryTransportFactory } from '@openagentix/mcp';
 import type { ProviderRegistry } from '@openagentix/providers';
-import { InProcessRunner, type RunResult, type Runner } from '@openagentix/runners';
+import {
+  InProcessRunner,
+  type IsolatingRunner,
+  type RunResult,
+  type Runner,
+} from '@openagentix/runners';
+import type { RunnerKind } from '@openagentix/core';
+import { NodeDispatcher } from './node-dispatcher.js';
 import { RunQueue } from './queue.js';
 
 export interface WorkerOptions {
@@ -11,6 +18,17 @@ export interface WorkerOptions {
   /** In-process MCP servers (demo/test); real deployments use stdio or streamable-http connections. */
   inMemoryMcp?: InMemoryTransportFactory;
   runner?: Runner;
+  /**
+   * Isolating runners (container, ...) by kind plus how run nodes reach the control node. Steps
+   * whose effective runner is isolating are executed by short-lived run nodes (ADR 0008).
+   */
+  isolation?: {
+    runners: Partial<Record<RunnerKind, IsolatingRunner & { imageFor(toolbox?: string): string }>>;
+    controlUrl: string;
+    limits: { cpus: number; memoryMb: number; pids: number };
+    /** How often a running node's run is checked for cancellation (default 2 s). */
+    cancelPollMs?: number;
+  };
 }
 
 /**
@@ -82,6 +100,21 @@ export class Worker {
           control,
           costModel: await this.services.models.costModelFor(scope),
           signal: abort.signal,
+          // Without isolation configured, a step that asks for an isolating runner has nowhere
+          // to run: the dispatcher still exists and fails it closed instead of running it inline.
+          dispatcher: new NodeDispatcher(
+            {
+              services: this.services,
+              runners: this.opts.isolation?.runners ?? {},
+              workerId: this.id,
+              controlUrl: this.opts.isolation?.controlUrl ?? '',
+              limits: this.opts.isolation?.limits ?? { cpus: 1, memoryMb: 512, pids: 256 },
+              ...(this.opts.isolation?.cancelPollMs
+                ? { cancelPollMs: this.opts.isolation.cancelPollMs }
+                : {}),
+            },
+            prepared.definition,
+          ),
         });
         log.info(
           { status: result.status, usage: result.usage, error: result.error },

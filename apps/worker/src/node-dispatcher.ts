@@ -1,0 +1,160 @@
+import { OaxError, type AgentDefinition, type AgentSpec, type RunnerKind } from '@openagentix/core';
+import type { Services } from '@openagentix/api';
+import {
+  NodeStepFailure,
+  type AgentOutput,
+  type IsolatingRunner,
+  type RunNodeExit,
+  type RunNodeHandle,
+  type StepDispatchRequest,
+  type StepDispatchResult,
+  type StepDispatcher,
+} from '@openagentix/runners';
+
+/** Runner kinds that execute steps in the orchestrator's own process. */
+const INLINE: readonly RunnerKind[] = ['in-process', 'local'];
+
+export interface NodeDispatcherOptions {
+  services: Pick<Services, 'runNodes' | 'control'>;
+  /** Isolating runners that are enabled, by kind. */
+  runners: Partial<Record<RunnerKind, IsolatingRunner & { imageFor(toolbox?: string): string }>>;
+  /** Id of the orchestrating worker (holds the run's lease). */
+  workerId: string;
+  /** Control node base URL as seen from run nodes. */
+  controlUrl: string;
+  /** Upper bounds handed to the runner (it clamps to its own maxima). */
+  limits: { cpus: number; memoryMb: number; pids: number };
+  /** Step timeout when neither the step nor the pipeline budget sets one. */
+  defaultTimeoutSeconds?: number;
+  cancelPollMs?: number;
+  now?: () => number;
+}
+
+/**
+ * The orchestrator side of an isolated step (ADR 0008, section 3.3): creates the session and the
+ * step-scoped token, starts the node, waits, then always revokes the session and removes the node.
+ * It fails closed: a step whose effective runner is not inline NEVER runs inline, and a step
+ * without an accepted result from its node fails the run.
+ */
+export class NodeDispatcher implements StepDispatcher {
+  constructor(
+    private readonly opts: NodeDispatcherOptions,
+    private readonly definition: AgentDefinition,
+  ) {}
+
+  private effectiveRunner(agent: AgentSpec): RunnerKind {
+    return agent.runtime?.runner ?? this.definition.runtime.runner;
+  }
+
+  isolates(agent: AgentSpec): boolean {
+    return !INLINE.includes(this.effectiveRunner(agent));
+  }
+
+  async dispatch(req: StepDispatchRequest): Promise<StepDispatchResult> {
+    const { agent, runId } = req;
+    const kind = this.effectiveRunner(agent);
+    const runner = this.opts.runners[kind];
+    if (!runner)
+      throw new OaxError(
+        'runner_unavailable',
+        `step "${agent.id}" needs runner "${kind}", which is not enabled on this worker`,
+      );
+    const now = this.opts.now ?? Date.now;
+    const timeoutSeconds =
+      agent.budget?.timeoutSeconds ??
+      this.definition.budget.timeoutSeconds ??
+      this.opts.defaultTimeoutSeconds ??
+      900;
+    // Step egress can only narrow the pipeline's (publish enforces it; this is the last check).
+    const pipelineEgress = this.definition.runtime.egress;
+    const egress = agent.runtime?.egress ?? pipelineEgress;
+    if (!egress.every((h) => pipelineEgress.includes(h)))
+      throw new OaxError('egress_denied', `step "${agent.id}" widens the pipeline's egress`);
+    const image = runner.imageFor(agent.toolbox ?? this.definition.runtime.toolbox);
+    const { runNodes, control } = this.opts.services;
+    const session = await runNodes.createSession(runId, this.opts.workerId, {
+      agentId: agent.id,
+      input: req.input,
+      timeoutSeconds,
+      runner: kind,
+      image,
+    });
+    const started = now();
+    const cancel = new AbortController();
+    const outer = req.signal;
+    const onOuter = () => cancel.abort(outer?.reason);
+    outer?.addEventListener('abort', onOuter, { once: true });
+    const poll = setInterval(() => {
+      void control
+        .isCancelled(runId)
+        .then((c) => c && cancel.abort(new Error('cancelled')))
+        // A control node that cannot answer must not let the node run on: fail closed.
+        .catch(() => cancel.abort(new Error('cancel check failed')));
+    }, this.opts.cancelPollMs ?? 2000);
+    let handle: RunNodeHandle | undefined;
+    let exit: RunNodeExit = { exitCode: null };
+    let reason: 'step_end' | 'cancelled' | 'timeout' | 'lease_lost' = 'step_end';
+    try {
+      handle = await runner.startNode(
+        {
+          runId,
+          nodeId: session.nodeId,
+          steps: [agent.id],
+          image,
+          controlUrl: this.opts.controlUrl,
+          runToken: session.token,
+          limits: { ...this.opts.limits, timeoutSeconds },
+          egress,
+        },
+        { signal: cancel.signal },
+      );
+      exit = await handle.wait(cancel.signal);
+      if (exit.reason === 'timeout') reason = 'timeout';
+      else if (exit.reason === 'cancelled' || cancel.signal.aborted) reason = 'cancelled';
+    } catch (e) {
+      reason = cancel.signal.aborted ? 'cancelled' : 'step_end';
+      if (!cancel.signal.aborted) throw e;
+    } finally {
+      clearInterval(poll);
+      outer?.removeEventListener('abort', onOuter);
+      // The token dies first, then the node is destroyed; both even when waiting threw.
+      await runNodes.revoke(session.sessionId, reason).catch(() => undefined);
+      await handle?.stop(reason).catch(() => undefined);
+      await runNodes
+        .recordStopped(session.sessionId, {
+          exitCode: exit.exitCode,
+          durationMs: now() - started,
+          ...(exit.reason ? { reason: exit.reason } : {}),
+        })
+        .catch(() => undefined);
+    }
+    if (reason === 'cancelled') throw new OaxError('cancelled', 'run was cancelled');
+    if (reason === 'timeout')
+      throw new NodeStepFailure(
+        'failed',
+        'control_timeout',
+        `step "${agent.id}" exceeded its timeout`,
+      );
+    const result = await runNodes.resultOf(session.sessionId);
+    if (result?.failure)
+      throw new NodeStepFailure(result.failure.status, result.failure.code, result.failure.message);
+    if (!result || exit.exitCode !== 0 || result.agentId !== agent.id)
+      throw new NodeStepFailure(
+        'failed',
+        'run_node_failed',
+        `run node of step "${agent.id}" ended without an accepted result (exit code ${String(exit.exitCode)})`,
+      );
+    const output: AgentOutput = {
+      agentId: agent.id,
+      format: result.format,
+      content: result.content,
+      ...(Object.hasOwn(result, 'json') ? { json: result.json } : {}),
+    };
+    return {
+      output,
+      usage: result.usage
+        ? { ...result.usage }
+        : { tokensIn: 0, tokensOut: 0, costMicros: 0, steps: 0, toolCalls: 0 },
+    };
+  }
+}
