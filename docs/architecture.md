@@ -33,11 +33,13 @@ flowchart TB
    `webhook_deliveries`), normalised to a CloudEvent and stored in `events`; Kafka records and cron
    ticks enter through the same `IngestService.ingestEvent` / `RunsService.enqueue`.
 2. **Queue**: a `runs` row (`queued`) referencing the agent's latest **immutable** version is
-   created; a team over its monthly budget gets `blocked_by_policy` immediately.
+   created; a run whose tenant, use case or team reached its monthly budget gets
+   `blocked_by_policy` immediately (see [budgets](budgets.md)).
 3. **Claim**: a worker claims runs with `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED)`
    and holds a lease (heartbeat). Expired leases are requeued with exponential backoff.
 4. **Execute** (`packages/runners/src/executor.ts`), per agent of the pipeline:
-   - control agent check (budgets, timeout, rate, loops, errors, denials, cancellation),
+   - control agent check (budgets incl. the monthly tenant/use case/team budgets asked from the
+     control node, timeout, rate, loops, errors, denials, cancellation),
    - model call with only the **granted** tools exposed,
    - for each tool call: **policy gate** on the control node -> `deny` (tool result tells the
      model), `require_approval` (run becomes `awaiting_approval` until a human decides) or
