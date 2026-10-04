@@ -403,6 +403,38 @@ export const costLedger = pgTable(
   ],
 );
 
+/**
+ * Monthly budget of one use case (`labels.useCase`) inside a tenant. The tenant-wide limit lives
+ * on `tenants.monthly_budget_micros`, team limits on `teams.monthly_budget_micros`.
+ */
+export const useCaseBudgets = pgTable(
+  'use_case_budgets',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: tenant(),
+    useCase: text('use_case').notNull(),
+    monthlyBudgetMicros: micros('monthly_budget_micros').notNull(),
+    createdAt: created(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('use_case_budgets_tenant_uq').on(t.tenantId, t.useCase)],
+);
+
+/** Alert thresholds already raised in a month; the primary key keeps every alert to one event. */
+export const budgetAlerts = pgTable(
+  'budget_alerts',
+  {
+    tenantId: uuid('tenant_id').notNull(),
+    scope: text('scope').notNull(),
+    /** Use case or team id; empty for the tenant budget. */
+    scopeKey: text('scope_key').notNull().default(''),
+    month: date('month', { mode: 'string' }).notNull(),
+    thresholdPercent: integer('threshold_percent').notNull(),
+    createdAt: created(),
+  },
+  (t) => [primaryKey({ columns: [t.tenantId, t.scope, t.scopeKey, t.month, t.thresholdPercent] })],
+);
+
 /** Deduplicates cron ticks across worker replicas. */
 export const cronTicks = pgTable(
   'cron_ticks',
