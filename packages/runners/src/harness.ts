@@ -1,5 +1,5 @@
 import { mkdir, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import {
   NotImplementedError,
   OaxError,

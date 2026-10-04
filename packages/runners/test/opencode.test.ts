@@ -5,13 +5,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   EgressPolicy,
-  OaxError,
   PolicyBundleSchema,
   StaticSecretResolver,
   parseAllowlist,
   resetEgressPolicy,
   setEgressPolicy,
 } from '@openagentix/core';
+import type { OaxError } from '@openagentix/core';
 import type { ProviderConfig } from '@openagentix/providers';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -99,7 +99,7 @@ describe('OpenCodeHarness.buildInvocation', () => {
         'PATH',
       ].sort(),
     );
-    const cfg = JSON.parse(i.files['.openagentix/opencode.json']!) as Record<string, any>;
+    const cfg = JSON.parse(i.files['.openagentix/opencode.json']!);
     expect(cfg.mcp).toEqual({
       'oax-gate': {
         type: 'remote',
@@ -148,7 +148,7 @@ describe('OpenCodeHarness.buildInvocation', () => {
         },
       ],
     );
-    const cfg = JSON.parse(i.files['.openagentix/opencode.json']!) as Record<string, any>;
+    const cfg = JSON.parse(i.files['.openagentix/opencode.json']!);
     const allowed = Object.entries(cfg.permission).filter(([, v]) => v === 'allow');
     expect(allowed).toEqual([['oax-gate_cve-db__lookup_cve', 'allow']]);
     expect(i.limits).toEqual({ maxTurns: 7 });
@@ -299,7 +299,7 @@ describe('OpenCodeHarness.run (fake binary)', () => {
     const h = harnessFor(conn({ headerSecrets: { 'x-b': 'hdr-secret' } } as never));
     const r = await run(h, 'env');
     expect(r.isError).toBe(false);
-    const seen = JSON.parse(r.text.replaceAll('[REDACTED]', 'R')) as Record<string, any>;
+    const seen = JSON.parse(r.text.replaceAll('[REDACTED]', 'R'));
     const cwd = join(dir, 'w-env');
     expect(seen.home).toBe(join(cwd, '.home'));
     expect(seen.args[0]).toBe('run');
