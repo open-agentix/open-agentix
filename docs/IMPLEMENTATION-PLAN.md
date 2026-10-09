@@ -260,7 +260,7 @@ Conventions for every item:
   security overrides (W2-3), 0007 evaluations (W2-4), 0008 agent budgets and channels (W2-5),
   0009 run node sessions (W1-3a), 0010 model proxy reservations and ledger columns (W1-3b),
   0011 agent repositories (W9-2), 0012 connection instances, grants and data protection columns
-  (W12-1, W12-2).
+  (W12-1, W12-2), 0013 tenant hierarchy (W13-1).
 - **Docs and website:** the item's PR updates the platform docs; the website/blog change is made
   when the item ships in a release (never before).
 - Subagents leave PRs open; the main agent reviews, merges and checks the result.
@@ -1881,6 +1881,33 @@ Docs and website: `docs/data-protection.md` (new, DPIA-friendly), `docs/tenancy.
 Helm: KEK secret reference, retention defaults, `OAX_DPA_SUBPROCESSORS` file mount.
 
 <!-- waves-9-12:end -->
+
+### Wave 13: hierarchical tenants and setup modes
+
+Milestone: **v0.4**. Design: [ADR 0013](adr/0013-hierarchical-tenants-and-setup-modes.md) (accepted by the owner 2026-10-09). The full work breakdown with dependencies is section 15 of the ADR; this section tracks the status. Items that touch money (W13-4, W13-13) or cross-organisation data (W13-15) get a security and concurrency review before merge.
+
+| Item | Title | Status | Depends on |
+| --- | --- | --- | --- |
+| W13-1 | Tenant tree model (data model slice, see below) | in review | - |
+| W13-2 | Effective settings resolver | not started | W13-1 |
+| W13-3 | Setup modes and wizard API | not started | - |
+| W13-4 | Hierarchical caps in accounting | not started | W13-1, PLAT-00 |
+| W13-5 | Further caps (runs, tokens, concurrency) | not started | W13-4 |
+| W13-6 | Roles and visibility | not started | W13-1 |
+| W13-7 to W13-16 | Connections, policies, audit, console, moves, conversion, docs, guarantees, leases | not started | see ADR 0013 section 15 |
+
+#### W13-1 Tenant tree model
+
+*As a platform operator, I want tenants to form a tree with a stable, queryable structure, so that budgets, settings and roles can be inherited later without changing the isolation model.* Size M, model `sonnet`, security review required (migration on existing data, tenant isolation).
+
+Slice 1 (this PR, data model and service layer only):
+
+- [x] Migration `0013_tenant_hierarchy.sql` for PostgreSQL and PGlite: `parent_id`, `root_id`, `path` (`/<uuid>/.../`), `depth` (check `<= 32`), prefix index `tenants_path_idx (path text_pattern_ops)`, slug unique among siblings (root slugs stay globally unique), every existing tenant becomes a root, idempotent, tree guard trigger (consistent placement, cycle, frozen placement until moves), documented down script `apps/api/drizzle/down/0013_tenant_hierarchy.down.sql`.
+- [x] Pure helpers in `packages/core/src/tenancy/path.ts` (path building, ancestors, subtree prefix, cycle and depth guards, slug paths).
+- [x] Repository `TenantTree` (children, roots, ancestors, descendants, subtree, node count, slug path resolution) and `TenantsService.createChild` with the configured depth (`OAX_TENANT_MAX_DEPTH`, default and maximum 32) and node limit (`OAX_TENANT_MAX_NODES_PER_ROOT`, default 1000).
+- [x] Tests: migration on a seeded flat table (PGlite and real PostgreSQL), constraints, trigger, down path, service, isolation probes. No HTTP route, no API change, no behaviour change for flat installs.
+
+Deferred to later slices of W13-1 and to the items named in the ADR: `X-OAX-Tenant` slug paths and an HTTP route for sub-tenants (together with W13-6, so that visibility rules exist before children can be created through the API), `limits`/`settings` columns (W13-2, W13-4), `use_case` and `converted_from_team` (W13-6, W13-14), `cost_ledger.root_id`, `model_reservations.tenant_path` and counters (W13-4), `installation_settings` (W13-3), moves (W13-11, W13-15).
 
 ## 3. Summary
 

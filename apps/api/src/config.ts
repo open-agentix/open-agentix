@@ -67,6 +67,8 @@ export const EnvSchema = z.object({
   OAX_BOOTSTRAP_ADMIN_PASSWORD: z.string().min(12).optional(),
   OAX_SESSION_TTL_SECONDS: int(8 * 3600),
   OAX_TOKEN_MAX_TTL_DAYS: int(365),
+  OAX_TENANT_MAX_DEPTH: z.coerce.number().int().min(1).max(32).default(32),
+  OAX_TENANT_MAX_NODES_PER_ROOT: z.coerce.number().int().min(1).default(1000),
   OAX_AUTH_CACHE_TTL_SECONDS: int(30),
 
   OAX_OIDC_ISSUER: z.string().url().optional(),
@@ -228,6 +230,8 @@ export interface Config {
   cache: { url: string | undefined; maxEntries: number };
   rateLimit: { max: number; loginMax: number; planMax: number };
   bodyLimit: number;
+  /** Tenant tree guards (ADR 0013): levels below a root (1 to 32) and nodes per organisation. */
+  tenancy: { maxDepth: number; maxNodesPerRoot: number };
   auth: {
     bootstrapAdmin: { email: string; password: string } | null;
     sessionTtlSeconds: number;
@@ -407,6 +411,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       planMax: e.OAX_RATE_LIMIT_PLAN_MAX,
     },
     bodyLimit: e.OAX_BODY_LIMIT_BYTES,
+    tenancy: {
+      maxDepth: e.OAX_TENANT_MAX_DEPTH,
+      maxNodesPerRoot: e.OAX_TENANT_MAX_NODES_PER_ROOT,
+    },
     auth: {
       bootstrapAdmin:
         e.OAX_BOOTSTRAP_ADMIN_EMAIL && e.OAX_BOOTSTRAP_ADMIN_PASSWORD
