@@ -8,6 +8,30 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Model proxy: native endpoint and model token (W1-3b-3, opt-in `OAX_MODEL_PROXY_ENABLED`)**: the
+  control node serves `POST /v1/worker/runs/{id}/model-token` (a step-scoped, session-bound,
+  once-per-step model token `oaxmt.`, stored as `run_node_sessions.model_token_jti`) and
+  `POST /v1/worker/runs/{id}/model` (JSON, or Server-Sent Events with `Accept: text/event-stream`)
+  with the pre-call chain of ADR 0009: token and session binding, model allowlist of the published
+  step (provider and model cannot be chosen by the caller), data classification, air-gapped egress,
+  BYOK key resolution on the control node (the key never leaves it and is scrubbed from provider
+  errors), strict re-serialised request validation (no server tools, `mcp_servers`, URL sources,
+  file ids, duplicate or prototype keys), a worst-case budget reservation, and settlement from the
+  usage the control node measured. Streaming goes through the upstream transports of W1-3b-5 with a
+  hard stop on revoked sessions, cancelled runs, deadlines, client disconnects and output beyond the
+  reservation (bound + 10 %). Stable error codes, `model_token.issued` / `model.denied` /
+  `model.aborted` audit entries, `oax_model_proxy_*` metrics and the `OAX_MODEL_PROXY_*`
+  configuration block (limits are bound to the accounting service and the stream transports).
+  New route access kind `model-token`. `ModelAccountingService.settle` now scrubs step payloads
+  before it opens its transaction. Not yet wired to the run node (W1-3b-4); the Anthropic and OpenAI
+  pass-through surfaces follow (W1-3b-6). Provider calls of the proxy never retry (a retry would be a
+  second billed call), the HTTP timeout follows the call deadline, everything that may have been
+  billed is charged, JSON answers use the stream limits, reported usage is capped by the
+  reservation, and tenant-controlled endpoints cannot reach private or metadata addresses
+  (`OAX_MODEL_PROXY_PRIVATE_ALLOW`); this also covers NAT64, 6to4 and IPv4-compatible forms, refuses
+  names that cannot be resolved, validates and pins the address at connect time (also for custom
+  Bedrock endpoints, whose responses are size-bounded), refuses calls of a run or step whose time is
+  exhausted and caps estimate-mode usage at the input upper bound. `docs/runners.md`, `docs/configuration.md`.
 - **Streaming upstream transports for the model proxy (W1-3b-5)**: `@openagentix/providers` gets a
   streaming API next to `complete`: `AnthropicStreamTransport`, `BedrockStreamTransport`
   (`InvokeModelWithResponseStream`) and `OpenAIStreamTransport` (OpenAI, Azure, OpenRouter, vLLM,

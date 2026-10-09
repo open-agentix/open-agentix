@@ -5,6 +5,7 @@ import {
   loadModelCatalog,
   modelPriceEntries,
   type FetchLike,
+  type HostLookup,
   type ModelCatalog,
 } from '@openagentix/providers';
 import { activateAirgap, checkStoredConnections, failClosed } from './airgap.js';
@@ -30,6 +31,8 @@ export interface AppContext {
   modelCatalog: ModelCatalog;
   /** Outbound HTTP for model providers (tests inject a fake; defaults to proxy-aware fetch). */
   fetchImpl?: FetchLike;
+  /** Name resolution for the SSRF checks of tenant-controlled endpoints (tests inject a fake). */
+  hostLookup?: HostLookup;
   now: () => Date;
   ldapFactory?: LdapClientFactory;
   oidcClient?: OidcClient;
@@ -101,6 +104,7 @@ export async function createContext(
     modelCatalog,
     now: overrides.now ?? (() => new Date()),
     ...(overrides.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {}),
+    ...(overrides.hostLookup ? { hostLookup: overrides.hostLookup } : {}),
     ...(overrides.ldapFactory ? { ldapFactory: overrides.ldapFactory } : {}),
     ...(overrides.oidcClient ? { oidcClient: overrides.oidcClient } : {}),
   };

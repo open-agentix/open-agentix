@@ -28,6 +28,7 @@ describe('route access declarations', () => {
       'authenticated',
       'public',
       'run-token',
+      'model-token',
       'webhook',
     ]);
     for (const r of routes)
@@ -81,6 +82,7 @@ describe('route access declarations', () => {
         r.access !== 'public' &&
         r.access !== 'authenticated' &&
         r.access !== 'run-token' &&
+        r.access !== 'model-token' &&
         r.access !== 'webhook' &&
         !['agents:read', 'runs:read', 'events:read', 'costs:read'].includes(String(r.access)),
     );

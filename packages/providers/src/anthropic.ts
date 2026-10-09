@@ -41,6 +41,54 @@ const STOP: Record<string, StopReason> = {
   refusal: 'refusal',
 };
 
+/**
+ * Builds the Messages API body of a chat request. Pure: shared by the non-streaming adapter and the
+ * streaming proxy transports (no network, no key).
+ */
+export function toAnthropicBody(
+  req: ChatRequest,
+  defaultMaxTokens?: number | undefined,
+): Anthropic.MessageCreateParamsNonStreaming {
+  const messages: Anthropic.MessageParam[] = [];
+  for (const m of req.messages) {
+    if (m.role === 'user') {
+      messages.push({ role: 'user', content: m.content });
+    } else if (m.role === 'assistant') {
+      const content: Anthropic.ContentBlockParam[] = [];
+      if (m.content) content.push({ type: 'text', text: m.content });
+      for (const c of m.toolCalls ?? [])
+        content.push({ type: 'tool_use', id: c.id, name: c.name, input: c.args });
+      messages.push({ role: 'assistant', content });
+    } else {
+      const block: Anthropic.ToolResultBlockParam = {
+        type: 'tool_result',
+        tool_use_id: m.toolCallId,
+        content: m.content,
+        ...(m.isError ? { is_error: true } : {}),
+      };
+      // All tool results of one turn go into a single user message.
+      const last = messages.at(-1);
+      if (last && last.role === 'user' && Array.isArray(last.content)) last.content.push(block);
+      else messages.push({ role: 'user', content: [block] });
+    }
+  }
+  const body: Anthropic.MessageCreateParamsNonStreaming = {
+    model: req.model,
+    max_tokens: req.maxTokens ?? defaultMaxTokens ?? 16_000,
+    messages,
+  };
+  if (req.system) body.system = req.system;
+  if (req.temperature !== undefined) body.temperature = req.temperature;
+  if (req.tools?.length) {
+    body.tools = req.tools.map((t) => ({
+      name: t.name,
+      description: t.description ?? '',
+      input_schema: { type: 'object', ...t.inputSchema } as Anthropic.Tool.InputSchema,
+    }));
+  }
+  return body;
+}
+
 /** Anthropic Messages API via the official SDK; network goes through the guarded fetch. */
 export class AnthropicProvider implements ModelProvider {
   readonly kind = 'anthropic' as const;
@@ -70,44 +118,7 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   toRequestBody(req: ChatRequest): Anthropic.MessageCreateParamsNonStreaming {
-    const messages: Anthropic.MessageParam[] = [];
-    for (const m of req.messages) {
-      if (m.role === 'user') {
-        messages.push({ role: 'user', content: m.content });
-      } else if (m.role === 'assistant') {
-        const content: Anthropic.ContentBlockParam[] = [];
-        if (m.content) content.push({ type: 'text', text: m.content });
-        for (const c of m.toolCalls ?? [])
-          content.push({ type: 'tool_use', id: c.id, name: c.name, input: c.args });
-        messages.push({ role: 'assistant', content });
-      } else {
-        const block: Anthropic.ToolResultBlockParam = {
-          type: 'tool_result',
-          tool_use_id: m.toolCallId,
-          content: m.content,
-          ...(m.isError ? { is_error: true } : {}),
-        };
-        // All tool results of one turn go into a single user message.
-        const last = messages.at(-1);
-        if (last && last.role === 'user' && Array.isArray(last.content)) last.content.push(block);
-        else messages.push({ role: 'user', content: [block] });
-      }
-    }
-    const body: Anthropic.MessageCreateParamsNonStreaming = {
-      model: req.model,
-      max_tokens: req.maxTokens ?? this.opts.defaultMaxTokens ?? 16_000,
-      messages,
-    };
-    if (req.system) body.system = req.system;
-    if (req.temperature !== undefined) body.temperature = req.temperature;
-    if (req.tools?.length) {
-      body.tools = req.tools.map((t) => ({
-        name: t.name,
-        description: t.description ?? '',
-        input_schema: { type: 'object', ...t.inputSchema } as Anthropic.Tool.InputSchema,
-      }));
-    }
-    return body;
+    return toAnthropicBody(req, this.opts.defaultMaxTokens);
   }
 
   async complete(req: ChatRequest, opts: CompleteOptions = {}): Promise<ChatResponse> {

@@ -49,6 +49,18 @@ const MEDIA: Record<
   },
 };
 
+/** Operations whose 200 answer is JSON or, on `Accept: text/event-stream`, Server-Sent Events. */
+const ALSO_SSE: Record<string, string> = {
+  'post /v1/worker/runs/{id}/model':
+    'Server-Sent Events: `start` (`callId`), `delta` (`text`), then `done` (the `WorkerModelResponse`) or `error` (`code`, `message`)',
+};
+
+/** Model proxy operations never answer 404: an unknown or foreign run is a 403. */
+const NO_NOT_FOUND = new Set([
+  'post /v1/worker/runs/{id}/model',
+  'post /v1/worker/runs/{id}/model-token',
+]);
+
 const REDIRECTS: Record<string, string> = {
   'get /v1/auth/oidc/login': 'Redirect to the identity provider (authorization code + PKCE)',
   'get /v1/auth/oidc/callback':
@@ -101,7 +113,12 @@ export function decorateOpenApi<T>(input: T): T {
         op.responses['401'] ??= errorResponse('Missing or invalid credentials');
         op.responses['403'] ??= errorResponse('Insufficient permissions');
       }
-      if (path.includes('{')) op.responses['404'] ??= errorResponse('Not found');
+      if (path.includes('{') && !NO_NOT_FOUND.has(key))
+        op.responses['404'] ??= errorResponse('Not found');
+      const sse = ALSO_SSE[key];
+      const ok = op.responses['200'] as { content?: Record<string, unknown> } | undefined;
+      if (sse && ok)
+        ok.content = { ...ok.content, 'text/event-stream': { schema: { type: 'string' } } };
       const media = MEDIA[key];
       if (media)
         op.responses[media.status] = {

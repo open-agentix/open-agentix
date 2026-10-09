@@ -1,3 +1,4 @@
+import type { HostLookup } from './ssrf.js';
 import { CLASSIFICATIONS, OaxError, type PriceEntry, type SecretResolver } from '@openagentix/core';
 import { z } from 'zod';
 import { AnthropicProvider } from './anthropic.js';
@@ -185,6 +186,8 @@ export interface RegistryDeps {
   secrets: SecretResolver;
   fetchImpl?: FetchLike;
   bedrockClient?: BedrockConverseClient;
+  /** Tenant-controlled endpoints: refuse non-public destinations (operator `allow` list). */
+  blockPrivateDestinations?: { allow?: readonly string[]; lookup?: HostLookup } | undefined;
 }
 
 export async function createProvider(
@@ -295,6 +298,7 @@ export async function createProvider(
         region: cfg.region,
         endpoint: cfg.endpoint,
         proxyUrl: cfg.proxyUrl,
+        blockPrivateDestinations: deps.blockPrivateDestinations,
         maxAttempts: cfg.maxRetries === undefined ? undefined : cfg.maxRetries + 1,
         credentials,
         catalogProvider,

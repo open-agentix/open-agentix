@@ -47,7 +47,7 @@ export interface ModelAccountingOptions {
   defaultDeadlineMs: number;
 }
 
-// Integration point (W1-3b-3): these defaults move to the `OAX_MODEL_PROXY_*` config block.
+/** Defaults; the control node binds them from the `OAX_MODEL_PROXY_*` config block (services/index.ts). */
 export const DEFAULT_ACCOUNTING_OPTIONS: ModelAccountingOptions = {
   maxConcurrentPerSession: 2,
   maxConcurrentPerTenant: 16,
@@ -116,10 +116,15 @@ export interface SettleRequest {
   output?: { textBytes: number; toolArgBytes?: number };
   status?: 'ok' | 'error';
   via?: LedgerExtras['via'];
-  /** Stored on the step record (scrubbed of broker secrets). */
+  /** Stored on the step record (scrubbed of broker secrets by `settle` before its transaction). */
   detail?: { input?: unknown; output?: unknown; durationMs?: number };
   /** Reason of an aborted call, written to `model.aborted` by the proxy (not by this service). */
   note?: string;
+  /**
+   * Metadata merged into the `step.model_call` audit payload (latency, stop reason, node id, request
+   * digest: names and numbers only, never content). Cannot override the accounting fields.
+   */
+  auditExtra?: Record<string, string | number | boolean | null>;
 }
 
 export interface Settlement {
@@ -543,10 +548,34 @@ export class ModelAccountingService {
     reservationId: string,
     req: SettleRequest = {},
   ): Promise<Settlement> {
+    // Scrubbing reads the database (the broker's sessions): done before the transaction opens, never
+    // inside it (a second connection while holding the tenant lock, and a deadlock on single
+    // connection databases such as PGlite).
+    const [row] = await this.ctx.db
+      .select({ runId: modelReservations.runId })
+      .from(modelReservations)
+      .where(
+        and(
+          eq(modelReservations.id, reservationId),
+          eq(modelReservations.tenantId, scope.tenantId),
+        ),
+      );
+    let clean = req;
+    if (row && req.detail) {
+      const { input, output } = req.detail;
+      clean = {
+        ...req,
+        detail: {
+          ...req.detail,
+          ...(input !== undefined ? { input: await this.scrub(row.runId, input) } : {}),
+          ...(output !== undefined ? { output: await this.scrub(row.runId, output) } : {}),
+        },
+      };
+    }
     const out = await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
       await this.lockTenant(tx, scope.tenantId);
-      return this.closeLocked(tx, scope.tenantId, reservationId, req, false);
+      return this.closeLocked(tx, scope.tenantId, reservationId, clean, false);
     });
     if (out.metric)
       this.ctx.metrics.costMicros.inc({ provider: out.metric.provider }, out.metric.costMicros);
@@ -647,11 +676,11 @@ export class ModelAccountingService {
       agentId: r.agentId,
       name,
       status,
-      ...(detail.input !== undefined ? { input: await this.scrub(r.runId, detail.input) } : {}),
+      ...(detail.input !== undefined ? { input: detail.input } : {}),
       ...(expire
         ? { output: { reason: 'reservation_expired' } }
         : detail.output !== undefined
-          ? { output: await this.scrub(r.runId, detail.output) }
+          ? { output: detail.output }
           : {}),
       tokensIn,
       tokensOut: t.output,
@@ -688,6 +717,7 @@ export class ModelAccountingService {
         tx,
       );
     await append(`step.model_call`, {
+      ...(req.auditExtra ?? {}),
       ...base,
       status,
       tokensIn,

@@ -172,6 +172,32 @@ export const EnvSchema = z.object({
   OAX_TOOLBOX_REGISTRY: z.string().default('ghcr.io/open-agentix'),
   OAX_TOOLBOX_ALLOWLIST: z.string().default(''),
   OAX_TOOLBOX_REQUIRE_SIGNATURE: bool.default(true),
+  // Model proxy (W1-3b, ADR 0009): opt-in; with it off the model routes answer 503.
+  OAX_MODEL_PROXY_ENABLED: bool.default(false),
+  OAX_MODEL_PROXY_MAX_BODY_BYTES: z.coerce
+    .number()
+    .int()
+    .min(1024)
+    .default(8 * 1024 * 1024),
+  OAX_MODEL_PROXY_RESERVATION: z.enum(['upper-bound', 'estimate']).default('upper-bound'),
+  OAX_MODEL_PROXY_MIN_OUTPUT_TOKENS: z.coerce.number().int().min(1).default(256),
+  OAX_MODEL_PROXY_MAX_CONCURRENT_PER_SESSION: z.coerce.number().int().min(1).default(2),
+  OAX_MODEL_PROXY_MAX_CONCURRENT_PER_TENANT: z.coerce.number().int().min(1).default(16),
+  OAX_MODEL_PROXY_MAX_STREAMS: z.coerce.number().int().min(1).default(256),
+  OAX_MODEL_PROXY_CALLS_PER_MINUTE: z.coerce.number().int().min(1).default(60),
+  OAX_MODEL_PROXY_MAX_CALL_SECONDS: z.coerce.number().int().min(1).default(600),
+  OAX_MODEL_PROXY_TTFB_SECONDS: z.coerce.number().int().min(1).default(120),
+  OAX_MODEL_PROXY_IDLE_SECONDS: z.coerce.number().int().min(1).default(60),
+  OAX_MODEL_PROXY_GRACE_SECONDS: int(60),
+  OAX_MODEL_PROXY_REVOCATION_POLL_MS: z.coerce.number().int().min(10).default(2000),
+  OAX_MODEL_PROXY_MAX_RESPONSE_BYTES: z.coerce
+    .number()
+    .int()
+    .min(1024)
+    .default(16 * 1024 * 1024),
+  OAX_MODEL_PROXY_CAPTURE: z.enum(['metadata', 'off']).default('metadata'),
+  /** Private destinations tenant-controlled endpoints may reach (hosts, suffixes, CIDRs). */
+  OAX_MODEL_PROXY_PRIVATE_ALLOW: z.string().default(''),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
   OTEL_SERVICE_NAME: z.string().optional(),
 
@@ -277,6 +303,26 @@ export interface Config {
     };
   };
   toolboxes: { registry: string; allowlist: string[]; requireSignature: boolean };
+  /** Model proxy (ADR 0009). The accounting limits and the stream limits are bound from here. */
+  modelProxy: {
+    enabled: boolean;
+    maxBodyBytes: number;
+    reservation: 'upper-bound' | 'estimate';
+    minOutputTokens: number;
+    maxConcurrentPerSession: number;
+    maxConcurrentPerTenant: number;
+    maxStreams: number;
+    callsPerMinute: number;
+    maxCallSeconds: number;
+    ttfbSeconds: number;
+    idleSeconds: number;
+    graceSeconds: number;
+    revocationPollMs: number;
+    maxResponseBytes: number;
+    capture: 'metadata' | 'off';
+    /** Operator allowlist of private destinations for tenant-controlled endpoints. */
+    privateAllow: string[];
+  };
   airgap: {
     enabled: boolean;
     /** Raw `OAX_AIRGAPPED_ALLOW` (hosts, suffixes, CIDRs). */
@@ -439,6 +485,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       registry: e.OAX_TOOLBOX_REGISTRY,
       allowlist: list(e.OAX_TOOLBOX_ALLOWLIST),
       requireSignature: e.OAX_TOOLBOX_REQUIRE_SIGNATURE,
+    },
+    modelProxy: {
+      enabled: e.OAX_MODEL_PROXY_ENABLED,
+      maxBodyBytes: e.OAX_MODEL_PROXY_MAX_BODY_BYTES,
+      reservation: e.OAX_MODEL_PROXY_RESERVATION,
+      minOutputTokens: e.OAX_MODEL_PROXY_MIN_OUTPUT_TOKENS,
+      maxConcurrentPerSession: e.OAX_MODEL_PROXY_MAX_CONCURRENT_PER_SESSION,
+      maxConcurrentPerTenant: e.OAX_MODEL_PROXY_MAX_CONCURRENT_PER_TENANT,
+      maxStreams: e.OAX_MODEL_PROXY_MAX_STREAMS,
+      callsPerMinute: e.OAX_MODEL_PROXY_CALLS_PER_MINUTE,
+      maxCallSeconds: e.OAX_MODEL_PROXY_MAX_CALL_SECONDS,
+      ttfbSeconds: e.OAX_MODEL_PROXY_TTFB_SECONDS,
+      idleSeconds: e.OAX_MODEL_PROXY_IDLE_SECONDS,
+      graceSeconds: e.OAX_MODEL_PROXY_GRACE_SECONDS,
+      revocationPollMs: e.OAX_MODEL_PROXY_REVOCATION_POLL_MS,
+      maxResponseBytes: e.OAX_MODEL_PROXY_MAX_RESPONSE_BYTES,
+      capture: e.OAX_MODEL_PROXY_CAPTURE,
+      privateAllow: list(e.OAX_MODEL_PROXY_PRIVATE_ALLOW),
     },
     airgap: {
       enabled: e.OAX_AIRGAPPED,

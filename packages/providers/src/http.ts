@@ -1,5 +1,7 @@
 import { OaxError, getEgressPolicy } from '@openagentix/core';
-import { createProxyAwareFetch, type Env } from './proxy.js';
+import { Agent, fetch as undiciFetch } from 'undici';
+import { createProxyAwareFetch, proxyFor, type Env } from './proxy.js';
+import { assertPublicDestination, createPinnedLookup, type HostLookup } from './ssrf.js';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -8,9 +10,26 @@ export class ProviderError extends OaxError {
     message: string,
     readonly status: number | null,
     readonly retryable: boolean,
+    /** The failure happened before any request byte could have reached the provider (DNS, refused). */
+    readonly preSend: boolean = false,
   ) {
     super('provider_error', message, { status });
   }
+}
+
+const PRE_SEND_CODES = new Set([
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+]);
+
+/** True for connection failures that provably happened before the request was sent. */
+export function isPreSendFailure(e: unknown): boolean {
+  const err = e as { code?: unknown; cause?: { code?: unknown } } | null;
+  const code = err?.cause?.code ?? err?.code;
+  return typeof code === 'string' && PRE_SEND_CODES.has(code);
 }
 
 export interface GuardedFetchOptions {
@@ -19,6 +38,12 @@ export interface GuardedFetchOptions {
   /** Optional explicit proxy; otherwise HTTPS_PROXY/HTTP_PROXY/NO_PROXY from `env` apply. */
   proxyUrl?: string | undefined;
   env?: Env;
+  /**
+   * Refuse destinations that resolve to loopback, private, link-local or metadata addresses (SSRF
+   * through tenant-controlled base URLs). Checked right before each request. `allow` lists
+   * operator-approved entries (`OAX_MODEL_PROXY_PRIVATE_ALLOW`).
+   */
+  blockPrivateDestinations?: { allow?: readonly string[]; lookup?: HostLookup } | undefined;
   /** Injected fetch (tests). Defaults to global fetch, or undici fetch when a proxy is set. */
   fetchImpl?: FetchLike | undefined;
 }
@@ -32,19 +57,36 @@ export function createGuardedFetch(opts: GuardedFetchOptions): FetchLike {
   const base: FetchLike =
     opts.fetchImpl ??
     createProxyAwareFetch({ proxyUrl: opts.proxyUrl, ...(opts.env ? { env: opts.env } : {}) });
-  return (input, init) => {
+  // Connect-time pinning: the dispatcher resolves the name itself, validates every address and
+  // connects to exactly those (no second resolution between check and connect). Not possible
+  // behind an HTTP proxy (the proxy resolves the name; only the pre-request check applies there)
+  // or with an injected fetch (tests).
+  const pinned =
+    opts.blockPrivateDestinations && !opts.fetchImpl
+      ? new Agent({
+          connect: { lookup: createPinnedLookup(opts.blockPrivateDestinations) as never },
+        })
+      : undefined;
+  return async (input, init) => {
     const origin = new URL(input).origin;
     if (!allowed.has(origin)) {
       return Promise.reject(
         new OaxError('egress_denied', `outbound request to ${origin} is not a configured endpoint`),
       );
     }
-    try {
-      getEgressPolicy().assert(input, 'provider');
-    } catch (e) {
-      return Promise.reject(e);
+    getEgressPolicy().assert(input, 'provider');
+    if (opts.blockPrivateDestinations)
+      await assertPublicDestination(new URL(input).hostname, opts.blockPrivateDestinations);
+    // A redirect would carry the request (and its key) to another origin: never followed.
+    if (pinned && !proxyFor(input, opts.env ?? process.env, opts.proxyUrl)) {
+      getEgressPolicy().assert(input, 'http');
+      return undiciFetch(input, {
+        ...init,
+        redirect: 'error',
+        dispatcher: pinned,
+      } as never) as unknown as Promise<Response>;
     }
-    return base(input, init);
+    return base(input, { ...init, redirect: 'error' });
   };
 }
 
@@ -53,11 +95,37 @@ export interface PostJsonOptions {
   signal?: AbortSignal | undefined;
   timeoutMs?: number;
   maxRetries?: number;
+  /** Largest response body read (default 16 MiB); more is a provider error. */
+  maxResponseBytes?: number;
   /** Base backoff in ms (doubles per attempt). */
   backoffMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Reads at most `max` bytes of a response body (`truncate`: stop quietly there), else throws. */
+export async function readBounded(res: Response, max: number, truncate = false): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let text = '';
+  let bytes = 0;
+  try {
+    for (;;) {
+      const r = await reader.read();
+      if (r.done) break;
+      bytes += r.value.byteLength;
+      if (bytes > max) {
+        if (truncate) break;
+        throw new ProviderError('provider response is too large', res.status, false);
+      }
+      text += dec.decode(r.value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return text;
+}
 
 /** POSTs JSON with timeout and retries on 429/5xx/network errors. */
 export async function postJson<T>(
@@ -79,8 +147,9 @@ export async function postJson<T>(
         body: JSON.stringify(body),
         signal: AbortSignal.any(signals),
       });
-      if (res.ok) return (await res.json()) as T;
-      const text = (await res.text()).slice(0, 500);
+      if (res.ok)
+        return JSON.parse(await readBounded(res, opts.maxResponseBytes ?? 16 * 1024 * 1024)) as T;
+      const text = (await readBounded(res, 500, true)).slice(0, 500);
       const retryable = res.status === 429 || res.status >= 500;
       lastError = new ProviderError(
         `HTTP ${res.status} from provider: ${text}`,
@@ -95,7 +164,12 @@ export async function postJson<T>(
       lastError =
         e instanceof ProviderError
           ? e
-          : new ProviderError(`provider request failed: ${(e as Error).message}`, null, true);
+          : new ProviderError(
+              `provider request failed: ${(e as Error).message}`,
+              null,
+              true,
+              isPreSendFailure(e),
+            );
     }
   }
   throw lastError;

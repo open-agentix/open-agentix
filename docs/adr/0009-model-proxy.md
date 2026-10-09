@@ -629,3 +629,105 @@ passed before (pre-1.0, noted in the changelog).
 7. Catalog import of cache prices (`scripts/import-models-dev.mjs`) and per-image token constants.
 8. A native SSE variant of `POST .../model` for live token streaming into the console?
 9. Default limits (concurrency per session/tenant, calls per minute) after the first real loads.
+
+## Amendments
+
+### W1-3b-3: native endpoint and model token (2026-10-04)
+
+Decisions taken while implementing `POST /v1/worker/runs/{id}/model` and `.../model-token`. Where
+they differ from the text above, this section wins.
+
+1. **Native SSE variant (answers open question 8).** The native endpoint answers JSON by default.
+   With `Accept: text/event-stream` it answers Server-Sent Events: `start { callId }`,
+   `delta { text }` per upstream text delta, then `done` (the `WorkerModelResponse`) or `error
+   { code, message }`. Tool calls are delivered in `done` only. Errors before the first upstream
+   byte are plain JSON errors with the usual status. Providers without a streaming transport
+   (`simulated`, Bedrock models that do not speak the Anthropic body) are completed first and
+   replayed as one `delta` and `done`.
+2. **Revocation by polling only.** An open call polls the session and run every
+   `OAX_MODEL_PROXY_REVOCATION_POLL_MS`. The Valkey channel `oax:session-revoked` is not built: the
+   cache interface has no publish/subscribe. The sliding-window call rate (`OAX_MODEL_PROXY_CALLS_PER_MINUTE`)
+   is per replica and in memory; the concurrency limits are database counters and hold across replicas.
+3. **Hard stop rule and reported usage.** The output of a stream is cut when `max(reported output
+   tokens, ceil(streamed bytes / 8))` exceeds the granted output bound by more than 10 %. Bytes / 8
+   is the floor of section 4.1: an honest provider that obeys `max_tokens` never reaches it (using
+   bytes / 3 would cut honest answers that run into the limit). A provider that reports more than
+   the bound is therefore cut as well. Usage that is reported is capped before settlement: input and
+   cache tokens together at the reserved input bound, output at `ceil(1.1 x bound) + 256` (never
+   below the bytes / 8 floor); the raw numbers go to the `model.overrun` audit entry only. An
+   aborted stream is settled with the estimate (bytes / 3, section 4.1) from what was streamed,
+   which can exceed the reservation by at most the bytes seen before the cut-off.
+   *Corrected:* an earlier text of this amendment said a hostile provider could be charged well above
+   its reservation; with the cap and the early cut-off the settled amount stays within the
+   reservation plus the 10 % overrun of the output bound.
+4. **Token and binding errors.** A model token whose `jti` is not the one stored in the session is
+   `401 unauthenticated`; a token or run token for another run than the path's, an agent that is not
+   the token's step, and an orchestrator token without `sid` are `403 model_not_allowed`; a revoked
+   or expired session, a run that is not `running`, a cancelled run or a lease taken over by
+   another worker are `403 run_node_session_revoked`. A provider that does not resolve for the run's
+   scope (including another tenant's BYOK connection) is `403 model_not_allowed`; a provider that
+   exists but cannot be built (missing secret) is `503 model_proxy_unavailable`.
+5. **No per-session context cache.** Definition, provider and secrets are resolved on every call, so a
+   revoked connection or rotated key takes effect on the next call. The cost is a few indexed reads
+   per call.
+6. **Strict schema before the allowlist.** The strict request schema (unknown keys, server tools,
+   `provider`, node-supplied `simulation`) runs when the body is parsed, so such requests are
+   `400 model_parameter_refused` before the model allowlist (`403 model_not_allowed`) is evaluated.
+   Nothing is forwarded or reserved in either case.
+7. **Request parser.** The model routes use their own JSON parser (no duplicate keys, no
+   prototype keys, depth 64, `OAX_MODEL_PROXY_MAX_BODY_BYTES`) and answer in the model envelope
+   `{ error: { code, message } }`, including authentication failures; a body with both
+   `content-length` and `transfer-encoding` is refused.
+8. **Audit and settlement.** `ModelAccountingService.settle` accepts `auditExtra` (node id, request
+   digest, latency, stop reason: names and numbers only) that is merged into the `step.model_call`
+   payload, and scrubs step payloads before it opens its transaction (not inside it). A call that
+   cannot be settled returns `503` without the model output; the reaper settles the reservation at
+   the reserved amount.
+9. **Token response.** `baseUrl` is `<OAX_NODE_CONTROL_URL or OAX_PUBLIC_URL>/v1/worker/runs/<runId>`
+   and `protocol` is always `native` until the pass-through surfaces exist (W1-3b-6).
+10. **Known gaps carried to later tasks.** `ModelAccountingService` prices with the global
+    `CostModel`; prices set only on a BYOK connection's `models[]` are not seen by the reservation, so
+    such a model counts as unpriced (`422 model_unpriced` under a cost limit, otherwise `priced:
+    false`). The connection schema has no `tokenBoundFactor`. The emergency-override check (W2-3) is
+    a hook (`ModelProxyHooks.checkOverride`) without an implementation.
+
+### W1-3b-3 review fixes (2026-10-04)
+
+11. **One call, one provider request, no retries.** Every provider the proxy builds has
+    `maxRetries: 0` (Bedrock one attempt, stream transports no retries) and an HTTP timeout equal to
+    the call deadline; a retry is a second billed call under one reservation, so the node retries
+    with a new reservation. Only provably pre-send failures are released at zero (egress refusal, DNS
+    and connection-refused errors, and a 4xx other than 408, 409 and 429); timeouts, resets, 5xx and
+    stream errors are charged with the reservation or the estimate.
+12. **The JSON path uses the stream plan.** For every provider with a streaming transport the plain
+    JSON answer is produced through that transport and aggregated, so the response size limit
+    (`OAX_MODEL_PROXY_MAX_RESPONSE_BYTES`), time to first byte, idle and deadline timeouts and the
+    output hard stop apply uniformly. Providers without a transport (`simulated`, Bedrock models
+    that do not speak the Anthropic body) use the adapter; the adapter paths use a bounded body
+    reader, never follow redirects and have a call deadline. The Bedrock adapter of a tenant-scoped
+    connection runs on an SDK request handler that fails the body beyond 16 MiB (see 14).
+13. **Deadline.** The call deadline is `min(OAX_MODEL_PROXY_MAX_CALL_SECONDS, time left of the run
+    timeout since the run start, time left of the step timeout since the session start)`, at least
+    one second while any time is left. A run or step whose time is already exhausted is refused
+    (`504 provider_timeout`) without a reservation.
+14. **Tenant-controlled endpoints.** Redirects are never followed (also in the SDK fetch). Endpoints
+    of tenant-scoped connections that are or resolve to loopback, private, link-local, metadata,
+    CGNAT, multicast or translation-embedded (IPv4-mapped, IPv4-compatible, NAT64, 6to4, Teredo)
+    private addresses are refused with `403 egress_denied` before the call and again right before
+    each request, unless listed in `OAX_MODEL_PROXY_PRIVATE_ALLOW`. A name that cannot be
+    resolved is refused too (fail closed). At connect time the HTTP client (an undici dispatcher
+    for fetch, an `https.Agent` for the AWS SDK) resolves the name itself through a lookup that
+    validates every address and connects to exactly those, so a DNS answer that changes between
+    the check and the connection (rebinding) is rejected. Limit: behind an HTTP proxy
+    (`proxyUrl`, `HTTPS_PROXY`) the proxy resolves the name, so only the pre-request check
+    applies; the operator trusts that proxy. A tenant-scoped Bedrock `endpoint` goes through the
+    same check and lookup, and its responses are bounded (stream limit, 16 MiB for the adapter).
+15. **Node-facing errors carry no upstream text.** Provider failures are reported as the HTTP status
+    or the kind of stream failure; budget refusals use fixed texts without scope names or numbers.
+16. **Smaller points.** The `requestDigest` is an HMAC under a per-tenant key derived from the server
+    secret; the HTTP rate limit of the model routes is keyed by peer address and a 429 is answered
+    in the model envelope with `Retry-After` (invalid tokens are rejected by authentication before
+    the limiter); the model proxy reads connections fresh (no 30 s cache); a failure in `begin()` or
+    aggregation settles the reservation and reports an error; `oax_model_proxy_*` labels use the
+    provider family, not the connection name (the older `oax_cost_micro_usd_total` still labels by
+    provider name).

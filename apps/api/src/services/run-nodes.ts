@@ -439,6 +439,32 @@ export class RunNodesService {
     return s;
   }
 
+  /** The session row of `sid` (any state), or `undefined`. Callers decide what is acceptable. */
+  async sessionById(sid: string): Promise<SessionRow | undefined> {
+    const [s] = await this.ctx.db.select().from(runNodeSessions).where(eq(runNodeSessions.id, sid));
+    return s;
+  }
+
+  /**
+   * Records the `jti` of the model token issued for a session, once (ADR 0009 section 2.2).
+   * Returns false when a token was already issued or the session is revoked; the caller then
+   * answers `model_token_already_issued` and no token is handed out.
+   */
+  async recordModelToken(sessionId: string, jti: string): Promise<boolean> {
+    const [row] = await this.ctx.db
+      .update(runNodeSessions)
+      .set({ modelTokenJti: jti })
+      .where(
+        and(
+          eq(runNodeSessions.id, sessionId),
+          isNull(runNodeSessions.revokedAt),
+          isNull(runNodeSessions.modelTokenJti),
+        ),
+      )
+      .returning({ id: runNodeSessions.id });
+    return !!row;
+  }
+
   /** The node's handover: its own step's spec, input, output schema and MCP connections. */
   async handover(claims: RunTokenClaims, runId: string, agentId: string): Promise<StepHandover> {
     const s = await this.checkSession(claims, runId);

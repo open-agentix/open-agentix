@@ -5,8 +5,10 @@ import {
   UnavailableProvider,
   createProvider,
   modelPriceEntries,
+  secretRefsOf,
   withName,
   type ModelEntry,
+  type ModelProvider,
   type ProviderConfig,
   type ProviderKind,
 } from '@openagentix/providers';
@@ -62,13 +64,29 @@ export class ModelsService {
     return this.platform;
   }
 
+  /** Tenant-scoped connections must not reach private destinations (SSRF); platform ones may. */
+  private guardFor(row: Pick<ConnectionRow, 'scope'>) {
+    return row.scope !== 'platform'
+      ? {
+          blockPrivateDestinations: {
+            allow: this.ctx.config.modelProxy.privateAllow,
+            ...(this.ctx.hostLookup ? { lookup: this.ctx.hostLookup } : {}),
+          },
+        }
+      : {};
+  }
+
   private async build(rows: readonly ConnectionRow[]): Promise<ProviderRegistry> {
     const providers = [];
     for (const row of rows) {
       const cfg = connectionProviderConfig(row);
       try {
         providers.push(
-          await createProvider(cfg, { secrets: this.ctx.secrets, fetchImpl: this.ctx.fetchImpl }),
+          await createProvider(cfg, {
+            secrets: this.ctx.secrets,
+            fetchImpl: this.ctx.fetchImpl,
+            ...this.guardFor(row),
+          }),
         );
       } catch (e) {
         this.ctx.logger.warn(
@@ -85,6 +103,103 @@ export class ModelsService {
       }
     }
     return ProviderRegistry.of(providers);
+  }
+
+  /**
+   * The one provider a model call uses, resolved for the run's scope exactly like `registryFor`
+   * (a connection of the run's tenant wins over a platform provider of the same name), together
+   * with its settings. Only the requested provider is built, so only its secrets are resolved.
+   * `null` when no provider of that name applies to the scope: another tenant's connections are
+   * never visible here (the scope carries the tenant of the run row).
+   */
+  async resolve(
+    scope: RunScope,
+    name: string,
+    /**
+     * Proxy settings: no provider-level retries (a retry is a second billed call under one
+     * reservation; the node retries with a new reservation) and an HTTP timeout tied to the call
+     * deadline.
+     */
+    opts: { timeoutMs?: number } = {},
+  ): Promise<{
+    provider: ModelProvider;
+    config: ProviderConfig | null;
+    tenantControlled: boolean;
+  } | null> {
+    const tune = <T extends ProviderConfig>(c: T): T => ({
+      ...c,
+      maxRetries: 0,
+      ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+    });
+    const row = (await this.catalog.connectionsForRun('model', scope, { fresh: true })).find(
+      (r) => r.name === name,
+    );
+    if (row) {
+      const config = tune(connectionProviderConfig(row));
+      try {
+        return {
+          provider: await createProvider(config, {
+            secrets: this.ctx.secrets,
+            fetchImpl: this.ctx.fetchImpl,
+            ...this.guardFor(row),
+          }),
+          config,
+          tenantControlled: row.scope !== 'platform',
+        };
+      } catch (e) {
+        return {
+          provider: new UnavailableProvider(
+            row.name,
+            ADAPTER_KIND[config.kind] ?? 'openai',
+            (e as Error).message,
+          ),
+          config,
+          tenantControlled: row.scope !== 'platform',
+        };
+      }
+    }
+    const platformCfg = this.ctx.config.providers.find((p) => p.name === name);
+    if (!platformCfg) return null;
+    // A fresh instance with the proxy settings (the shared platform registry keeps its own).
+    const config = tune(platformCfg);
+    try {
+      return {
+        provider: await createProvider(config, {
+          secrets: this.ctx.secrets,
+          fetchImpl: this.ctx.fetchImpl,
+        }),
+        config,
+        tenantControlled: false,
+      };
+    } catch (e) {
+      return {
+        provider: new UnavailableProvider(
+          name,
+          ADAPTER_KIND[config.kind] ?? 'openai',
+          (e as Error).message,
+        ),
+        config,
+        tenantControlled: false,
+      };
+    }
+  }
+
+  /**
+   * Resolved secret values of a provider's settings (key, header secrets), for scrubbing provider
+   * error text before it is returned, logged or audited. Values never leave the control node.
+   */
+  async secretValues(config: ProviderConfig | null): Promise<string[]> {
+    if (!config) return [];
+    const out: string[] = [];
+    for (const ref of secretRefsOf(config)) {
+      try {
+        const v = await this.ctx.secrets.resolve(ref);
+        if (v) out.push(v);
+      } catch {
+        // an unresolvable reference has nothing to scrub
+      }
+    }
+    return out;
   }
 
   async registryFor(scope: RunScope): Promise<ProviderRegistry> {
@@ -119,6 +234,7 @@ export class ModelsService {
       const provider = await createProvider(connectionProviderConfig(row), {
         secrets: this.ctx.secrets,
         fetchImpl: this.ctx.fetchImpl,
+        ...this.guardFor(row),
       });
       const res = await provider.complete({
         model,

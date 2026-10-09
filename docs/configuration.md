@@ -239,6 +239,36 @@ The `container` runner is implemented and opt-in (see [runners.md](runners.md)).
 | `OAX_TOOLBOX_ALLOWLIST` | – | Comma list of toolbox names agents may declare (`runtime.toolbox`). Enforced at publish; the `kubernetes-job` runner treats an empty list as "no toolbox allowed" and refuses to start without it. |
 | `OAX_TOOLBOX_REQUIRE_SIGNATURE` | `true` | Only run cosign-verified toolbox images. **Not enforced by the runner itself**: with `kubernetes-job` enabled the node refuses to start unless `OAX_K8S_SIGNATURES_VERIFIED_BY_ADMISSION=true` (an admission policy verifies). |
 
+## Model proxy (v0.2)
+
+The control node can serve model calls of isolated run nodes: the node holds only a step-scoped
+token, the provider key is resolved on the control node, the control node measures tokens and
+settles the cost, and a worst-case reservation is held against every applicable budget before the
+call ([ADR 0009](adr/0009-model-proxy.md); how it works and how to call it: [runners.md](runners.md)).
+Opt-in; with the flag off, `POST /v1/worker/runs/{id}/model` and `.../model-token` answer
+`503 model_proxy_unavailable` and nodes behave as before. Concurrency limits are counted in the
+database (reservations), so they hold across api replicas; the per-run call rate and the in-flight
+limit are per replica.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_MODEL_PROXY_ENABLED` | `false` | Feature flag of the model proxy (native endpoint and model token). |
+| `OAX_MODEL_PROXY_MAX_BODY_BYTES` | `8388608` | Largest request body (8 MiB); larger bodies get `413 model_request_too_large`. |
+| `OAX_MODEL_PROXY_RESERVATION` | `upper-bound` | `upper-bound` reserves the proven worst-case input (UTF-8 bytes plus overheads); `estimate` reserves a third of it (fewer refusals near a limit, no guarantee). |
+| `OAX_MODEL_PROXY_MIN_OUTPUT_TOKENS` | `256` | A call whose tightest budget leaves fewer output tokens is refused with that budget's code instead of being shrunk. |
+| `OAX_MODEL_PROXY_MAX_CONCURRENT_PER_SESSION` | `2` | Active reservations (calls in flight) per run node session. |
+| `OAX_MODEL_PROXY_MAX_CONCURRENT_PER_TENANT` | `16` | Active reservations per tenant. |
+| `OAX_MODEL_PROXY_MAX_STREAMS` | `256` | Calls in flight on one replica (streams and plain calls). |
+| `OAX_MODEL_PROXY_CALLS_PER_MINUTE` | `60` | Calls per run and minute (sliding window, per replica). |
+| `OAX_MODEL_PROXY_MAX_CALL_SECONDS` | `600` | Deadline of one call (also bounded by the step's remaining timeout); also the base of the reservation expiry. |
+| `OAX_MODEL_PROXY_TTFB_SECONDS` | `120` | Streaming: time to the first upstream event. |
+| `OAX_MODEL_PROXY_IDLE_SECONDS` | `60` | Streaming: longest silence between two upstream events. |
+| `OAX_MODEL_PROXY_GRACE_SECONDS` | `60` | A reservation outlives its call deadline by this long before the worker's reaper settles it at the reserved amount. |
+| `OAX_MODEL_PROXY_REVOCATION_POLL_MS` | `2000` | While a call is open the session and run are polled this often; revocation, cancellation or lease loss ends the call within one interval. |
+| `OAX_MODEL_PROXY_MAX_RESPONSE_BYTES` | `16777216` | Largest upstream response of one call (16 MiB). |
+| `OAX_MODEL_PROXY_PRIVATE_ALLOW` | – | Private destinations (hosts, suffixes, CIDRs) that tenant-controlled endpoints (BYOK model connections) may reach; everything private, loopback, link-local or metadata is refused otherwise (`403 egress_denied`). |
+| `OAX_MODEL_PROXY_CAPTURE` | `metadata` | `metadata` stores the response text, tool calls and stop reason in the step record (never the request); `off` stores only metadata. Bodies are never logged. |
+
 ## Webhooks
 
 | Variable | Default | Meaning |
