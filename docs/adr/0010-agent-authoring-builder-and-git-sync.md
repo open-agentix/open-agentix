@@ -812,3 +812,19 @@ delivery, operator targets from `OAX_PR_TARGETS`, DOG-3c) and the seed endpoint 
   amendment 3). A delta bomb inside a blob is bounded by the byte cap, the wall clock and
   `GIT_ALLOC_LIMIT`, not by the tmpfs quota (the worker checks the repository size after the
   fetch). SSH is not part of this slice.
+
+### Amendment 3 (2026-10-09): pull-request output delivery (DOG-3c/DOG-4)
+
+`PullRequestDelivery` (`apps/worker/src/git/delivery.ts`) consumes `outputs: [{ format:
+pull-request, target }]` with targets from `OAX_PR_TARGETS`. Rules, all in code: the open pull
+request limit is checked before the node starts and again before the push; the branch is
+`<prefix>issue-<n>-<run8>` and is created, never updated; the patch needs a full passing test run on
+the final tree (all node-reported test claims must agree: full-suite run, exit code 0, no timeout,
+same tree); the secret scan knows the exact run token of the node, brokered secrets, provider keys
+and platform secrets, and refuses the delivery when these lists cannot be read; the pull request
+is a draft whose body comes from a fixed template, and it is scanned **before** the branch is
+pushed; model text and the issue title are neutralized (mentions, `#n`/`owner/repo#n`/`GH-n`
+references and closing keywords such as `Fixes #n` cannot notify, link or close issues on merge); a
+dry run (`OAX_PR_DRY_RUN`) stops after the local commit. Audit: `pull_request.refused|pushed|opened`.
+The run output is the delivery result (`dryRun`, branch, commit, base, pull request number and URL).
+

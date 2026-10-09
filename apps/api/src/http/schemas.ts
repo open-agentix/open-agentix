@@ -1,4 +1,5 @@
 import { CLASSIFICATIONS, PERMISSIONS, ROLES, RUN_STATUSES, STEP_KINDS } from '@openagentix/core';
+import { PatchAttachmentSchema } from '@openagentix/runners';
 import { z } from 'zod';
 
 /** zod schemas of the public API (source of the generated OpenAPI 3.1 document). */
@@ -632,6 +633,9 @@ export const StepHandoverResultBody = z.object({
   format: z.string().max(64),
   content: z.string().max(1_000_000),
   json: Json.optional(),
+  patch: PatchAttachmentSchema.optional().describe(
+    'the patch the node computed from its workspace (steps with a pull-request output)',
+  ),
   failure: z
     .object({
       status: z.enum(['failed', 'blocked_by_policy', 'cancelled']),

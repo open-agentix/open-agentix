@@ -6,11 +6,14 @@ import {
   type RunnerKind,
 } from '@openagentix/core';
 import type { Services } from '@openagentix/api';
+import { GitError } from './git/errors.js';
+import { readIssue, type PreparedWorkspace, type PullRequestDelivery } from './git/delivery.js';
 import {
   NodeStepFailure,
   type AgentOutput,
   type IsolatingRunner,
   type RunNodeExit,
+  type PatchAttachment,
   type RunNodeHandle,
   type StepDispatchRequest,
   type StepDispatchResult,
@@ -41,6 +44,18 @@ export interface NodeDispatcherOptions {
   defaultTimeoutSeconds?: number;
   cancelPollMs?: number;
   now?: () => number;
+  /**
+   * Pull request delivery (DOG-4). Without it a step with a `pull-request` output fails closed
+   * (`pull_request_unavailable`) before anything starts.
+   */
+  delivery?: PullRequestDelivery;
+}
+
+/** A Git/delivery refusal becomes a failed step with its fixed, client-safe code. */
+function deliveryFailure(e: unknown): NodeStepFailure {
+  if (e instanceof GitError) return new NodeStepFailure('failed', e.code, e.message);
+  if (e instanceof OaxError) return new NodeStepFailure('failed', e.code, e.message);
+  return new NodeStepFailure('failed', 'pull_request_failed', 'the pull request delivery failed');
 }
 
 /**
@@ -64,6 +79,61 @@ export class NodeDispatcher implements StepDispatcher {
   }
 
   async dispatch(req: StepDispatchRequest): Promise<StepDispatchResult> {
+    const prOutput = req.agent.outputs?.find((o) => o.format === 'pull-request');
+    if (!prOutput) return this.dispatchNode(req);
+    // The seed is built by the worker BEFORE the node exists (and before any model money is spent):
+    // the node itself never gets a route to the Git host (dogfooding D4-A).
+    const delivery = this.opts.delivery;
+    if (!delivery || !prOutput.target || !delivery.has(prOutput.target))
+      throw new NodeStepFailure(
+        'failed',
+        'pull_request_unavailable',
+        `step "${req.agent.id}" has a pull-request output but no configured delivery target`,
+      );
+    let issue;
+    try {
+      issue = readIssue(req.input);
+    } catch (e) {
+      throw deliveryFailure(e);
+    }
+    const workspace = await delivery.prepare(req.runId, prOutput.target).catch((e: unknown) => {
+      throw deliveryFailure(e);
+    });
+    try {
+      const res = await this.dispatchNode(req, workspace);
+      const patch = res.patch;
+      if (!patch)
+        throw new NodeStepFailure('failed', 'patch_missing', 'the run node attached no patch');
+      const delivered = await delivery
+        .deliver(workspace, {
+          issue,
+          summary: res.output.content,
+          patch,
+          model: req.agent.model,
+          costMicros: res.usage.costMicros,
+          extraSecrets: [res.sessionToken],
+        })
+        .catch((e: unknown) => {
+          throw deliveryFailure(e);
+        });
+      return {
+        output: {
+          agentId: req.agent.id,
+          format: 'pull-request',
+          content: JSON.stringify(delivered),
+          json: delivered,
+        },
+        usage: res.usage,
+      };
+    } finally {
+      await workspace.dispose().catch(() => undefined);
+    }
+  }
+
+  private async dispatchNode(
+    req: StepDispatchRequest,
+    workspace?: PreparedWorkspace,
+  ): Promise<StepDispatchResult & { patch?: PatchAttachment; sessionToken: string }> {
     const { agent, runId } = req;
     const kind = this.effectiveRunner(agent);
     const runner = this.opts.runners[kind];
@@ -113,6 +183,14 @@ export class NodeDispatcher implements StepDispatcher {
     let exit: RunNodeExit = { exitCode: null };
     let reason: 'step_end' | 'cancelled' | 'timeout' | 'lease_lost' = 'step_end';
     try {
+      if (workspace)
+        await runNodes.storeSeed(session.sessionId, this.opts.workerId, {
+          archive: workspace.archive,
+          target: workspace.target.name,
+          commit: workspace.commit,
+          files: workspace.files,
+          agentId: agent.id,
+        });
       handle = await runner.startNode(
         {
           runId,
@@ -178,6 +256,8 @@ export class NodeDispatcher implements StepDispatcher {
     const after = await control.runUsage(runId);
     return {
       output,
+      ...(result.patch ? { patch: result.patch } : {}),
+      sessionToken: session.token,
       usage: {
         tokensIn: Math.max(0, after.tokensIn - before.tokensIn),
         tokensOut: Math.max(0, after.tokensOut - before.tokensOut),

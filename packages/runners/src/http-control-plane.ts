@@ -146,6 +146,48 @@ export class HttpControlPlane implements ControlPlane, ModelProxyClient {
     await this.request('POST', `/v1/worker/runs/${runId}/handover/result`, result);
   }
 
+  /**
+   * The workspace seed of the step (once per step and session): the archive bytes and the SHA-256
+   * the control node announced. The caller verifies the digest before it unpacks anything.
+   */
+  async fetchWorkspaceSeed(
+    runId: string,
+    agentId: string,
+    maxBytes: number,
+  ): Promise<{ archive: Buffer; sha256: string }> {
+    const res = await this.fetch(
+      `${this.opts.baseUrl.replace(/\/$/, '')}/v1/worker/runs/${runId}/workspace?agentId=${encodeURIComponent(agentId)}`,
+      { method: 'GET', headers: { authorization: `Bearer ${this.opts.runToken}` } },
+    );
+    if (!res.ok)
+      throw new OaxError(
+        'workspace_seed_unavailable',
+        `control node returned HTTP ${res.status} for the workspace seed`,
+        { status: res.status },
+      );
+    const sha256 = res.headers.get('x-oax-seed-sha256') ?? '';
+    if (!/^[0-9a-f]{64}$/.test(sha256))
+      throw new OaxError('workspace_seed_invalid', 'the seed response carries no valid digest');
+    const declared = Number(res.headers.get('content-length') ?? '0');
+    if (declared > maxBytes)
+      throw new OaxError('workspace_seed_invalid', 'the seed is larger than the node accepts');
+    const reader = res.body?.getReader();
+    if (!reader) throw new OaxError('workspace_seed_invalid', 'the seed response has no body');
+    const chunks: Uint8Array[] = [];
+    let n = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.byteLength;
+      if (n > maxBytes) {
+        void reader.cancel().catch(() => undefined);
+        throw new OaxError('workspace_seed_invalid', 'the seed is larger than the node accepts');
+      }
+      chunks.push(value);
+    }
+    return { archive: Buffer.concat(chunks), sha256 };
+  }
+
   checkBudget(runId: string): Promise<BudgetVerdict> {
     return this.request('GET', `/v1/worker/runs/${runId}/budget`);
   }

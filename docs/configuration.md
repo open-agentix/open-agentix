@@ -219,6 +219,10 @@ The `container` runner is implemented and opt-in (see [runners.md](runners.md)).
 | `OAX_CONTAINER_IMAGE` | – | Run node image, `name@sha256:<digest>` only. |
 | `OAX_CONTAINER_TOOLBOX_IMAGES` | `{}` | JSON map toolbox name -> digest-pinned image. |
 | `OAX_CONTAINER_HARNESS_IMAGES` | `{}` | JSON map harness (`claude-code`, `opencode`) -> digest-pinned image; a harness step runs only on its harness image (`harness_image_unknown` otherwise). See [runners](runners.md#harness-images-dog-1). |
+| `OAX_PR_TARGETS` | – | worker | Path of the JSON file with the pull request delivery targets (DOG-4, [bug-fix agent](bug-fix-agent.md)). Unset: steps with a `pull-request` output fail closed. |
+| `OAX_PR_DRY_RUN` | `false` | worker | `true`: delivery stops after the local commit (no push, no pull request). |
+| `OAX_PR_PRIVATE_ALLOW` | – | worker | Private Git destinations (hosts/CIDRs) the delivery may reach. |
+| `OAX_WORKSPACE_ROOT`, `OAX_WORKSPACE_STATE_DIR` | `/tmp/workspace`, `/tmp/oax-workspace` | run node | Where the node unpacks the seed and keeps the workspace server's configuration and result. |
 | `OAX_CONTAINER_MEMORY_MB` | `512` | Memory (MiB) of an ordinary run node, clamped to `OAX_CONTAINER_MAX_MEMORY_MB`. The max is the ceiling, not the default. |
 | `OAX_CONTAINER_TMP_MB` | `64` | `/tmp` tmpfs size (MiB) of an ordinary run node; at most half of the node memory. |
 | `OAX_CONTAINER_HARNESS_MEMORY_MB` | `2048` | Memory (MiB) of a harness step's node, clamped to `OAX_CONTAINER_MAX_MEMORY_MB`. |

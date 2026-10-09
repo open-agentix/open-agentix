@@ -6,6 +6,7 @@ import { createWorkerHttpServer } from './http.js';
 import { KafkaSources } from './sources.js';
 import { CronScheduler } from './scheduler.js';
 import { DemoLlmRunner } from './demo-runner.js';
+import { createPullRequestDelivery } from './pr-wiring.js';
 import { Worker } from './worker.js';
 
 const config = loadConfig();
@@ -38,7 +39,9 @@ if (kubernetesRunner) {
   );
 }
 // OAX_DEMO_MCP=true registers the built-in demo MCP servers (cve-db, tickets) for `in-memory` connections.
+// Pull request delivery (DOG-4): off unless OAX_PR_TARGETS names the operator's target file.
 const worker = new Worker(ctx, {
+  delivery: (services, workerId) => createPullRequestDelivery(ctx, services, workerId),
   ...(config.demoMcp ? { inMemoryMcp: inMemoryServers(demoServerFactories()) } : {}),
   // Demo scenarios may run through the Claude Code harness (fixed scenarios, strict limits).
   ...(config.demo.enabled && config.demo.llm === 'claude-code'
