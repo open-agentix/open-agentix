@@ -8,6 +8,29 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Workspace tools for harness steps (DOG-2, ADR 0008 Amendment 2)**: new package
+  `@openagentix/workspace` with the MCP server `workspace` (`list_files`, `read_file`, `search`,
+  `diff`, `edit_file`, `write_file`, `run_tests`; stdio binary `oax-workspace`). Path-confined without
+  following symbolic links, forbidden `.git`/`.github`/CI/secret-like paths, size, output, call and
+  time limits, a fixed test command without shell and with a scrubbed environment, process-group
+  kill and a memory watchdog. The node computes the final patch itself
+  (`{ patch, patchSha256, changedFiles, lastTestRun, fullSuitePassed, treeMatchesLastRun,
+  testedFinalTree }`, refused as a whole for
+  changes outside `src/` and `test/`, links, mode changes, binary files); `workspaceToolGrants()`
+  gives the matching gate grants. Docs: `docs/workspace-tools.md`. Seed endpoint, image and output
+  delivery are separate tasks (DOG-1, DOG-3c).
+  Review hardening: after every test run all processes it started (group, descendants, orphans of
+  the same UID from `detached`/`setsid`/double fork) are killed and verified, the call returns at
+  the latest after the timeout plus a grace period even if a child holds the pipes, and the
+  memory watchdog counts all of them; `testedFinalTree` requires a passing **full-suite** run on
+  exactly the final tree (single test files no longer count); extended deny list (`.envrc`,
+  `.pgpass`, `*.tfvars`, `*.tfstate`, `.vault-token`, `.dev.vars`, `*.gpg`, `service-account*.json`,
+  `id_*`, `.npmrc*`, ...); files with several hard links are refused; directories count toward the
+  tree limit; tree walk and diff have a time cap (`maxFinalizeMs`, code `timeout`); refused
+  paths and arguments count as denied; patch headers carry the real file mode; absolute paths are
+  removed from test output; the result file is written with `O_NOFOLLOW`; startup warning when
+  `kernel.yama.ptrace_scope` is 0. Documented trust boundary: test code runs as the node's UID
+  (ADR 0008 Amendment 3).
 - **Tenant tree data model (W13-1 first slice, ADR 0013)**: migration `0013_tenant_hierarchy.sql`
   (PostgreSQL and PGlite) adds `parent_id`, `root_id`, a materialized `path` with prefix index and
   `depth` (technical maximum 32) to `tenants`; slugs stay globally unique (`tenants_slug_unique` is kept, the

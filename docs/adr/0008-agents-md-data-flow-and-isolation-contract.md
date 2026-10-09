@@ -541,3 +541,70 @@ Found while implementing the run node and the container runner; sections 1 to 4 
   5 because 0005 to 0008 are not used yet.
 - **Model calls (3.4)** are **not** part of W1-3a: until W1-3b, a run node can only use the keyless
   `simulated` provider; every other provider fails the step with `model_proxy_unavailable`.
+
+## Amendment 2 (DOG-2, 2026-10-09): workspace tools for harness steps
+
+A harness step (Claude Code, `--tools ""`) has no filesystem tools of its own. The only way it can
+read or change the checkout of its run node is the **workspace tool contract** below: an MCP server
+named `workspace` (`@openagentix/workspace`, `oax-workspace` on stdio, or in-process) that the node
+starts in the checkout, listed as a normal connection of the step. Every call is therefore decided
+by the policy gate and recorded (`policy_decision`, `tool_call`, audit chain) like any other tool
+call. Details and limits: [workspace tools](../workspace-tools.md).
+
+- **Tools and classes** (declared in the connection, section 1.3): `list_files`, `read_file`,
+  `search`, `diff` are `read`; `edit_file`, `write_file`, `run_tests` are `write` (they change the
+  tree or execute code). The agent has `access: write`; the write is confined to the node's
+  workspace.
+- **Two walls per rule.** The grant (`workspaceToolGrants()`) lists every argument, constrains write
+  paths to `^(src|test)/[A-Za-z0-9._/-]{1,200}$` with `deny: ["\\.\\.", "^\\."]`, caps calls per
+  tool, and refuses unknown arguments. The server repeats every rule (paths, sizes, counts), so a
+  grant that is too wide, or a call that bypasses the gate, still cannot leave the workspace.
+- **Confinement.** Paths are relative and normalised (no `..`, absolute, backslash, control
+  characters); each component is checked with `lstat` and symbolic links are refused everywhere (read,
+  write, list, search); files are opened with `O_NOFOLLOW`/`O_NONBLOCK` and re-checked with
+  `realpath`; writes go through an exclusive temp file and `rename`. Never accessible, at any
+  depth: `.git`, `.github`, other CI configuration, and secret-like files (`.env*`, keys, tokens,
+  `.npmrc`, credentials).
+- **Limits** (operator configuration, defaults): read 256 KiB per file and 64 KiB per call, write
+  64 KiB, tool output 64 KiB, 500 list entries, 200 search matches, 5 MiB seed, 80 tool calls and
+  20 minutes as a second wall behind the gate and the platform timeout. Binary and non-UTF-8 files
+  are refused.
+- **`run_tests`.** The command is fixed by the connection (`command`, `args`, no shell, no model
+  input); the model may add only one file argument matching an operator pattern (never starting
+  with `-`). Scrubbed environment (`PATH`, throwaway `HOME`/`TMPDIR`, fixed extras: no `OAX_*`,
+  `ANTHROPIC_*`, proxy or token variables), own process group, timeout, memory watchdog over all
+  processes of the run, output cap, a maximum number of runs. At the end of every run all processes
+  that belong to it (group, descendants, orphans of the same UID started during the run) are
+  killed with `SIGKILL` and verified, and the call never waits for the output pipes to close. Network denial is the node's (no
+  egress grant, internal network), not an in-process promise.
+- **Patch computed by the node.** At the end the node (not the model) calls `finalize()`: it walks
+  the tree, compares it with the baseline taken from the seed and builds the unified diff itself
+  (no `git` binary, so a planted `.git/config` has no effect). The result
+  `{ patch, patchSha256, changedFiles, lastTestRun, fullSuitePassed, treeMatchesLastRun,
+  testedFinalTree }` goes into the step output.
+  The whole patch is refused (`ok: false`, with a code) if anything outside the writable area
+  changed, if a symbolic link or special file appears, on mode changes, binary files, more than 20
+  files or a patch above 64 KiB. `testedFinalTree` is `fullSuitePassed && treeMatchesLastRun`: the
+  last run was the **full suite** (no file argument), it passed, and the tree after it is exactly
+  the tree the patch describes. A single passing test file never sets it.
+- **Tool output is data.** Results are JSON values; file contents, search hits and test output are
+  strings inside them, never instructions; the tool descriptions say so, and a hostile file cannot
+  change any state (policy denials end the run after three, ADR 0003).
+- **Not part of this amendment**: the seed endpoint, unpacking the seed, passing `patch` through
+  the step output and the image that carries the server (DOG-1, DOG-3c, DOG-4).
+
+## Amendment 3 (DOG-2 review, 2026-10-09): trust boundary of test code
+
+`run_tests` executes model-written code **as the same UID as the node process** (the
+`oax-workspace` server). The threat model of T4/T9 therefore treats **test code as equal to a
+compromised node, including the gate**: it can write to `/proc/<ppid>/fd/1` (into the MCP stream),
+read `/proc/<pid>/environ`, the token directory and every other file of the UID, and attach with
+`ptrace` where `kernel.yama.ptrace_scope` is 0. The process rules of Amendment 2 (scrubbed
+environment, group kill, reaping of stray processes) protect against honest mistakes, not against
+hostile test code. The patch and the draft pull request can also become an **exfiltration channel**
+(read data written into a source file). Required follow-ups, tracked as issues: run tests under a
+separate UID or in a sibling container; seccomp denying `ptrace` and `process_vm_*` and
+`ptrace_scope >= 1`; scan the patch for token patterns in the worker (DOG-3) before delivery. The
+server logs a warning at startup when `ptrace_scope` is 0. Until then the human review of the
+draft pull request is the control, and the dogfooding setup (own repository, no real secrets in
+the run node) is the only supported use. Details: [workspace tools](../workspace-tools.md).
