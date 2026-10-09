@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Demo: platform-admin visitor account, sign-in hint with all accounts, scenario tenant**: the
+  demo seed adds `owner@example.org` ("Olga Owner", fictional), a platform admin (the same
+  `users.platform_admin` mechanism as the seed's bootstrap owner) that sees all four demo tenants and
+  the tenant switcher; the other accounts are unchanged. The demo stays read-only for it: the
+  read-only hook ignores the principal, the allowlist is exported as `DEMO_ALLOWED_MUTATIONS` and a
+  test walks every mutating route as the owner. The sign-in hint box lists every demo account with a
+  one-line role description (EN/DE) and fills in the one you click. Scenario runs are created in the
+  Security tenant only, whatever tenant the caller acts in; `GET /v1/demo/scenarios` and the `202`
+  answer of `POST /v1/demo/scenarios/{id}/run` carry that `tenant`, and the dashboard names it and
+  offers a switch (or explains that the account cannot open it). `docs/demo.md` updated.
 - **UI: tenant switcher, breadcrumb and cross-tenant confirmations (UX slice U4)**: principals
   that may act in more than one tenant (platform admins, as `GET /v1/tenants` reports) get a tenant
   switcher in the top bar (phones, bottom sheet) and the sidebar header (desktop): an accessible

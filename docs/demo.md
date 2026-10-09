@@ -65,14 +65,32 @@ Acme Labs (demo)     separate organisation (acme-labs)    log-summary
 ```
 
 The three fixed scenarios run `cve-triage` and so live in `security`, where the pending approval is
-too. Sign-in users (`admin@`, `engineer@`, `operator@`, `auditor@`, `integrator@example.org`) belong
-to `security`, `contractor@` to `platform` (agent-scoped to `feature-builder`), `viewer@` to
-`acme-labs`. The seed creates sub-tenants through `TenantsService.createChild` (service layer; the
-HTTP API has no child creation yet).
+too. Sign-in users (all fictional, `example.org`, one shared fake password):
+
+| User | Role | Tenant |
+| --- | --- | --- |
+| `owner@` (Olga Owner) | platform admin: sees all four tenants and the tenant switcher | `default` (home) |
+| `admin@`, `engineer@`, `operator@`, `auditor@`, `integrator@` | the role named by the address | `security` |
+| `contractor@` | agent-scoped to `feature-builder` | `platform` |
+| `viewer@` | viewer | `acme-labs` |
+
+The seed also creates `demo-owner@example.org`, the platform admin that builds the tree. It is not
+listed on the sign-in page. `owner@` is the same mechanism (`users.platform_admin`, which
+`GET /v1/me` reports as `platformAdmin` and which allows `X-OAX-Tenant`); no separate privilege path
+exists. The console shows the tenant switcher when `GET /v1/tenants` returns two or more tenants, so
+only `owner@` sees it; the other users have one tenant. The sign-in hint box (image built with
+`VITE_OAX_DEMO=true`) lists all accounts with one line per role. The seed creates sub-tenants
+through `TenantsService.createChild` (service layer; the HTTP API has no child creation yet).
+
+**Read-only, also for the platform admin.** The demo's read-only hook runs before authentication and
+ignores the principal, so `owner@` cannot create, change or delete anything (no tenant, token, user,
+policy, agent, connection, ...). Only sign-in/out, the side-effect-free checks and the fixed
+scenarios pass (`DEMO_ALLOWED_MUTATIONS` in `apps/api/src/http/app.ts`); a test walks every
+registered mutating route as `owner@` to prove it.
 
 **Known gap (until W13-2/W13-6):** roles do not yet apply across the tree, so a user only sees the
-agents of their own node, and the console has no tenant switcher (platform operators use the
-`X-OAX-Tenant` header). Budget caps of parent nodes are stored but not enforced. The default tenant
+agents of their own node. Platform admins see every tenant through the tenant switcher (#178) or the
+`X-OAX-Tenant` header. Budget caps of parent nodes are stored but not enforced. The default tenant
 keeps its technical slug `default`.
 
 **Deterministic ids.** Tenants (except the migrated root), agents and the seeded runs get UUIDv5 ids
@@ -87,6 +105,14 @@ random ids. The seed stays idempotent: it does nothing when agents already exist
 queues a run of the seeded `cve-triage` agent. The event data comes from a fixed table
 (`apps/api/src/demo/scenarios.ts`), the worker re-derives it from that table again, and the endpoint
 accepts no free text. Both endpoints answer 404 outside demo mode.
+
+**Scenarios always run in Security (demo).** The run is created in the `security` tenant for every
+caller, whichever tenant they act in (`X-OAX-Tenant`): the agent is looked up inside that tenant
+only, so a visitor cannot pick the tenant. `GET /v1/demo/scenarios` and the `202` answer name it in
+`tenant`. The dashboard says "Runs of scenarios appear in Security (demo)"; when the account may
+act there (platform admin, or already in `security`) it offers a switch button and, after starting a
+scenario, switches to that tenant so the run opens. Accounts of other tenants (`viewer@`,
+`contractor@`) get a note that they cannot open it.
 
 Limits (all configurable, see `docs/configuration.md`): runs per visitor and window (default 3 per
 10 minutes; the visitor is a salted hash of the client IP, so set `OAX_TRUST_PROXY=true` behind an
