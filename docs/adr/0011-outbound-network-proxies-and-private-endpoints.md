@@ -354,3 +354,44 @@ What the first implementation step settled (code in `packages/core/src/network/`
 8. **Operations.** Warnings are logged at start-up; the config file must be a regular file and is
    read through one descriptor with a 1 MiB limit; the digest covers the environment proxies and
    `NO_PROXY`; allowlist CIDRs reject `/0` and any prefix that is not 1-3 digits.
+
+### Amendment 3 (W10-1-2 first slice, 2026-10-09): dispatcher factory
+
+1. **One factory.** `createOutboundDispatcher` (`packages/providers/src/outbound.ts`) is the only place
+   that builds outbound HTTP(S) connections. `plan(url, {purpose, scope, pin})` calls `resolveRoute` and
+   returns the route, a credential-free audit record and a cached undici dispatcher; `fetch(...)`
+   wraps it; `nodeAgents(...)` gives the same routing to Node `http(s)` agents (AWS SDK).
+2. **Direct.** Optional connect-time DNS pinning (`createPinnedLookup`, reused from `ssrf.ts`): the
+   resolved addresses are checked and exactly those are connected, so rebinding between check and
+   connect is closed. Tenant-origin requests are always pinned; platform requests when the caller
+   passes `pin` (the existing `blockPrivateDestinations`). `privateAllow` of the configuration extends
+   the allowed addresses.
+3. **Via proxy.** `ProxyAgent` with CONNECT for every target (undici tunnels plain `http://` too, so
+   the proxy never sees path or query). `Proxy-Authorization` comes from `authSecret` (`user:password`
+   or a full `Basic`/`Bearer` value) or, for the legacy environment and legacy `proxyUrl`, from the URL
+   userinfo; it is held in memory only and never in an audit record, error or log. A tenant-chosen
+   proxy host (legacy `proxyUrl`) is pinned at connect time. **Documented limitation:** behind a proxy
+   the proxy resolves the destination name, so the destination address cannot be pinned or checked;
+   only the resolver's pre-request checks (name, literal address, metadata veto, air-gapped allowlist)
+   apply. The audit record says `proxyResolves: true`.
+4. **Trust and client certificates.** `ca` is the system roots plus the named bundles (`system+extra`)
+   or the bundles only (`extra-only`); the proxy CA bundle is used for the connection to an https
+   proxy and, for `tlsInspection`, also for the destination. Certificate and key come from the
+   `certSecret`/`keySecret` references. There is no switch to disable verification. A missing secret
+   fails closed (`network_secret_unavailable`). Secrets are read through a synchronous `SecretReader`
+   snapshot; adapting the (asynchronous) secret store is part of the wiring step.
+5. **Hardening.** `redirect: 'error'` always; connect timeout 15 s, headers/body timeout 300 s, optional
+   per-request total timeout, response limit 64 MiB (declared length and streamed bytes; exceeding it
+   errors the stream). A `deny` is `egress_denied` carrying the resolver code in `details`.
+6. **Compatibility.** Callers not yet configured through the network file use a factory over the legacy
+   environment (`legacyNetwork`) with `RouteScope.allowPlainHttp` (platform only, ignored for tenants),
+   so in-cluster `http://` model servers keep working; strict TLS-only for the `model` purpose applies
+   as soon as a configured network is passed.
+7. **Boundary.** `packages/providers/test/outbound-boundary.test.ts` and the ESLint rules in
+   `eslint.config.js` fail on a new direct `fetch(`, `undici`, `node:http(s)`, `https-proxy-agent` or
+   `createProxyAwareFetch` outside the factory. Listed exceptions: servers, local container/cluster
+   clients and the clients still to migrate.
+8. **Not yet done:** wiring `getNetworkSettings()` and the secret store into the registry/providers,
+   migration of MCP, OIDC, ingest probe, change gate and the run-node control plane (#100), tenant
+   proxy selection (#101), Network page and test endpoint (#102), run-node upstream proxy (#103),
+   Helm and docs (#104), abuse tests (#105).

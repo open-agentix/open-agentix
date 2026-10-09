@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Outbound dispatcher factory with DNS pinning (W10-1-2 first slice, ADR 0011 amendment 3)**:
+  `createOutboundDispatcher` in `@openagentix/providers` asks `resolveRoute` for every request and builds
+  the undici dispatcher: direct with a pinned DNS lookup, or through the selected HTTP(S) proxy
+  (CONNECT, `Proxy-Authorization` from the secret reference, proxy CA bundle); trust bundles
+  (`system+extra` / `extra-only`) and client certificates come from the network configuration.
+  Deny and veto results are `egress_denied` (with the resolver code), redirects are never followed,
+  connect/header/body timeouts and a response size limit always apply, and every decision is exposed
+  to `onRoute` without secrets. `createGuardedFetch` (OpenAI-compatible, Ollama, Anthropic, stream
+  transports) and the Bedrock client now use the factory; providers, the registry and the stream
+  factory accept an optional `outbound` (dispatcher, purpose, scope). A boundary test and ESLint
+  rules fail when a new direct `fetch(`, `undici` or `node:http(s)` client appears outside the
+  factory (exceptions are listed). New `RouteScope.allowPlainHttp` (platform only) keeps in-cluster
+  `http://` model servers working until they are described by the network configuration.
 - **Outbound network configuration and route resolver (W10-1-1, ADR 0011)**:
   `OAX_NETWORK_CONFIG_FILE` (YAML/JSON) or `OAX_NETWORK_CONFIG` (inline JSON) defines named proxies,
   trust bundles, client certificates, ordered routes and the proxies tenants may select. The pure
