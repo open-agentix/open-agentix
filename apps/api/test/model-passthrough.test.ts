@@ -7,12 +7,13 @@ import {
   BASE_ENV,
   DONE,
   FakeUpstream,
+  HARNESS_ENV,
   PLATFORM_ANTHROPIC_KEY,
   PLATFORM_OPENAI_KEY,
   json,
   captureLogger,
+  harnessModelToken,
   mkRun,
-  modelToken,
   openaiChunk,
   openaiUsage,
   publicLookup,
@@ -32,7 +33,11 @@ let n: TestNode;
 beforeAll(async () => {
   log = captureLogger();
   n = await testNode(
-    { ...BASE_ENV, OAX_MODEL_PROXY_ANTHROPIC_BETAS: 'allowed-beta-1,allowed-beta-2' },
+    {
+      ...BASE_ENV,
+      ...HARNESS_ENV,
+      OAX_MODEL_PROXY_ANTHROPIC_BETAS: 'allowed-beta-1,allowed-beta-2',
+    },
     { secrets, fetchImpl: up.fetch, hostLookup: publicLookup, logger: log.logger },
   );
 });
@@ -52,8 +57,10 @@ const audit = async (runId: string, action: string) =>
 
 /** A run with a model token for the given provider/model. */
 async function setup(provider: string, model: string, extra: Parameters<typeof mkRun>[1] = {}) {
-  const r = await mkRun(n, { provider, model, ...extra });
-  return { r, mt: await modelToken(n, r) };
+  // The pass-through surfaces belong to harness steps: they only accept a harness model token.
+  const harness = provider === 'oai' ? 'opencode' : 'claude-code';
+  const r = await mkRun(n, { provider, model, harness, ...extra });
+  return { r, mt: await harnessModelToken(n, r, harness) };
 }
 
 const post = (
@@ -817,8 +824,27 @@ describe('OpenAI pass-through', () => {
 describe('simulated provider on both surfaces', () => {
   const sim =
     '      - text: "Simulated hello"\n        usage: { inputTokens: 10, outputTokens: 5 }';
-  const make = async (): Promise<{ r: MadeRun; mt: string }> =>
-    setup('simulated', 'sim-1', { simulation: sim });
+  // A harness step cannot carry a simulation, so the harness token is minted for a native step
+  // here: the pass-through code under test does not look at the step's runtime.
+  const make = async (): Promise<{ r: MadeRun; mt: string }> => {
+    const r = await mkRun(n, { provider: 'simulated', model: 'sim-1', simulation: sim });
+    const { token, claims } = issueModelToken(
+      RUN_TOKEN_SECRET,
+      {
+        runId: r.runId,
+        sid: r.sessionId,
+        nodeId: r.nodeId,
+        agentId: 'a',
+        surface: 'harness',
+        harness: 'claude-code',
+        ttlSeconds: 60,
+        notAfterMs: r.expiresAt.getTime(),
+      },
+      Date.now(),
+    );
+    expect(await n.services.runNodes.recordModelToken(r.sessionId, claims.jti)).toBe(true);
+    return { r, mt: token };
+  };
 
   it('synthesises Anthropic events and a JSON message', async () => {
     const { r, mt } = await make();
@@ -885,14 +911,9 @@ describe('tenant-controlled endpoints (SSRF)', () => {
       },
     });
     expect(created.statusCode).toBe(201);
-    const r = await mkRun(n, { provider: 'loop', model: 'm' }, asB);
-    const tok = await n.req({
-      method: 'POST',
-      url: `/v1/worker/runs/${r.runId}/model-token`,
-      token: r.runToken,
-      payload: { agentId: 'a' },
-    });
-    const res = await post(O, tok.json().token as string, openaiBody({}, 'm'));
+    const r = await mkRun(n, { provider: 'loop', model: 'm', harness: 'opencode' }, asB);
+    const mt = await harnessModelToken(n, r, 'opencode');
+    const res = await post(O, mt, openaiBody({}, 'm'));
     expect(res.statusCode).toBe(403);
     expect(res.json().error.code).toBe('egress_denied');
     expect(up.calls).toHaveLength(0);
@@ -912,6 +933,8 @@ describe('feature flag', () => {
           sid: 's',
           nodeId: 'n',
           agentId: 'a',
+          surface: 'harness',
+          harness: 'claude-code',
           ttlSeconds: 60,
           notAfterMs: Date.now() + 60_000,
         },

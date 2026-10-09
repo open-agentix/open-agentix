@@ -4,7 +4,12 @@ import { OaxError, ValidationError, type ValidationIssue } from '../errors.js';
 import { compareSemver, isSemver } from '../semver.js';
 import { checkJsonSchemaSubset, JSON_SCHEMA_LIMITS, SCHEMA_REF_PREFIX } from './json-schema.js';
 import { parseAgentDefinition, type AgentDefinition, type AgentSpec } from './parser.js';
-import { HANDOVER_EVENT_SOURCE, type ArgConstraint, type CredentialRef } from './schema.js';
+import {
+  CONFIG_PLACEHOLDER,
+  HANDOVER_EVENT_SOURCE,
+  type ArgConstraint,
+  type CredentialRef,
+} from './schema.js';
 import { parseWhen, whenStepRefs } from './when.js';
 
 /** Publish-time knowledge the core cannot have on its own (filled by the control node). */
@@ -19,6 +24,9 @@ export function credentialEnvName(c: CredentialRef): string {
   const name = c.secret.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
   return /^[0-9]/.test(name) ? `_${name}` : name;
 }
+
+/** Runners that may host a harness: the harness child never runs in the worker process. */
+const HARNESS_RUNNERS: readonly string[] = ['container', 'kubernetes-job'];
 
 const RESERVED_ENV = new Set([
   'PATH',
@@ -149,6 +157,26 @@ function checkHandovers(
       }
     }
     checkCredentials(a.credentials ?? [], `${base}.credentials`, errors);
+    if (a.runtime?.harness) {
+      const runner = a.runtime.runner ?? def.runtime.runner;
+      if (!HARNESS_RUNNERS.includes(runner))
+        errors.push({
+          path: `${base}.runtime.harness`,
+          message: `a harness step needs an isolating runner (container or kubernetes-job), not "${runner}"`,
+        });
+      if (a.instructions && CONFIG_PLACEHOLDER.test(a.instructions))
+        errors.push({
+          path: `${base}.instructions`,
+          message:
+            'the instructions of a harness step must not contain "{env:" or "{file:" (the harness would substitute them)',
+        });
+      if (a.simulation)
+        errors.push({
+          path: `${base}.simulation`,
+          message:
+            'a harness step cannot use "simulation": scripted responses never reach a harness',
+        });
+    }
     a.runtime?.egress?.forEach((host, j) => {
       if (!def.runtime.egress.includes(host))
         errors.push({

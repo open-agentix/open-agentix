@@ -28,6 +28,22 @@ export interface GateEndpoint {
   runToken: string;
 }
 
+/**
+ * Where a harness sends its model traffic when it runs through the model proxy (ADR 0009 section
+ * 10). The model token is the harness child's only credential: it opens the model endpoints of one
+ * step and nothing else (no gate, approvals, credentials or handover endpoints).
+ */
+export interface ModelProxyEndpoint {
+  /** Pass-through surface the control node chose for this harness and provider. */
+  protocol: 'anthropic' | 'openai';
+  /** Surface root, e.g. `https://control/v1/model-proxy/anthropic` (no `/v1`, no trailing slash). */
+  baseUrl: string;
+  /** `oaxmt.` model token of the step. Never logged; scrubbed from everything the harness returns. */
+  token: string;
+  /** The model the step is published with: the only one the proxy lets through. */
+  model: string;
+}
+
 /** Limits of the agent contract, mapped to harness flags AND enforced by the platform itself. */
 export interface HarnessLimits {
   /** Agent turns (model round trips). From `budget.maxSteps`. */
@@ -48,6 +64,14 @@ export interface HarnessInvocation {
   /** Prompt, passed on stdin so event data never shows up in the process list. */
   stdin?: string;
   limits?: HarnessLimits;
+  /**
+   * Set when the harness runs through the model proxy (public part only, never the token). In this
+   * mode the adapter never reads a provider key or an OAuth token and the process always has a
+   * time limit.
+   */
+  modelProxy?: Pick<ModelProxyEndpoint, 'protocol' | 'baseUrl'>;
+  /** Values to scrub from everything the harness returns (the model token in proxy mode). */
+  redact?: string[];
 }
 
 export interface HarnessToolEvent {
@@ -93,6 +117,8 @@ export interface ExternalHarness {
     prompt: string,
     gate: GateEndpoint,
     tools?: readonly ExposedTool[],
+    /** Run through the model proxy instead of a direct provider/OAuth login (ADR 0009 section 10). */
+    proxy?: ModelProxyEndpoint,
   ): HarnessInvocation;
   run(invocation: HarnessInvocation, opts: HarnessRunOptions): Promise<HarnessResult>;
 }
@@ -217,6 +243,8 @@ export interface ClaudeCodeOptions {
   anthropicUrl?: string;
   /** Platform default when the agent sets no step budget. */
   defaultMaxTurns?: number;
+  /** Time limit of a proxied run when the agent sets none (default 30 minutes). */
+  defaultTimeoutMs?: number;
 }
 
 /** Claude Code in headless mode with a generated allowlist that only contains gate tools. */
@@ -231,7 +259,13 @@ export class ClaudeCodeHarness implements ExternalHarness {
     prompt: string,
     gate: GateEndpoint,
     tools?: readonly ExposedTool[],
+    proxy?: ModelProxyEndpoint,
   ): HarnessInvocation {
+    if (proxy && proxy.protocol !== 'anthropic')
+      throw new OaxError(
+        'model_surface_mismatch',
+        `Claude Code speaks the anthropic protocol only, not "${proxy.protocol}"`,
+      );
     const prefix = `mcp__${gate.serverName}__`;
     // Prefer the exact tools the gate serves for this run; fall back to the declared grants.
     const allowed = tools
@@ -251,13 +285,14 @@ export class ClaudeCodeHarness implements ExternalHarness {
     };
     const budget = effectiveBudget(def.budget, agent.budget);
     const maxTurns = budget.maxSteps ?? this.options.defaultMaxTurns ?? 25;
-    const limits: HarnessLimits = {
+    const limits = harnessLimits(
+      budget,
       maxTurns,
-      ...(budget.maxCostUsd !== undefined ? { maxBudgetUsd: budget.maxCostUsd } : {}),
-      ...(budget.timeoutSeconds !== undefined ? { timeoutMs: budget.timeoutSeconds * 1000 } : {}),
-    };
-    const home = this.options.oauthTokenFile ? undefined : (this.options.home ?? process.env.HOME);
-    return {
+      proxy ? (this.options.defaultTimeoutMs ?? HARNESS_DEFAULT_TIMEOUT_MS) : undefined,
+    );
+    const home =
+      this.options.oauthTokenFile || proxy ? undefined : (this.options.home ?? process.env.HOME);
+    const inv: HarnessInvocation = {
       command: this.options.command ?? 'claude',
       args: [
         '-p',
@@ -297,14 +332,42 @@ export class ClaudeCodeHarness implements ExternalHarness {
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
         DISABLE_AUTOUPDATER: '1',
         ...(home ? { HOME: home } : {}),
+        ...(proxy ? claudeProxyEnv(proxy) : {}),
       },
       files: { '.openagentix/mcp.json': JSON.stringify(mcpConfig, null, 2) },
       stdin: prompt,
       limits,
+      ...(proxy
+        ? {
+            modelProxy: { protocol: proxy.protocol, baseUrl: trimSlash(proxy.baseUrl) },
+            redact: [proxy.token],
+          }
+        : {}),
     };
+    if (proxy) assertProxyInvocation(inv, proxy);
+    return inv;
   }
 
   async run(inv: HarnessInvocation, opts: HarnessRunOptions): Promise<HarnessResult> {
+    if (inv.modelProxy) {
+      // Through the proxy the egress decision belongs to the control node (ADR 0009 section 9);
+      // the CLI only reaches the proxy. No token file, no login of the host, an empty HOME.
+      const cwd = await prepareWorkdir(opts.cwd, inv.files);
+      const home = join(cwd, '.home');
+      await mkdir(home, { recursive: true, mode: 0o700 });
+      const env = { ...inv.env, HOME: home };
+      assertProxyInvocation(inv, undefined, env);
+      return runHarnessProcess(
+        inv,
+        {
+          cwd,
+          env,
+          secrets: [...gateSecrets(inv), ...(inv.redact ?? [])],
+          signal: opts.signal,
+        },
+        new ClaudeOutputParser(),
+      );
+    }
     // The CLI is a separate process that talks to the Anthropic API itself, so the in-process
     // network guard cannot see it: in air-gapped mode refuse unless that endpoint is allowlisted.
     getEgressPolicy().assert(
@@ -326,12 +389,163 @@ export class ClaudeCodeHarness implements ExternalHarness {
       await mkdir(env.HOME, { recursive: true, mode: 0o700 });
       secrets.push(token);
     }
+    assertLoaderEnv(env);
     return runHarnessProcess(
       inv,
       { cwd, env, secrets, signal: opts.signal },
       new ClaudeOutputParser(),
     );
   }
+}
+
+/** A proxied harness always has a time limit, even when the agent sets no `timeoutSeconds`. */
+export const HARNESS_DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** Maps the effective budget to harness limits; `fallbackTimeoutMs` applies without a timeout. */
+export function harnessLimits(
+  budget: { maxCostUsd?: number | undefined; timeoutSeconds?: number | undefined },
+  maxTurns: number,
+  fallbackTimeoutMs?: number,
+): HarnessLimits {
+  const timeoutMs =
+    budget.timeoutSeconds !== undefined ? budget.timeoutSeconds * 1000 : fallbackTimeoutMs;
+  return {
+    maxTurns,
+    ...(budget.maxCostUsd !== undefined ? { maxBudgetUsd: budget.maxCostUsd } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  };
+}
+
+const trimSlash = (u: string) => u.replace(/\/+$/, '');
+
+/** Bearer tokens of the generated config files (the gate's run token), for scrubbing. */
+export function gateSecrets(inv: HarnessInvocation): string[] {
+  const out: string[] = [];
+  for (const v of Object.values(inv.files)) {
+    const m = /"Authorization":\s*"Bearer ([^"]+)"/.exec(v);
+    if (m?.[1]) out.push(m[1]);
+  }
+  return out;
+}
+
+/**
+ * Claude Code against the proxy: `ANTHROPIC_BASE_URL` is the surface root (the CLI appends
+ * `/v1/messages`), the model token is the auth token. Every model variable the CLI consults is set
+ * to the step's model, because the proxy refuses any other model id (background calls with the
+ * default small/fast model would fail). Betas and non-essential traffic are off; the proxy drops
+ * betas it does not allow anyway.
+ */
+function claudeProxyEnv(proxy: ModelProxyEndpoint): Record<string, string> {
+  return {
+    ANTHROPIC_BASE_URL: trimSlash(proxy.baseUrl),
+    ANTHROPIC_AUTH_TOKEN: proxy.token,
+    ANTHROPIC_MODEL: proxy.model,
+    ANTHROPIC_SMALL_FAST_MODEL: proxy.model,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: proxy.model,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: proxy.model,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: proxy.model,
+    CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
+    DISABLE_TELEMETRY: '1',
+    DISABLE_ERROR_REPORTING: '1',
+  };
+}
+
+/** Environment variables that would hand a harness a real provider credential or another route. */
+const FORBIDDEN_PROXY_ENV = [
+  /^ANTHROPIC_API_KEY$/,
+  /^ANTHROPIC_(BEDROCK|VERTEX|FOUNDRY)_/,
+  /^CLAUDE_CODE_OAUTH_TOKEN$/,
+  /^CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY)$/,
+  /^OPENAI_/,
+  /^AZURE_/,
+  /^AWS_/,
+  /^GOOGLE_/,
+  /^OPENROUTER_/,
+  /^(HTTPS?|ALL|NO)_PROXY$/i,
+];
+/** Variables that change what code or certificates a harness process loads, or its configuration. */
+const FORBIDDEN_LOADER_ENV = [
+  /^NODE_/,
+  /^LD_/,
+  /^DYLD_/,
+  /^BUN_/,
+  /^SSL_CERT_/,
+  /^(CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|GIT_SSL_CAINFO)$/,
+  /^CLAUDE_CONFIG_DIR$/,
+  /^ANTHROPIC_CUSTOM_HEADERS$/,
+  /^OPENCODE_(CONFIG_CONTENT|CONFIG_DIR|PERMISSION)$/,
+];
+/**
+ * The complete environment of a harness behind the model proxy (allowlist, fail closed): what the
+ * invocation builders set plus what the adapters add right before the start (HOME, XDG, config
+ * path, the key and header values).
+ */
+const ALLOWED_PROXY_ENV = [
+  /^(PATH|LANG|NO_COLOR|HOME)$/,
+  /^XDG_(CONFIG|DATA|CACHE|STATE)_HOME$/,
+  /^(CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC|CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)$/,
+  /^(DISABLE_AUTOUPDATER|DISABLE_TELEMETRY|DISABLE_ERROR_REPORTING)$/,
+  /^ANTHROPIC_(BASE_URL|AUTH_TOKEN|MODEL|SMALL_FAST_MODEL)$/,
+  /^ANTHROPIC_DEFAULT_(HAIKU|SONNET|OPUS)_MODEL$/,
+  /^OPENCODE_CONFIG$/,
+  /^OPENCODE_DISABLE_[A-Z_]+$/,
+  /^OAX_OPENCODE_API_KEY$/,
+];
+
+/** Refuses loader / certificate / configuration variables in the environment of any harness. */
+export function assertLoaderEnv(env: Readonly<Record<string, string>>): void {
+  for (const key of Object.keys(env))
+    if (FORBIDDEN_LOADER_ENV.some((re) => re.test(key)))
+      throw new OaxError(
+        'harness_proxy_invariant',
+        `the environment variable ${key} must not reach a harness`,
+      );
+}
+/** Flags that would switch the permission model off. */
+const FORBIDDEN_PROXY_ARGS = [
+  '--dangerously-skip-permissions',
+  '--allow-dangerously-skip-permissions',
+  '--dangerously-bypass-approvals-and-sandbox',
+];
+
+/**
+ * Last line of defence for harnesses that run through the model proxy: a generated command line
+ * and environment that would carry a provider key, an OAuth token, another route to a model or a
+ * bypass of the permission model is refused (fail closed). Called when the invocation is built and
+ * again right before the process starts.
+ */
+export function assertProxyInvocation(
+  inv: HarnessInvocation,
+  proxy?: ModelProxyEndpoint,
+  /** The environment that is actually passed to `spawn` (default: the one of the invocation). */
+  env: Readonly<Record<string, string>> = inv.env,
+): void {
+  const refuse = (message: string): never => {
+    throw new OaxError('harness_proxy_invariant', message);
+  };
+  if (!inv.modelProxy && !proxy) refuse('the invocation is not a proxy invocation');
+  assertLoaderEnv(env);
+  for (const key of Object.keys(env)) {
+    if (FORBIDDEN_PROXY_ENV.some((re) => re.test(key)))
+      refuse(`the environment variable ${key} must not reach a harness behind the model proxy`);
+    if (!ALLOWED_PROXY_ENV.some((re) => re.test(key)) && !/^OAX_OPENCODE_HEADER_\d+$/.test(key))
+      refuse(`the environment variable ${key} is not on the allowlist of a proxied harness`);
+  }
+  if (env.ANTHROPIC_BASE_URL !== undefined && env.ANTHROPIC_BASE_URL !== inv.modelProxy?.baseUrl)
+    refuse('ANTHROPIC_BASE_URL does not point to the model proxy of the step');
+  for (const arg of inv.args)
+    if (FORBIDDEN_PROXY_ARGS.includes(arg)) refuse(`the harness flag ${arg} is not allowed`);
+  const mode = inv.args.indexOf('--permission-mode');
+  if (mode >= 0 && inv.args[mode + 1] !== 'dontAsk')
+    refuse('the permission mode of a harness must be dontAsk');
+  // Credentials: only the model token of the step may appear in the environment.
+  for (const [key, value] of Object.entries(env)) {
+    if (/(TOKEN|KEY|SECRET|PASSWORD)/i.test(key) && !value.startsWith('oaxmt.'))
+      refuse(`the environment variable ${key} is not a model token`);
+  }
+  if (proxy && inv.modelProxy?.baseUrl !== trimSlash(proxy.baseUrl))
+    refuse('the proxy base URL of the invocation does not match the model token');
+  if (inv.limits?.timeoutMs === undefined) refuse('a proxy invocation needs a time limit');
 }
 
 /** Parses `--output-format stream-json` lines of Claude Code. */

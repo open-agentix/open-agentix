@@ -281,8 +281,10 @@ Completions APIs under the same switch (`OAX_MODEL_PROXY_ENABLED`):
 
 ## Not in this version
 
-- **Harness adapters (W1-3b-7).** The pass-through surfaces below exist, but `agents[].runtime.harness`
-  and the run-node image targets that start Claude Code or OpenCode against them follow.
+- **Harness run-node images (W1-3b-8, PLAT-05).** `agents[].runtime.harness` and the adapters exist
+  ([harnesses](harnesses.md#through-the-model-proxy-run-nodes)), but the image targets that contain the
+  pinned Claude Code and OpenCode binaries do not: until they ship, a harness step fails with
+  `harness_spawn_failed` unless the operator builds such an image.
 
 ### Known follow-ups
 

@@ -408,7 +408,7 @@ function registerModelRoutes(app: ZApp, deps: Deps): void {
         const auth = await modelProxy.authenticate(bearerOf(req), req.params.id);
         // Values must never be cached by an intermediary or end up in a log.
         reply.header('cache-control', 'no-store');
-        return modelProxy.issueToken(auth, req.body.agentId);
+        return modelProxy.issueToken(auth, req.body.agentId, req.body.harness);
       },
     );
 

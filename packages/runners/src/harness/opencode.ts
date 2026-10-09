@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import {
@@ -13,14 +13,19 @@ import {
 import type { ExposedTool } from '@openagentix/mcp';
 import type { ProviderConfig } from '@openagentix/providers';
 import { buildSystemPrompt } from '../executor.js';
-import type {
-  ExternalHarness,
-  GateEndpoint,
-  HarnessInvocation,
-  HarnessLimits,
-  HarnessResult,
-  HarnessRunOptions,
-  HarnessToolEvent,
+import {
+  HARNESS_DEFAULT_TIMEOUT_MS,
+  assertLoaderEnv,
+  assertProxyInvocation,
+  gateSecrets,
+  harnessLimits,
+  type ExternalHarness,
+  type GateEndpoint,
+  type HarnessInvocation,
+  type HarnessResult,
+  type HarnessRunOptions,
+  type HarnessToolEvent,
+  type ModelProxyEndpoint,
 } from '../harness.js';
 import {
   prepareWorkdir,
@@ -79,6 +84,8 @@ export interface OpenCodeOptions {
   secrets?: SecretResolver;
   /** Platform default when the agent sets no step budget. */
   defaultMaxSteps?: number;
+  /** Time limit of a proxied run when the agent sets none (default 30 minutes). */
+  defaultTimeoutMs?: number;
 }
 
 interface ProviderPlan {
@@ -91,13 +98,38 @@ interface ProviderPlan {
   headerSecrets: Record<string, string>;
 }
 
+/** Provider id of the proxy inside the generated config (never the name of a real connection). */
+export const OPENCODE_PROXY_PROVIDER = 'oax-proxy';
+
 interface RunMeta {
   plan: ProviderPlan;
+  /** Model token of a proxied run; handed to the child as `OAX_OPENCODE_API_KEY`. */
+  proxyToken?: string;
   serverName: string;
   providerLabel: string;
 }
 
 const trimSlash = (u: string) => u.replace(/\/+$/, '');
+
+/**
+ * OpenCode substitutes `{env:NAME}` and `{file:PATH}` in the raw text of the configuration file
+ * before parsing it. Every string the author controls (instructions, model, ids) must therefore
+ * never reach the file with those sequences intact, or it could pull the model token or the run
+ * token file into the prompt. The opening brace is written as the JSON escape `\u007b`: the
+ * substitution pattern no longer matches the text, JSON.parse still yields the literal characters.
+ */
+const SUBSTITUTION = /\{(?=(?:env|file):)/gi;
+
+export function serializeOpenCodeConfig(
+  config: unknown,
+  placeholders: Record<string, string>,
+): string {
+  let text = JSON.stringify(config, null, 2).replace(SUBSTITUTION, '\\u007b');
+  // Placeholders are inserted last, by a per-build random marker the author cannot know.
+  for (const [marker, placeholder] of Object.entries(placeholders))
+    text = text.split(JSON.stringify(marker)).join(JSON.stringify(placeholder));
+  return text;
+}
 
 function planProvider(cfg: ProviderConfig, model: string): ProviderPlan {
   const models = { [model]: {} };
@@ -154,6 +186,25 @@ function planProvider(cfg: ProviderConfig, model: string): ProviderPlan {
   }
 }
 
+/**
+ * The provider entry for a run through the proxy: one provider that speaks the surface's protocol,
+ * `baseURL` = surface root + `/v1`, the model token as API key (via `{env:...}`) and no headers.
+ */
+function planProxy(proxy: ModelProxyEndpoint): ProviderPlan {
+  const baseURL = `${trimSlash(proxy.baseUrl)}/v1`;
+  return {
+    entry: {
+      npm: proxy.protocol === 'anthropic' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible',
+      name: OPENCODE_PROXY_PROVIDER,
+      options: { baseURL },
+      models: { [proxy.model]: {} },
+    },
+    endpoint: baseURL,
+    apiKeySecret: undefined,
+    headerSecrets: {},
+  };
+}
+
 /** OpenCode in non-interactive mode with a deny-by-default config that only allows gate tools. */
 export class OpenCodeHarness implements ExternalHarness {
   readonly name = 'opencode' as const;
@@ -167,21 +218,34 @@ export class OpenCodeHarness implements ExternalHarness {
     prompt: string,
     gate: GateEndpoint,
     tools?: readonly ExposedTool[],
+    proxy?: ModelProxyEndpoint,
   ): HarnessInvocation {
-    const cfg = this.options.providers?.find((p) => p.name === agent.provider);
-    if (!cfg)
-      throw new OaxError(
-        'harness_provider_unknown',
-        `no model connection "${agent.provider}" is configured for the OpenCode harness`,
-      );
-    const plan = planProvider(cfg, agent.model);
+    let plan: ProviderPlan;
+    if (proxy) {
+      // Through the proxy there is no connection on this side: the control node holds the key.
+      if (proxy.model !== agent.model)
+        throw new OaxError(
+          'harness_proxy_invariant',
+          'the model of the model token does not match the model of the step',
+        );
+      plan = planProxy(proxy);
+    } else {
+      const cfg = this.options.providers?.find((p) => p.name === agent.provider);
+      if (!cfg)
+        throw new OaxError(
+          'harness_provider_unknown',
+          `no model connection "${agent.provider}" is configured for the OpenCode harness`,
+        );
+      plan = planProvider(cfg, agent.model);
+    }
+    const providerId = proxy ? OPENCODE_PROXY_PROVIDER : agent.provider;
     const budget = effectiveBudget(def.budget, agent.budget);
     const maxTurns = budget.maxSteps ?? this.options.defaultMaxSteps ?? 25;
-    const limits: HarnessLimits = {
+    const limits = harnessLimits(
+      budget,
       maxTurns,
-      ...(budget.maxCostUsd !== undefined ? { maxBudgetUsd: budget.maxCostUsd } : {}),
-      ...(budget.timeoutSeconds !== undefined ? { timeoutMs: budget.timeoutSeconds * 1000 } : {}),
-    };
+      proxy ? (this.options.defaultTimeoutMs ?? HARNESS_DEFAULT_TIMEOUT_MS) : undefined,
+    );
 
     // OpenCode names MCP tools `<server>_<tool>`. Deny by default, allow exactly the served tools.
     const prefix = `${gate.serverName}_`;
@@ -195,20 +259,27 @@ export class OpenCodeHarness implements ExternalHarness {
       ...Object.fromEntries(OPENCODE_BUILTIN_TOOLS.map((b) => [b, false])),
       ...Object.fromEntries(allowed.map((n) => [n, true])),
     };
+    const nonce = randomUUID();
+    const placeholders: Record<string, string> = {};
+    const placeholder = (env: string): string => {
+      const marker = `oax-placeholder-${nonce}-${env}`;
+      placeholders[marker] = `{env:${env}}`;
+      return marker;
+    };
     const headers = Object.fromEntries(
-      Object.keys(plan.headerSecrets).map((h, i) => [h, `{env:${HEADER_ENV_PREFIX}${i}}`]),
+      Object.keys(plan.headerSecrets).map((h, i) => [h, placeholder(`${HEADER_ENV_PREFIX}${i}`)]),
     );
     const entry = structuredClone(plan.entry) as { options: Record<string, unknown> };
     if (Object.keys(headers).length)
       entry.options.headers = { ...(entry.options.headers as object), ...headers };
-    if (plan.apiKeySecret) entry.options.apiKey = `{env:${API_KEY_ENV}}`;
+    if (plan.apiKeySecret || proxy) entry.options.apiKey = placeholder(API_KEY_ENV);
 
     const config = {
       $schema: 'https://opencode.ai/config.json',
-      model: `${agent.provider}/${agent.model}`,
+      model: `${providerId}/${agent.model}`,
       default_agent: OPENCODE_AGENT,
-      enabled_providers: [agent.provider],
-      provider: { [agent.provider]: entry },
+      enabled_providers: [providerId],
+      provider: { [providerId]: entry },
       // The loopback policy gate is the ONLY tool source.
       mcp: {
         [gate.serverName]: {
@@ -245,7 +316,7 @@ export class OpenCodeHarness implements ExternalHarness {
         '--format',
         'json',
         '--model',
-        `${agent.provider}/${agent.model}`,
+        `${providerId}/${agent.model}`,
         '--agent',
         OPENCODE_AGENT,
       ],
@@ -261,11 +332,23 @@ export class OpenCodeHarness implements ExternalHarness {
         OPENCODE_DISABLE_CLAUDE_CODE: 'true',
         OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
       },
-      files: { [CONFIG_FILE]: JSON.stringify(config, null, 2) },
+      files: { [CONFIG_FILE]: serializeOpenCodeConfig(config, placeholders) },
       stdin: prompt,
       limits,
+      ...(proxy
+        ? {
+            modelProxy: { protocol: proxy.protocol, baseUrl: trimSlash(proxy.baseUrl) },
+            redact: [proxy.token],
+          }
+        : {}),
     };
-    this.meta.set(inv, { plan, serverName: gate.serverName, providerLabel: agent.provider });
+    this.meta.set(inv, {
+      plan,
+      ...(proxy ? { proxyToken: proxy.token } : {}),
+      serverName: gate.serverName,
+      providerLabel: providerId,
+    });
+    if (proxy) assertProxyInvocation(inv, proxy);
     return inv;
   }
 
@@ -273,8 +356,10 @@ export class OpenCodeHarness implements ExternalHarness {
     const meta = this.meta.get(inv);
     if (!meta)
       throw new OaxError('harness_invalid', 'the invocation was not built by this adapter');
-    // The CLI talks to the model endpoint itself, invisible to the in-process network guard.
-    getEgressPolicy().assert(meta.plan.endpoint, 'OpenCode harness (model endpoint)');
+    // The CLI talks to the model endpoint itself, invisible to the in-process network guard. Through
+    // the proxy the endpoint is the control node, whose egress rules decide (ADR 0009 section 9).
+    if (meta.proxyToken) assertProxyInvocation(inv);
+    else getEgressPolicy().assert(meta.plan.endpoint, 'OpenCode harness (model endpoint)');
     await this.verifyBinary(inv.command);
 
     const cwd = await prepareWorkdir(opts.cwd, inv.files);
@@ -289,11 +374,8 @@ export class OpenCodeHarness implements ExternalHarness {
       XDG_STATE_HOME: join(home, 'state'),
       OPENCODE_CONFIG: join(cwd, CONFIG_FILE),
     };
-    const secrets: string[] = [];
-    for (const v of Object.values(inv.files)) {
-      const m = /"Authorization":\s*"Bearer ([^"]+)"/.exec(v);
-      if (m?.[1]) secrets.push(m[1]);
-    }
+    const secrets: string[] = [...gateSecrets(inv), ...(inv.redact ?? [])];
+    if (meta.proxyToken) env[API_KEY_ENV] = meta.proxyToken;
     // BYOK: only the references travel in the platform; the values live in this child's env.
     const resolver = this.options.secrets ?? new DefaultSecretResolver();
     if (meta.plan.apiKeySecret) {
@@ -308,6 +390,9 @@ export class OpenCodeHarness implements ExternalHarness {
       env[`${HEADER_ENV_PREFIX}${i++}`] = value;
       if (value) secrets.push(value);
     }
+    // The environment that goes to spawn, with everything the adapter added.
+    if (meta.proxyToken) assertProxyInvocation(inv, undefined, env);
+    else assertLoaderEnv(env);
     return runHarnessProcess(
       inv,
       { cwd, env, secrets, signal: opts.signal },

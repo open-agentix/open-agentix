@@ -1,5 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
+import { HARNESS_KINDS } from './agents/schema.js';
 import { OaxError } from './errors.js';
 
 /**
@@ -40,6 +41,14 @@ export const ModelTokenClaimsSchema = z.strictObject({
   sid: Id,
   nodeId: Id,
   agentId: Id,
+  /**
+   * Which endpoint family the token opens: `native` (the built-in step loop, `POST .../model`) or
+   * `harness` (the pass-through surfaces of an external harness). Tokens without the claim are
+   * native. The endpoints refuse the other surface (ADR 0009 section 10).
+   */
+  surface: z.enum(['native', 'harness']).default('native'),
+  /** The harness a `harness` token was issued for. */
+  harness: z.enum(HARNESS_KINDS).optional(),
   jti: Id,
   iat: z.number().int().nonnegative(),
   exp: z.number().int().positive(),
@@ -51,6 +60,9 @@ export interface IssueModelTokenInput {
   sid: string;
   nodeId: string;
   agentId: string;
+  /** Defaults to `native`; `harness` needs `harness`. */
+  surface?: 'native' | 'harness';
+  harness?: (typeof HARNESS_KINDS)[number];
   /** Token lifetime in seconds (the caller passes at most `OAX_RUN_TOKEN_TTL_SECONDS`). */
   ttlSeconds: number;
   /** Hard upper bound for `exp` in unix milliseconds: the session expiry. */
@@ -99,6 +111,8 @@ export function issueModelToken(
   if (input.notAfterMs !== undefined) exp = Math.min(exp, Math.floor(input.notAfterMs / 1000));
   if (exp <= iat)
     throw new OaxError('model_token_ttl_invalid', 'model token would be expired when issued');
+  if ((input.surface === 'harness') !== (input.harness !== undefined))
+    throw new OaxError('model_token_invalid', 'a harness token names its harness, others do not');
   const claims = ModelTokenClaimsSchema.parse({
     v: 1,
     aud: MODEL_TOKEN_AUDIENCE,
@@ -106,6 +120,8 @@ export function issueModelToken(
     sid: input.sid,
     nodeId: input.nodeId,
     agentId: input.agentId,
+    surface: input.surface ?? 'native',
+    ...(input.harness ? { harness: input.harness } : {}),
     jti: input.jti ?? randomUUID(),
     iat,
     exp,

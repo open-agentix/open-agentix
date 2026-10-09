@@ -25,6 +25,7 @@ runtime) is described on the website's agents.md reference. This page covers the
 | `tools[].profile` | `agents[].tools[]` | Grant of a named profile of a connection (`{ server: jira, profile: read }`), with optional `approval`, `maxCallsPerRun`, `classification` | Duplicates; the connection and the profile must exist (unknown names are refused) |
 | `credentials` | `agents[]` | `[{ secret: <ref>, env?: NAME }]`, references only (max. 16) | Reference format, duplicates, reserved env names (`PATH`, `OAX_*`, `LD_*`, ...) |
 | `runtime.runner`, `runtime.egress` | `agents[]` | Runner override for this step; egress can only narrow the pipeline's `runtime.egress` | Egress subset |
+| `runtime.harness` | `agents[]` | `claude-code` or `opencode`: the step runs in a run node through that harness, which talks to the model proxy with the step's model token ([harnesses](harnesses.md#through-the-model-proxy-run-nodes)) | Isolating runner (`container`, `kubernetes-job`), no `simulation`; enabled by the operator at publish |
 
 ## JSON Schema subset
 

@@ -253,6 +253,7 @@ limit are per replica.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `OAX_MODEL_PROXY_ENABLED` | `false` | Feature flag of the model proxy (native endpoint and model token). |
+| `OAX_HARNESSES_ENABLED` | empty | Comma-separated harnesses a step may name in `runtime.harness` (`claude-code`, `opencode`). Requires `OAX_MODEL_PROXY_ENABLED=true`. Run nodes find the binaries through `OAX_CLAUDE_BIN`, `OAX_OPENCODE_BIN` and `OAX_OPENCODE_SHA256` (set by the node image, never downloaded). |
 | `OAX_MODEL_PROXY_MAX_BODY_BYTES` | `8388608` | Largest request body (8 MiB); larger bodies get `413 model_request_too_large`. |
 | `OAX_MODEL_PROXY_RESERVATION` | `upper-bound` | `upper-bound` reserves the proven worst-case input (UTF-8 bytes plus overheads); `estimate` reserves a third of it (fewer refusals near a limit, no guarantee). |
 | `OAX_MODEL_PROXY_MIN_OUTPUT_TOKENS` | `256` | A call whose tightest budget leaves fewer output tokens is refused with that budget's code instead of being shrunk. |
