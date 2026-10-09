@@ -33,6 +33,8 @@ export interface StreamPlan {
   buildBody(req: ChatRequest): Record<string, unknown>;
   /** Resolved secret values of the provider, for scrubbing error text (never logged). */
   secrets: string[];
+  /** OpenAI surface: the name of the output bound parameter this provider understands. */
+  maxTokensParam?: 'max_tokens' | 'max_completion_tokens' | undefined;
 }
 
 const ANTHROPIC_ON_BEDROCK = /(^|\.)anthropic\./;
@@ -84,6 +86,7 @@ export async function createStreamPlan(
       }),
       buildBody: (req) => toOpenAIBody(req, o.maxTokensParam),
       secrets,
+      maxTokensParam: o.maxTokensParam,
     };
   };
   switch (cfg.kind) {
