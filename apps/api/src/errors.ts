@@ -22,6 +22,7 @@ const STATUS: Record<string, number> = {
   version_immutable: 409,
   version_not_increasing: 409,
   invalid_state: 409,
+  agent_disabled: 409,
   egress_denied: 422,
   tenant_depth_exceeded: 422,
   tenant_node_limit_exceeded: 422,

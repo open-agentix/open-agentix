@@ -12,15 +12,19 @@ import {
   type Principal,
   type ValidationResult,
 } from '@openagentix/core';
-import { and, desc, eq, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
+import type { Db } from '../db/client.js';
 import { agentVersions, agents, teams } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import { decodeTimeCursor, encodeTimeCursor, page } from '../pagination.js';
 import { statusFilter, textFilter, useCaseFilter, type AgentStatus } from './agent-filters.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
+
+/** Longest reason accepted when an agent is disabled or enabled. */
+export const MAX_DISABLE_REASON_LENGTH = 500;
 
 export type AgentRow = typeof agents.$inferSelect;
 export type AgentVersionRow = typeof agentVersions.$inferSelect;
@@ -364,6 +368,102 @@ export class AgentsService {
       );
   }
 
+  /**
+   * Switches an agent off (UX slice A7). Needs `agents:publish` on the agent, like publishing.
+   * A disabled agent accepts no new runs (`409 agent_disabled`, see `RunsService.enqueue` and the
+   * worker's claim query); runs that already started finish unless someone cancels them, and its
+   * published versions stay immutable and readable. Idempotent: disabling a disabled agent changes
+   * nothing (the first actor, time and reason stay) and writes no second audit entry.
+   */
+  async disable(
+    principal: Principal,
+    id: string,
+    reason?: string | null,
+  ): Promise<{ agent: AgentRow; changed: boolean }> {
+    const agent = await this.get(id, principal);
+    await this.assertAccess(principal, agent, 'agents:publish');
+    const text = reason?.trim() || null;
+    if (text && text.length > MAX_DISABLE_REASON_LENGTH)
+      throw new HttpError(400, 'validation_failed', 'reason must not exceed 500 characters');
+    return this.ctx.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(agents)
+        .set({ disabledAt: this.ctx.now(), disabledBy: principal.userId, disabledReason: text })
+        .where(
+          and(
+            eq(agents.id, id),
+            eq(agents.tenantId, principal.tenantId),
+            isNull(agents.disabledAt),
+          ),
+        )
+        .returning();
+      if (!row)
+        return { agent: await this.reload(tx as unknown as Db, id, principal), changed: false };
+      await this.audit.append(
+        {
+          actor: principal.userId,
+          tenantId: principal.tenantId,
+          action: 'agent.disabled',
+          target: id,
+          payload: { reason: text },
+        },
+        tx as unknown as Db,
+      );
+      return { agent: row, changed: true };
+    });
+  }
+
+  /** Switches a disabled agent back on; runs, triggers and the scheduler pick it up again. */
+  async enable(
+    principal: Principal,
+    id: string,
+    reason?: string | null,
+  ): Promise<{ agent: AgentRow; changed: boolean }> {
+    const agent = await this.get(id, principal);
+    await this.assertAccess(principal, agent, 'agents:publish');
+    const text = reason?.trim() || null;
+    if (text && text.length > MAX_DISABLE_REASON_LENGTH)
+      throw new HttpError(400, 'validation_failed', 'reason must not exceed 500 characters');
+    return this.ctx.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(agents)
+        .set({ disabledAt: null, disabledBy: null, disabledReason: null })
+        .where(
+          and(
+            eq(agents.id, id),
+            eq(agents.tenantId, principal.tenantId),
+            isNotNull(agents.disabledAt),
+          ),
+        )
+        .returning();
+      if (!row)
+        return { agent: await this.reload(tx as unknown as Db, id, principal), changed: false };
+      await this.audit.append(
+        {
+          actor: principal.userId,
+          tenantId: principal.tenantId,
+          action: 'agent.enabled',
+          target: id,
+          payload: {
+            reason: text,
+            wasDisabledAt: agent.disabledAt?.toISOString() ?? null,
+          },
+        },
+        tx as unknown as Db,
+      );
+      return { agent: row, changed: true };
+    });
+  }
+
+  private async reload(db: Db, id: string, principal: Principal): Promise<AgentRow> {
+    const [row] = await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, id), eq(agents.tenantId, principal.tenantId)));
+    if (!row) throw notFound('agent');
+    return row;
+  }
+
   /** Publishes the current draft as an immutable version (idempotent for identical content). */
   async publish(
     principal: Principal,
@@ -510,14 +610,14 @@ export class AgentsService {
     });
   }
 
-  /** Published agents with cron triggers (used by the scheduler). */
+  /** Enabled, published agents with cron triggers (used by the scheduler; disabled agents have none). */
   async cronAgents(): Promise<
     { agentId: string; versionId: string; schedule: string; timezone?: string }[]
   > {
     const rows = await this.ctx.db
       .select({ agentId: agents.id, versionId: agents.latestVersionId })
       .from(agents)
-      .where(sql`${agents.latestVersionId} is not null`);
+      .where(and(isNotNull(agents.latestVersionId), isNull(agents.disabledAt)));
     const out: { agentId: string; versionId: string; schedule: string; timezone?: string }[] = [];
     for (const r of rows) {
       const { definition } = await this.definitionOf(r.versionId!);

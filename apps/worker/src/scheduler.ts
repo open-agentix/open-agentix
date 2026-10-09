@@ -88,12 +88,18 @@ export class CronScheduler {
       const gated = gate ? { ...event, data: { ...(event.data as object), change: gate } } : event;
       return (await this.services.ingest.ingestEvent(source, gated, `cron:${source.name}`)).runId;
     }
-    const run = await this.services.runs.enqueue({
-      agentId,
-      event,
-      triggeredBy: `cron:${schedule}`,
-    });
-    return run.id;
+    try {
+      const run = await this.services.runs.enqueue({
+        agentId,
+        event,
+        triggeredBy: `cron:${schedule}`,
+      });
+      return run.id;
+    } catch (e) {
+      // Disabled between the reload and the tick: refused and audited by enqueue, not an error.
+      if ((e as { code?: unknown }).code === 'agent_disabled') return null;
+      throw e;
+    }
   }
 
   start(reloadMs = 60_000): void {

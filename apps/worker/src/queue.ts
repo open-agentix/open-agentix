@@ -11,6 +11,11 @@ export interface ClaimedRun {
 /**
  * Postgres work queue on the `runs` table: `FOR UPDATE SKIP LOCKED` lets any number of worker
  * replicas claim runs concurrently without double execution; leases recover crashed workers.
+ *
+ * Runs of a disabled agent are never claimed (they stay queued until the agent is enabled again).
+ * The agent row is locked `FOR SHARE` for the claim, so `disable` (an update of that row) either
+ * committed before the claim looks, or waits until the claim committed: no run starts after
+ * `disable` has returned. Runs that already run are not touched.
  */
 export class RunQueue {
   constructor(
@@ -32,11 +37,14 @@ export class RunQueue {
         started_at = coalesce(started_at, ${now}),
         attempts = attempts + 1
       where id in (
-        select id from runs
-        where status = 'queued' and available_at <= ${now}
-        order by available_at, created_at
+        select r.id from runs r
+        join agents a on a.id = r.agent_id
+        where r.status = 'queued' and r.available_at <= ${now}
+          and a.disabled_at is null
+        order by r.available_at, r.created_at
         limit ${max}
-        for update skip locked
+        for update of r skip locked
+        for share of a
       )
       returning id, attempts`)) as unknown as { rows: { id: string; attempts: number }[] };
     return res.rows.map((r) => ({ id: r.id, attempts: Number(r.attempts) }));

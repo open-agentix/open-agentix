@@ -25,6 +25,9 @@ export const agentDto = ({ agent: a, ...context }: AgentSummary) => ({
   lastRun: context.lastRun && { ...context.lastRun, createdAt: iso(context.lastRun.createdAt) },
   monthSpendUsd: context.monthSpendUsd,
   budget: context.budget,
+  disabledAt: context.disabled ? iso(context.disabled.at) : null,
+  disabledBy: context.disabled?.by ?? null,
+  disabledReason: context.disabled?.reason ?? null,
 });
 
 export const agentDetailDto = (s: AgentSummary) => ({
