@@ -35,6 +35,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Model proxy pass-through surfaces (W1-3b-6)**: `POST /v1/model-proxy/anthropic/v1/messages`,
+  `POST /v1/model-proxy/openai/v1/chat/completions` and the two `GET .../v1/models` routes speak the
+  Anthropic and OpenAI protocols for harnesses, with JSON and Server-Sent Events. They open with the
+  model token only (`x-api-key` or `Authorization: Bearer`), run through the same admission,
+  reservation, settlement, cap, SSRF-pinning and revocation chain as the native route, and stop a
+  stream mid-way (output over the reserved bound, revoked session, cancelled run, deadline, client
+  disconnect) with the protocol's own error event. Requests are parsed with a strict allowlist and
+  the upstream body is rebuilt; every relayed event is rebuilt from allowlisted fields; client
+  credentials and headers are never forwarded (new `OAX_MODEL_PROXY_ANTHROPIC_BETAS` allowlist for
+  `anthropic-beta`). `count_tokens` and `GET models/{id}` are not served yet.
 - **Run node and executor on the model proxy (W1-3b-4)**: `oax run-node` sends every model call of
   its step through the control node's model proxy (`ModelProxyProvider`, a metered provider, the
   simulated provider included; `ModelProxyUnavailableProvider` is gone), the executor records no

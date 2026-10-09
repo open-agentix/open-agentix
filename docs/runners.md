@@ -245,11 +245,44 @@ never logged. Audit: `model_token.issued`, `model.denied` (once a minute per ses
 `model.aborted`, `model.overrun`, `model.usage_floor`, `model.reservation_expired` and the
 `step.model_call` entry of every settlement (`via: proxy`). Metrics: `oax_model_proxy_*`.
 
+### Pass-through surfaces (W1-3b-6)
+
+For harnesses that speak a vendor protocol the proxy serves the Anthropic Messages and OpenAI Chat
+Completions APIs under the same switch (`OAX_MODEL_PROXY_ENABLED`):
+
+| Route | Purpose |
+| --- | --- |
+| `POST /v1/model-proxy/anthropic/v1/messages` | Anthropic Messages, JSON or SSE (`stream: true`) |
+| `POST /v1/model-proxy/openai/v1/chat/completions` | OpenAI Chat Completions, JSON or SSE |
+| `GET /v1/model-proxy/anthropic/v1/models`, `GET /v1/model-proxy/openai/v1/models` | list exactly the model of the step |
+
+- **Credential**: the **model token** only, as `x-api-key` or `Authorization: Bearer` (two different
+  values are refused as ambiguous). A run token never opens these routes. The path has no run id;
+  the run, session and step come from the token. Neither header is ever forwarded upstream: the
+  upstream request carries the provider key resolved on the control node and nothing else from the
+  client except the `anthropic-beta` values listed in `OAX_MODEL_PROXY_ANTHROPIC_BETAS`.
+- **Same admission as the native route**: token and session binding, model allowlist (the request's
+  `model` must be the step's published model), classification, air-gap, SSRF checks on tenant
+  endpoints, worst-case reservation, settlement from the measured usage, rate and concurrency limits.
+  The step's provider must speak the surface (`400 model_surface_mismatch`; no translation between
+  protocols; `simulated` works on both).
+- **Strict request allowlist**: unknown keys and server tools, `mcp_servers`, URL or file sources,
+  `n > 1`, `logprobs`, audio and the like are `400 model_parameter_refused`; the upstream body is
+  rebuilt from the validated fields (`metadata` and `user` are dropped, `max_tokens` is clamped to the
+  reservation, never raised).
+- **Streams** are relayed event by event, each event **rebuilt from allowlisted fields** (unknown
+  keys and event types are dropped). The hard stop of the native stream applies: output beyond the
+  reserved bound plus 10 %, a revoked session, a cancelled run, the call deadline or a client
+  disconnect ends the upstream request and the stream, and the call is settled from what was
+  streamed. A mid-stream stop is sent as `event: error` (Anthropic) or a final `data: {"error":...}`
+  chunk without `[DONE]` (OpenAI). Errors in the protocol's own envelope carry the platform code in
+  `error.code`.
+- Not served yet: `POST .../messages/count_tokens` and `GET .../models/{id}`.
+
 ## Not in this version
 
-- **Harnesses and the pass-through surfaces (W1-3b-6, W1-3b-7).** A run node reaches models through
-  the native proxy endpoint only; the Anthropic and OpenAI protocol surfaces for Claude Code and
-  OpenCode inside a node follow.
+- **Harness adapters (W1-3b-7).** The pass-through surfaces below exist, but `agents[].runtime.harness`
+  and the run-node image targets that start Claude Code or OpenCode against them follow.
 
 ### Known follow-ups
 
