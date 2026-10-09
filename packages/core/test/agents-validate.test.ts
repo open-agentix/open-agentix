@@ -147,3 +147,42 @@ describe('checkPublish', () => {
     }
   });
 });
+
+describe('runtime.harness (ADR 0009 section 10)', () => {
+  const src = (runtime: string, pipelineRuntime = '', extra = '') =>
+    withFrontMatter(
+      `${MINIMAL_FM}\n    runtime: ${runtime}\n${extra}`.replace(
+        'owner: team-a',
+        `owner: team-a\n${pipelineRuntime}`,
+      ),
+    );
+
+  it('accepts a harness on an isolating runner, set on the step or inherited from the pipeline', () => {
+    expect(errorsOf(src('{ runner: container, harness: claude-code }'))).toEqual([]);
+    expect(errorsOf(src('{ runner: kubernetes-job, harness: opencode }'))).toEqual([]);
+    expect(
+      errorsOf(src('{ harness: opencode }', 'runtime:\n  runner: container\n  egress: []')),
+    ).toEqual([]);
+  });
+
+  it('refuses a harness that would run inside the worker process or the CLI', () => {
+    for (const runner of ['in-process', 'local']) {
+      expect(errorsOf(src(`{ runner: ${runner}, harness: claude-code }`)).join()).toMatch(
+        /needs an isolating runner.*"(in-process|local)"/,
+      );
+    }
+    expect(errorsOf(src('{ harness: claude-code }')).join()).toMatch(/isolating runner/);
+  });
+
+  it('refuses scripted simulations and unknown or stubbed harnesses', () => {
+    const sim = src(
+      '{ runner: container, harness: claude-code }',
+      '',
+      '    simulation:\n      responses:\n        - text: hi\n',
+    );
+    expect(errorsOf(sim).join()).toMatch(/cannot use "simulation"/);
+    for (const h of ['hermes', 'openclaw', 'unknown']) {
+      expect(validateAgentSource(src(`{ runner: container, harness: ${h} }`)).valid).toBe(false);
+    }
+  });
+});

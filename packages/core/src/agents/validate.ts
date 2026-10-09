@@ -20,6 +20,9 @@ export function credentialEnvName(c: CredentialRef): string {
   return /^[0-9]/.test(name) ? `_${name}` : name;
 }
 
+/** Runners that may host a harness: the harness child never runs in the worker process. */
+const HARNESS_RUNNERS: readonly string[] = ['container', 'kubernetes-job'];
+
 const RESERVED_ENV = new Set([
   'PATH',
   'HOME',
@@ -149,6 +152,20 @@ function checkHandovers(
       }
     }
     checkCredentials(a.credentials ?? [], `${base}.credentials`, errors);
+    if (a.runtime?.harness) {
+      const runner = a.runtime.runner ?? def.runtime.runner;
+      if (!HARNESS_RUNNERS.includes(runner))
+        errors.push({
+          path: `${base}.runtime.harness`,
+          message: `a harness step needs an isolating runner (container or kubernetes-job), not "${runner}"`,
+        });
+      if (a.simulation)
+        errors.push({
+          path: `${base}.simulation`,
+          message:
+            'a harness step cannot use "simulation": scripted responses never reach a harness',
+        });
+    }
     a.runtime?.egress?.forEach((host, j) => {
       if (!def.runtime.egress.includes(host))
         errors.push({

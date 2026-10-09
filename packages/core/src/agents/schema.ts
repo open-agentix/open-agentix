@@ -179,9 +179,21 @@ export const RUNNER_KINDS = [
 ] as const;
 export type RunnerKind = (typeof RUNNER_KINDS)[number];
 
+/**
+ * External agent harnesses that can execute a step through the model proxy (ADR 0009 section 10).
+ * Hermes and OpenClaw are documented stubs and therefore not selectable.
+ */
+export const HARNESS_KINDS = ['claude-code', 'opencode'] as const;
+export type HarnessKind = (typeof HARNESS_KINDS)[number];
+
 /** Per-step runtime override: another runner, or a narrower egress list (ADR 0008). */
 export const StepRuntimeSchema = z.strictObject({
   runner: z.enum(RUNNER_KINDS).optional(),
+  /**
+   * Run the step through an external harness that talks to the model proxy (ADR 0009 section 10).
+   * Needs an isolating runner; the harness gets the policy gate as its only tool source.
+   */
+  harness: z.enum(HARNESS_KINDS).optional(),
   /** Must be a subset of the pipeline's `runtime.egress`; a step can only narrow it. */
   egress: z.array(z.string().min(1)).optional(),
 });
