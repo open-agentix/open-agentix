@@ -1,6 +1,6 @@
 import type { AgentFilters } from '../../api/queries';
 
-export const AGENT_STATUSES = ['draft', 'published', 'changed'] as const;
+export const AGENT_STATUSES = ['draft', 'published', 'changed', 'disabled'] as const;
 export const AGENT_GROUPS = ['useCase', 'ownerTeam'] as const;
 export type AgentGroupBy = (typeof AGENT_GROUPS)[number];
 

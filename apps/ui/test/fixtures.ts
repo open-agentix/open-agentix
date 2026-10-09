@@ -146,6 +146,9 @@ export const agent: Agent = {
   lastRun: { id: ids.run, status: 'failed', createdAt: iso(-3_600_000) },
   monthSpendUsd: 41,
   budget: { limitUsd: 50, spentUsd: 41, percentUsed: 82, source: 'team', sourceName: 'Security' },
+  disabledAt: null,
+  disabledBy: null,
+  disabledReason: null,
   draftSource,
 };
 
