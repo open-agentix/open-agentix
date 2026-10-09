@@ -2,7 +2,7 @@
 
 - Status: Proposed (concept for plan items NEW-01 and, in section 10, NEW-02; implementation
   follows as NEW-03 and NEW-04)
-- Date: 2026-10-09
+- Date: 2026-10-09 (amended 2026-10-09 with the owner decisions, section 12)
 - Builds on: [demo profile](demo.md), [demo repo agent](demo-repo-agent.md) (W11-1),
   [MCP connections and tool profiles](mcp.md), [budgets](budgets.md), [harnesses](harnesses.md),
   [ADR 0009](adr/0009-model-proxy.md) (model proxy, reservations),
@@ -15,8 +15,9 @@
 
 The demo becomes more than a demo: a **real installation with a read-only view for visitors**.
 Six agents do real work for the openagentix project itself, each in its **own tenant**, and every
-visitor can watch what they do, what they cost, which tools they may use and what the audit chain
-recorded. Visitors never start, change or approve anything.
+visitor can watch what they do, what they cost, which tools they may use and which policy
+decisions were made in their runs. Visitors never start, change or approve anything. The audit log
+itself is reserved for maintainers and for time-limited `pentest` reviewers (section 5).
 
 | Showcase agent (tenant) | Input -> output | Safety level |
 | --- | --- | --- |
@@ -32,9 +33,9 @@ part of the same tree so that its runs are visible next to the others.
 
 Principles, all of them already platform features or listed as gaps in section 3:
 
-1. **Read-only for visitors.** A guest can read runs, costs, budgets, agent definitions, tool
-   profiles, policies and the audit chain, and can verify the chain. Every other write is refused
-   by the role and, independently, by a read-only guard in front of the API (section 5).
+1. **Read-only for visitors.** An anonymous visitor acts as `viewer`: runs, costs, budgets and
+   agent definitions, **without** `audit:read`. Every write is refused by the role and,
+   independently, by a read-only guard in front of the API (section 5).
 2. **Real agents run under operator identities** (one service principal per tenant), never under
    a visitor's.
 3. **Pull request instead of merge.** No agent can merge, push to `main`, push tags, change CI
@@ -52,7 +53,7 @@ Principles, all of them already platform features or listed as gaps in section 3
 | --- | --- | --- |
 | Data | fictional, seeded, reset every night | real runs on the project's public repositories, kept for the retention window |
 | Models | simulated provider; optional live Claude Code in fixed scenarios | real model providers through the model proxy, plus a local model for the self-development agent |
-| Visitors | sign in with shared fake credentials; may start fixed scenarios | anonymous read-only guest session; cannot start anything (one exception, section 8.6) |
+| Visitors | sign in with shared fake credentials; may start fixed scenarios | anonymous read-only session as `viewer`; cannot start anything (one exception, section 8.6) |
 | Mode | `OAX_DEMO_MODE=true` | multi-tenant mode (ADR 0013), showcase guard on |
 
 The nightly reset of the demo profile makes it unsuitable for a history of real runs, so the
@@ -60,17 +61,27 @@ showcase is a **separate installation** of the same images. The demo additionall
 copies of the six showcases (same `agents.md` files with `provider: simulated` and fictional events
 on `example.org`), so that visitors who only run the demo locally see the same structure.
 
-Where the showcase installation runs is an operator decision (open question 1). The concept only
-needs a control node with PostgreSQL, a worker or run node that can reach GitHub and the model
-providers, and, for the self-development agent, a private network path to the local model server
-(section 10.6).
+**Hosting (owner decision 2026-10-09).** The showcase needs a live backend with a database and a
+local model server, which GitHub-hosted services cannot provide, so it is the one exception to the
+rule that the project runs entirely on GitHub:
+
+| Part | Where |
+| --- | --- |
+| Control node (API), PostgreSQL, worker and run nodes, Ollama | the project owner's server, as containers deployed from Git (no manual setup); Ollama and PostgreSQL are reachable only on the private container network |
+| Console (frontend) | GitHub Pages as a static build that talks to the showcase API; if the console is served by the backend image instead, it runs with the backend on the same server |
+| Website, public demo pages, container images, CI | unchanged: GitHub (Pages, GHCR, GitHub-hosted runners) |
+
+Because the control node runs next to Ollama, the self-development agent needs no extra worker
+node; the model proxy reaches Ollama as a private destination (ADR 0011 section 6). Only the API
+(and, if served by the backend, the console) is published, behind the platform's own rate limits
+and the read-only guard.
 
 ## 3. What exists and what is missing
 
 | Needed for | Exists on `main` | Missing (proposed item, section 11) |
 | --- | --- | --- |
 | Own tenant per showcase, nested | flat tenants with monthly budgets (ADR 0007) | tenant tree and caps: W13-1, W13-2, W13-4, W13-6 |
-| Visitor can only read | `viewer` role, demo read-only API | guest role and guard for a non-demo installation (S-1) |
+| Visitor can only read | `viewer` role (no `audit:read`), demo read-only API | anonymous `viewer` session, `pentest` role (ADR 0013 section 7.5) and guard for a non-demo installation (S-1) |
 | Model calls with hard cost limits | model proxy and reservations (W1-3b-3, W1-3b-4) | passthrough and harness adapters: PLAT-03, PLAT-04, PLAT-05 |
 | Coding in a sandbox (edit files, run tests) | container runner, toolbox `git+node` contract, Claude Code and OpenCode harnesses | harness steps in run nodes with workspace tools (PLAT-05), test command allowlist (S-5) |
 | Opening pull requests | PR-back for agent definitions only (ADR 0010 section 9) | GitHub connection with a `pr` profile and branch constraints (S-3) |
@@ -113,61 +124,66 @@ Why this shape:
   `model_unpriced` whenever a cost limit applies, see [budgets](budgets.md)). A cap of `0` would
   block every run (a budget counts as reached at or above its limit), so `self-dev` gets a
   1 USD tripwire; the model allowlist is the real guarantee, the cap only catches a mistake.
-- **Depth 2** below the root, inside the default limit of 4.
+- **Depth 2** below the root: the default structure of ADR 0013 (section 2); further levels can be
+  added at any time without changing a setting.
+- **Currency**: the installation's global display currency (ADR 0013 section 12.5) is left at the
+  default **USD**, which is what the providers bill in. Another currency would be one global admin
+  setting for the whole installation, never per tenant.
 - **Connections** are created on the node that needs them and inherited downwards (ADR 0013
   section 6): the read-only GitHub connection on `showcase`, the `pr` connection on `engineering`,
   the model provider instances on `showcase` with narrowing per child.
 
-Before W13 ships, the tree cannot be built, and flat tenants created now could not be nested later
-(a root cannot be moved under another root, ADR 0013 section 9). The showcase therefore starts
-after W13-1, W13-2, W13-4 and W13-6. NEW-03 is blocked on PLAT-02 to PLAT-05 anyway, so this adds
-no delay on the critical path. If an earlier start is wanted, the fallback is one `showcase` tenant
-with one team per showcase (team budgets exist today) and a later conversion (ADR 0013 open
-question 5).
+Before W13 ships, the tree cannot be built, and flat tenants created now could only be nested later
+by merging organisations (a root move, platform admins only, ADR 0013 section 9.2). The showcase
+therefore starts after W13-1, W13-2, W13-4 and W13-6. NEW-03 is blocked on PLAT-02 to PLAT-05
+anyway, so this adds no delay on the critical path. If an earlier start is wanted, the fallback is
+one `showcase` tenant with one team per showcase (team budgets exist today) and a later conversion
+of each team into a sub-tenant (ADR 0013 section 9.3).
 
-## 5. Roles and the guest
+## 5. Roles: anonymous viewers and `pentest`
 
 ### 5.1 Who does what
 
+Owner decisions of 2026-10-09: anonymous visitors are `viewer` **without** `audit:read`; there is
+no new `guest` role; a new fixed role `pentest` reads everything including `audit:read` (ADR 0013
+section 7.5).
+
 | Actor | Binding | Can |
 | --- | --- | --- |
-| Guest (anonymous visitor) | `guest` on `showcase` (new role, S-1) | read runs, steps, tool calls, outputs, costs, budgets, effective values, agent definitions, tool profiles, policies, audit entries; verify the audit chain |
+| Anonymous visitor | `viewer` on `showcase` (anonymous session, S-1) | read runs, steps, tool calls with policy decisions, outputs, costs, budgets, effective values, agent definitions; **not** the audit log |
+| Pentest reviewer (named, time-limited) | `pentest` on `showcase`, `expiresAt` at most 30 days | read everything in the tree including the audit log and its verification, users, settings and token metadata; no write, execute, approve, cancel or export |
 | Agent service principal | `operator` restricted to `runs:execute` on its own leaf tenant, API token with matching scopes | start runs of its own agents (cron, webhook) |
-| Maintainer | `admin` on `showcase` | publish agents, approve gated steps, change caps, review and merge pull requests on GitHub |
-| Platform operator | platform operator | installation, providers, keys |
+| Maintainer | tenant admin on `showcase` | publish agents, approve gated steps, change caps, review and merge pull requests on GitHub; reads the audit log |
+| Platform admin | platform admin | installation, providers, keys, global currency |
 
-### 5.2 The guest role and the read-only guard
+### 5.2 The anonymous viewer session and the read-only guard
 
-The fixed role set has no role that fits: `viewer` cannot read the audit log, and `auditor` can
-also read users and settings. The concept proposes one new fixed role `guest`:
-
-```text
-guest = agents:read, runs:read, events:read, costs:read, policies:read, connections:read,
-        audit:read, audit:verify
-```
-
-No `users:read` (operator accounts stay invisible), no `settings:read`, no `audit:export`, no
+The role is the first wall: `viewer` has `agents:read`, `runs:read`, `events:read` and
+`costs:read` only. No `audit:*`, `users:read` (operator accounts stay invisible), `settings:read`,
 `tokens:*`, nothing with `write`, `execute`, `approve` or `cancel`.
 
-The role is the first wall. The second is a **showcase guard** (`OAX_SHOWCASE_GUEST=true`): a guest
-principal may only call `GET` routes and the side-effect-free `POST /v1/audit/verify` (and
-`POST /v1/demo/ask` when section 8.6 is enabled); everything else answers `403 guest_read_only`
-before any handler runs, so a wrong permission in a new route cannot open a write path. The guard
-has its own test that walks the route table.
+The second wall is a **showcase guard** (`OAX_SHOWCASE_GUEST=true`): an anonymous principal may only
+call `GET` routes (and `POST /v1/demo/ask` when section 8.6 is enabled); everything else answers
+`403 guest_read_only` before any handler runs, so a wrong permission in a new route cannot open a
+write path. The guard has its own test that walks the route table.
 
-Guest sessions are anonymous: `POST /v1/showcase/session` issues a short-lived signed cookie for
-the `guest` principal, rate-limited per salted IP hash. There are no shared credentials to publish
-and no accounts to manage (open question 2: anonymous session vs. shared fake credentials as in the
-demo).
+Sessions are anonymous: `POST /v1/showcase/session` issues a short-lived signed cookie for a
+`viewer` principal, rate-limited per salted IP hash. There are no shared credentials to publish and
+no accounts to manage.
 
-### 5.3 What a guest sees and what is hidden
+`pentest` bindings are granted by a maintainer to a named reviewer for a fixed period (the binding
+must carry `expiresAt`); the reviewer signs in with a normal account, is not subject to the
+anonymous guard, and is still read-only by role. The tenant admins are notified of every `pentest`
+binding.
+
+### 5.3 What a visitor sees and what is hidden
 
 | Visible | Hidden |
 | --- | --- |
-| run timeline, model calls with token counts and cost, tool calls with arguments and results, policy decisions (allowed, denied, approval), outputs, links to the pull requests | secret values (never stored anywhere), secret reference names, connection endpoints of private servers, operator user names and mail addresses, API tokens |
+| run timeline, model calls with token counts and cost, tool calls with arguments and results, policy decisions of the run (allowed, denied, approval), outputs, links to the pull requests | secret values (never stored anywhere), secret reference names, connection endpoints of private servers, operator user names and mail addresses, API tokens |
 | effective budgets and caps with "inherited from", counters, blocked banners | the uploaded source image of the social media agent after its retention window |
-| agent definitions (`agents.md`), expansions of tool profiles, safety level | raw request digests and internal ids that are not needed for reading |
-| audit entries of the showcase tree and the verify result | audit entries of the platform partition |
+| agent definitions (`agents.md`), safety level | raw request digests and internal ids that are not needed for reading |
+| the result of the last audit chain verification (time and status) in the summary | the audit log itself (entries, export, verify endpoint): maintainers and `pentest` only |
 
 Content comes from public repositories, so run content is not secret; still, the showcase stores it
 with a 30-day retention (ADR 0012 section 7.2) and runs the PII hook (ADR 0012 section 7.3) that
@@ -189,8 +205,11 @@ content. Issue numbers and titles stay.
 
 - **Read**: the pinned read-only GitHub MCP server of the demo repo agent (W11-1-1), connection
   `github-read` on `showcase`, owner and repository allowlist enforced by argument constraints and
-  by the runner wrapper. Repositories: `open-agentix/open-agentix`, `open-agentix/open-agentix-helm`
-  (open question 3 for more).
+  by the runner wrapper. Repositories (owner decision): `open-agentix/open-agentix`,
+  `open-agentix/open-agentix-helm`, `open-agentix/openagentix.si` (website),
+  `open-agentix/blog.openagentix.si` (blog) and `open-agentix/agenticWorkflowProtocol.org` (AWP).
+  Each agent gets the subset it needs (section 8): code agents the code repositories, the research
+  agent all five read-only.
 - **Write** (`engineering` only): connection `github-pr`, a GitHub App installed only on the
   allowlisted repositories with exactly `contents: write`, `pull_requests: write`,
   `issues: write` (for the one comment) and **no** `workflows`, `administration` or `actions`
@@ -224,8 +243,13 @@ write, and a write step can only touch its branch namespace. In addition:
   on issues that carry `agent:<name>`, and the trigger checks through the read API that the label
   was added by a user with write permission on the repository. Anybody can open an issue; nobody
   outside the maintainers can make an agent work on it.
-- Web reading is limited to an allowlist of documentation hosts, `GET` only, size capped, no
-  JavaScript; fetched content never becomes a tool argument for a write tool without a schema check.
+- Web reading is limited to a **fixed domain allowlist** of official documentation hosts, `GET`
+  only, size capped, no JavaScript; fetched content never becomes a tool argument for a write tool
+  without a schema check (section 8.4).
+- **No instructions from the internet**: no MCP server, skill, prompt file or plugin from the
+  internet is installed, included or fetched at run time without the owner's explicit approval of
+  that exact source; an approved one is reviewed, pinned to a version and kept as a copy in a
+  project repository before use.
 - Outputs carry the label "AI-generated by the <agent> showcase agent", the run link and the run
   cost; pull request bodies say which model wrote the change.
 
@@ -233,7 +257,7 @@ write, and a write step can only touch its branch namespace. In addition:
 
 Per agent: disable the agent. Per subtree: lower the cap to the current usage (ADR 0013
 section 5.4, takes effect on the next call). Global: revoke the GitHub App installation. All three
-are audited and visible to guests ("paused by maintainer").
+are audited and visible to visitors ("paused by maintainer").
 
 ## 7. Common metrics
 
@@ -264,7 +288,8 @@ Opus 5.5 4/20 USD. Estimates ignore prompt caching, so real costs should be lowe
 ### 8.1 Social media agent (`showcase/marketing/social-media`)
 
 Purpose: turn a project image (a screenshot of the console, a diagram, a release banner) and a
-short brief into an Instagram post and a LinkedIn post, both as drafts.
+short brief into an Instagram post and a LinkedIn post, both as drafts, **always in English and
+German** (owner decision; the same rule applies to every public content draft of the showcase).
 
 ```yaml
 apiVersion: openagentix.io/v1alpha1
@@ -279,13 +304,13 @@ triggers:
   - type: manual                       # maintainer uploads image + brief in the console
 budget: { maxTokens: 30000, maxCostUsd: 0.10, maxSteps: 4, maxToolCalls: 0, timeoutSeconds: 120 }
 schemas:
-  Drafts: { ... }                      # instagram{caption,hashtags[<=15],altText}, linkedin{text,hashtags[<=5],altText}
+  Drafts: { ... }                      # { en, de }, each: instagram{caption,hashtags[<=15],altText}, linkedin{text,hashtags[<=5],altText}
 agents:
   - id: draft
     provider: anthropic
     model: claude-sonnet-5-5
     access: read-only
-    input: { from: [event] }           # event.data: { imageRef, brief, language }
+    input: { from: [event] }           # event.data: { imageRef, brief }; output always en + de
     outputs: [{ format: json }]
     output: { schema: { $ref: "#/schemas/Drafts" }, onInvalid: retry }
   - id: check
@@ -294,7 +319,8 @@ agents:
     access: read-only
     input: { from: [draft] }
     outputs: [{ format: json }]        # { ok, findings[] }: length limits, alt text present,
-                                       # no claims about features that are not on main, no people
+                                       # no claims about features that are not on main, no people,
+                                       # en and de present and saying the same
 pipeline: [draft, check]
 ```
 
@@ -302,10 +328,10 @@ pipeline: [draft, check]
 | --- | --- |
 | Tools | none. No posting tool exists; the result is a run artifact |
 | Safety level | L1 draft |
-| Model, cost | Sonnet 5.5 (vision) for the draft, Haiku 4.5 (vision) for the check. About 4k input (image, brief, instructions) and 1k output per draft: about 0.02 USD per post including the check |
-| Budgets | 0.10 USD per run, 5 USD per month (about 200 posts; realistic use is a few per week) |
+| Model, cost | Sonnet 5.5 (vision) for the draft, Haiku 4.5 (vision) for the check. About 4k input (image, brief, instructions) and 2k output for both languages: about 0.03 USD per post including the check |
+| Budgets | 0.10 USD per run, 5 USD per month (about 150 posts in both languages; realistic use is a few per week) |
 | Data | images are operator-supplied project material without identifiable people; metadata (EXIF) stripped on upload; image retention 7 days, the drafts 30 days |
-| Metrics | drafts per month, accepted without edit, accepted with edit, discarded; check findings per draft; alt text present (target 100 %); cost per accepted draft |
+| Metrics | drafts per month, accepted without edit, accepted with edit, discarded (per language); check findings per draft; alt text present in both languages (target 100 %); cost per accepted draft |
 | Gap | image input (S-4): providers, the event store and handovers carry text and JSON only today |
 
 ### 8.2 Bug fix agent (`showcase/engineering/bug-fix`)
@@ -442,7 +468,7 @@ pipeline: [research, comment]
 | Aspect | Value |
 | --- | --- |
 | Safety level | L1: the report is a run artifact; the one issue comment needs a maintainer's approval |
-| Sources | repository, issues, ADRs; documentation hosts on an allowlist kept in the connection (open question 4). Citations in the report are checked against the tool log: a source the agent did not actually read is flagged |
+| Sources | the five allowlisted repositories, issues, ADRs; documentation on a **fixed domain allowlist** kept in the connection (official documentation hosts of the technologies the project uses, extended only by a maintainer change in Git). Indexed documentation services in the style of context7 are an **evaluated option** only (S-11): reported with a privacy, licence and injection assessment, not connected. Citations in the report are checked against the tool log: a source the agent did not actually read is flagged |
 | Model, cost | Sonnet 5.5, about 80k in and 6k out: about 0.22 USD per report |
 | Budgets | 0.75 USD per run, 10 USD per month |
 | Metrics | reports per month, maintainer rating (1 to 5), citations verified (target 100 %), follow-up issues created from a report, cost per report |
@@ -513,14 +539,14 @@ its design, abuse analysis and tests apply unchanged.
 | Safety level | L0 |
 | Model, cost | Haiku 4.5, about 20k in and 1.5k out: about 0.03 USD per answer; run cap 0.05 USD |
 | Budgets | per visitor 3 questions per 10 minutes, daily budget 0.50 USD, monthly cap 15 USD on the tenant; the tightest wins |
-| Guest exception | this is the only place where a guest causes a run: `POST /v1/demo/ask` queues a run of this one fixed agent under the tenant's service principal. The guest still has no `runs:execute`, cannot choose the agent, the model or the tools. Default `questions` mode (curated questions); `free-text` only when the owner enables it |
+| Visitor exception | this is the only place where an anonymous visitor causes a run: `POST /v1/demo/ask` queues a run of this one fixed agent under the tenant's service principal. The visitor (`viewer`) still has no `runs:execute`, cannot choose the agent, the model or the tools. Default `questions` mode (curated questions); `free-text` only when the owner enables it |
 | Metrics | questions per day, "I don't know" share, citations matching the tool log (target 100 %), answer reports, days with the daily budget used up, p95 latency |
 
 ### 8.7 Summary
 
 | Agent | Tools (read / write) | Level | Main model | Cost per run | Monthly cap |
 | --- | --- | --- | --- | --- | --- |
-| social-media | - / - | L1 | Sonnet 5.5 (vision) | ~0.02 USD | 5 USD |
+| social-media | - / - | L1 | Sonnet 5.5 (vision) | ~0.03 USD (en + de) | 5 USD |
 | bug-fix | repo read / workspace, branch + draft PR | L2 | Sonnet 5.5 | ~0.50 USD | 15 USD |
 | cve-fix | repo read / workspace deps, branch + draft PR | L2 | Haiku 4.5 | ~0.03 USD | 5 USD |
 | feature-research | repo + docs read / one comment (approval) | L1 | Sonnet 5.5 | ~0.22 USD | 10 USD |
@@ -532,8 +558,8 @@ Expected total for a normal month: 15 to 40 USD, hard-capped at 60 USD by the or
 
 ## 9. Per-tenant overview
 
-Every tenant page (and the organisation page with the tree) shows, for guests and maintainers
-alike:
+Every tenant page (and the organisation page with the tree) shows, for visitors and maintainers
+alike (the audit block only for maintainers and `pentest`):
 
 - **Header**: tenant path, safety level badge, models allowed (effective, with "inherited from"),
   status (`active`, `blocked by <node>`, `paused by maintainer`).
@@ -543,8 +569,9 @@ alike:
   ...), filters by agent and status (`GET /v1/runs?scope=subtree`).
 - **Costs**: per agent, per model, per day; cost per accepted outcome (`GET /v1/costs?scope=subtree`).
 - **Agents**: definitions, published versions, tool profile expansions with read/write badges.
-- **Audit**: recent entries with filters (policy decisions, approvals, budget events), "verify
-  chain" button and last verification result.
+- **Audit** (maintainers and `pentest`): recent entries with filters (policy decisions, approvals,
+  budget events), "verify chain" button and last verification result. Visitors see only the last
+  verification time and status in the summary.
 - **Outcomes**: the metrics of section 7 and of the agent's section.
 
 The organisation page adds the tree with a usage bar per node and a summary that the website can
@@ -576,8 +603,10 @@ runs are visible in the showcase (`engineering/self-dev`).
 
 Further constraints:
 
-- **VRAM contention**: when transcoding holds VRAM, Ollama falls back to CPU or fails to load the
-  model. The agent must treat the GPU as optional and run a CPU-only configuration by default.
+- **VRAM contention**: when other workloads hold VRAM, Ollama falls back to CPU or fails to load
+  the model. Owner decision: the agent runs **on the GPU by default**; a pre-check verifies that
+  enough VRAM is free and otherwise uses the CPU configuration (smaller context, nightly window) or
+  skips the run (`skipped: gpu_busy`) instead of failing.
 - **Driver and toolchain support for Pascal**: recent CUDA toolchains deprecate or drop older GPU
   generations. The Ollama image must be pinned to a version whose CUDA build still supports compute
   capability 6.1, verified once and recorded; otherwise CPU-only.
@@ -632,16 +661,17 @@ In addition:
 - **File allowlist** for changes: `docs/**`, `packages/*/test/**`, `apps/*/test/**`, and only for
   lint fixes the reported file. Never: migrations, `packages/core/src/policy`, accounting, model
   proxy, runners, auth, `deploy/`, lockfiles, `.github/`.
-- **At most 2 open pull requests** at a time and at most 1 new per day; every pull request carries
-  the label `local-llm` and the model digest.
+- **At most 2 open pull requests** at a time and **at most 1 new draft pull request per day** (owner
+  decision: one per day is enough); every pull request carries the label `local-llm` and the model
+  digest.
 - **Shadow mode first**: the agent produces patches as run artifacts and opens no pull request
   until the evaluation gate (10.7) is passed.
 - **Host protection**: concurrency 1, nightly schedule, run timeout, and a pre-check step that skips
   the run when the host is under memory or IO pressure (`skipped: host_busy`), so the agent never
   competes with other workloads during the day.
-- **Network**: the Ollama endpoint is never exposed publicly. The model proxy reaches it over a
-  private network as a private destination (ADR 0011 section 6); if the control node runs elsewhere,
-  a worker node next to Ollama plus an allowlisted private endpoint is required (open question 7).
+- **Network**: the Ollama endpoint is never exposed publicly. The control node runs on the same
+  server (section 2), so the model proxy reaches Ollama over the private container network as a
+  private destination (ADR 0011 section 6); no extra worker node is needed.
 - **Instructions**: issue text and logs are data. The agent never installs anything from the
   internet at run time; the toolbox image and the model are pinned.
 
@@ -666,7 +696,8 @@ In addition:
 
 ### 10.8 Recommendation
 
-- **Feasible now** with a 3B to 4B model on the GPU or a 7B model on the CPU in a nightly window:
+- **Feasible now** with a 3B to 4B model on the GPU (the default) or a 7B model on the CPU in a
+  nightly window as fallback:
   the daily digest, issue triage suggestions, CI failure summaries and feature monitoring (all L0),
   and, after shadow mode, tiny docs and test pull requests. This is useful and an honest showcase of
   what a local model can and cannot do, with visible zero API cost and visible wall time.
@@ -707,7 +738,7 @@ A daily agent in the showcase tenant `showcase/engineering/self-dev` that:
 - after an evaluation gate, opens at most one small draft pull request per day for docs drift,
   lint fixes or a missing test of a pure function.
 
-All runs, tokens, wall time and (zero) cost are visible to showcase guests.
+All runs, tokens, wall time and (zero) cost are visible to showcase visitors.
 
 ## Non-goals
 
@@ -758,42 +789,60 @@ triage precision, digest usefulness rating.
 - Harness steps in run nodes through the model proxy (PLAT-04, PLAT-05)
 - Ollama operations and provider tests (NEW-20, NEW-21)
 
-## Open questions
+## Decided
 
-- Which host runs the control node, and is a worker node next to Ollama needed?
-- GPU or CPU-only as the default, given the shared card?
-- Is one draft PR per day the right ceiling for reviewer capacity?
+- The control node, PostgreSQL and Ollama run on the same server; no extra worker node.
+- GPU by default, CPU configuration or skip when VRAM is busy.
+- At most one new draft pull request per day.
 ```
 
 ## 11. Proposed work items (input for NEW-03 and NEW-04)
 
 | Item | Content | Depends on |
 | --- | --- | --- |
-| S-1 | `guest` role, showcase guard (`OAX_SHOWCASE_GUEST`), anonymous guest session, route-table test | W13-6 |
+| S-1 | Anonymous `viewer` session, showcase guard (`OAX_SHOWCASE_GUEST`), route-table test; `pentest` role comes with W13-6 (ADR 0013 section 7.5) | W13-6 |
 | S-2 | Showcase seed: tenant tree, caps, model allowlists, connections, service principals; simulated copies of the six agents for the public demo (fictional `example.org` data) | W13-1, W13-2, W13-4 |
 | S-3 | GitHub `pr` connection: App credentials via the credential broker, profile `pr`, branch/base/draft/path constraints, open-PR limit step | ADR 0012 instances (W12) |
 | S-4 | Image inputs: event attachment references, handover of images to vision-capable providers, size and type limits, EXIF stripping, retention | PLAT-02 |
 | S-5 | Workspace tools in run nodes: file edit profile, test command allowlist, diff export for the publish step | PLAT-05 |
-| S-6 | Read-only documentation fetch tool: `GET` only, host allowlist, size cap, text extraction, no scripts | W10 resolver (ADR 0011) |
+| S-6 | Read-only documentation fetch tool: `GET` only, fixed domain allowlist in Git, size cap, text extraction, no scripts | W10 resolver (ADR 0011) |
 | S-7 | Outcome sync (PR state, reverts) and per-tenant overview; `GET /v1/showcase/summary` | S-3, W13-10 |
 | S-8 | The six `agents.md` files under `examples/showcase/`, verification docs with real runs | S-1 to S-7, PLAT-04 |
 | S-9 | Self-development agent (NEW-04), phased as in 10.9 | S-1 to S-5, S-7, NEW-20, NEW-21 |
+| S-10 | Approval gate between pipeline steps (run pauses after a step until `runs:approve`), audited, visible to visitors as "waiting for approval" | W1-5 |
+| S-11 | Research and assessment (no integration): indexed documentation services in the style of context7 for the research agent; privacy, licence, pinning, prompt-injection risk; result is a recommendation to the owner, who approves or rejects that exact source | - |
+| S-12 | Showcase deployment: Compose stack for control node, PostgreSQL, worker and Ollama on the owner's server via Git and runner; console build for GitHub Pages pointing at the showcase API (or served by the backend) | S-1, S-2 |
 
-| S-10 | Approval gate between pipeline steps (run pauses after a step until `runs:approve`), audited, visible to guests as "waiting for approval" | W1-5 |
+## 12. Owner decisions and open questions
 
-## 12. Open questions
+### 12.1 Decided on 2026-10-09
 
-1. Where does the showcase installation run (control node, PostgreSQL, worker), given that the
-   project's website, demo pages, images and CI live on GitHub-hosted services? A live installation
-   with real runs needs a server; GitHub-hosted runners could execute scheduled agent runs but not
-   host the console.
-2. Guests: anonymous read-only session (proposed) or shared fake credentials as in the demo?
-3. Repositories for the agents: only `open-agentix/open-agentix` and `open-agentix-helm`, or also
-   the website and the blog?
-4. Documentation hosts on the research agent's allowlist.
-5. Caps: are 60 USD for the organisation and the per-tenant values of section 4 acceptable? Display
-   in USD (as stored) or EUR (ADR 0013 open question 8)?
-6. A new fixed role `guest` (proposed) or reuse of `viewer` plus `audit:read`?
-7. Self-development agent: which host runs the control node relative to Ollama, GPU or CPU-only
-   default, and the reviewer capacity (one draft PR per day)?
-8. Should the social media drafts be in English only, or English and German?
+1. **Hosting**: backend (control node, workers), PostgreSQL and Ollama on the project owner's
+   server as containers; the console on GitHub Pages, or with the backend if the backend serves it
+   (section 2). This is the only exception to "open-agentix runs entirely on GitHub".
+2. **Visitors**: anonymous and read-only, as `viewer` (section 5).
+3. **Repositories**: `open-agentix`, `open-agentix-helm`, `openagentix.si` (website),
+   `blog.openagentix.si` (blog) and `agenticWorkflowProtocol.org` (AWP) (section 6.2).
+4. **Research allowlist**: a fixed domain allowlist of official documentation first; indexed
+   services in the style of context7 only as an evaluated option (S-11); no MCP server or skill
+   from the internet without the owner's approval of that exact source (sections 6.3, 8.4).
+5. **Caps and currency**: the caps of section 4 stand; currency is configurable as one global
+   installation setting with default USD (ADR 0013 section 12.5); the showcase uses USD.
+6. **Roles**: no new `guest` role; `viewer` without `audit:read` for visitors; new fixed role
+   `pentest` with read on everything including `audit:read` (ADR 0013 section 7.5).
+7. **Self-development agent**: GPU by default; one draft pull request per day (section 10.6).
+8. **Languages**: social media drafts, and all public content drafts, always in English and German
+   (section 8.1).
+
+### 12.2 Still open
+
+1. **Console on GitHub Pages**: the static console then calls the showcase API across origins.
+   This needs CORS for exactly the Pages origin and a cookie setting for the anonymous session
+   (`SameSite=None; Secure` or a token in memory instead of a cookie). Serving the console from the
+   backend avoids both; which variant is preferred?
+2. **Showcase domain**: which hostname publishes the showcase API (and console, if served by the
+   backend)?
+3. **Research allowlist content**: the first list of documentation hosts (proposal: the official
+   documentation of Node.js, TypeScript, PostgreSQL, Kubernetes, Helm, the model providers and the
+   Model Context Protocol) to be confirmed in the S-6 pull request.
+4. **Pentest reviewers**: who receives `pentest` bindings, and is 30 days the right maximum?
