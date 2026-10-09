@@ -157,6 +157,21 @@ export function quoteSummary(raw: string, maxChars = 2000): string {
     .join('\n');
 }
 
+/** The node's test claims describe one passing run of the full suite on the final tree. */
+export function testedFullSuite(p: PatchAttachment): boolean {
+  const run = p.lastTestRun;
+  return (
+    run !== null &&
+    run.passed &&
+    run.file === null &&
+    run.exitCode === 0 &&
+    !run.timedOut &&
+    p.fullSuitePassed &&
+    p.treeMatchesLastRun &&
+    p.testedFinalTree
+  );
+}
+
 export class PullRequestDelivery {
   private readonly identity: Identity;
 
@@ -259,8 +274,10 @@ export class PullRequestDelivery {
     const run8 = runId.replace(/[^A-Za-z0-9]/g, '').slice(0, 8);
     const branch = `${t.branchPrefix}issue-${input.issue.number}-${run8.toLowerCase()}`;
     try {
-      // Node-reported, but required: a patch nobody ran the suite on is not proposed.
-      if (!input.patch.lastTestRun?.passed || !input.patch.testedFinalTree)
+      // Node-reported, but required: a patch nobody ran the suite on is not proposed. The claims
+      // must also agree with each other (a single-file run, a timeout or a non-zero exit is no
+      // full green run, whatever the summary flags say).
+      if (!testedFullSuite(input.patch))
         throw new GitError('tests_not_green', 'the full test suite did not pass on the final tree');
       const known = [
         ...((await this.o.knownSecrets?.(runId)) ?? []),

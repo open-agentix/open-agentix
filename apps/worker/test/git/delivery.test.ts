@@ -292,6 +292,21 @@ describe('PullRequestDelivery.deliver', () => {
       await refused(p, { patch: attachment(p, { lastTestRun: null }) }, 'tests_not_green');
     });
 
+    it('test claims that contradict each other', async () => {
+      const p = goodPatch();
+      const run = { passed: true, exitCode: 0, timedOut: false, durationMs: 1, file: null };
+      for (const [i, over] of (
+        [
+          { lastTestRun: { ...run, file: 'test/price.test.js' } },
+          { lastTestRun: { ...run, exitCode: 1 } },
+          { lastTestRun: { ...run, timedOut: true } },
+          { fullSuitePassed: false },
+          { treeMatchesLastRun: false },
+        ] as Partial<PatchAttachment>[]
+      ).entries())
+        await refused(p, { patch: attachment(p, over) }, 'tests_not_green', delivery(), 40 + i);
+    });
+
     it('a digest that does not match the patch', async () => {
       const p = goodPatch();
       await refused(
