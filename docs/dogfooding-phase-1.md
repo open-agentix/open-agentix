@@ -400,8 +400,8 @@ sonnet, tests: haiku with real test runs, review and DOG-5: opus).
 > checked at build, Alpine/musl works, no Debian needed), `OAX_CONTAINER_HARNESS_IMAGES`,
 > `OAX_CONTAINER_TMP_MB`, `OAX_CONTAINER_HARNESS_MEMORY_MB|TMP_MB`, `OAX_HARNESS_EGRESS_ALLOWED`;
 > see [runners](runners.md#harness-images-dog-1) and the
-> [verification](verification/claude-code-harness.md#run-node-image-dog-1). `oax-workspace` is DOG-2
-> and is not part of the image yet; the end-to-end harness step in a real container with the full
+> [verification](verification/claude-code-harness.md#run-node-image-dog-1). `oax-workspace` (DOG-2, #139)
+> is built into the image (`node /app/packages/workspace/dist/main.js`); the end-to-end harness step in a real container with the full
 > stack follows with DOG-4b. Differences: the memory default applies to the harness class, not per
 > step, and `OAX_CLAUDE_BIN` is set by the image.
 

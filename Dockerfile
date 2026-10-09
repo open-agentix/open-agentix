@@ -17,6 +17,7 @@ COPY packages/providers/package.json packages/providers/
 COPY packages/events/package.json packages/events/
 COPY packages/mcp/package.json packages/mcp/
 COPY packages/runners/package.json packages/runners/
+COPY packages/workspace/package.json packages/workspace/
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
 
@@ -115,7 +116,8 @@ RUN set -eu; \
 # read-only root filesystem compatible: it writes only to /tmp and /run/oax, both tmpfs mounts of the
 # container runner). `git` is pinned by version (offline use for diffs only, it needs no network) and
 # the package manager is removed afterwards, so the image cannot install anything. The binary is
-# proprietary (Anthropic): keep the resulting image in a PRIVATE registry package.
+# proprietary (Anthropic): keep the resulting image in a PRIVATE registry package. It also carries the
+# `oax-workspace` MCP server (packages/workspace, DOG-2): `node /app/packages/workspace/dist/main.js`.
 FROM runtime AS run-node-claude-code
 ARG VERSION=0.0.0-dev
 ARG CLAUDE_CODE_VERSION=2.1.295
@@ -138,6 +140,7 @@ RUN apk add --no-cache git="${GIT_VERSION}" || { \
  && rm -rf /sbin/apk /etc/apk /var/cache/apk /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 COPY --from=claude-code-bin /out/claude /opt/claude-code/bin/claude
 COPY --from=claude-code-bin /out/LICENSE.md /opt/claude-code/LICENSE.md
+COPY --from=build /src/packages/workspace/dist /app/packages/workspace/dist
 COPY --from=build /src/apps/worker/dist /app/apps/worker/dist
 ENV OAX_CLAUDE_BIN=/opt/claude-code/bin/claude
 WORKDIR /app/apps/worker

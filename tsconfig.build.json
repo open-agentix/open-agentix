@@ -17,6 +17,9 @@
       "path": "packages/runners"
     },
     {
+      "path": "packages/workspace"
+    },
+    {
       "path": "apps/api"
     },
     {
