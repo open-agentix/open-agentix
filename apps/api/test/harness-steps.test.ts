@@ -213,8 +213,114 @@ ${extra}    instructions: Do it.
   });
 });
 
+describe('harness egress and images at publish (DOG-1)', () => {
+  const source = (name: string, runtime: string, pipelineRuntime = '') => `---
+apiVersion: openagentix.io/v1alpha1
+kind: Agent
+name: ${name}
+version: 1.0.0
+owner: team-security
+${pipelineRuntime}agents:
+  - id: a
+    provider: simulated
+    model: sim-1
+    runtime: ${runtime}
+    instructions: Do it.
+---
+`;
+  const publishOn = async (node: TestNode, src: string) => {
+    const created = await node.req({ method: 'POST', url: '/v1/agents', payload: { source: src } });
+    if (created.statusCode !== 201) return created;
+    return node.req({
+      method: 'POST',
+      url: `/v1/agents/${created.json().id as string}/publish`,
+    });
+  };
+
+  it('refuses a harness step with egress hosts unless the operator allows it', async () => {
+    const withEgress = source(
+      'egress-denied',
+      '{ runner: container, harness: claude-code, egress: [jira.example.com] }',
+      'runtime:\n  runner: container\n  egress: [jira.example.com]\n',
+    );
+    const res = await publishOn(n, withEgress);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toContain('OAX_HARNESS_EGRESS_ALLOWED');
+    // a step that narrows to nothing is fine even under a pipeline with egress
+    const narrowed = source(
+      'egress-narrowed',
+      '{ runner: container, harness: claude-code, egress: [] }',
+      'runtime:\n  runner: container\n  egress: [jira.example.com]\n',
+    );
+    // the pipeline egress is outside the (empty) operator ceiling here; only the harness rule is asserted
+    expect((await publishOn(n, narrowed)).body).not.toContain('OAX_HARNESS_EGRESS_ALLOWED');
+  });
+
+  it('refuses a harness without a configured image on the container runner', async () => {
+    const { OAX_CONTAINER_HARNESS_IMAGES: _drop, ...noImages } = ENV;
+    const node = await testNode(noImages, { secrets, hostLookup: publicLookup });
+    try {
+      const res = await publishOn(
+        node,
+        source('no-image', '{ runner: container, harness: claude-code }'),
+      );
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('OAX_CONTAINER_HARNESS_IMAGES');
+    } finally {
+      await node.close();
+    }
+  });
+});
+
 describe('configuration', () => {
   const base = { OAX_DATABASE_URL: 'memory://', NODE_ENV: 'test' } as Record<string, string>;
+  const IMG = `ghcr.io/o/r@sha256:${'d'.repeat(64)}`;
+  const container = {
+    ...base,
+    OAX_CONTAINER_RUNNER_ENABLED: 'true',
+    OAX_CONTAINER_ENGINE_URL: 'http://socket-proxy:2375',
+    OAX_CONTAINER_IMAGE: IMG,
+    OAX_CONTAINER_NETWORK: 'oax-nodes',
+    OAX_NODE_CONTROL_URL: 'http://api:8080',
+  };
+  it('reads the harness image map, /tmp sizes and the egress switch', () => {
+    const c = loadConfig({
+      ...container,
+      OAX_CONTAINER_HARNESS_IMAGES: JSON.stringify({ 'claude-code': IMG }),
+      OAX_CONTAINER_MAX_MEMORY_MB: '4096',
+      OAX_CONTAINER_TMP_MB: '128',
+      OAX_CONTAINER_HARNESS_TMP_MB: '512',
+      OAX_HARNESS_EGRESS_ALLOWED: 'true',
+    });
+    expect(c.runners.container.config).toMatchObject({
+      harnessImages: { 'claude-code': IMG },
+      tmpMb: 128,
+      harnessTmpMb: 512,
+      harnessMemoryMb: 2048,
+      harnessEgressAllowed: true,
+    });
+    expect(c.harnesses.egressAllowed).toBe(true);
+    expect(loadConfig(container).harnesses.egressAllowed).toBe(false);
+  });
+  it('refuses tag-only or unknown harness images and a /tmp that cannot fit in memory', () => {
+    expect(() =>
+      loadConfig({
+        ...container,
+        OAX_CONTAINER_HARNESS_IMAGES: JSON.stringify({ 'claude-code': 'x:latest' }),
+      }),
+    ).toThrow(/digest/);
+    expect(() =>
+      loadConfig({ ...container, OAX_CONTAINER_HARNESS_IMAGES: JSON.stringify({ evil: IMG }) }),
+    ).toThrow(/container runner/);
+    expect(() =>
+      loadConfig({
+        ...container,
+        OAX_CONTAINER_HARNESS_IMAGES: JSON.stringify({ 'claude-code': IMG }),
+        OAX_CONTAINER_HARNESS_TMP_MB: '2048',
+        OAX_CONTAINER_MAX_MEMORY_MB: '4096',
+      }),
+    ).toThrow(/must be smaller than the node memory/);
+  });
   it('defaults to no harness and needs the model proxy for any', () => {
     expect(loadConfig(base).harnesses.enabled).toEqual([]);
     expect(() => loadConfig({ ...base, OAX_HARNESSES_ENABLED: 'opencode' })).toThrow(

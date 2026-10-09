@@ -985,3 +985,32 @@ harness itself should see (the child never receives them; only MCP tools of the 
   only" default for harness steps. This is documented as a **residual risk**: until it exists, a
   harness step should be published with `runtime.egress: []` (the narrowest declaration); whether the
   egress proxy then admits the control node only was not verified here.
+
+### DOG-1: harness image selection, egress default, resources (2026-10-09)
+
+Closes the "run-node images" and "verified variable names" items of W1-3b-7 for Claude Code. Where it
+differs from the text above, this section wins.
+
+1. **Image per harness (H9).** `OAX_CONTAINER_HARNESS_IMAGES` maps a harness to a digest-pinned image.
+   The keys are the allowlist (only `HARNESS_KINDS`); a harness step runs **only** on the image of its
+   harness (`image_not_allowed` otherwise), an unmapped harness fails closed (`harness_image_unknown`,
+   and publish refuses it on the container runner). The Claude Code image is built from the Dockerfile
+   target `run-node-claude-code`: the native binary is downloaded at build time only and verified
+   against the SHA-512 of the registry metadata recorded in the Dockerfile; no package manager remains
+   in the image. OpenCode has no image target yet.
+2. **Egress default (H5).** A harness step publishes with `runtime.egress: []`. Declared hosts are
+   refused at publish and again by the container runner at node start (`harness_egress_denied`) unless
+   the operator sets `OAX_HARNESS_EGRESS_ALLOWED=true`. "Control node only" is thereby enforced rather
+   than a convention, and was verified from inside a node (control node reachable; DNS for
+   `api.anthropic.com` and `github.com` fails; direct IPs unreachable).
+3. **Resources (H7).** A harness node gets `OAX_CONTAINER_HARNESS_MEMORY_MB` (default 2048, capped by
+   `OAX_CONTAINER_MAX_MEMORY_MB`) and a `/tmp` of `OAX_CONTAINER_HARNESS_TMP_MB` (default 256);
+   ordinary nodes keep 512 MiB and `OAX_CONTAINER_TMP_MB` (64). A `/tmp` that is not smaller than the
+   node memory is a configuration error. `/tmp` stays `noexec`.
+4. **Verification.** The environment variables `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and
+   `ANTHROPIC_MODEL` and the request shape (`/v1/messages`, Bearer, `tools: []`, no other request)
+   are verified against the pinned binary (`docs/verification/claude-code-harness.md`).
+5. **Licence.** The binary is proprietary: the image belongs in a private registry package.
+6. **Credential.** The upstream credential of the Claude Code pass-through surface is an API key with a
+   provider-side spend limit (owner decision 2026-10-09). The subscription-token option (`authTokenRef`,
+   section 10 stays "OAuth is orchestrator-only, not proxied") is not built (DOG-1b closed as not needed).

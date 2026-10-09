@@ -541,3 +541,16 @@ Found while implementing the run node and the container runner; sections 1 to 4 
   5 because 0005 to 0008 are not used yet.
 - **Model calls (3.4)** are **not** part of W1-3a: until W1-3b, a run node can only use the keyless
   `simulated` provider; every other provider fails the step with `model_proxy_unavailable`.
+
+## Amendment 2 (DOG-1, 2026-10-09): harness nodes
+
+- **Image per step kind (3.3).** The image of a node is no longer a function of the toolbox alone: a
+  step with `runtime.harness` gets the image mapped for its harness (`OAX_CONTAINER_HARNESS_IMAGES`,
+  digest-pinned, `harness_image_unknown` fails closed) and `RunNodeSpec` carries the `harness`. The
+  runner refuses a harness step on any other image.
+- **Egress.** A harness node has no egress grant by default; declared hosts need
+  `OAX_HARNESS_EGRESS_ALLOWED=true` (publish and runner check, `harness_egress_denied`).
+- **Resources.** The runner applies per-class sizes: `OAX_CONTAINER_HARNESS_MEMORY_MB` and
+  `OAX_CONTAINER_HARNESS_TMP_MB` for harness nodes, `OAX_CONTAINER_TMP_MB` for the others; the
+  operator maximum still caps memory. The threat model is otherwise unchanged (read-only root,
+  `CapDrop ALL`, `noexec` tmpfs). Details: ADR 0009, amendment DOG-1.

@@ -98,15 +98,49 @@ Answer (sanitized): (none)
 - The harness needs its own network access to the Anthropic API; it is not usable in air-gapped
   mode (see `docs/airgapped.md`): in air-gapped mode the harness refuses to start unless `api.anthropic.com` (or `anthropicUrl`) is on `OAX_AIRGAPPED_ALLOW`.
 
-## Proxy mode (not verified with a real CLI yet)
+## Run-node image (DOG-1)
+
+Verified on 2026-10-09 with the Dockerfile target `run-node-claude-code` (Claude Code `2.1.295`,
+native musl build, SHA-512 `4bf70c9f...ed16` for amd64 checked at build time) in a throwaway container
+with the hardening of the container runner (numeric user 10001, read-only root file system, all
+capabilities dropped, `no-new-privileges`, 2048 MiB memory, 256 PIDs, `/tmp` tmpfs 256 MiB `noexec`)
+on an `internal` Docker network that contained only a fake control node.
+
+| Check | Result |
+| --- | --- |
+| `claude --version` | `2.1.295 (Claude Code)`, equals the pin (the build also fails otherwise) |
+| `managed-settings.json`, `/etc/claude-code`, `CLAUDE_CONFIG_DIR` | none present |
+| package managers (`apk`, `npm`, `npx`, `corepack`, `yarn`, `pip`) | none present |
+| control node from inside the node | reachable (`GET /healthz` answered) |
+| `api.anthropic.com`, `github.com` | unreachable (`bad address`: no DNS on the internal network) |
+| direct IP (`1.1.1.1`) | `Network unreachable` |
+| write outside `/tmp` | `Read-only file system` |
+| `git init` and `git --version` in `/tmp` | works offline |
+
+Variable names and request shape of the **pinned CLI** against the proxy surface, with exactly the
+invocation and environment of the adapter (`stream-json`, `--tools ""`, `--strict-mcp-config`,
+`--permission-mode dontAsk`, `--restricted`, `--max-turns`):
+
+- `ANTHROPIC_BASE_URL=<control>/v1/model-proxy/anthropic` is honoured; the CLI sends
+  `POST /v1/model-proxy/anthropic/v1/messages?beta=true` (streaming), no other request (no
+  `count_tokens`, no `GET models/{id}`, no telemetry, no update check).
+- `ANTHROPIC_AUTH_TOKEN` is sent as `Authorization: Bearer ...`; no `x-api-key` header.
+- `ANTHROPIC_MODEL` (and the `SMALL_FAST`/`DEFAULT_*` variables) decides the model id of the request.
+- The request carries `tools: []`: no built-in tool is offered to the model (the `init` event lists
+  `tools: []`, `skills: []`, `mcp_servers: []`).
+- With only `ANTHROPIC_API_KEY` set the CLI sends `x-api-key` instead; the adapter does not use it.
+
+Not part of this check: a real Anthropic upstream and the gate tools (DOG-2); the end-to-end run of a
+harness step through the real container runner on the homelab is DOG-4b/DOG-5.
+
+## Proxy mode
 
 Through the model proxy (`agents[].runtime.harness`, ADR 0009 amendment W1-3b-7) the adapter sets
 `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
 `ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL`, `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`,
-`DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING`. The tests cover the adapter with a fake CLI that
-performs the HTTP call; the variable names are taken from the CLI documentation and have **not**
-been checked against a pinned binary. To verify: run the pinned CLI in a run node against a control node
-with `OAX_HARNESSES_ENABLED=claude-code` and check (a) the proxy receives `POST /v1/messages` with the
-model token, (b) no request carries another model id (`count_tokens` and `GET models/{id}` answer 404, see
-W1-3b-6, and must not break the run), (c) the ledger lines have `via = 'proxy'`.
-
+`DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING`. The variable names above (`ANTHROPIC_BASE_URL`,
+`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`) are now checked against the pinned binary (section
+"Run-node image"); the remaining ones are accepted without complaint but their effect (for example
+that a background call would use the small model) is not observable with a one-turn prompt. Still to
+verify with a real control node: (a) the proxy receives `POST /v1/messages` with the model token,
+(b) no request carries another model id, (c) the ledger lines have `via = 'proxy'`.

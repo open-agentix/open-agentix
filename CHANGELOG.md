@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Run-node image with Claude Code and harness runtime settings (DOG-1)**: Dockerfile target
+  `run-node-claude-code` with the Claude Code binary pinned to 2.1.295 and verified against the
+  registry SHA-512 at build time (no runtime download, no package manager, non-root, read-only root
+  compatible), `scripts/build-harness-image.sh` (build, push, digest). New settings
+  `OAX_CONTAINER_HARNESS_IMAGES` (harness -> digest-pinned image, `harness_image_unknown` fails
+  closed), `OAX_CONTAINER_TMP_MB`, `OAX_CONTAINER_HARNESS_MEMORY_MB` (2048) and
+  `OAX_CONTAINER_HARNESS_TMP_MB` (256), and `OAX_HARNESS_EGRESS_ALLOWED` (default off): a harness step
+  must publish with `runtime.egress: []` and the container runner refuses declared hosts at start
+  ("control node only" is enforced, not assumed). Verified in a hardened container on an internal
+  network; ADR 0008 amendment 2 and ADR 0009 amendment DOG-1. DOG-1b (subscription token) is not
+  built by owner decision.
 - **Tenant tree data model (W13-1 first slice, ADR 0013)**: migration `0013_tenant_hierarchy.sql`
   (PostgreSQL and PGlite) adds `parent_id`, `root_id`, a materialized `path` with prefix index and
   `depth` (technical maximum 32) to `tenants`; slugs stay globally unique (`tenants_slug_unique` is kept, the

@@ -250,6 +250,26 @@ export class AgentsService {
           path: `agents.${i}.runtime.harness`,
           message: `harness "${h}" is not enabled (OAX_HARNESSES_ENABLED=${this.ctx.config.harnesses.enabled.join(',')})`,
         });
+      if (!h) return;
+      // "Control node only": a harness step holds a model token and runs untrusted tool output, so it
+      // publishes without egress hosts unless the operator opened that explicitly (DOG-1).
+      const egress = a.runtime?.egress ?? def.runtime.egress;
+      if (egress.length > 0 && !this.ctx.config.harnesses.egressAllowed)
+        issues.push({
+          path: `agents.${i}.runtime.egress`,
+          message: `harness step "${a.id}" must not declare egress (runtime.egress: []); set OAX_HARNESS_EGRESS_ALLOWED=true to allow it`,
+        });
+      // The image of the harness must exist: otherwise the step would only fail when it starts.
+      const container = runners.container.config;
+      if (
+        (a.runtime?.runner ?? def.runtime.runner) === 'container' &&
+        container &&
+        !container.harnessImages[h]
+      )
+        issues.push({
+          path: `agents.${i}.runtime.harness`,
+          message: `no run node image is configured for harness "${h}" (OAX_CONTAINER_HARNESS_IMAGES)`,
+        });
     });
     // Step egress of container steps must lie inside the operator ceiling (never a union with it).
     const ceiling = (runners.container.config?.egressAllow ?? []).map(parseEgressEntry);

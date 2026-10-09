@@ -158,6 +158,15 @@ export const EnvSchema = z.object({
   /** Run node image pinned by digest (`...@sha256:<64 hex>`). */
   OAX_CONTAINER_IMAGE: z.string().optional(),
   OAX_CONTAINER_TOOLBOX_IMAGES: json(z.record(z.string(), z.string())).optional(),
+  /** Harness -> digest-pinned image, e.g. `{"claude-code":"ghcr.io/...@sha256:..."}` (DOG-1). */
+  OAX_CONTAINER_HARNESS_IMAGES: json(z.record(z.string(), z.string())).optional(),
+  /** `/tmp` tmpfs size (MiB) of an ordinary run node. */
+  OAX_CONTAINER_TMP_MB: int(64),
+  /** Memory (MiB, clamped to OAX_CONTAINER_MAX_MEMORY_MB) and `/tmp` size (MiB) of a harness step's node. */
+  OAX_CONTAINER_HARNESS_MEMORY_MB: int(2048),
+  OAX_CONTAINER_HARNESS_TMP_MB: int(256),
+  /** Allow harness steps to declare egress hosts. Default false: a harness step reaches the control node only. */
+  OAX_HARNESS_EGRESS_ALLOWED: bool.default(false),
   /** Pre-created network with `internal: true`. */
   OAX_CONTAINER_NETWORK: z.string().optional(),
   /** Egress proxy (a separate service, see docs/runners.md): URL nodes use and the shared grant key. */
@@ -300,7 +309,7 @@ export interface Config {
     dailyRuns: number;
   };
   /** External harnesses steps may run through the model proxy. Needs the model proxy. */
-  harnesses: { enabled: HarnessKind[] };
+  harnesses: { enabled: HarnessKind[]; egressAllowed: boolean };
   runners: {
     enabled: RunnerKind[];
     kubernetesJob: { enabled: boolean } & z.infer<typeof KubernetesJobRunnerConfigSchema> & {
@@ -599,6 +608,11 @@ function containerConfig(e: z.infer<typeof EnvSchema>): Config['runners']['conta
     allowRawSocket: e.OAX_CONTAINER_ALLOW_RAW_SOCKET,
     image: need(e.OAX_CONTAINER_IMAGE, 'OAX_CONTAINER_IMAGE'),
     toolboxImages: e.OAX_CONTAINER_TOOLBOX_IMAGES ?? {},
+    harnessImages: e.OAX_CONTAINER_HARNESS_IMAGES ?? {},
+    tmpMb: e.OAX_CONTAINER_TMP_MB,
+    harnessMemoryMb: e.OAX_CONTAINER_HARNESS_MEMORY_MB,
+    harnessTmpMb: e.OAX_CONTAINER_HARNESS_TMP_MB,
+    harnessEgressAllowed: e.OAX_HARNESS_EGRESS_ALLOWED,
     network: need(e.OAX_CONTAINER_NETWORK, 'OAX_CONTAINER_NETWORK'),
     ...(e.OAX_CONTAINER_EGRESS_PROXY_URL
       ? {
@@ -614,6 +628,28 @@ function containerConfig(e: z.infer<typeof EnvSchema>): Config['runners']['conta
     maxMemoryMb: e.OAX_CONTAINER_MAX_MEMORY_MB,
     maxPids: e.OAX_CONTAINER_MAX_PIDS,
   });
+  if (parsed.success) {
+    const c = parsed.data;
+    // tmpfs pages count against the container's memory: a /tmp that cannot fit would only fail late.
+    const checks: [string, number, number][] = [
+      ['OAX_CONTAINER_TMP_MB', c.tmpMb, c.maxMemoryMb],
+      ...(Object.keys(c.harnessImages).length > 0
+        ? ([
+            [
+              'OAX_CONTAINER_HARNESS_TMP_MB',
+              c.harnessTmpMb,
+              Math.min(c.harnessMemoryMb, c.maxMemoryMb),
+            ],
+          ] as [string, number, number][])
+        : []),
+    ];
+    for (const [name, tmp, memory] of checks)
+      if (tmp >= memory)
+        throw new OaxError(
+          'config_invalid',
+          `invalid configuration: ${name} (${tmp}) must be smaller than the node memory (${memory} MiB, see OAX_CONTAINER_MAX_MEMORY_MB)`,
+        );
+  }
   if (!parsed.success)
     throw new OaxError(
       'config_invalid',
@@ -641,7 +677,10 @@ function harnessesConfig(e: z.infer<typeof EnvSchema>): Config['harnesses'] {
       'config_invalid',
       'invalid configuration: OAX_HARNESSES_ENABLED requires OAX_MODEL_PROXY_ENABLED=true',
     );
-  return { enabled: [...new Set(enabled)] as HarnessKind[] };
+  return {
+    enabled: [...new Set(enabled)] as HarnessKind[],
+    egressAllowed: e.OAX_HARNESS_EGRESS_ALLOWED,
+  };
 }
 
 function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {

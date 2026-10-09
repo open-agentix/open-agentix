@@ -440,6 +440,7 @@ export const HARNESS_ENV = {
   OAX_CONTAINER_RUNNER_ENABLED: 'true',
   OAX_CONTAINER_ENGINE_URL: 'http://socket-proxy:2375',
   OAX_CONTAINER_IMAGE: IMAGE,
+  OAX_CONTAINER_HARNESS_IMAGES: JSON.stringify({ 'claude-code': IMAGE, opencode: IMAGE }),
   OAX_CONTAINER_NETWORK: 'oax-nodes',
   OAX_NODE_CONTROL_URL: 'http://api:8080',
   OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',

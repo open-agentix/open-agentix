@@ -393,6 +393,15 @@ sonnet, tests: haiku with real test runs, review and DOG-5: opus).
 
 ### DOG-1 Run-node image and harness runtime defaults
 
+> **Implemented (2026-10-09):** Dockerfile target `run-node-claude-code` (Claude Code 2.1.295, SHA-512
+> checked at build, Alpine/musl works, no Debian needed), `OAX_CONTAINER_HARNESS_IMAGES`,
+> `OAX_CONTAINER_TMP_MB`, `OAX_CONTAINER_HARNESS_MEMORY_MB|TMP_MB`, `OAX_HARNESS_EGRESS_ALLOWED`;
+> see [runners](runners.md#harness-images-dog-1) and the
+> [verification](verification/claude-code-harness.md#run-node-image-dog-1). `oax-workspace` is DOG-2
+> and is not part of the image yet; the end-to-end harness step in a real container with the full
+> stack follows with DOG-4b. Differences: the memory default applies to the harness class, not per
+> step, and `OAX_CLAUDE_BIN` is set by the image.
+
 - Dockerfile target `run-node-claude-code`: pinned Claude Code version and SHA-256 (build fails on
   mismatch), pinned `git` (offline use), `oax-workspace` included; base Alpine if the binary runs on
   musl, otherwise Debian slim for this target only.
@@ -413,6 +422,12 @@ sonnet, tests: haiku with real test runs, review and DOG-5: opus).
   and referenced by digest.
 
 ### DOG-1b Subscription credential at the control node
+
+> **Decision (owner, 2026-10-09): Q1 = no.** The proxy uses an Anthropic API key with a provider-side
+> spend limit; the subscription token is not relayed. DOG-1b (`authTokenRef`) is therefore **not
+> built** and ADR 0009 section 10 stays as is. The existing `anthropic` provider with `apiKeyRef`
+> already serves the pass-through surface of harness tokens. The bullets below are kept as the
+> design that would apply if the decision is reversed.
 
 - `anthropic` provider option `authTokenRef` (mutually exclusive with `apiKeyRef`); OAuth bearer
   header set for the upstream; allowed only for pass-through calls of `harness` tokens with

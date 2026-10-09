@@ -1,4 +1,4 @@
-import { OaxError, type RunnerKind } from '@openagentix/core';
+import { HARNESS_KINDS, OaxError, type HarnessKind, type RunnerKind } from '@openagentix/core';
 import { z } from 'zod';
 import type { EngineHijack } from './container-hijack.js';
 import { mintEgressGrant } from './egress-proxy.js';
@@ -48,6 +48,26 @@ export const ContainerRunnerConfigSchema = z.strictObject({
   toolboxImages: z
     .record(z.string(), z.string().regex(IMAGE_DIGEST, 'image must be pinned by digest'))
     .default({}),
+  /**
+   * Harness (`claude-code`, ...) -> image pinned by digest (DOG-1). A step with `runtime.harness`
+   * runs ONLY on the image of its harness; an unknown harness fails closed (`harness_image_unknown`).
+   * The keys are the allowlist: only kinds of `HARNESS_KINDS` are accepted.
+   */
+  harnessImages: z
+    .partialRecord(
+      z.enum(HARNESS_KINDS),
+      z.string().regex(IMAGE_DIGEST, 'image must be pinned by digest'),
+    )
+    .default({}),
+  /** Memory (MiB) of a harness step's node; clamped to `maxMemoryMb`. Claude Code needs about 1 GiB. */
+  harnessMemoryMb: z.number().int().min(256).default(2048),
+  /** `/tmp` tmpfs (MiB) of a harness step's node: the repository checkout and test scratch space. */
+  harnessTmpMb: z.number().int().positive().default(256),
+  /**
+   * A harness step normally reaches only the control node. Declared egress hosts are refused for it
+   * unless the operator opts in (`OAX_HARNESS_EGRESS_ALLOWED`).
+   */
+  harnessEgressAllowed: z.boolean().default(false),
   /** Pre-created network with `internal: true`; its only neighbours are the control node and the proxy. */
   network: z.string().min(1),
   /**
@@ -72,6 +92,7 @@ export const ContainerRunnerConfigSchema = z.strictObject({
     .default('default'),
   /** Numeric non-root user and group of the node process. */
   uid: z.number().int().min(1000).max(65534).default(10001),
+  /** `/tmp` tmpfs (MiB) of an ordinary node; harness steps use `harnessTmpMb`. */
   tmpMb: z.number().int().positive().default(64),
   stopGraceSeconds: z.number().int().nonnegative().default(5),
 });
@@ -243,11 +264,26 @@ export class ContainerRunner implements IsolatingRunner {
 
   /** Images a node may run: the default image and the configured toolbox images. */
   allowedImages(): Set<string> {
-    return new Set([this.config.image, ...Object.values(this.config.toolboxImages)]);
+    return new Set([
+      this.config.image,
+      ...Object.values(this.config.toolboxImages),
+      ...Object.values(this.config.harnessImages),
+    ]);
   }
 
   /** Image for a step: its toolbox's image, else the default. Unknown toolboxes fail closed. */
-  imageFor(toolbox: string | undefined): string {
+  imageFor(toolbox: string | undefined, harness?: HarnessKind): string {
+    // A harness step runs on the image of its harness (it contains the pinned binary); the toolbox
+    // cannot be combined with it, so the allowlist stays one-to-one.
+    if (harness) {
+      const image = this.config.harnessImages[harness];
+      if (!image)
+        throw new OaxError(
+          'harness_image_unknown',
+          `no image is configured for harness "${harness}" (OAX_CONTAINER_HARNESS_IMAGES)`,
+        );
+      return image;
+    }
     if (!toolbox) return this.config.image;
     const image = this.config.toolboxImages[toolbox];
     if (!image)
@@ -277,6 +313,20 @@ export class ContainerRunner implements IsolatingRunner {
     } catch {
       throw new OaxError('run_node_invalid', 'control URL is not an http(s) URL');
     }
+    if (spec.harness) {
+      if (spec.image !== c.harnessImages[spec.harness])
+        throw new OaxError(
+          'image_not_allowed',
+          `a "${spec.harness}" harness step must run on the image configured for that harness`,
+        );
+      // "Control node only" is enforced here too, not only at publish: the node network is internal
+      // and no egress grant is minted, unless the operator explicitly allows harness egress.
+      if (spec.egress.length > 0 && !c.harnessEgressAllowed)
+        throw new OaxError(
+          'harness_egress_denied',
+          'a harness step must not declare egress (OAX_HARNESS_EGRESS_ALLOWED is not set); it reaches the control node only',
+        );
+    }
     if (spec.egress.length > 0) {
       if (!c.egressProxyUrl || !c.egressGrantSecret)
         throw new OaxError(
@@ -294,7 +344,13 @@ export class ContainerRunner implements IsolatingRunner {
   /** The options of the container; exposed for tests and `assertSafeCreateBody`. */
   buildCreateBody(spec: RunNodeSpec): CreateBody {
     const c = this.config;
-    const memory = Math.min(spec.limits.memoryMb, c.maxMemoryMb) * 1024 * 1024;
+    // Harness steps get their own memory and /tmp sizes (Claude Code plus a repository checkout);
+    // the operator maximum still caps the memory.
+    const memoryMb = spec.harness
+      ? Math.min(c.harnessMemoryMb, c.maxMemoryMb)
+      : Math.min(spec.limits.memoryMb, c.maxMemoryMb);
+    const tmpMb = spec.harness ? c.harnessTmpMb : c.tmpMb;
+    const memory = memoryMb * 1024 * 1024;
     const tmpfs = (mb: number, mode: string) =>
       `rw,noexec,nosuid,nodev,size=${mb}m,mode=${mode},uid=${c.uid},gid=${c.uid}`;
     return {
@@ -340,7 +396,7 @@ export class ContainerRunner implements IsolatingRunner {
         MemorySwap: memory,
         NanoCpus: Math.round(Math.min(spec.limits.cpus, c.maxCpus) * 1e9),
         PidsLimit: Math.min(spec.limits.pids, c.maxPids),
-        Tmpfs: { '/tmp': tmpfs(c.tmpMb, '1777'), [TOKEN_DIR]: tmpfs(1, '0700') },
+        Tmpfs: { '/tmp': tmpfs(tmpMb, '1777'), [TOKEN_DIR]: tmpfs(1, '0700') },
         Init: true,
         RestartPolicy: { Name: 'no' },
         AutoRemove: false,

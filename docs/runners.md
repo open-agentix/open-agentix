@@ -122,12 +122,48 @@ Opt-in: nothing isolating runs by default. Enable it with `OAX_RUNNERS_ENABLED=i
 | `OAX_CONTAINER_ENGINE_URL` | required. Rootless Podman `unix:///run/user/1000/podman/podman.sock`, or a Docker socket proxy `http://socket-proxy:2375`. The Docker daemon's own socket (`/var/run/docker.sock`) is **refused** unless `OAX_CONTAINER_ALLOW_RAW_SOCKET=true` (logs a warning, audit `runner.unsafe_socket`). |
 | `OAX_CONTAINER_IMAGE` | required. Run node image **pinned by digest** (`name@sha256:<64 hex>`); tags are refused. Build target `run-node` of the repository `Dockerfile`. |
 | `OAX_CONTAINER_TOOLBOX_IMAGES` | JSON map toolbox name -> digest-pinned image. A step with an unknown toolbox fails closed (`toolbox_image_unknown`). Toolbox build, signing and verification are W2-1. |
+| `OAX_CONTAINER_HARNESS_IMAGES` | JSON map harness (`claude-code`, `opencode`) -> digest-pinned image. A step with `runtime.harness` runs **only** on the image of its harness; an unknown harness fails closed (`harness_image_unknown`), a tag is refused at start. See Harness images below. |
+| `OAX_CONTAINER_TMP_MB` | size of `/tmp` (tmpfs, default 64) of an ordinary node. |
+| `OAX_CONTAINER_HARNESS_MEMORY_MB`, `OAX_CONTAINER_HARNESS_TMP_MB` | memory (default 2048, clamped to `OAX_CONTAINER_MAX_MEMORY_MB`) and `/tmp` size (default 256) of a **harness step's** node: Claude Code plus a repository checkout do not fit into 512 MiB / 64 MiB. tmpfs pages count against the memory limit, so startup refuses a `/tmp` that is not smaller than the node memory. |
+| `OAX_HARNESS_EGRESS_ALLOWED` | default `false`. A harness step must publish with `runtime.egress: []` ("control node only"); publish refuses declared hosts, the runner refuses them again at start (`harness_egress_denied`). `true` lifts both checks. |
 | `OAX_CONTAINER_NETWORK` | required. A pre-created network with `internal: true`; the runner inspects it before every start and refuses anything else (`network_not_internal`). |
 | `OAX_NODE_CONTROL_URL` | required. Base URL of the control node **as seen from the node** (on the internal network), not the public URL. |
 | `OAX_CONTAINER_INSTANCE_ID` | installation id (default `default`); containers are labelled with it and the orphan reaper only touches its own installation's containers. Set a distinct value per installation on a shared engine. |
 | `OAX_CONTAINER_EGRESS_PROXY_URL`, `_GRANT_SECRET`, `_ALLOW`, `_PRIVATE_ALLOW` | the separate egress proxy, see Egress below; without URL and secret no step can declare egress. |
 | `OAX_CONTAINER_MAX_CPUS`, `_MAX_MEMORY_MB`, `_MAX_PIDS` | upper bounds (defaults 1, 512, 256); a step's limits are clamped to them. |
 | `OAX_CONTAINER_ENGINE`, `OAX_CONTAINER_ALLOW_RAW_SOCKET` | `docker` (default) or `podman`; the unsafe-socket switch. |
+
+### Harness images (DOG-1)
+
+A harness step needs the harness binary inside the node. The Dockerfile target
+`run-node-claude-code` (derived from `run-node`) contains Claude Code `2.1.295`:
+
+- **Pinned and verified.** The native musl package (`@anthropic-ai/claude-code-linux-x64-musl`, `-arm64-musl`)
+  is fetched at **build time** from the npm registry and checked against the SHA-512 recorded in the
+  Dockerfile (`CLAUDE_CODE_SHA512_AMD64|ARM64`, taken from `npm view <pkg>@<version> dist.integrity`, converted to
+  hex); a mismatch or a wrong `claude --version` fails the build. Nothing is downloaded when the image
+  runs, there are no install scripts, no package manager (`apk`, `npm`, `yarn`, `corepack` are removed)
+  and `OAX_CLAUDE_BIN=/opt/claude-code/bin/claude` is set in the image. To change the version, change
+  `CLAUDE_CODE_VERSION` and both digests in one commit and re-run the verification
+  ([claude-code-harness](verification/claude-code-harness.md)).
+- **Hardening unchanged.** Numeric non-root user `10001`, no capabilities, read-only root file system
+  (Claude Code writes only below `HOME=/tmp`), no `managed-settings.json`, no `/etc/claude-code`, no
+  `CLAUDE_CONFIG_DIR`. `git` (pinned by Alpine package version, `GIT_VERSION`) is included for offline use
+  such as diffs. Reproducibility: pin the base image as well, `--build-arg NODE_IMAGE=node:22-alpine@sha256:...`
+  (the Alpine package pin fails the build when the base moves, which is intended).
+- **Licence.** The Claude Code binary is proprietary (Anthropic). Keep the pushed image in a
+  **private** registry package; it is not a project release artifact.
+- **Digest rule.** `OAX_CONTAINER_HARNESS_IMAGES` accepts only `name@sha256:<manifest digest>`. A locally
+  built image has no repository digest until it is pushed, so the flow is: build, push, take the digest
+  of the push, configure it, make sure the engine host has pulled it (the runner never pulls).
+  `scripts/build-harness-image.sh <git-sha>` does build, push and prints the variable line. Only keys
+  of the known harness kinds are accepted (the allowlist), and the image of a harness step must be the one
+  configured for that harness: another allowed image is refused (`image_not_allowed`).
+- **Limits.** Harness steps get `OAX_CONTAINER_HARNESS_MEMORY_MB` (2048) and `OAX_CONTAINER_HARNESS_TMP_MB`
+  (256); the operator maximum `OAX_CONTAINER_MAX_MEMORY_MB` still caps the memory, so raise it (for example 2048)
+  on installations that run harness steps.
+- **Egress.** The node network is `internal`; a harness step has no egress grant, so it reaches the
+  control node only (verified from inside a node, [verification](verification/claude-code-harness.md#run-node-image-dog-1)).
 
 Hardening of every node container (checked again by `assertSafeCreateBody` before each create, which
 refuses privileged mode, bind mounts, devices, added capabilities, host namespaces, host/bridge
@@ -281,10 +317,9 @@ Completions APIs under the same switch (`OAX_MODEL_PROXY_ENABLED`):
 
 ## Not in this version
 
-- **Harness run-node images (W1-3b-8, PLAT-05).** `agents[].runtime.harness` and the adapters exist
-  ([harnesses](harnesses.md#through-the-model-proxy-run-nodes)), but the image targets that contain the
-  pinned Claude Code and OpenCode binaries do not: until they ship, a harness step fails with
-  `harness_spawn_failed` unless the operator builds such an image.
+- **OpenCode run-node image.** The Claude Code image exists (DOG-1, below); the image target for
+  OpenCode does not. A `opencode` harness step fails with `harness_image_unknown` until the operator
+  maps a self-built image.
 
 ### Known follow-ups
 
