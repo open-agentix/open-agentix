@@ -1,4 +1,10 @@
-import { CLASSIFICATIONS, PERMISSIONS, ROLES, RUN_STATUSES, STEP_KINDS } from '@openagentix/core';
+import {
+  CLASSIFICATIONS,
+  GRANTABLE_ROLES,
+  PERMISSIONS,
+  RUN_STATUSES,
+  STEP_KINDS,
+} from '@openagentix/core';
 import { AGENT_STATUSES } from '../services/agent-filters.js';
 import { PatchAttachmentSchema } from '@openagentix/runners';
 import { z } from 'zod';
@@ -485,7 +491,8 @@ export const CostRowSchema = z.object({
   costUsd: z.number(),
 });
 
-export const RoleSchema = z.enum(ROLES);
+/** Roles accepted for grants; `pentest` is not grantable before ADR 0014 slice S6. */
+export const RoleSchema = z.enum(GRANTABLE_ROLES);
 export const PermissionSchema = z.enum(PERMISSIONS);
 export const UserSchema = z.object({
   id: Id,

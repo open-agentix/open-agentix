@@ -1,7 +1,7 @@
 import {
   getEgressPolicy,
   PERMISSIONS,
-  ROLES,
+  GRANTABLE_ROLES,
   ROLE_PERMISSIONS,
   RUNNER_KINDS,
 } from '@openagentix/core';
@@ -182,9 +182,11 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
         available: ctx.config.runners.enabled.includes(k),
       })),
       auth: { local: true, ldap: !!ctx.config.auth.ldap, oidc: !!ctx.config.auth.oidc },
-      roles: [...ROLES],
+      roles: [...GRANTABLE_ROLES],
       permissions: [...PERMISSIONS],
-      rolePermissions: Object.fromEntries(ROLES.map((r) => [r, [...ROLE_PERMISSIONS[r]]])),
+      rolePermissions: Object.fromEntries(
+        GRANTABLE_ROLES.map((r) => [r, [...ROLE_PERMISSIONS[r]]]),
+      ),
     }),
   );
 }

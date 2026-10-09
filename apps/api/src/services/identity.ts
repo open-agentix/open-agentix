@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import {
   OaxError,
+  bindingFingerprint,
+  effectiveAt,
   effectivePermissions,
   homeTenantOf,
-  isRole,
+  isGrantableRole,
+  sameBindings,
   type Permission,
   type Principal,
   type Role,
@@ -30,7 +33,9 @@ import {
 } from '../db/schema.js';
 import type { tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
+import type { Db } from '../db/client.js';
 import type { AuditService } from './audit.js';
+import { loadRawGrants, mirrorGlobalRoles } from './role-bindings.js';
 import { TenantAccess } from './tenant-access.js';
 
 export type UserRow = typeof users.$inferSelect;
@@ -96,15 +101,20 @@ export class IdentityService {
       .select({ count: sql<number>`count(*)::int` })
       .from(users);
     if (count > 0) return false;
-    await this.ctx.db.insert(users).values({
-      id: randomUUID(),
-      email: admin.email.toLowerCase(),
-      displayName: 'Administrator',
-      passwordHash: await hashPassword(admin.password),
-      source: 'local',
-      globalRoles: ['admin'],
-      tenantId: DEFAULT_TENANT_ID,
-      platformAdmin: true,
+    const id = randomUUID();
+    const passwordHash = await hashPassword(admin.password);
+    await this.ctx.db.transaction(async (tx) => {
+      await tx.insert(users).values({
+        id,
+        email: admin.email.toLowerCase(),
+        displayName: 'Administrator',
+        passwordHash,
+        source: 'local',
+        globalRoles: ['admin'],
+        tenantId: DEFAULT_TENANT_ID,
+        platformAdmin: true,
+      });
+      await mirrorGlobalRoles(tx as unknown as Db, { id, tenantId: DEFAULT_TENANT_ID }, ['admin']);
     });
     await this.audit.append({
       actor: 'system',
@@ -124,11 +134,12 @@ export class IdentityService {
       .from(teamMembers)
       .innerJoin(teams, eq(teams.id, teamMembers.teamId))
       .where(and(eq(teamMembers.userId, user.id), eq(teams.tenantId, user.tenantId)));
+    // `pentest` is not grantable before ADR 0014 slice S6: it is ignored in the legacy sources.
     const bindings: RoleBinding[] = user.globalRoles
-      .filter(isRole)
+      .filter(isGrantableRole)
       .map((role) => ({ role, teamId: null }));
     for (const m of memberships)
-      if (isRole(m.role)) bindings.push({ role: m.role, teamId: m.teamId });
+      if (isGrantableRole(m.role)) bindings.push({ role: m.role, teamId: m.teamId });
     const agentBindings = await this.ctx.db
       .select({
         role: agentRoleBindings.role,
@@ -139,8 +150,59 @@ export class IdentityService {
       .innerJoin(agents, eq(agents.id, agentRoleBindings.agentId))
       .where(and(eq(agentRoleBindings.userId, user.id), eq(agents.tenantId, user.tenantId)));
     for (const b of agentBindings)
-      if (isRole(b.role)) bindings.push({ role: b.role, teamId: b.teamId, agentId: b.agentId });
+      if (isGrantableRole(b.role))
+        bindings.push({ role: b.role, teamId: b.teamId, agentId: b.agentId });
+    // ADR 0014 S1: the legacy bindings above stay authoritative; the new resolver only shadows.
+    if (this.ctx.config.auth.roleBindingsShadow) await this.shadowCheck(user, bindings);
     return bindings;
+  }
+
+  private readonly shadowLogged = new Map<string, number>();
+
+  /**
+   * Shadow mode of the tenant role resolver (ADR 0014 slice S1): resolves the user's bindings from
+   * `tenant_role_bindings` at the home node and compares them with the legacy result. Never throws,
+   * never changes the result; a difference is counted (`oax_role_bindings_shadow_total`) and logged
+   * (at most once per user and ten minutes). A non-zero `mismatch` count means the mirror of
+   * `users.global_roles` drifted or a binding exists that the legacy path does not know.
+   */
+  private async shadowCheck(user: UserRow, legacy: RoleBinding[]): Promise<void> {
+    const counter = this.ctx.metrics.roleBindingsShadow;
+    try {
+      const loaded = await loadRawGrants(this.ctx.db, user);
+      if (!loaded) {
+        counter.inc({ outcome: 'error' });
+        return;
+      }
+      // Today a platform operator acts with the roles of its home tenant: no implicit admin yet.
+      const resolved = effectiveAt(loaded.raw, loaded.home, {
+        now: this.ctx.now(),
+        implicitPlatformAdmin: false,
+      });
+      if (sameBindings(legacy, resolved)) {
+        counter.inc({ outcome: 'match' });
+        return;
+      }
+      counter.inc({ outcome: 'mismatch' });
+      const now = this.ctx.now().getTime();
+      if (now - (this.shadowLogged.get(user.id) ?? 0) < 600_000) return;
+      this.shadowLogged.set(user.id, now);
+      if (this.shadowLogged.size > 1000) this.shadowLogged.clear();
+      const a = bindingFingerprint(legacy);
+      const b = bindingFingerprint(resolved);
+      this.ctx.logger.warn(
+        {
+          userId: user.id,
+          tenantId: user.tenantId,
+          onlyLegacy: a.filter((l) => !b.includes(l)),
+          onlyResolver: b.filter((l) => !a.includes(l)),
+        },
+        'role binding shadow mismatch: legacy and resolver disagree (legacy stays authoritative)',
+      );
+    } catch (e) {
+      counter.inc({ outcome: 'error' });
+      this.ctx.logger.warn({ err: e, userId: user.id }, 'role binding shadow check failed');
+    }
   }
 
   /** Users with a role on exactly one agent (resource-scoped bindings). */
@@ -483,7 +545,9 @@ export class IdentityService {
     displayName: string,
     mapped: MappedBinding[],
   ): Promise<UserRow> {
-    const globalRoles = mapped.filter((m) => m.teamSlug === null).map((m) => m.role);
+    const globalRoles = mapped
+      .filter((m) => m.teamSlug === null && isGrantableRole(m.role))
+      .map((m) => m.role);
     const lower = email.toLowerCase();
     const [existing] = await this.ctx.db.select().from(users).where(eq(users.email, lower));
     // External identities land in the default tenant (or stay in the tenant they were created in).
@@ -491,17 +555,21 @@ export class IdentityService {
     if (existing && existing.source !== source)
       throw conflict(`user ${lower} exists with source ${existing.source}`);
     const id = existing?.id ?? randomUUID();
-    if (existing) {
-      if (existing.disabled) throw unauthenticated('user is disabled');
-      await this.ctx.db
-        .update(users)
-        .set({ displayName, globalRoles, externalId })
-        .where(eq(users.id, id));
-    } else {
-      await this.ctx.db
-        .insert(users)
-        .values({ id, email: lower, displayName, source, externalId, globalRoles, tenantId });
-    }
+    if (existing?.disabled) throw unauthenticated('user is disabled');
+    // `global_roles` and its mirror in `tenant_role_bindings` change together (ADR 0014 S1).
+    await this.ctx.db.transaction(async (tx) => {
+      if (existing) {
+        await tx
+          .update(users)
+          .set({ displayName, globalRoles, externalId })
+          .where(eq(users.id, id));
+      } else {
+        await tx
+          .insert(users)
+          .values({ id, email: lower, displayName, source, externalId, globalRoles, tenantId });
+      }
+      await mirrorGlobalRoles(tx as unknown as Db, { id, tenantId }, globalRoles);
+    });
     const slugs = [...new Set(mapped.filter((m) => m.teamSlug).map((m) => m.teamSlug!))];
     const teamRows = slugs.length
       ? await this.ctx.db
@@ -626,14 +694,23 @@ export class IdentityService {
       .where(eq(users.email, email));
     if (exists) throw conflict(`user ${email} already exists`);
     const id = randomUUID();
-    await this.ctx.db.insert(users).values({
-      id,
-      email,
-      displayName: input.displayName,
-      passwordHash: await hashPassword(input.password),
-      source: 'local',
-      globalRoles: input.globalRoles,
-      tenantId: actor.tenantId,
+    const passwordHash = await hashPassword(input.password);
+    await this.ctx.db.transaction(async (tx) => {
+      await tx.insert(users).values({
+        id,
+        email,
+        displayName: input.displayName,
+        passwordHash,
+        source: 'local',
+        globalRoles: input.globalRoles,
+        tenantId: actor.tenantId,
+      });
+      await mirrorGlobalRoles(
+        tx as unknown as Db,
+        { id, tenantId: actor.tenantId },
+        input.globalRoles,
+        actor.userId,
+      );
     });
     await this.audit.append({
       actor: actor.userId,
@@ -658,11 +735,21 @@ export class IdentityService {
     if (patch.displayName !== undefined) set.displayName = patch.displayName;
     if (patch.globalRoles !== undefined) set.globalRoles = patch.globalRoles;
     if (patch.disabled !== undefined) set.disabled = patch.disabled;
-    const updated = await this.ctx.db
-      .update(users)
-      .set(set)
-      .where(and(eq(users.id, id), eq(users.tenantId, actor.tenantId)))
-      .returning();
+    const updated = await this.ctx.db.transaction(async (tx) => {
+      const rows = await tx
+        .update(users)
+        .set(set)
+        .where(and(eq(users.id, id), eq(users.tenantId, actor.tenantId)))
+        .returning();
+      if (rows.length > 0 && patch.globalRoles !== undefined)
+        await mirrorGlobalRoles(
+          tx as unknown as Db,
+          { id, tenantId: actor.tenantId },
+          patch.globalRoles,
+          actor.userId,
+        );
+      return rows;
+    });
     if (updated.length === 0) throw notFound('user');
     await this.invalidateUserTokens(id);
     await this.audit.append({

@@ -19,6 +19,7 @@ export class Metrics {
   readonly modelProxyDuration: Histogram<'phase'>;
   readonly modelProxyAborts: Counter<'reason'>;
   readonly modelProxyStreamsActive: Gauge<string>;
+  readonly roleBindingsShadow: Counter<'outcome'>;
 
   constructor(prefix = 'oax_') {
     collectDefaultMetrics({ register: this.registry, prefix });
@@ -33,6 +34,14 @@ export class Metrics {
       name: `${prefix}events_ingested_total`,
       help: 'Ingested events',
       labelNames: ['source', 'outcome'],
+      registers: [this.registry],
+    });
+    this.roleBindingsShadow = new Counter({
+      name: `${prefix}role_bindings_shadow_total`,
+      help:
+        'Shadow comparison of the tenant role resolver with the legacy bindings (ADR 0014 S1): ' +
+        'outcome match, mismatch or error; the legacy result stays authoritative',
+      labelNames: ['outcome'],
       registers: [this.registry],
     });
     this.runsCreated = new Counter({
