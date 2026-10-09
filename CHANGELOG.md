@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Kubernetes Job runner wired into the worker (RM-24)**: `apps/worker` now starts the
+  `kubernetes-job` runner when `OAX_RUNNERS_ENABLED` lists it and `OAX_K8S_JOB_ENABLED=true`
+  (off by default, no cluster client otherwise), next to or instead of the container runner, with a
+  per-runner control URL slot (both runners read `OAX_NODE_CONTROL_URL` for now). Fail closed: the process refuses to start outside a cluster or with an
+  incomplete configuration. New settings `OAX_K8S_IMAGE`, `OAX_K8S_TOOLBOX_IMAGES`,
+  `OAX_K8S_CONTROL_PLANE_POD_SELECTOR`/`_NAMESPACE_SELECTOR`/`_CIDRS`/`_PORTS`, `OAX_K8S_DNS_EGRESS`,
+  `OAX_K8S_AUTOMOUNT_SA_TOKEN`, `OAX_K8S_DEFAULT_DENY_POLICY`; an enabled runner now requires an
+  `https://` `OAX_NODE_CONTROL_URL`, a digest-pinned `OAX_K8S_IMAGE` and a control plane selector or CIDR
+  (**behaviour change** for configurations that enabled the runner before it was wired). The kind
+  end-to-end test stays opt-in. Docs: `docs/kubernetes-job-runner.md`, `docs/runners.md`.
+  `OAX_K8S_CONTROL_PLANE_PORTS` must list at least one port (an empty list would have rendered
+  `ports: []`, which a NetworkPolicy reads as every port). `OAX_K8S_CONTROL_PLANE_CIDRS` are
+  checked at start-up: no broader than `/24` (IPv4) or `/64` (IPv6), never inside an always-denied
+  range, and always-denied ranges plus `OAX_K8S_DENY_CIDRS` inside them are excluded.
 - **Seed endpoint, pull-request delivery and bug-fix agent (DOG-3c/DOG-4, ADR 0008 Amendment 5, ADR
   0010 Amendment 3)**: `GET /v1/worker/runs/{id}/workspace` (step-scoped, once per session, SHA-256
   header, digests-only audit `workspace.prepared`/`workspace.fetched`, migration 0014); run node

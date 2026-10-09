@@ -36,6 +36,8 @@ export interface NodeDispatcherOptions {
   workerId: string;
   /** Control node base URL as seen from run nodes. */
   controlUrl: string;
+  /** Per-runner override of `controlUrl` (e.g. an https URL for Kubernetes, an internal one for containers). */
+  controlUrls?: Partial<Record<RunnerKind, string>>;
   /** Upper bounds handed to the runner (it clamps to its own maxima). */
   limits: { cpus: number; memoryMb: number; pids: number };
   /** Step timeout when neither the step nor the pipeline budget sets one. */
@@ -195,7 +197,7 @@ export class NodeDispatcher implements StepDispatcher {
           nodeId: session.nodeId,
           steps: [agent.id],
           image,
-          controlUrl: this.opts.controlUrl,
+          controlUrl: this.opts.controlUrls?.[kind] ?? this.opts.controlUrl,
           runToken: session.token,
           limits: { ...this.opts.limits, timeoutSeconds },
           egress,

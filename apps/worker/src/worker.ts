@@ -33,6 +33,8 @@ export interface WorkerOptions {
       >
     >;
     controlUrl: string;
+    /** Per-runner override of `controlUrl`. */
+    controlUrls?: Partial<Record<RunnerKind, string>>;
     limits: { cpus: number; memoryMb: number; pids: number };
     /** How often a running node's run is checked for cancellation (default 2 s). */
     cancelPollMs?: number;
@@ -120,6 +122,9 @@ export class Worker {
               workerId: this.id,
               ...(this.delivery ? { delivery: this.delivery } : {}),
               controlUrl: this.opts.isolation?.controlUrl ?? '',
+              ...(this.opts.isolation?.controlUrls
+                ? { controlUrls: this.opts.isolation.controlUrls }
+                : {}),
               limits: this.opts.isolation?.limits ?? { cpus: 1, memoryMb: 512, pids: 256 },
               ...(this.opts.isolation?.cancelPollMs
                 ? { cancelPollMs: this.opts.isolation.cancelPollMs }

@@ -1,4 +1,9 @@
-import { NotImplementedError, OaxError, type RunnerKind } from '@openagentix/core';
+import {
+  NotImplementedError,
+  OaxError,
+  type HarnessKind,
+  type RunnerKind,
+} from '@openagentix/core';
 import type { z } from 'zod';
 import {
   ALWAYS_DENIED_CIDRS,
@@ -215,6 +220,59 @@ export function effectiveResources(
   return { cpu: `${Math.max(1, Math.round(cpu * 1000))}m`, memory: `${mem}Mi` };
 }
 
+/**
+ * Narrowest the operator may make a control plane CIDR: /24 (IPv4), /64 (IPv6). The control node is
+ * a few addresses (a Service IP, a load balancer); a wider block would let run Pods reach every
+ * neighbour on the control ports. Use the pod/namespace selectors for in-cluster Pods instead.
+ */
+export const CONTROL_PLANE_MIN_PREFIX: Readonly<Record<4 | 6, number>> = { 4: 24, 6: 64 };
+
+/**
+ * The control plane `ipBlock`s: each CIDR must be valid, no broader than
+ * {@link CONTROL_PLANE_MIN_PREFIX} and not inside an always-denied range (IMDS, link-local,
+ * loopback). Always-denied ranges and `denyCidrs` that lie inside a control plane CIDR are
+ * punched out with `except`. A control plane CIDR inside a `denyCidrs` range is an explicit
+ * operator exception (e.g. the control node's Service IP inside the denied service CIDR).
+ */
+export function controlPlaneBlocks(cfg: KubernetesJobRunnerConfig): EgressCidr[] {
+  const always = ALWAYS_DENIED_CIDRS.map((d) => parseCidr(d)!);
+  const denied = [
+    ...always,
+    ...cfg.denyCidrs.map((d) => {
+      const c = parseCidr(d);
+      if (!c) throw bad(`deny CIDR "${d}" is not a valid CIDR`);
+      return c;
+    }),
+  ];
+  return cfg.controlPlane.cidrs.map((raw) => {
+    const c = parseCidr(raw);
+    if (!c) throw bad(`control plane CIDR "${raw}" is not a valid CIDR`);
+    const min = CONTROL_PLANE_MIN_PREFIX[c.version];
+    if (c.bits < min) {
+      throw bad(`control plane CIDR "${raw}" is too broad (minimum prefix /${min})`);
+    }
+    if (always.some((d) => cidrContains(d, c))) {
+      throw bad(`control plane CIDR "${raw}" is inside an always-denied range`);
+    }
+    const except = [
+      ...new Set(
+        denied
+          .filter((d) => d.version === c.version && d.bits > c.bits && cidrContains(c, d))
+          .map((d) => formatCidr(d)),
+      ),
+    ];
+    return { cidr: formatCidr(c), except };
+  });
+}
+
+/** Start-up check of the control plane settings (fail closed, before the first step). */
+export function validateControlPlane(cfg: KubernetesJobRunnerConfig): void {
+  if (cfg.controlPlane.ports.length === 0) {
+    throw bad('controlPlane.ports must list at least one port');
+  }
+  controlPlaneBlocks(cfg);
+}
+
 function selectorPeer(
   podSelector?: Record<string, string>,
   namespaceSelector?: Record<string, string>,
@@ -268,12 +326,12 @@ export function buildNetworkPolicy(spec: RunNodeSpec, cfg: KubernetesJobRunnerCo
   const cpTo: Record<string, unknown>[] = [];
   const peer = selectorPeer(cp.podSelector, cp.namespaceSelector);
   if (peer) cpTo.push(peer);
-  for (const c of cp.cidrs) {
-    const pc = parseCidr(c);
-    if (!pc || pc.bits === 0) throw bad(`invalid control plane CIDR "${c}"`);
-    cpTo.push({ ipBlock: { cidr: c } });
+  for (const { cidr, except } of controlPlaneBlocks(cfg)) {
+    cpTo.push({ ipBlock: { cidr, ...(except.length > 0 ? { except } : {}) } });
   }
   if (cpTo.length > 0) {
+    // An empty `ports` list would allow every port to the control plane peers (fail closed).
+    if (cp.ports.length === 0) throw bad('controlPlane.ports must list at least one port');
     egress.push({ to: cpTo, ports: cp.ports.map((port) => ({ protocol: 'TCP', port })) });
   }
   for (const { cidr, except } of plan.cidrs) {
@@ -446,11 +504,52 @@ export class KubernetesJobRunner implements IsolatingRunner {
       throw bad('the run namespace must differ from the worker namespace');
     }
     validateResourceCeiling(this.config.resources);
+    validateControlPlane(this.config);
+    // Misconfigured images are a start-up error, not a surprise at the first step (fail closed).
+    for (const image of [this.config.image, ...Object.values(this.config.toolboxImages)]) {
+      if (image !== undefined) validateImage(image, this.config);
+    }
     this.client = opts.client;
     this.pollMs = opts.pollMs ?? 2000;
     this.cleanupPolls = Math.max(1, Math.ceil((opts.cleanupTimeoutMs ?? 60_000) / this.pollMs));
     this.sleep = opts.sleep ?? defaultSleep;
     this.warn = opts.warn ?? (() => undefined);
+  }
+
+  /** Limits the worker hands to ordinary steps: the operator ceilings (steps are clamped again). */
+  defaultLimits(): { cpus: number; memoryMb: number; pids: number } {
+    return {
+      cpus: parseCpu(this.config.resources.cpu),
+      memoryMb: Math.floor(parseMemoryMb(this.config.resources.memory)),
+      pids: 256,
+    };
+  }
+
+  /** Image for a step: its toolbox image, else the default. Unknown toolboxes/harnesses fail closed. */
+  imageFor(toolbox: string | undefined, harness?: HarnessKind): string {
+    if (harness) {
+      throw new OaxError(
+        'harness_image_unknown',
+        `harness "${harness}" steps are not supported by the kubernetes-job runner yet`,
+      );
+    }
+    if (!toolbox) {
+      if (!this.config.image) {
+        throw new OaxError(
+          'run_node_image_unknown',
+          'no run node image is configured (OAX_K8S_IMAGE)',
+        );
+      }
+      return this.config.image;
+    }
+    const image = this.config.toolboxImages[toolbox];
+    if (!image) {
+      throw new OaxError(
+        'toolbox_image_unknown',
+        `no image is configured for toolbox "${toolbox}" (OAX_K8S_TOOLBOX_IMAGES)`,
+      );
+    }
+    return image;
   }
 
   async execute(_run: PreparedRun, _ctx: RunnerContext): Promise<RunResult> {

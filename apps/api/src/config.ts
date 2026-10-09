@@ -15,6 +15,8 @@ import {
   KubernetesJobRunnerConfigSchema,
   parseCidr,
   parseEgressEntries,
+  validateControlPlane,
+  validateImage,
   validateResourceCeiling,
 } from '@openagentix/runners';
 import { z } from 'zod';
@@ -150,6 +152,15 @@ export const EnvSchema = z.object({
   OAX_K8S_RESOURCES_CPU: z.string().default('500m'),
   OAX_K8S_RESOURCES_MEMORY: z.string().default('512Mi'),
   OAX_K8S_EGRESS: z.string().default(''),
+  OAX_K8S_IMAGE: z.string().optional(),
+  OAX_K8S_TOOLBOX_IMAGES: json(z.record(z.string(), z.string())).optional(),
+  OAX_K8S_CONTROL_PLANE_POD_SELECTOR: json(z.record(z.string(), z.string())).optional(),
+  OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR: json(z.record(z.string(), z.string())).optional(),
+  OAX_K8S_CONTROL_PLANE_CIDRS: z.string().default(''),
+  OAX_K8S_CONTROL_PLANE_PORTS: z.string().default('443'),
+  OAX_K8S_DNS_EGRESS: bool.default(true),
+  OAX_K8S_AUTOMOUNT_SA_TOKEN: bool.default(false),
+  OAX_K8S_DEFAULT_DENY_POLICY: z.string().default('default-deny-all'),
   // Container runner (W1-3a): opt-in, one hardened container per isolated step.
   OAX_CONTAINER_RUNNER_ENABLED: bool.default(false),
   OAX_CONTAINER_ENGINE: z.enum(['docker', 'podman']).default('docker'),
@@ -317,6 +328,8 @@ export interface Config {
     enabled: RunnerKind[];
     kubernetesJob: { enabled: boolean } & z.infer<typeof KubernetesJobRunnerConfigSchema> & {
         imagePullSecrets: string[];
+        /** Control node base URL as seen from run Pods (https only; set exactly when enabled). */
+        nodeControlUrl?: string;
       };
     /** `config` is set exactly when the runner is enabled and complete (fail closed otherwise). */
     container: {
@@ -675,6 +688,18 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
       );
     }
   }
+  // An empty list would become `ports: []` in the NetworkPolicy, which Kubernetes reads as
+  // "every port"; refuse it (and non-numeric entries) with the setting's name.
+  const controlPlanePorts = list(e.OAX_K8S_CONTROL_PLANE_PORTS).map(Number);
+  if (
+    controlPlanePorts.length === 0 ||
+    !controlPlanePorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535)
+  ) {
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: OAX_K8S_CONTROL_PLANE_PORTS must list at least one TCP port (1-65535)',
+    );
+  }
   const job = KubernetesJobRunnerConfigSchema.parse({
     namespace: e.OAX_K8S_NAMESPACE,
     serviceAccountName: e.OAX_K8S_SERVICE_ACCOUNT,
@@ -690,6 +715,21 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
     egress: list(e.OAX_K8S_EGRESS),
     resources: { cpu: e.OAX_K8S_RESOURCES_CPU, memory: e.OAX_K8S_RESOURCES_MEMORY },
     nodeSelector: e.OAX_K8S_NODE_SELECTOR ?? {},
+    ...(e.OAX_K8S_IMAGE ? { image: e.OAX_K8S_IMAGE } : {}),
+    toolboxImages: e.OAX_K8S_TOOLBOX_IMAGES ?? {},
+    controlPlane: {
+      ...(e.OAX_K8S_CONTROL_PLANE_POD_SELECTOR
+        ? { podSelector: e.OAX_K8S_CONTROL_PLANE_POD_SELECTOR }
+        : {}),
+      ...(e.OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR
+        ? { namespaceSelector: e.OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR }
+        : {}),
+      cidrs: list(e.OAX_K8S_CONTROL_PLANE_CIDRS),
+      ports: controlPlanePorts,
+    },
+    dnsEgress: e.OAX_K8S_DNS_EGRESS,
+    automountServiceAccountToken: e.OAX_K8S_AUTOMOUNT_SA_TOKEN,
+    defaultDenyPolicy: e.OAX_K8S_DEFAULT_DENY_POLICY,
   });
   try {
     validateResourceCeiling(job.resources);
@@ -720,6 +760,45 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
         'invalid configuration: runner "kubernetes-job" needs OAX_TOOLBOX_ALLOWLIST and/or OAX_K8S_RUN_NODE_IMAGES (an empty allowlist would allow nothing)',
       );
     }
+    // Fail closed: a Pod that cannot reach the control node is useless, and the control node URL
+    // must be https (the run token travels to it).
+    const cp = job.controlPlane;
+    if (!cp.podSelector && !cp.namespaceSelector && cp.cidrs.length === 0) {
+      throw new OaxError(
+        'config_invalid',
+        'invalid configuration: runner "kubernetes-job" needs OAX_K8S_CONTROL_PLANE_POD_SELECTOR / OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR / OAX_K8S_CONTROL_PLANE_CIDRS (where run nodes may reach the control node)',
+      );
+    }
+    try {
+      validateControlPlane(job);
+    } catch (err) {
+      throw new OaxError(
+        'config_invalid',
+        `invalid configuration: OAX_K8S_CONTROL_PLANE_CIDRS / OAX_K8S_DENY_CIDRS: ${(err as Error).message}`,
+      );
+    }
+    if (!e.OAX_NODE_CONTROL_URL || !e.OAX_NODE_CONTROL_URL.startsWith('https://')) {
+      throw new OaxError(
+        'config_invalid',
+        'invalid configuration: runner "kubernetes-job" needs OAX_NODE_CONTROL_URL with an https:// URL',
+      );
+    }
+    if (!job.image) {
+      throw new OaxError(
+        'config_invalid',
+        'invalid configuration: runner "kubernetes-job" needs OAX_K8S_IMAGE (digest-pinned run node image)',
+      );
+    }
+    for (const image of [job.image, ...Object.values(job.toolboxImages)]) {
+      try {
+        validateImage(image!, job);
+      } catch (err) {
+        throw new OaxError(
+          'config_invalid',
+          `invalid configuration: OAX_K8S_IMAGE / OAX_K8S_TOOLBOX_IMAGES: ${(err as Error).message}`,
+        );
+      }
+    }
     // The runner does not verify cosign signatures itself; an admission policy must.
     if (e.OAX_TOOLBOX_REQUIRE_SIGNATURE && !e.OAX_K8S_SIGNATURES_VERIFIED_BY_ADMISSION) {
       throw new OaxError(
@@ -735,6 +814,7 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
       enabled: e.OAX_K8S_JOB_ENABLED,
       ...job,
       imagePullSecrets: list(e.OAX_K8S_IMAGE_PULL_SECRETS),
+      ...(e.OAX_NODE_CONTROL_URL ? { nodeControlUrl: e.OAX_NODE_CONTROL_URL } : {}),
     },
   };
 }

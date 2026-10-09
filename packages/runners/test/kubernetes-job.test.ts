@@ -470,6 +470,53 @@ describe('resources and identity', () => {
       KubernetesJobRunnerConfigSchema.parse({ controlPlane: { namespaceSelector: {} } }),
     ).toThrow(/must not be empty/);
   });
+
+  it('rejects an empty control plane port list (an empty `ports` opens every port)', () => {
+    expect(() =>
+      KubernetesJobRunnerConfigSchema.parse({
+        controlPlane: { namespaceSelector: { a: 'b' }, ports: [] },
+      }),
+    ).toThrow();
+    // Defence in depth: a config that bypassed the schema never yields a port-less rule.
+    const c = cfg();
+    c.controlPlane.ports = [];
+    expect(() => buildNetworkPolicy(spec({ egress: [] }), c)).toThrow(/port/);
+    expect(
+      () =>
+        new KubernetesJobRunner({
+          client: new FakeKube(),
+          config: { namespace: 'runs', controlPlane: { cidrs: ['10.9.0.1/32'], ports: [] } },
+        }),
+    ).toThrow();
+  });
+  it('bounds control plane CIDRs and punches the always-denied ranges out of them', () => {
+    const mkr = (cidrs: string[], over: Record<string, unknown> = {}) =>
+      new KubernetesJobRunner({
+        client: new FakeKube(),
+        config: { namespace: 'runs', controlPlane: { cidrs }, ...over },
+      });
+    // too broad: a /1 split would open half of the internet on the control ports
+    expect(() => mkr(['0.0.0.0/1'])).toThrow(/too broad/);
+    expect(() => mkr(['10.0.0.0/8'])).toThrow(/too broad/);
+    expect(() => mkr(['2001:db8::/32'])).toThrow(/too broad/);
+    expect(() => mkr(['not-a-cidr'])).toThrow(/control plane CIDR/);
+    // inside an always-denied range (cloud metadata)
+    expect(() => mkr(['169.254.169.254/32'])).toThrow(/always-denied/);
+    expect(() => mkr(['10.9.0.0/24'])).not.toThrow();
+    // denied ranges inside an allowed control plane CIDR become `except` entries
+    const p = buildNetworkPolicy(
+      spec({ egress: [] }),
+      cfg({
+        dnsEgress: false,
+        denyCidrs: ['10.9.0.1/32'],
+        controlPlane: { cidrs: ['10.9.0.0/24', '168.63.129.0/24'] },
+      }),
+    ) as any;
+    expect(p.spec.egress[0].to).toEqual([
+      { ipBlock: { cidr: '10.9.0.0/24', except: ['10.9.0.1/32'] } },
+      { ipBlock: { cidr: '168.63.129.0/24', except: ['168.63.129.16/32'] } },
+    ]);
+  });
 });
 
 describe('KubernetesJobRunner lifecycle', () => {
@@ -959,5 +1006,41 @@ describe('InClusterKubeClient', () => {
 
   it('fromEnv requires an in-cluster environment', () => {
     expect(() => InClusterKubeClient.fromEnv({})).toThrow(/not running in a cluster/);
+  });
+});
+
+describe('worker wiring helpers', () => {
+  const IMG = `ghcr.io/open-agentix/toolbox-trivy@${DIGEST}`;
+  const mk = (over: Record<string, unknown> = {}) =>
+    new KubernetesJobRunner({
+      client: new FakeKube(),
+      config: {
+        namespace: 'runs',
+        toolboxAllowlist: ['trivy'],
+        image: IMG,
+        toolboxImages: { trivy: IMG },
+        ...over,
+      },
+    });
+
+  it('selects the configured image and fails closed for unknown toolboxes and harnesses', () => {
+    const r = mk();
+    expect(r.imageFor(undefined)).toBe(IMG);
+    expect(r.imageFor('trivy')).toBe(IMG);
+    expect(() => r.imageFor('nmap')).toThrow(/no image is configured for toolbox "nmap"/);
+    expect(() => r.imageFor(undefined, 'claude-code')).toThrow(/not supported/);
+    expect(() => mk({ image: undefined }).imageFor(undefined)).toThrow(/no run node image/);
+  });
+
+  it('hands the operator ceilings to the worker as default limits', () => {
+    expect(mk().defaultLimits()).toEqual({ cpus: 0.5, memoryMb: 512, pids: 256 });
+  });
+
+  it('rejects unpinned, foreign-registry or non-allowlisted images at construction', () => {
+    expect(() => mk({ image: 'ghcr.io/open-agentix/toolbox-trivy:latest' })).toThrow(/digest/);
+    expect(() => mk({ image: `docker.io/x/toolbox-trivy@${DIGEST}` })).toThrow(/registry/);
+    expect(() =>
+      mk({ toolboxImages: { nmap: `ghcr.io/open-agentix/toolbox-nmap@${DIGEST}` } }),
+    ).toThrow(/allowlist/);
   });
 });
