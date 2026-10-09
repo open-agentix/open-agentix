@@ -812,6 +812,7 @@ triage precision, digest usefulness rating.
 | S-10 | Approval gate between pipeline steps (run pauses after a step until `runs:approve`), audited, visible to visitors as "waiting for approval" | W1-5 |
 | S-11 | Research and assessment (no integration): indexed documentation services in the style of context7 for the research agent; privacy, licence, pinning, prompt-injection risk; result is a recommendation to the owner, who approves or rejects that exact source | - |
 | S-12 | Showcase deployment: Compose stack for control node, PostgreSQL, worker and Ollama on the owner's server via Git and runner; console build for GitHub Pages pointing at the showcase API (or served by the backend) | S-1, S-2 |
+| S-13 | Code quality reviewer (`examples/agents/code-quality-reviewer.md`, [guide](examples-quality-agent.md)): tenant `engineering/code-review`, cap 3 USD of the 45 USD, L1 draft, one approved PR comment | S-1, S-2, S-3 (`pr-comment` profile) |
 
 ## 12. Owner decisions and open questions
 
