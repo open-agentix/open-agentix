@@ -3,9 +3,11 @@ import { performance } from 'node:perf_hooks';
 import type { Principal } from '@openagentix/core';
 import pg from 'pg';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { costLedger, runs, tenants as tenantsTable } from '../src/db/schema.js';
 import { monthOf } from '../src/services/runs.js';
+import { TenantAccess } from '../src/services/tenant-access.js';
+import { TenantTree } from '../src/services/tenant-tree.js';
 import { agentSource } from './fixtures.js';
 import { testNode, type TestNode } from './helpers.js';
 
@@ -273,22 +275,41 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
       expect(c['x-unit']).toMatchObject({ agents: 0, spendMonthUsd: 0 });
     });
 
-    it('shows a tenant admin their node and everything below, nothing else', async () => {
+    it('shows a tenant admin only their own node until bindings inherit (ADR 0014)', async () => {
       const r = await tree(tok.adminA!, '?include=counts');
       const xs = r.json().items as Item[];
-      expect(slugs(xs)).toEqual(['org-a', 'div-1', 'team-1', 'div-2']);
-      expect(xs[0]).toMatchObject({ myRoles: ['admin'], inheritedRoles: [] });
-      expect(xs[1]).toMatchObject({ myRoles: [], inheritedRoles: ['admin'] });
-      // nothing of the other organisation or the default tenant, not even as a string
-      for (const secret of [id['org-b']!, id['x-unit']!, id.default!, 'org-b', 'x-unit', 'Secret'])
+      expect(slugs(xs)).toEqual(['org-a']);
+      expect(xs[0]).toMatchObject({ myRoles: ['admin'], inheritedRoles: [], hasChildren: false });
+      // nothing below the node, of the other organisation or the default tenant, not even a name
+      for (const secret of [
+        id['div-1']!,
+        id['team-1']!,
+        id['div-2']!,
+        'div-1',
+        'Division',
+        'team-1',
+        id['org-b']!,
+        id['x-unit']!,
+        id.default!,
+        'org-b',
+        'x-unit',
+        'Secret',
+      ])
         expect(r.body).not.toContain(secret);
-      expect(xs[0]!.counts).toMatchObject({ agentsSubtree: 7, spendMonthSubtreeUsd: 8 });
+      // own numbers only: the 6 agents and 7 USD below must not leak into the subtree figures
+      expect(xs[0]!.counts).toMatchObject({
+        agents: 1,
+        agentsSubtree: 1,
+        spendMonthUsd: 1,
+        spendMonthSubtreeUsd: 1,
+        pendingApprovals: 0,
+      });
     });
 
-    it('shows a use-case-sized admin only their branch plus the ancestors as name stubs', async () => {
+    it('shows the admin of an inner node only that node plus the ancestors as name stubs', async () => {
       const r = await tree(tok.adminDiv1!, '?include=counts');
       const xs = r.json().items as Item[];
-      expect(slugs(xs)).toEqual(['org-a', 'div-1', 'team-1']);
+      expect(slugs(xs)).toEqual(['org-a', 'div-1']);
       expect(xs[0]).toMatchObject({
         visible: false,
         counts: null,
@@ -297,12 +318,26 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
         hasChildren: true,
         name: 'Org org-a',
       });
-      expect(xs[1]).toMatchObject({ visible: true, myRoles: ['admin'] });
-      // no sibling, no counts of the ancestor, no foreign organisation
-      for (const secret of [id['div-2']!, 'div-2', 'Division Two', id['org-b']!, 'org-b'])
+      expect(xs[1]).toMatchObject({ visible: true, myRoles: ['admin'], hasChildren: false });
+      // no child, no sibling, no counts of the ancestor, no foreign organisation
+      for (const secret of [
+        id['team-1']!,
+        'team-1',
+        'Team One',
+        id['div-2']!,
+        'div-2',
+        'Division Two',
+        id['org-b']!,
+        'org-b',
+      ])
         expect(r.body).not.toContain(secret);
-      // the stub carries no number of the parent: only the branch's own sums
-      expect(xs[1]!.counts).toMatchObject({ agentsSubtree: 3, spendMonthSubtreeUsd: 3 });
+      // the stub carries no number of the parent, the node none of its child
+      expect(xs[1]!.counts).toMatchObject({
+        agents: 2,
+        agentsSubtree: 2,
+        spendMonthSubtreeUsd: 2.5,
+        pendingApprovals: 1,
+      });
     });
 
     it('shows a viewer only the own node (and the path above), never a child or a subtree sum', async () => {
@@ -343,7 +378,7 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
       const xs = await items(tok.agentsOnly!, '?include=counts');
       expect(xs[0]!.counts).toMatchObject({
         agents: 1,
-        agentsSubtree: 7,
+        agentsSubtree: 1,
         runs30d: null,
         pendingApprovals: null,
         spendMonthUsd: null,
@@ -353,9 +388,11 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
     });
 
     it('accepts a root by id or slug path inside the reach and 404s everywhere else', async () => {
-      expect(slugs(await items(tok.adminA!, `?root=${id['div-1']}`))).toEqual(['div-1', 'team-1']);
-      expect(slugs(await items(tok.adminA!, '?root=org-a/div-1'))).toEqual(['div-1', 'team-1']);
+      expect(slugs(await items(n.admin, `?root=${id['div-1']}`))).toEqual(['div-1', 'team-1']);
+      expect(slugs(await items(n.admin, '?root=org-a/div-1'))).toEqual(['div-1', 'team-1']);
       expect(slugs(await items(n.admin, '?root=org-b&depth=0'))).toEqual(['org-b']);
+      for (const own of [id['org-a']!, 'org-a', id['org-a']!.toUpperCase()])
+        expect(slugs(await items(tok.adminA!, `?root=${own}`)), own).toEqual(['org-a']);
       const outside = [
         id['org-b']!, // another organisation
         'org-b/x-unit',
@@ -366,6 +403,9 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
         '../etc',
         'a//b',
         'ORG-A',
+        id['div-1']!, // a child of the admin's own node (no inheriting binding)
+        'org-a/div-1',
+        'div-1',
       ];
       const bodies = new Set<string>();
       for (const root of outside.slice(0, 3).concat(outside.slice(4))) {
@@ -386,15 +426,16 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
     });
 
     it('limits depth and size and flags truncation, shallowest first', async () => {
-      expect(slugs(await items(tok.adminA!, '?depth=1'))).toEqual(['org-a', 'div-1', 'div-2']);
-      const xs = await items(tok.adminA!, '?depth=1');
+      const org = '?root=org-a';
+      expect(slugs(await items(n.admin, `${org}&depth=1`))).toEqual(['org-a', 'div-1', 'div-2']);
+      const xs = await items(n.admin, `${org}&depth=1`);
       expect(xs.find((x) => x.slug === 'div-1')!.hasChildren).toBe(true); // cut off by depth
-      const r = await tree(tok.adminA!, '?limit=3');
+      const r = await tree(n.admin, `${org}&limit=3`);
       expect(r.json().truncated).toBe(true);
       expect(slugs(r.json().items)).toEqual(['org-a', 'div-1', 'div-2']); // team-1 is the deepest
-      expect((await tree(tok.adminA!, '?limit=4')).json().truncated).toBe(false);
+      expect((await tree(n.admin, `${org}&limit=4`)).json().truncated).toBe(false);
       // truncated responses still carry complete subtree sums
-      const c = await items(tok.adminA!, '?limit=1&include=counts');
+      const c = await items(n.admin, `${org}&limit=1&include=counts`);
       expect(c[0]!.counts).toMatchObject({ agentsSubtree: 7 });
       for (const bad of ['?depth=33', '?depth=-1', '?limit=0', '?limit=5001', '?include=secrets'])
         expect((await tree(tok.adminA!, bad)).statusCode, bad).toBe(400);
@@ -445,37 +486,31 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
       expect(
         await me(n.admin).then((r) => [r.body.installationMode, r.body.visibleTenantCount]),
       ).toEqual(['multi', 7]);
-      expect((await me(tok.adminA!)).body).toMatchObject({
-        installationMode: 'multi',
-        visibleTenantCount: 4,
-      });
-      expect((await me(tok.adminDiv1!)).body).toMatchObject({
-        installationMode: 'multi',
-        visibleTenantCount: 2,
-      });
-      // a viewer or a leaf admin has nothing to switch to, whatever else exists in the installation
-      expect((await me(tok.viewerA!)).body).toMatchObject({
-        installationMode: 'single',
-        visibleTenantCount: 1,
-      });
-      expect((await me(tok.adminTeam1!)).body).toMatchObject({
-        installationMode: 'single',
-        visibleTenantCount: 1,
-      });
+      // nobody but a platform admin has anything to switch to before inheriting bindings
+      // (ADR 0014), whatever else exists in the installation: tenant admins of inner nodes neither
+      for (const who of ['adminA', 'adminDiv1', 'viewerA', 'adminTeam1'])
+        expect((await me(tok[who]!)).body, who).toMatchObject({
+          installationMode: 'single',
+          visibleTenantCount: 1,
+        });
     });
 
     it('follows X-OAX-Tenant: acting tenant changes, home tenant and roles stay', async () => {
-      const { body, headers } = await me(tok.adminA!, { 'x-oax-tenant': 'org-a/div-1/team-1' });
+      const { body, headers } = await me(n.admin, { 'x-oax-tenant': 'org-a/div-1/team-1' });
       expect(body.actingTenant).toMatchObject({ slugPath: 'org-a/div-1/team-1' });
       expect(body.actingTenant.path.map((p: { slug: string }) => p.slug)).toEqual([
         'org-a',
         'div-1',
         'team-1',
       ]);
-      expect(body.homeTenant).toMatchObject({ slug: 'org-a' });
-      expect(body.bindings[0]).toMatchObject({ role: 'admin', tenantId: id['org-a'] });
+      expect(body.homeTenant).toMatchObject({ slug: 'default' });
+      expect(body.bindings[0]).toMatchObject({ role: 'admin', tenantId: id.default });
       expect(headers['x-oax-acting-tenant']).toBe('org-a/div-1/team-1');
-      expect(body.visibleTenantCount).toBe(4);
+      expect(body.visibleTenantCount).toBe(7);
+      // a tenant admin naming its own node by slug path is a no-op
+      const own = await me(tok.adminA!, { 'x-oax-tenant': 'org-a' });
+      expect(own.body.actingTenant.slugPath).toBe('org-a');
+      expect(own.headers['x-oax-acting-tenant']).toBe('org-a');
     });
 
     it('lets a platform admin act anywhere', async () => {
@@ -495,16 +530,82 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
       return r;
     };
 
-    it('acts in any node of the visible subtree by id, slug or slug path', async () => {
+    it('lets a platform admin act in any node by id, slug or slug path', async () => {
       for (const ref of [id['team-1']!, 'team-1', 'org-a/div-1/team-1']) {
-        const r = await agentsOf(tok.adminA!, ref);
+        const r = await agentsOf(n.admin, ref);
         expect(r.statusCode, ref).toBe(200);
         expect(r.json().items.map((a: { name: string }) => a.name)).toEqual(['team-1-agent-0']);
         expect(r.headers['x-oax-acting-tenant']).toBe('org-a/div-1/team-1');
       }
+    });
+
+    it('lets everybody else name the own node by id, slug or slug path', async () => {
+      for (const [who, refs, path] of [
+        ['adminA', [id['org-a']!, id['org-a']!.toUpperCase(), 'org-a'], 'org-a'],
+        ['adminTeam1', [id['team-1']!, 'team-1', 'org-a/div-1/team-1'], 'org-a/div-1/team-1'],
+      ] as const)
+        for (const ref of refs) {
+          const r = await agentsOf(tok[who]!, ref);
+          expect(r.statusCode, `${who} -> ${ref}`).toBe(200);
+          expect(r.headers['x-oax-acting-tenant']).toBe(path);
+        }
       const own = await agentsOf(tok.adminA!);
       expect(own.json().items).toHaveLength(1);
       expect(own.headers['x-oax-acting-tenant']).toBe('org-a');
+    });
+
+    it('never lets a tenant admin act in a descendant: no read, no write (ADR 0014 opt-in)', async () => {
+      // Without an inheriting binding the admin role of org-a covers org-a only. Every route that
+      // writes in a node (agents, users, tokens, teams, connections, policies, budgets, ...) runs
+      // in the acting node, so the header itself must be refused.
+      const H = { 'x-oax-tenant': 'org-a/div-1' };
+      const writes: Parameters<TestNode['req']>[0][] = [
+        { method: 'GET', url: '/v1/agents', headers: H },
+        { method: 'POST', url: '/v1/agents', headers: H, payload: { source: agentSource('x') } },
+        {
+          method: 'POST',
+          url: '/v1/users',
+          headers: H,
+          payload: {
+            email: 'planted@div-1.example.org',
+            displayName: 'planted',
+            password: PW,
+            globalRoles: ['admin'],
+          },
+        },
+        { method: 'POST', url: '/v1/teams', headers: H, payload: { slug: 'planted', name: 'P' } },
+        {
+          method: 'POST',
+          url: '/v1/tokens',
+          headers: H,
+          payload: { name: 'planted', expiresInDays: 1 },
+        },
+      ];
+      for (const w of writes) {
+        const r = await as(tok.adminA!)(w);
+        expect(r.statusCode, `${w.method} ${w.url}`).toBe(404);
+      }
+      // nothing was created in the child
+      const users = await as(n.admin)({ method: 'GET', url: '/v1/users', headers: H });
+      expect(users.body).not.toContain('planted@div-1.example.org');
+      const agentsInChild = await agentsOf(n.admin, 'org-a/div-1');
+      expect(agentsInChild.json().items).toHaveLength(2);
+      // the API token of that admin is refused too
+      expect((await agentsOf(tok.agentsOnly!, 'div-1')).statusCode).toBe(404);
+    });
+
+    it('never looks up another node for a caller limited to its home node (no timing oracle)', async () => {
+      const resolve = vi.spyOn(TenantAccess.prototype, 'resolve');
+      const walk = vi.spyOn(TenantTree.prototype, 'resolveSlugPath');
+      try {
+        for (const ref of ['org-b/x-unit', 'org-b', 'nope/nothing', id['org-b']!, 'org-a/div-1'])
+          expect((await agentsOf(tok.adminA!, ref)).statusCode, ref).toBe(404);
+        expect(resolve).not.toHaveBeenCalled();
+        expect(walk).not.toHaveBeenCalled();
+      } finally {
+        resolve.mockRestore();
+        walk.mockRestore();
+      }
     });
 
     it('answers 404 identically for sibling, ancestor, other organisation and unknown nodes', async () => {
@@ -520,9 +621,13 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
             'org-b',
             'x-unit',
             id.default!,
+            'team-1', // child
+            'org-a/div-1/team-1',
+            id['team-1']!,
           ],
         ],
         ['adminA', ['org-b', id['org-b']!, 'org-b/x-unit', 'x-unit', 'default', id.default!]],
+        ['adminA', ['div-1', 'org-a/div-1', id['div-1']!, 'org-a/div-1/team-1', 'div-2']],
         ['viewerA', ['div-1', 'org-a/div-1', id['div-1']!, 'org-b']],
         ['adminTeam1', ['div-1', 'org-a', 'div-2', id['div-1']!]],
         ['adminB', ['org-a', 'div-1', id['div-1']!, 'default']],
@@ -547,22 +652,23 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
       expect((await agentsOf(tok.viewerA!, 'div-1')).statusCode).toBe(404);
     });
 
-    it('keeps the roles of the home tenant: a tenant admin cannot create tenants or leave the subtree', async () => {
+    it('keeps the roles of the home tenant: a tenant admin cannot create tenants or reach a child', async () => {
       const r = await as(tok.adminA!)({
         method: 'POST',
         url: '/v1/tenants',
-        headers: { 'x-oax-tenant': 'div-1' },
         payload: { slug: 'sneaky', name: 'Sneaky' },
       });
       expect(r.statusCode).toBe(403);
-      // a resource of the child is not reachable by id from the parent's node without the header
+      // a resource of the child is not reachable by id, with or without the header
       const a = (await agentsOf(n.admin, id['div-1']!)).json().items[0].id as string;
-      expect((await as(tok.adminA!)({ method: 'GET', url: `/v1/agents/${a}` })).statusCode).toBe(
-        404,
-      );
+      for (const headers of [{}, { 'x-oax-tenant': 'div-1' }])
+        expect(
+          (await as(tok.adminA!)({ method: 'GET', url: `/v1/agents/${a}`, headers })).statusCode,
+        ).toBe(404);
+      // a platform admin acting there keeps its own (home) roles and may read it
       expect(
         (
-          await as(tok.adminA!)({
+          await as(n.admin)({
             method: 'GET',
             url: `/v1/agents/${a}`,
             headers: { 'x-oax-tenant': 'div-1' },
@@ -602,13 +708,8 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
         parentId: id['org-b'],
         depth: 1,
       });
-      expect((await list(tok.adminA!)).map((t) => t.slug)).toEqual([
-        'div-1',
-        'div-2',
-        'org-a',
-        'team-1',
-      ]);
-      expect((await list(tok.adminDiv1!)).map((t) => t.slug)).toEqual(['div-1', 'team-1']);
+      expect((await list(tok.adminA!)).map((t) => t.slug)).toEqual(['org-a']);
+      expect((await list(tok.adminDiv1!)).map((t) => t.slug)).toEqual(['div-1']);
       expect((await list(tok.viewerA!)).map((t) => t.slug)).toEqual(['org-a']);
     });
 
@@ -617,6 +718,8 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
         ['adminA', 'org-b'],
         ['adminDiv1', 'div-2'],
         ['adminDiv1', 'org-a'],
+        ['adminDiv1', 'team-1'],
+        ['adminA', 'div-1'],
         ['viewerA', 'div-1'],
       ] as const)
         expect(
@@ -624,7 +727,7 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
           `${who} ${target}`,
         ).toBe(404);
       expect(
-        (await as(tok.adminA!)({ method: 'GET', url: `/v1/tenants/${id['div-1']}` })).json(),
+        (await as(tok.adminDiv1!)({ method: 'GET', url: `/v1/tenants/${id['div-1']}` })).json(),
       ).toMatchObject({ slugPath: 'org-a/div-1' });
     });
   });
@@ -643,7 +746,8 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
       expect((await search(tok.adminDiv1!, 'div')).map((x) => x.slug)).toEqual(['div-1']);
       expect(await search(tok.adminDiv1!, 'secret')).toEqual([]);
       expect((await search(tok.adminA!, 'unit one')).map((x) => x.slugPath)).toEqual([]);
-      expect((await search(tok.adminA!, 'team one')).map((x) => x.slugPath)).toEqual([
+      expect(await search(tok.adminA!, 'team one')).toEqual([]); // a descendant
+      expect((await search(n.admin, 'team one')).map((x) => x.slugPath)).toEqual([
         'org-a/div-1/team-1',
       ]);
       expect(await search(tok.viewerA!, 'division')).toEqual([]);

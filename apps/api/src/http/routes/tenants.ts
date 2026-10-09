@@ -51,8 +51,9 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
         summary:
           "The tenant tree the caller may see, with the caller's roles and optional counts per node",
         description:
-          'Platform operators see every organisation, tenant admins their node and everything below it, ' +
-          "everybody else their own node. The ancestors of the caller's node appear as path stubs " +
+          'Platform operators see every organisation; everybody else, tenant admins included, their ' +
+          'own node until role bindings can inherit down the tree (ADR 0014). ' +
+          "The ancestors of the caller's node appear as path stubs " +
           '(`visible: false`: name and slug only). Siblings, cousins and other organisations never ' +
           "appear. A `root` outside the caller's reach is 404. Counts are included only for nodes " +
           'and metrics the caller may read. Parents come before their children; siblings are ordered ' +

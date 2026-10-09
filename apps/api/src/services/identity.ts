@@ -234,9 +234,10 @@ export class IdentityService {
 
   /**
    * Acting inside another node of the tenant tree (`X-OAX-Tenant: <id | slug | slug path>`,
-   * ADR 0013 7.4): platform operators may act in every node, tenant admins in their own node and
-   * everything below it, everybody else only in their own node. A node outside that reach
-   * (sibling, ancestor, another organisation) answers 404, indistinguishable from an unknown one.
+   * ADR 0013 7.4 with ADR 0014): platform operators may act in every node, everybody else (tenant
+   * admins included) only in their own node until bindings can inherit (ADR 0014 S2). A node
+   * outside that reach (child, sibling, ancestor, another organisation) answers 404,
+   * indistinguishable from an unknown one.
    * The roles stay those of the home tenant; the principal remembers it as `homeTenantId`.
    */
   async actingIn(principal: Principal, tenant: string): Promise<Principal> {

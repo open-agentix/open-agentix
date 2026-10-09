@@ -193,8 +193,9 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   });
 
   /**
-   * `X-OAX-Tenant` selects the node the request acts in: any node of the caller's visible subtree
-   * (platform operators: every node); everything else is 404. The node actually used is reported
+   * `X-OAX-Tenant` selects the node the request acts in: any node the caller can reach
+   * (`TenantAccess`: platform operators every node, everybody else the home node until bindings
+   * inherit, ADR 0014); everything else is 404. The node actually used is reported
    * back in `X-OAX-Acting-Tenant` (its slug path) so the console can detect a mismatch.
    */
   const actingIn = async (

@@ -51,8 +51,8 @@ export class TenantsService {
   }
 
   /**
-   * The tenants the principal may see and act in: platform operators every tenant, tenant admins
-   * their node and everything below it, everybody else only their own (ADR 0013 7.4).
+   * The tenants the principal may see and act in ({@link TenantAccess.reach}): platform operators
+   * every tenant, everybody else only their own until bindings can inherit (ADR 0014).
    */
   async list(p: Principal): Promise<TenantRow[]> {
     const reach = await this.access.reach(p);
