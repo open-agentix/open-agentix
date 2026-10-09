@@ -605,11 +605,19 @@ export class GitSession {
   async lsRemote(ref: string): Promise<string | null> {
     assertBranchRef(ref);
     const { r } = await this.network(['ls-remote', '--refs', '--', this.repo.url, ref]);
-    const lines = r.stdout.toString('utf8').split('\n').filter(Boolean);
-    if (lines.length === 0) return null;
-    const m = lines.length === 1 ? /^([0-9a-f]{40})\t(\S+)$/.exec(lines[0]!) : null;
-    if (!m || m[2] !== ref) throw new GitError('protocol_error', 'unexpected ref advertisement');
-    return m[1]!;
+    // ls-remote patterns match the TAIL of a ref name: `refs/heads/x/refs/heads/<ref>` is listed
+    // too. Only the exact name counts; other lines must still be well formed.
+    const hits: string[] = [];
+    for (const line of r.stdout.toString('utf8').split('\n').filter(Boolean)) {
+      const m = /^([0-9a-f]{40})\t(\S+)$/.exec(line);
+      if (!m) throw new GitError('protocol_error', 'unexpected ref advertisement');
+      const [, id, name] = m as unknown as [string, string, string];
+      if (name === ref) hits.push(id);
+      else if (!name.endsWith(`/${ref}`))
+        throw new GitError('protocol_error', 'unexpected ref advertisement');
+    }
+    if (hits.length > 1) throw new GitError('protocol_error', 'unexpected ref advertisement');
+    return hits[0] ?? null;
   }
 
   /** Shallow fetch (depth 1) of one commit into the session's bare repository. */

@@ -523,6 +523,20 @@ exec git "$@"
     expect(git(srv.bare, 'rev-parse', `refs/heads/${branch}`)).toBe(baseSha);
   });
 
+  it('is not blocked by a ref whose name merely ends with the branch name', async () => {
+    const branch = 'oax/bug-fix/tail-1';
+    git(srv.bare, 'update-ref', `refs/heads/zz/refs/heads/${branch}`, baseSha);
+    const patch = diffOf('src/price.js', PRICE_BEFORE, PRICE_AFTER);
+    const s = await prep();
+    try {
+      const rep = await s.applyAndPushBranch(input(patch, branch));
+      expect(rep.pushed).toBe(true);
+      expect(git(srv.bare, 'rev-parse', `refs/heads/${branch}`)).toBe(rep.commit);
+    } finally {
+      await s.dispose();
+    }
+  });
+
   it('stops before the push in dry-run mode', async () => {
     const patch = diffOf('src/price.js', PRICE_BEFORE, PRICE_AFTER);
     const s = await prep();
