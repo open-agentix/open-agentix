@@ -155,6 +155,12 @@ All notable changes to this project are documented here. The format follows
   counts and class names only (a run node may report exactly that step). On by default;
   `OAX_STRIP_INVISIBLE_UNICODE=false` switches it off for diagnostics. Docs:
   `docs/security-input-hardening.md`.
+- **Secret redaction for model input** (ADR 0008 Amendment 6): known secret values (resolved secret
+  references, brokered credentials, run, gate and model tokens) and common token shapes are replaced
+  by `[redacted:<kind>]` in prompts and in every tool result before it enters the model context or a
+  stored step output; the counts are part of the `input_guard` audit entry. On by default;
+  `OAX_REDACT_MODEL_CONTEXT=false` switches it off for diagnostics. The token patterns moved from
+  `apps/worker` to `@openagentix/core` (`SECRET_PATTERNS`); `scanForSecrets` is unchanged.
 - Network configuration refuses plain `http://` proxies in production (`proxy_plain_http`), proxy
   URLs with credentials (use `authSecret` references), any key that would disable TLS verification
   and `NODE_TLS_REJECT_UNAUTHORIZED=0` (`tls_insecure`). Cloud metadata addresses and names are

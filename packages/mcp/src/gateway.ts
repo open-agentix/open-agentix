@@ -6,6 +6,7 @@ import {
   findGrant,
   isGuardReportEmpty,
   mergeGuardReports,
+  type SecretResolver,
   type GuardReport,
   type PolicyContext,
   type PolicyDecision,
@@ -65,21 +66,35 @@ export class ToolGateway {
     private readonly configs: readonly McpServerConfig[],
     private readonly deps: ConnectDeps,
     /**
-     * Guards every tool result before the caller sees it (invisible Unicode removed). This is the
-     * one place all tool results pass, for inline runs, run nodes and harness steps alike. On by
-     * default.
+     * Guards every tool result before the caller sees it (invisible Unicode removed, secret values
+     * replaced). This is the one place all tool results pass, for inline runs, run nodes and
+     * harness steps alike. On by default; secrets resolved for the servers are registered here.
      */
     readonly guard: ContextGuard = new ContextGuard(),
   ) {}
+
+  /** Wraps a resolver so that every value it hands out is known to the guard. */
+  private recording(resolver: SecretResolver): SecretResolver {
+    return {
+      resolve: async (ref) => {
+        const value = await resolver.resolve(ref);
+        this.guard.addSecret(value);
+        return value;
+      },
+    };
+  }
 
   private async connection(server: string): Promise<McpConnection> {
     const existing = this.connections.get(server);
     if (existing) return existing;
     const cfg = this.configs.find((c) => c.name === server);
     if (!cfg) throw new OaxError('mcp_unknown_server', `MCP server "${server}" is not configured`);
-    const deps = this.deps.secretsFor
-      ? { ...this.deps, secrets: this.deps.secretsFor(cfg.name) }
-      : this.deps;
+    const deps = {
+      ...this.deps,
+      secrets: this.recording(
+        this.deps.secretsFor ? this.deps.secretsFor(cfg.name) : this.deps.secrets,
+      ),
+    };
     const conn = await McpConnection.connect(cfg, deps);
     this.connections.set(server, conn);
     return conn;

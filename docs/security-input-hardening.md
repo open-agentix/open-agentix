@@ -1,14 +1,15 @@
 # Input hardening: what reaches the model
 
-A cheap, deterministic stage runs on every text that enters a model's context or a stored step
-output. It complements the structural rule that tool results and event payloads are untrusted data
-and never instructions; it does not replace it, and it is not a prompt-injection detector.
+Two cheap, deterministic stages run on every text that enters a model's context or a stored step
+output. They complement the structural rule that tool results and event payloads are untrusted data
+and never instructions; they do not replace it, and they are not a prompt-injection detector.
 
 | Stage | What it does | Setting (default on) |
 | --- | --- | --- |
 | Invisible-Unicode filter | removes characters a human cannot see but a model reads | `OAX_STRIP_INVISIBLE_UNICODE` |
+| Secret redaction | replaces secret values with `[redacted:<kind>]` | `OAX_REDACT_MODEL_CONTEXT` |
 
-Code: `packages/core/src/invisible-text.ts`, `context-guard.ts`.
+Code: `packages/core/src/invisible-text.ts`, `secret-patterns.ts`, `context-guard.ts`.
 
 ## Where it runs (the choke points)
 
@@ -46,25 +47,46 @@ channel through joiners placed between non-ASCII letters; it is accepted because
 would otherwise break. U+FE0F (emoji presentation) is ordinary text and stays. Text is not
 normalised (no NFC), so legitimate text is never rewritten beyond the removed code points.
 
+## Secret redaction
+
+- **Exact values in use**: secrets resolved for MCP servers (the gateway registers every value its
+  resolver hands out), brokered credentials and the step's run token on a run node, and the gate
+  and model tokens of a harness step. Matched plain, URL-encoded, base64 (with and without padding)
+  and hex. Values shorter than 8 characters are not matched exactly (they would mangle ordinary
+  text); the token shapes below still apply.
+- **Token shapes**: the list in `packages/core/src/secret-patterns.ts`, shared with the
+  pull-request secret scan (`apps/worker/src/git/secret-scan.ts`, which fails closed on a hit). A
+  private key is replaced as a whole block (a truncated block up to 4 KiB after the header).
+- Replacement is `[redacted:<kind>]` (`known-secret`, `github-token`, `private-key`, ...). Heuristic
+  kinds (`env-secret-assignment`, `secret-assignment`, `authorization-header`) replace the whole
+  match, including the variable name; that over-redacts on purpose.
+- Limits: a secret the platform never saw and that has no known shape is not found; an attacker who
+  controls a tool can encode a value beyond the decoded forms. This is a tripwire and a hygiene
+  measure, not a guarantee.
+- All patterns are bounded; the test suite runs them against hostile 256 KiB inputs with a time limit
+  and checks that doubling the input does not quadruple the time (a quadratic pattern was found
+  once in review).
+
 ## Audit
 
-When the filter removes something, a `control` step named `input_guard` is recorded
+When a stage removes or replaces something, a `control` step named `input_guard` is recorded
 (audit action `step.control`, target `input_guard`):
 
 ```json
 { "source": "tool_result", "tool": "read_file",
-  "invisible": { "total": 3, "classes": { "tag": 2, "zero_width": 1 } } }
+  "invisible": { "total": 3, "classes": { "tag": 2, "zero_width": 1 } },
+  "secrets": { "total": 1, "kinds": { "github-token": 1 } } }
 ```
 
 `source` is `input` (prompt), `tool_result` or `tool_error`; `tool` is the configured tool name. The
-entry carries counts and class names only, never the content or a digest of it. A clean
+entry carries counts and class or kind names only, never the content or a digest of it. A clean
 text adds no entry. A run node may report this one control step; the control node reduces whatever
-it sends to counts and class names matching `[a-z0-9_-]{1,40}` (`auditShapeOfReport`) and marks it
+it sends to counts and names matching `[a-z0-9_-]{1,40}` (`auditShapeOfReport`) and marks it
 `reportedBy: node:<id>`, like every node step. Any other control step from a node is still ignored.
 
 ## Configuration
 
-See [configuration](configuration.md#input-hardening). The filter is on by default. Turning it
+See [configuration](configuration.md#input-hardening). Both stages are on by default. Turning one
 off is meant for diagnostics (for example to see the raw text a tool returned). Only `0`, `false`,
-`off` or `no` disable it; any other value, including a typo, keeps it on. Run nodes read the
-same variable from their own environment; a runner that does not pass it leaves the filter on.
+`off` or `no` disable a stage; any other value, including a typo, keeps it on. Run nodes read the
+same variables from their own environment; a runner that does not pass them leaves both stages on.

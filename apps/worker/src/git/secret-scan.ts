@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { SECRET_PATTERNS } from '@openagentix/core';
 
 /**
  * Scan of text that leaves the platform (patch, commit message, pull request title and body) for
@@ -18,35 +19,7 @@ export interface SecretHit {
   via: string;
 }
 
-// Every repetition before a literal anchor is bounded: an unbounded `[a-z0-9.-]*` in front of `://`
-// made the scan quadratic (64 KiB of `a.a.a.` blocked the event loop for seconds).
-const PATTERNS: [string, RegExp][] = [
-  ['private-key', /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/],
-  ['github-token', /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/],
-  ['gitlab-token', /\bglpat-[A-Za-z0-9_-]{16,}\b/],
-  ['aws-access-key', /\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{16}\b/],
-  ['slack-token', /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/],
-  ['slack-webhook', /hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/],
-  ['anthropic-key', /\bsk-ant-[A-Za-z0-9_-]{16,}\b/],
-  ['openai-style-key', /\bsk-(?:proj-)?[A-Za-z0-9_-]{24,}\b/],
-  ['run-token', /\boaxrt\.[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]{8,})?/],
-  ['model-token', /\boaxmt\.[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]{8,})?/],
-  ['platform-token', /\boax_[A-Za-z0-9]{8,}_[A-Za-z0-9_-]{16,}\b/],
-  ['npm-token', /\bnpm_[A-Za-z0-9]{30,}\b/],
-  ['google-api-key', /\bAIza[0-9A-Za-z_-]{35}\b/],
-  ['stripe-key', /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b/],
-  ['jwt', /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/],
-  ['authorization-header', /\b(?:Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{20,}/],
-  ['url-credentials', /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]{1,256}:[^\s/@]{3,256}@/i],
-  [
-    'env-secret-assignment',
-    /\b[A-Z][A-Z0-9_]{0,63}(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Z0-9_]{0,63}\s{0,8}[=:]\s{0,8}["']?[^\s"']{12,}/,
-  ],
-  [
-    'secret-assignment',
-    /\b(?:secret|token|password|passwd|api[_-]?key|access[_-]?key|auth[_-]?token)["']?\s*[:=]\s*["'][A-Za-z0-9+/_=.-]{20,}["']/i,
-  ],
-];
+const PATTERNS = SECRET_PATTERNS;
 
 const dig = (v: string) => createHash('sha256').update(v).digest('hex').slice(0, 12);
 

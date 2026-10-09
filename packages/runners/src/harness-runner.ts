@@ -248,12 +248,16 @@ export async function executeWithHarness(
 
     const handle = await serveGateHttp({ gateway: ctx.tools, gate, tools: exposed, onCall });
     tokens.push(handle.token);
+    guard.addSecret(handle.token);
     const workDir = await mkdtemp(join(options.workRoot ?? tmpdir(), 'oax-harness-'));
     let res: HarnessResult;
     const started = now();
     try {
       const endpoint = options.modelProxy ? await options.modelProxy(scoped) : undefined;
-      if (endpoint) tokens.push(endpoint.token);
+      if (endpoint) {
+        tokens.push(endpoint.token);
+        guard.addSecret(endpoint.token);
+      }
       const prompt = guard.text(
         start.explicit ? buildHandoverPrompt(start.value) : buildUserPrompt(run, previous),
       );

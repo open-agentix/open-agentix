@@ -372,10 +372,12 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
   let env: NodeEnv;
   let control: HttpControlPlane;
   let proxyUrl: string | undefined;
+  let runToken: string | undefined;
   try {
     env = parseNodeEnv(opts.env ?? process.env);
     const bundle = await readBundle(env.tokenFile, read, sleep, opts.tokenWaitMs ?? 30_000);
     proxyUrl = bundle.proxyUrl;
+    runToken = bundle.token;
     // The token lives in memory from here on (it is never re-read: there is no refresh), so a
     // file on disk only helps a harness child that learns its path. Best effort: a container
     // reads `/dev/stdin`, a mounted Secret is read-only; neither can or needs to be removed.
@@ -418,7 +420,16 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
     const proxyEnv: Record<string, string> = proxyUrl
       ? { HTTPS_PROXY: proxyUrl, https_proxy: proxyUrl, HTTP_PROXY: proxyUrl, http_proxy: proxyUrl }
       : {};
-    const guard = contextGuardFromEnv(opts.env ?? process.env);
+    // Everything this node holds in secret form is known to the guard: brokered credentials, the
+    // step's run token. The model token never reaches the node process itself (harness only).
+    const guard = contextGuardFromEnv(opts.env ?? process.env, [
+      ...(runToken ? [runToken] : []),
+      ...creds.credentials.map((c) => c.value),
+      ...creds.connections.flatMap((c) => [
+        ...Object.values(c.env ?? {}),
+        ...Object.values(c.headers ?? {}),
+      ]),
+    ]);
     tools = new ToolGateway(
       mergeCredentials(handover.mcp, creds, proxyEnv),
       {

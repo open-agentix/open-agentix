@@ -126,12 +126,13 @@ Roles: `admin`, `agent-engineer`, `integrator`, `operator`, `auditor`, `viewer`
 
 ## Input hardening
 
-Cleaning of text before it enters a model's context or a stored step output (details:
-[input hardening](security-input-hardening.md)). On by default; switch off only to diagnose.
+Stages that clean text before it enters a model's context or a stored step output (details:
+[input hardening](security-input-hardening.md)). Both are on by default; switch off only to diagnose.
 
 | Variable | Default | Used by | Meaning |
 | --- | --- | --- | --- |
 | `OAX_STRIP_INVISIBLE_UNICODE` | `true` | worker, run node | Remove zero-width, bidi, tag and control characters from prompts and tool results. `0`, `false`, `off` or `no` disables; any other value keeps it on. |
+| `OAX_REDACT_MODEL_CONTEXT` | `true` | worker, run node | Replace known secret values and token shapes with `[redacted:<kind>]` in prompts and tool results. Same value rules. |
 
 ## Providers and costs
 

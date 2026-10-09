@@ -1,47 +1,145 @@
 import { stripInvisible, type InvisibleReport } from './invisible-text.js';
+import { SECRET_PATTERNS } from './secret-patterns.js';
 
 /**
  * Guard for everything that enters a model's context or a stored step output: removes invisible
- * steering Unicode (`invisible-text.ts`). One place, so every stage that cleans model input is
- * configured, reported and audited the same way.
+ * steering Unicode (`invisible-text.ts`) and replaces secret values with `[redacted:<kind>]`.
  *
- * Reports carry counts and class names only, never the content, so they are safe to audit.
+ * Secrets are found in two ways: exact values the process knows to be in use (resolved secret
+ * references, brokered credentials, run and model tokens; matched plain, URL-encoded, base64 and
+ * hex) and common token shapes (`secret-patterns.ts`). Known values shorter than
+ * {@link MIN_KNOWN_SECRET_LENGTH} are not matched exactly, because they would mangle ordinary text;
+ * the token shapes still apply.
+ *
+ * Reports carry counts and class or kind names only, never the content, so they are safe to audit.
  */
+
+export const MIN_KNOWN_SECRET_LENGTH = 8;
+/** Longest block of a private key that is replaced when the END line is present. */
+const PRIVATE_KEY_BLOCK_MAX = 16_384;
+/** Replaced after a BEGIN line whose END line is missing (a truncated tool result). */
+const PRIVATE_KEY_TRUNCATED_MAX = 4_096;
 
 export interface GuardReport {
   invisible: InvisibleReport;
+  secrets: { total: number; kinds: Record<string, number> };
 }
 
-export const emptyGuardReport = (): GuardReport => ({ invisible: { total: 0, classes: {} } });
+export const emptyGuardReport = (): GuardReport => ({
+  invisible: { total: 0, classes: {} },
+  secrets: { total: 0, kinds: {} },
+});
 
-export const isGuardReportEmpty = (r: GuardReport): boolean => r.invisible.total === 0;
+export const isGuardReportEmpty = (r: GuardReport): boolean =>
+  r.invisible.total === 0 && r.secrets.total === 0;
 
 export function mergeGuardReports(into: GuardReport, from: GuardReport): void {
   into.invisible.total += from.invisible.total;
   for (const [k, n] of Object.entries(from.invisible.classes))
     into.invisible.classes[k as keyof InvisibleReport['classes']] =
       (into.invisible.classes[k as keyof InvisibleReport['classes']] ?? 0) + (n ?? 0);
+  into.secrets.total += from.secrets.total;
+  for (const [k, n] of Object.entries(from.secrets.kinds))
+    into.secrets.kinds[k] = (into.secrets.kinds[k] ?? 0) + n;
 }
 
 export interface ContextGuardOptions {
   /** Remove invisible steering Unicode. Default `true`. */
   stripInvisible?: boolean;
+  /** Replace secret values. Default `true`. */
+  redactSecrets?: boolean;
+  /** Exact secret values in use at start (more can be added with {@link ContextGuard.addSecret}). */
+  knownSecrets?: Iterable<string>;
+}
+
+// The private key pattern in the shared list only finds the header; for redaction the body goes too.
+// Both branches are bounded, so a text full of BEGIN lines costs a constant per 4 KiB consumed.
+const PRIVATE_KEY_BLOCK = new RegExp(
+  '-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----' +
+    `(?:[\\s\\S]{0,${PRIVATE_KEY_BLOCK_MAX}}?-----END [A-Z0-9 ]{0,64}PRIVATE KEY(?: BLOCK)?-----` +
+    `|[\\s\\S]{0,${PRIVATE_KEY_TRUNCATED_MAX}})`,
+  'g',
+);
+
+const GLOBAL_PATTERNS: readonly (readonly [string, RegExp])[] = SECRET_PATTERNS.map(
+  ([kind, re]) => [kind, new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)],
+);
+
+function forms(secret: string): string[] {
+  const b64 = Buffer.from(secret).toString('base64');
+  return [
+    secret,
+    encodeURIComponent(secret),
+    b64,
+    b64.replace(/=+$/, ''),
+    Buffer.from(secret).toString('hex'),
+  ].filter((f, i, all) => f.length >= MIN_KNOWN_SECRET_LENGTH && all.indexOf(f) === i);
 }
 
 export class ContextGuard {
   readonly stripInvisible: boolean;
+  readonly redactSecrets: boolean;
+  /** Longest first, so a secret that contains another one is replaced as a whole. */
+  private known: string[] = [];
 
   constructor(opts: ContextGuardOptions = {}) {
     this.stripInvisible = opts.stripInvisible ?? true;
+    this.redactSecrets = opts.redactSecrets ?? true;
+    for (const s of opts.knownSecrets ?? []) this.addSecret(s);
+  }
+
+  /** Registers a secret value that is in use (resolved reference, brokered credential, token). */
+  addSecret(value: string): void {
+    if (value.length < MIN_KNOWN_SECRET_LENGTH) return;
+    for (const f of forms(value)) {
+      if (this.known.includes(f)) continue;
+      this.known.push(f);
+    }
+    this.known.sort((a, b) => b.length - a.length);
+  }
+
+  private redactText(text: string, report: GuardReport['secrets']): string {
+    let out = text;
+    const count = (kind: string, n: number) => {
+      if (n === 0) return;
+      report.total += n;
+      report.kinds[kind] = (report.kinds[kind] ?? 0) + n;
+    };
+    for (const k of this.known) {
+      if (!out.includes(k)) continue;
+      const parts = out.split(k);
+      count('known-secret', parts.length - 1);
+      out = parts.join('[redacted:known-secret]');
+    }
+    let n = 0;
+    out = out.replace(PRIVATE_KEY_BLOCK, () => {
+      n++;
+      return '[redacted:private-key]';
+    });
+    count('private-key', n);
+    for (const [kind, re] of GLOBAL_PATTERNS) {
+      if (kind === 'private-key') continue;
+      let hits = 0;
+      out = out.replace(re, () => {
+        hits++;
+        return `[redacted:${kind}]`;
+      });
+      count(kind, hits);
+    }
+    return out;
   }
 
   /** Guards one string. Returns the input unchanged (same string) when nothing was found. */
   text(input: string): { text: string; report: GuardReport } {
     const report = emptyGuardReport();
-    if (!this.stripInvisible) return { text: input, report };
-    const r = stripInvisible(input);
-    report.invisible = r.report;
-    return { text: r.text, report };
+    let out = input;
+    if (this.stripInvisible) {
+      const r = stripInvisible(out);
+      out = r.text;
+      report.invisible = r.report;
+    }
+    if (this.redactSecrets) out = this.redactText(out, report.secrets);
+    return { text: out, report };
   }
 
   /** Guards every string value of a JSON-like value (keys are left alone). Cycles are not followed. */
@@ -67,15 +165,21 @@ export class ContextGuard {
 const OFF = new Set(['0', 'false', 'off', 'no']);
 
 /**
- * Builds the guard from the environment. A stage is ON unless explicitly turned off with one of
- * `0`, `false`, `off`, `no` (anything else, including a typo, keeps it on: fail safe):
- * `OAX_STRIP_INVISIBLE_UNICODE`. Turning a stage off is meant for diagnostics only.
+ * Builds the guard from the environment. Both stages are ON unless explicitly turned off with one
+ * of `0`, `false`, `off`, `no` (anything else, including a typo, keeps the stage on: fail safe):
+ * `OAX_STRIP_INVISIBLE_UNICODE` and `OAX_REDACT_MODEL_CONTEXT`. Turning a stage off is meant for
+ * diagnostics only.
  */
 export function contextGuardFromEnv(
   env: Record<string, string | undefined> = process.env,
+  knownSecrets: Iterable<string> = [],
 ): ContextGuard {
   const off = (name: string) => OFF.has((env[name] ?? '').trim().toLowerCase());
-  return new ContextGuard({ stripInvisible: !off('OAX_STRIP_INVISIBLE_UNICODE') });
+  return new ContextGuard({
+    stripInvisible: !off('OAX_STRIP_INVISIBLE_UNICODE'),
+    redactSecrets: !off('OAX_REDACT_MODEL_CONTEXT'),
+    knownSecrets,
+  });
 }
 
 /**
@@ -88,10 +192,16 @@ export function auditShapeOfReport(r: unknown): GuardReport {
     v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {};
   const num = (v: unknown) =>
     typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
+  const pick = (v: unknown, into: Record<string, number>) => {
+    for (const [k, n] of Object.entries(rec(v)).slice(0, 64)) {
+      if (/^[a-z0-9_-]{1,40}$/.test(k)) into[k] = num(n);
+    }
+  };
   const inv = rec(rec(r).invisible);
+  const sec = rec(rec(r).secrets);
   out.invisible.total = num(inv.total);
-  for (const [k, n] of Object.entries(rec(inv.classes)).slice(0, 64)) {
-    if (/^[a-z0-9_-]{1,40}$/.test(k)) (out.invisible.classes as Record<string, number>)[k] = num(n);
-  }
+  pick(inv.classes, out.invisible.classes as Record<string, number>);
+  out.secrets.total = num(sec.total);
+  pick(sec.kinds, out.secrets.kinds);
   return out;
 }

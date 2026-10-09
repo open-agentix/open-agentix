@@ -41,7 +41,7 @@ Particularly interesting:
   downloads of prompts, skills or tools.
 - Secrets are referenced by name (environment or Kubernetes Secret) and redacted in logs and
   audit payloads.
-- Text that enters a model's context (prompts, tool results) loses invisible steering Unicode
-  before the model sees it, and the removal is audited with counts only
+- Text that enters a model's context (prompts, tool results) loses invisible steering Unicode and
+  secret values before the model sees it, and the removal is audited with counts only
   ([input hardening](docs/security-input-hardening.md)).
 - The audit table is append-only (trigger + database role without UPDATE/DELETE).

@@ -1269,7 +1269,8 @@ describe('what a node may report, and who said it', () => {
       output: {
         source: 'tool_result',
         tool: 'read',
-        invisible: { total: 2, classes: { tag: 2, 'not a class, a leaked sentence': 9 } },
+        invisible: { total: 2, classes: { tag: 2 } },
+        secrets: { total: 1, kinds: { 'github-token': 1, 'not a kind, a leaked sentence': 9 } },
         content: 'ghp_must_not_be_stored',
       },
     });
@@ -1280,6 +1281,7 @@ describe('what a node may report, and who said it', () => {
       source: 'tool_result',
       tool: 'read',
       invisible: { total: 2, classes: { tag: 2 } },
+      secrets: { total: 1, kinds: { 'github-token': 1 } },
     });
     const entries = (await auditOf(runId)).filter((e) => e.action === 'step.control');
     expect(entries).toHaveLength(1);
