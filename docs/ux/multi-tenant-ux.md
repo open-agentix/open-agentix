@@ -102,7 +102,8 @@ Known gaps:
 
 `POST /v1/agents/{id}/disable` and `POST /v1/agents/{id}/enable` switch an agent off and on without
 deleting it. Both need `agents:publish` on the agent (team or agent-scoped binding, API token scope
-`agents:publish`), take an optional body `{ "reason": "<= 500 characters" }` and return the agent
+`agents:publish`), take an optional body `{ "reason": "<= 500 characters" }` (control, zero-width and bidi characters
+are removed and line breaks folded into spaces before it is stored and audited) and return the agent
 detail (`200`). Another tenant's agent, or one the caller cannot read, is `404`; a reader without
 `agents:publish` (viewer, operator, auditor, token with `agents:read` only) is `403`.
 
@@ -121,8 +122,9 @@ Behaviour of a disabled agent:
   actor (`manual:<user>`, `webhook:<source>`, `cron:<schedule>`) and the metric
   `oax_runs_refused_total{trigger,reason}`. Webhook senders get `202` with `runId: null` and the new
   field `reason: "agent_disabled"` (no error to retry on); event sources stay bound and enabled.
-  The scheduler drops the cron jobs of the definition on its next reload (within 60 s); a tick that
-  still fires is refused and audited.
+  The scheduler drops the cron jobs of the definition and the cron event sources bound to the agent
+  on its next reload (within 60 s), so a disabled agent causes no change-gate probe, event or audit
+  entry per tick; a tick that still fires is refused and audited (without the probe).
 - **Handovers.** A pipeline hands over between steps *inside one run* (`run-nodes`); there is no
   handover that starts another agent, so nothing can bypass the check. If agent-to-agent calls
   arrive later they must start the callee through `enqueue`.

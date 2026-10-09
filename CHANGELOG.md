@@ -9,12 +9,14 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - **API: disable and enable agents (UX slice A7, #161)**: `POST /v1/agents/{id}/disable` and
-  `/enable` (permission `agents:publish` on the agent, optional `reason` up to 500 characters, idempotent,
+  `/enable` (permission `agents:publish` on the agent, optional `reason` up to 500 characters with
+  control, invisible and bidi characters removed, idempotent,
   audited as `agent.disabled` / `agent.enabled`). A disabled agent accepts no new runs: manual API
   runs, webhook and mail-in ingest, event sources, cron triggers and demo scenarios are refused with
   `409 agent_disabled` and a `run.refused` audit entry (the event is still stored; webhook senders
   get `202` with `runId: null` and `reason: "agent_disabled"`), and the worker never claims its
-  queued runs; the check runs under a row lock, so no run can start after `disable` returned.
+  queued runs; the check runs under a row lock, so no run can start after `disable` returned. Cron
+  triggers and cron event sources of a disabled agent are not scheduled (no change probe per tick).
   Running runs finish unless cancelled; published versions stay immutable and visible. Agent
   summaries gain `status: disabled` (also a `status` filter value), `disabledAt`, `disabledBy`
   (`{ id, displayName }`) and `disabledReason`. Migration `0016_agent_disable` (additive, down
