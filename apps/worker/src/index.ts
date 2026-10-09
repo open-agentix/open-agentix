@@ -6,3 +6,5 @@ export * from './http.js';
 export * from './demo-runner.js';
 export * from './node-dispatcher.js';
 export * from './run-node.js';
+export * from './seed-unpack.js';
+export * from './pr-wiring.js';

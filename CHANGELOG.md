@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Seed endpoint, pull-request delivery and bug-fix agent (DOG-3c/DOG-4, ADR 0008 Amendment 5, ADR
+  0010 Amendment 3)**: `GET /v1/worker/runs/{id}/workspace` (step-scoped, once per session, SHA-256
+  header, digests-only audit `workspace.prepared`/`workspace.fetched`, migration 0014); run node
+  unpacks the seed with its own checks (`apps/worker/src/seed-unpack.ts`), writes the workspace
+  server configuration and attaches the node-computed patch to the step result; `PullRequestDelivery`
+  turns it into a pushed `oax/bug-fix/*` branch and a draft pull request from operator targets
+  (`OAX_PR_TARGETS`, `OAX_PR_DRY_RUN`), with open-PR limit before the node starts, test-green
+  requirement (consistent full-suite claims), fail-closed secret scan with the exact tokens in use
+  before the push, neutralized mentions/issue references/closing keywords in the pull request text
+  and `pull_request.*` audit entries; example
+  agent `examples/agents/bug-fix-agent.md` and `docs/bug-fix-agent.md`.
 - **Git delivery in the worker (DOG-3a/3b, ADR 0010 Amendment 2)**: `apps/worker/src/git/` with a
   hardened minimal Git engine over https (child process with allowlisted environment, forced `-c`
   options, one-target loopback relay that dials through the outbound dispatcher, shallow fetch of

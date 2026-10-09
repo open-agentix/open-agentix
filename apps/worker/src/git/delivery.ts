@@ -1,0 +1,401 @@
+import type { SecretResolver } from '@openagentix/core';
+import type { OutboundDispatcher } from '@openagentix/providers';
+import type { PatchAttachment } from '@openagentix/runners';
+import { GitEngine, type GitAuditEvent, type GitEngineOptions, type GitSession } from './engine.js';
+import { GitError } from './errors.js';
+import { GitHubExtension, sanitizeTitle } from './github.js';
+import { scanForSecrets } from './secret-scan.js';
+import type { PullRequestTarget } from './target.js';
+import type { Identity } from './validate.js';
+
+/**
+ * Trusted pull request delivery (dogfooding D5, ADR 0010 Amendment 2 and 3). The worker, never a
+ * run node or a model, prepares the workspace seed from the operator-configured target, and after
+ * the step validates the node's patch, applies it to the SAME commit the node saw, pushes a new
+ * branch and opens a DRAFT pull request. Every rule below is code:
+ *
+ * - the repository, base, branch prefix, path allowlist and limits come from the target; the event
+ *   supplies only an issue number and title (data);
+ * - the patch must be accompanied by a passing full-suite test run on exactly the final tree
+ *   (node-reported, the human reviewer re-runs it);
+ * - at the open pull request limit the run ends with `pr_limit_reached` BEFORE the model is paid
+ *   and again before the push;
+ * - patch, commit message and pull request text are scanned for credential-like text and for the
+ *   exact secrets of this process (`knownSecrets`: tokens in use, brokered values, provider keys);
+ * - audit entries `pull_request.refused|pushed|opened` carry codes, digests and counts only.
+ */
+export interface DeliveryAuditEvent {
+  /** `pull_request.refused|pushed|opened`, or a `git.*` entry of the engine. */
+  action: string;
+  runId: string;
+  target: string;
+  at: string;
+  [k: string]: unknown;
+}
+
+export interface PullRequestDeliveryOptions {
+  dispatcher: OutboundDispatcher;
+  secrets: SecretResolver;
+  targets: ReadonlyMap<string, PullRequestTarget>;
+  /** Commit identity (default `agentix-zero <github@openagentix.si>`). */
+  identity?: Identity;
+  /** Stops after the commit exists locally: nothing is pushed, no pull request is opened. */
+  dryRun?: boolean;
+  /** Exact secret values of this process to keep out of the delivered text. */
+  knownSecrets?: (runId: string) => Promise<string[]>;
+  audit?: (e: DeliveryAuditEvent) => void | Promise<void>;
+  /** Engine options (tests: relay trust, DNS, git binary, tmp root). */
+  engine?: Partial<Omit<GitEngineOptions, 'dispatcher' | 'secrets' | 'audit'>>;
+  /** Test seam for the GitHub extension (DNS, private allowlist). */
+  github?: {
+    privateAllow?: readonly string[];
+    lookup?: (host: string) => Promise<{ address: string }[]>;
+  };
+  now?: () => Date;
+}
+
+export const DEFAULT_IDENTITY: Identity = { name: 'agentix-zero', email: 'github@openagentix.si' };
+
+export interface IssueRef {
+  number: number;
+  title: string;
+}
+
+/** What the worker prepared for one step: the seed and the open Git session behind it. */
+export interface PreparedWorkspace {
+  runId: string;
+  target: PullRequestTarget;
+  /** The commit the seed was built from; the patch is applied to exactly this commit. */
+  commit: string;
+  archive: Buffer;
+  sha256: string;
+  files: number;
+  skipped: number;
+  /** @internal The open session that fetched `commit`; disposed by `dispose()`. */
+  session: GitSession;
+  dispose(): Promise<void>;
+}
+
+export interface DeliverInput {
+  issue: IssueRef;
+  /** The node's output text (untrusted; quoted, capped, scanned). */
+  summary: string;
+  patch: PatchAttachment;
+  model: string;
+  /** Proxy-measured list-price cost of the run so far, in micro-USD. */
+  costMicros: number;
+  /** More exact secrets to keep out of the delivered text (the node's own run token, ...). */
+  extraSecrets?: readonly string[];
+}
+
+export interface DeliveryResult {
+  dryRun: boolean;
+  target: string;
+  branch: string;
+  commit: string;
+  baseSha: string;
+  patchSha256: string;
+  changedFiles: number;
+  pullRequest?: { number: number; url: string; draft: true };
+}
+
+/** Reads `{ issue: { number, title } }` out of a step input; refuses anything else. */
+export function readIssue(input: unknown): IssueRef {
+  const obj = (v: unknown): Record<string, unknown> | undefined =>
+    v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+  const root = obj(input);
+  const issue = obj(root?.issue) ?? obj(obj(root?.data)?.issue);
+  const number = issue?.number;
+  const title = issue?.title;
+  if (
+    typeof number !== 'number' ||
+    !Number.isSafeInteger(number) ||
+    number < 1 ||
+    number > 999_999_999 ||
+    typeof title !== 'string' ||
+    sanitizeTitle(title).length === 0
+  )
+    throw new GitError('issue_invalid', 'the step input carries no valid issue number and title');
+  return { number, title: sanitizeTitle(title) };
+}
+
+const TEMPLATE_FOOTER = 'AI-generated by the openagentix bug-fix agent; review before merging.';
+
+const ZWSP = '\u200b';
+
+/**
+ * Untrusted text (model output, issue title) that ends up in a commit message or a pull request:
+ * no mention notifies anyone, no `#n`, `owner/repo#n` or `GH-n` reference links or cross-references
+ * an issue, and no closing keyword (`fixes`, `closes`, `resolves`, ...) closes an issue when the
+ * change is merged. A zero-width space breaks each pattern without changing what a reader sees.
+ */
+export function neutralizeReferences(text: string): string {
+  return text
+    .replace(/@/g, `@${ZWSP}`)
+    .replace(/#(?=[0-9])/g, `#${ZWSP}`)
+    .replace(/\bGH-(?=[0-9])/gi, (m) => `${m.slice(0, 2)}${ZWSP}-`)
+    .replace(
+      /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b/gi,
+      (m) => `${m[0]}${ZWSP}${m.slice(1)}`,
+    );
+}
+
+/** The model text as a short quote: printable, capped, no mentions or references, no HTML. */
+export function quoteSummary(raw: string, maxChars = 2000): string {
+  const text = neutralizeReferences(
+    raw
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u2028\u2029]/g, '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[<>]/g, (c) => (c === '<' ? '\u2039' : '\u203a')),
+  ).trim();
+  const cut = [...text].slice(0, maxChars).join('');
+  if (cut.length === 0) return '> (no summary)';
+  return cut
+    .split('\n')
+    .map((l) => `> ${l}`)
+    .join('\n');
+}
+
+/** The node's test claims describe one passing run of the full suite on the final tree. */
+export function testedFullSuite(p: PatchAttachment): boolean {
+  const run = p.lastTestRun;
+  return (
+    run !== null &&
+    run.passed &&
+    run.file === null &&
+    run.exitCode === 0 &&
+    !run.timedOut &&
+    p.fullSuitePassed &&
+    p.treeMatchesLastRun &&
+    p.testedFinalTree
+  );
+}
+
+export class PullRequestDelivery {
+  private readonly identity: Identity;
+
+  constructor(private readonly o: PullRequestDeliveryOptions) {
+    this.identity = o.identity ?? DEFAULT_IDENTITY;
+  }
+
+  has(targetName: string): boolean {
+    return this.o.targets.has(targetName);
+  }
+
+  private targetOf(name: string): PullRequestTarget {
+    const t = this.o.targets.get(name);
+    if (!t) throw new GitError('target_invalid', 'the pull request target is not configured');
+    return t;
+  }
+
+  private audit(runId: string, target: string, e: Record<string, unknown>) {
+    const ev = {
+      runId,
+      target,
+      at: (this.o.now?.() ?? new Date()).toISOString(),
+      ...e,
+    } as DeliveryAuditEvent;
+    return Promise.resolve(this.o.audit?.(ev)).catch(() => undefined);
+  }
+
+  private extension(t: PullRequestTarget, runId: string): GitHubExtension {
+    return new GitHubExtension({
+      dispatcher: this.o.dispatcher,
+      secrets: this.o.secrets,
+      tokenRef: t.extensionTokenRef,
+      repositoryUrl: t.url,
+      baseBranch: t.baseBranch,
+      branchPrefix: t.branchPrefix,
+      maxOpenPullRequests: t.maxOpenPullRequests,
+      maxBodyBytes: t.maxBodyBytes,
+      ...(this.o.github?.privateAllow ? { privateAllow: this.o.github.privateAllow } : {}),
+      ...(this.o.github?.lookup ? { lookup: this.o.github.lookup } : {}),
+      audit: (e) => this.audit(runId, t.name, { ...e, action: 'git.audit', via: e.action }),
+      ...(this.o.now ? { now: this.o.now } : {}),
+    });
+  }
+
+  /**
+   * Resolves the base branch to a commit, fetches it, checks the open pull request limit (before
+   * any model money is spent) and builds the seed. The caller must `dispose()` the result.
+   */
+  async prepare(runId: string, targetName: string): Promise<PreparedWorkspace> {
+    const t = this.targetOf(targetName);
+    const engine = new GitEngine({
+      ...this.o.engine,
+      dispatcher: this.o.dispatcher,
+      secrets: this.o.secrets,
+      audit: (e: GitAuditEvent) => this.audit(runId, t.name, { ...e, action: e.action }),
+    });
+    let session: GitSession | undefined;
+    try {
+      const open = await this.extension(t, runId).countOpenPullRequests(t.branchPrefix);
+      if (open >= t.maxOpenPullRequests)
+        throw new GitError('pr_limit_reached', 'too many open pull requests');
+      session = await engine.openSession({
+        url: t.url,
+        credential: { tokenRef: t.tokenRef, username: t.username },
+        branchPrefix: t.branchPrefix,
+      });
+      const commit = await session.lsRemote(`refs/heads/${t.baseBranch}`);
+      if (!commit) throw new GitError('not_found', 'the base branch was not found');
+      await session.fetchCommit(commit);
+      const seed = await session.exportSeed(commit);
+      const s = session;
+      return {
+        runId,
+        target: t,
+        commit,
+        archive: seed.archive,
+        sha256: seed.sha256,
+        files: seed.snapshot.files.length,
+        skipped: seed.snapshot.skipped.length,
+        session: s,
+        dispose: () => s.dispose(),
+      };
+    } catch (e) {
+      await session?.dispose().catch(() => undefined);
+      await this.audit(runId, t.name, {
+        action: 'pull_request.refused',
+        stage: 'prepare',
+        code: e instanceof GitError ? e.code : 'git_failed',
+      });
+      throw e;
+    }
+  }
+
+  /**
+   * Validates the node's claims, applies the patch to the prepared commit, pushes a new branch and
+   * opens a draft pull request. The prepared workspace is disposed in every case.
+   */
+  async deliver(ws: PreparedWorkspace, input: DeliverInput): Promise<DeliveryResult> {
+    const { target: t, runId } = ws;
+    const run8 = runId.replace(/[^A-Za-z0-9]/g, '').slice(0, 8);
+    const branch = `${t.branchPrefix}issue-${input.issue.number}-${run8.toLowerCase()}`;
+    try {
+      // Node-reported, but required: a patch nobody ran the suite on is not proposed. The claims
+      // must also agree with each other (a single-file run, a timeout or a non-zero exit is no
+      // full green run, whatever the summary flags say).
+      if (!testedFullSuite(input.patch))
+        throw new GitError('tests_not_green', 'the full test suite did not pass on the final tree');
+      const known = [
+        ...((await this.o.knownSecrets?.(runId)) ?? []),
+        ...(input.extraSecrets ?? []),
+      ].filter((v) => v.length >= 8);
+      const ext = this.extension(t, runId);
+      const open = await ext.countOpenPullRequests(t.branchPrefix);
+      if (open >= t.maxOpenPullRequests)
+        throw new GitError('pr_limit_reached', 'too many open pull requests');
+      // The issue title is event data: it must not close or reference other issues on merge.
+      const title = sanitizeTitle(`fix: ${neutralizeReferences(input.issue.title)}`);
+      const message = `${title}\n\nProposed by the openagentix bug-fix agent (run ${run8}).\n`;
+      // The pull request text is checked BEFORE anything is pushed, so a refusal leaves no branch.
+      // The raw texts are scanned too: neutralizing inserts characters that could split a secret.
+      const body = this.body(t, input, run8);
+      const hits = scanForSecrets(
+        `${title}\n${body}\n${input.issue.title}\n${input.summary}`,
+        known,
+      );
+      if (hits.length > 0)
+        throw new GitError(
+          'secret_detected',
+          'the pull request text contains credential-like content',
+          { hits: hits.map((h) => ({ pattern: h.pattern, digest: h.digest, via: h.via })) },
+        );
+      const rep = await ws.session.applyAndPushBranch({
+        sha: ws.commit,
+        patch: input.patch.patch,
+        patchSha256: input.patch.patchSha256,
+        branch,
+        message,
+        identity: this.identity,
+        policy: {
+          pathAllow: t.pathAllow,
+          maxBytes: t.maxPatchBytes,
+          maxFiles: t.maxFiles,
+        },
+        knownSecrets: known,
+        dryRun: this.o.dryRun === true,
+      });
+      const result: DeliveryResult = {
+        dryRun: !rep.pushed,
+        target: t.name,
+        branch,
+        commit: rep.commit,
+        baseSha: ws.commit,
+        patchSha256: rep.patchSha256,
+        changedFiles: rep.changedFiles,
+      };
+      if (!rep.pushed) {
+        await this.audit(runId, t.name, {
+          action: 'pull_request.pushed',
+          ok: true,
+          dryRun: true,
+          branch,
+          commit: rep.commit,
+          baseSha: ws.commit,
+          patchSha256: rep.patchSha256,
+        });
+        return result;
+      }
+      await this.audit(runId, t.name, {
+        action: 'pull_request.pushed',
+        ok: true,
+        branch,
+        commit: rep.commit,
+        baseSha: ws.commit,
+        patchSha256: rep.patchSha256,
+        sentBytes: rep.sentBytes,
+      });
+      const pr = await ext.openDraftPullRequest({ head: branch, base: t.baseBranch, title, body });
+      result.pullRequest = { number: pr.number, url: pr.url, draft: true };
+      await this.audit(runId, t.name, {
+        action: 'pull_request.opened',
+        ok: true,
+        url: pr.url,
+        number: pr.number,
+        branch,
+        sha: rep.commit,
+        patchSha256: rep.patchSha256,
+      });
+      return result;
+    } catch (e) {
+      const err =
+        e instanceof GitError ? e : new GitError('git_failed', 'the delivery could not be done');
+      await this.audit(runId, t.name, {
+        action: 'pull_request.refused',
+        stage: 'deliver',
+        code: err.code,
+        branch,
+        patchSha256: input.patch.patchSha256,
+        ...(err.code === 'secret_detected'
+          ? { hits: (err.details as { hits?: unknown })?.hits }
+          : {}),
+      });
+      throw err;
+    } finally {
+      await ws.dispose();
+    }
+  }
+
+  private body(t: PullRequestTarget, input: DeliverInput, run8: string): string {
+    const run = input.patch.lastTestRun;
+    const cost = (input.costMicros / 1_000_000).toFixed(4);
+    return [
+      quoteSummary(input.summary),
+      '',
+      `Issue: ${t.url}/issues/${input.issue.number}`,
+      `Tests (reported by the run node, please re-run): ${run?.passed ? 'full suite passed' : 'not passed'}`,
+      // counted from the patch itself (the worker validates exactly these file headers before the
+      // push), not from the node's changedFiles claim
+      `Files changed: ${(input.patch.patch.match(/^diff --git /gm) ?? []).length}`,
+      `Run: ${run8}`,
+      `Model: ${input.model.replace(/[^A-Za-z0-9._:/-]/g, '').slice(0, 64)}`,
+      `Cost at list price (measured by the model proxy): $${cost}`,
+      '',
+      TEMPLATE_FOOTER,
+      '',
+    ].join('\n');
+  }
+}

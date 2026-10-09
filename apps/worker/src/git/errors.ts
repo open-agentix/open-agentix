@@ -38,7 +38,10 @@ export type GitErrorCode =
   | 'pr_body_too_large'
   | 'host_response_invalid'
   | 'host_request_failed'
-  | 'credential_unavailable';
+  | 'credential_unavailable'
+  | 'tests_not_green'
+  | 'patch_missing'
+  | 'issue_invalid';
 
 export class GitError extends OaxError {
   declare readonly code: GitErrorCode;

@@ -625,3 +625,26 @@ the run node) is the only supported use. Details: [workspace tools](../workspace
   harness may not run on a harness image (publish check, and a runner check that allows it only if the
   operator also configured that image as default or toolbox image). The harness image carries no
   `org.opencontainers.image.source` label and may only be pushed to a private package.
+
+## Amendment 5 (DOG-4, 2026-10-09): workspace seed endpoint and patch attachment
+
+- **Seed (3.3).** For a step with a `pull-request` output the worker builds the seed from the
+  operator target before the node exists (`OutputSchema.target`, `OAX_PR_TARGETS`) and stores it with
+  the session (`run_node_sessions.workspace_seed`, base64, at most 5 MiB, the SHA-256 is computed
+  by the control node). Audit `workspace.prepared`: commit, size, file count, digest.
+- **Endpoint.** `GET /v1/worker/runs/{id}/workspace?agentId=` answers `application/x-tar` with
+  `x-oax-seed-sha256` and `cache-control: no-store`. It needs a step-scoped run token of exactly
+  this run and step; it answers **once** per session (`409 workspace_seed_already_fetched`), the
+  bytes are deleted in the same statement and again when the session is revoked. Audit
+  `workspace.fetched` carries size and digest only.
+- **Node-side unpacking.** The node does not trust the packer: it verifies the digest, parses the
+  whole archive first and refuses (`seed_invalid`) anything but regular files with the modes 0644 and
+  0755, relative UTF-8 names without `..`, `.`, empty or `.git` segments, duplicates (also by case and
+  Unicode form), links of any kind, devices, extended headers, size or count above the limits, and
+  trailing data. The root must be empty. Nothing is written when the archive is refused.
+- **Patch attachment.** The step result gains an optional `patch` (`{ patch, patchSha256,
+  changedFiles, lastTestRun, fullSuitePassed, treeMatchesLastRun, testedFinalTree }`, at most 128 Ki
+  characters) read by the node from the workspace server's result file. It is not rewritten by the
+  secret scrubber (a changed byte would only break its digest); the worker scans it. Delivery
+  requires `lastTestRun.passed` **and** `testedFinalTree` (the stricter rule of Amendment 2).
+

@@ -8426,6 +8426,84 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/worker/runs/{id}/workspace:
+    get:
+      summary: "Run node: the workspace seed of its own step (ustar archive; once per step and session)"
+      tags:
+        - worker
+      description: Returns the archive prepared by the worker (`application/x-tar`) with its SHA-256 in `x-oax-seed-sha256`. The node verifies the digest and unpacks the archive with its own checks. A second request is refused with 409; the bytes are deleted when the session ends.
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+          in: query
+          name: agentId
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - runToken: []
+      responses:
+        "401":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/worker/runs/{id}/handover/result:
     post:
       summary: "Run node: post the final result of its step"
@@ -8447,6 +8525,93 @@ paths:
                   type: string
                   maxLength: 1000000
                 json: {}
+                patch:
+                  description: the patch the node computed from its workspace (steps with a pull-request output)
+                  type: object
+                  properties:
+                    patch:
+                      type: string
+                      minLength: 1
+                      maxLength: 131072
+                    patchSha256:
+                      type: string
+                      pattern: ^[0-9a-f]{64}$
+                    changedFiles:
+                      maxItems: 100
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          path:
+                            type: string
+                            minLength: 1
+                            maxLength: 300
+                          status:
+                            type: string
+                            enum:
+                              - added
+                              - modified
+                              - deleted
+                          additions:
+                            type: integer
+                            minimum: 0
+                            maximum: 9007199254740991
+                          deletions:
+                            type: integer
+                            minimum: 0
+                            maximum: 9007199254740991
+                        required:
+                          - path
+                          - status
+                          - additions
+                          - deletions
+                        additionalProperties: false
+                    lastTestRun:
+                      anyOf:
+                        - type: object
+                          properties:
+                            passed:
+                              type: boolean
+                            exitCode:
+                              anyOf:
+                                - type: integer
+                                  minimum: -9007199254740991
+                                  maximum: 9007199254740991
+                                - type: "null"
+                            timedOut:
+                              type: boolean
+                            durationMs:
+                              type: integer
+                              minimum: 0
+                              maximum: 9007199254740991
+                            file:
+                              anyOf:
+                                - type: string
+                                  maxLength: 300
+                                - type: "null"
+                          required:
+                            - passed
+                            - exitCode
+                            - timedOut
+                            - durationMs
+                            - file
+                          additionalProperties: false
+                        - type: "null"
+                    fullSuitePassed:
+                      type: boolean
+                    treeMatchesLastRun:
+                      type: boolean
+                    testedFinalTree:
+                      type: boolean
+                  required:
+                    - patch
+                    - patchSha256
+                    - changedFiles
+                    - lastTestRun
+                    - fullSuitePassed
+                    - treeMatchesLastRun
+                    - testedFinalTree
+                  additionalProperties: false
                 failure:
                   description: set instead of an output when the step did not succeed
                   type: object
