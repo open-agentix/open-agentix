@@ -91,6 +91,7 @@ export function ConnectionsPage() {
       <PageHeader
         title={t('connections.title')}
         description={t('connections.subtitle')}
+        scope
         actions={
           can('connections:write') ? (
             <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>

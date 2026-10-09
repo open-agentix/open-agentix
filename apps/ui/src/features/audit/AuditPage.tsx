@@ -7,7 +7,7 @@ import type { AuditEntry } from '../../api/types';
 import { useCan } from '../../auth/auth';
 import { Icon } from '../../components/Icon';
 import { useToast } from '../../components/toast';
-import { VirtualTable, type Column } from '../../components/VirtualTable';
+import { ResponsiveList, type ListColumn } from '../../components/ResponsiveList';
 import {
   Button,
   Code,
@@ -64,17 +64,19 @@ export function AuditPage() {
     }
   };
 
-  const columns: Column<AuditEntry>[] = [
+  const columns: ListColumn<AuditEntry>[] = [
     {
       key: 'seq',
       header: '#',
       cell: (e) => <span className="mono">{e.seq}</span>,
       className: 'num',
+      mobileLine: 3,
     },
     {
       key: 'ts',
       header: t('audit.time'),
       cell: (e) => <time dateTime={e.ts}>{fmt.dateTime(e.ts)}</time>,
+      mobileLine: 3,
     },
     {
       key: 'action',
@@ -84,6 +86,7 @@ export function AuditPage() {
           {e.action}
         </button>
       ),
+      mobileLine: 1,
     },
     {
       key: 'actor',
@@ -101,13 +104,13 @@ export function AuditPage() {
         ) : (
           '–'
         ),
-      className: 'hide-sm',
+      mobileLine: 3,
     },
     {
       key: 'hash',
       header: t('audit.hash'),
       cell: (e) => <span className="mono muted">{e.hash.slice(0, 12)}</span>,
-      className: 'hide-sm',
+      mobileLine: 3,
     },
   ];
 
@@ -117,6 +120,7 @@ export function AuditPage() {
       <PageHeader
         title={t('audit.title')}
         description={t('audit.subtitle')}
+        scope
         actions={
           <>
             {can('audit:export') ? (
@@ -202,7 +206,7 @@ export function AuditPage() {
         ) : entries.isError ? (
           <ErrorState error={entries.error} onRetry={() => void entries.refetch()} />
         ) : rows.length ? (
-          <VirtualTable
+          <ResponsiveList
             caption={t('audit.title')}
             columns={columns}
             rows={rows}

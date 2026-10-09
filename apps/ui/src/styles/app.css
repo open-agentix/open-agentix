@@ -1029,7 +1029,15 @@ a.list-main:hover .strong {
   color: var(--text-muted);
 }
 .bar-cell {
+  display: block;
+  width: 100%;
+}
+.table th.bar-col,
+.table td.bar-col {
   width: 30%;
+}
+.card-line .card-cell:has(.bar-cell) {
+  flex: 1 1 100%;
 }
 .bar {
   display: block;
@@ -2032,6 +2040,65 @@ details[open] summary {
 }
 .tenant-badge-side {
   padding: 0 var(--space-2);
+}
+
+/* Responsive list: three-line card rows on phones instead of hidden columns */
+.card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.card-row {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  min-width: 0;
+}
+.card-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.card-line-1 {
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  color: var(--text);
+  font-size: var(--text-md);
+}
+.card-line-1 > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.card-line-1 > :not(:first-child) {
+  flex: none;
+}
+.card-cell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.card-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.card-line-1 a,
+.card-line-1 .link-btn,
+.card-foot .link-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
 }
 
 @media (max-width: 900px) {

@@ -28,7 +28,7 @@ export function AgentDetailPage() {
     ...agentVersionQuery(agentId, latestVersion ?? ''),
     enabled: !!latestVersion,
   });
-  const teamNames = useTeamNames(can('users:read'));
+  const teamNames = useTeamNames();
   useDocumentTitle(agent.data?.name ?? t('agents.title'));
   const tab: AgentTab = search.tab ?? 'overview';
   const setTab = (next: AgentTab) =>

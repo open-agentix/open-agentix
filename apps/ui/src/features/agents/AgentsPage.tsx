@@ -5,17 +5,18 @@ import { agentsQuery, useTeamNames } from '../../api/queries';
 import type { AgentSummary } from '../../api/types';
 import { useCan } from '../../auth/auth';
 import { Icon } from '../../components/Icon';
-import { VirtualTable, type Column } from '../../components/VirtualTable';
+import { ResponsiveList, type ListColumn } from '../../components/ResponsiveList';
+import { ScopeChip, useActiveTenant } from '../../components/Tenant';
 import { Badge, EmptyState, ErrorState, Loading, PageHeader, Section } from '../../components/ui';
 import { useI18n } from '../../i18n/i18n';
-import { useDocumentTitle } from '../../lib/hooks';
+import { shortId, useDocumentTitle } from '../../lib/hooks';
 
 export function AgentsPage() {
   const { t, fmt } = useI18n();
   useDocumentTitle(t('agents.title'));
   const can = useCan();
   const agents = useQuery(agentsQuery);
-  const teamNames = useTeamNames(can('users:read'));
+  const teamNames = useTeamNames();
   const [q, setQ] = useState('');
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -25,7 +26,13 @@ export function AgentsPage() {
       : items;
   }, [agents.data, q]);
 
-  const columns: Column<AgentSummary>[] = [
+  const tenant = useActiveTenant();
+  const teamLabel = (a: AgentSummary): string =>
+    a.teamId
+      ? (teamNames.get(a.teamId) ?? t('tenancy.teamFallback', { id: shortId(a.teamId) }))
+      : t('common.global');
+
+  const columns: ListColumn<AgentSummary>[] = [
     {
       key: 'name',
       header: t('agents.name'),
@@ -34,34 +41,44 @@ export function AgentsPage() {
           {a.name}
         </Link>
       ),
+      mobileLine: 1,
     },
     {
       key: 'desc',
       header: t('agents.description'),
       cell: (a) => <span className="truncate">{a.description ?? '–'}</span>,
-      className: 'hide-sm',
     },
     {
       key: 'version',
       header: t('agents.latestVersion'),
       cell: (a) =>
         a.latestVersion ? (
-          <Badge tone="success">v{a.latestVersion}</Badge>
+          <Badge tone="success">
+            <span className="sr-only">{t('tenancy.status.published')} </span>v{a.latestVersion}
+          </Badge>
         ) : (
           <Badge>{t('agents.draftOnly')}</Badge>
         ),
+      mobileLine: 1,
+    },
+    {
+      key: 'tenant',
+      header: t('tenancy.tenant'),
+      cell: () => (tenant ? <ScopeChip tenant={tenant} compact /> : null),
+      mobileOnly: true,
+      mobileLine: 3,
     },
     {
       key: 'team',
-      header: t('agents.team'),
-      cell: (a) => (a.teamId ? (teamNames.get(a.teamId) ?? '–') : t('common.global')),
-      className: 'hide-sm',
+      header: t('tenancy.ownerTeam'),
+      cell: teamLabel,
+      mobileLine: 3,
     },
     {
       key: 'updated',
       header: t('agents.draftUpdated'),
       cell: (a) => fmt.relative(a.draftUpdatedAt),
-      className: 'hide-sm',
+      mobileLine: 3,
     },
   ];
 
@@ -70,6 +87,7 @@ export function AgentsPage() {
       <PageHeader
         title={t('agents.title')}
         description={t('agents.subtitle')}
+        scope
         actions={
           can('agents:write') ? (
             <>
@@ -118,7 +136,7 @@ export function AgentsPage() {
             {q ? undefined : t('agents.emptyText')}
           </EmptyState>
         ) : (
-          <VirtualTable
+          <ResponsiveList
             caption={t('agents.title')}
             columns={columns}
             rows={rows}
