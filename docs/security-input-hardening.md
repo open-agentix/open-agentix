@@ -33,10 +33,20 @@ Removed always:
 | Class (audit name) | Code points |
 | --- | --- |
 | `zero_width` | U+200B, U+2060-U+2064, U+FEFF |
-| `bidi` | U+200E, U+200F, U+202A-U+202E, U+2066-U+2069 |
+| `bidi` | U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069 |
 | `tag` | U+E0000-U+E007F (the "tag" block used to hide whole sentences) |
-| `variation` | U+E0100-U+E01EF (variation selectors supplement, used to smuggle bytes) |
+| `variation` | U+E0100-U+E01EF (variation selectors supplement, used to smuggle bytes); U+FE00-U+FE0F except the first one after a visible character (see below) |
 | `control` | C0 and C1 control codes and DEL, except tab, line feed and carriage return |
+| `format` | other characters that render as nothing: U+00AD (soft hyphen), U+034F, U+115F, U+1160, U+3164, U+FFA0 (Hangul fillers), U+17B4, U+17B5, U+180E, U+206A-U+206F, U+FFF9-U+FFFB (interlinear annotation), U+1BCA0-U+1BCA3, U+1D173-U+1D17A |
+
+**Variation selectors (decision).** U+FE00-U+FE0F are how emoji presentation (U+FE0F), text
+presentation (U+FE0E), keycaps and standardized variants are written: one selector after a visible
+character. A run of them is the byte-smuggling trick (one selector per nibble or byte attached to a
+single emoji), so only the first selector after a visible character stays; one at the start of the
+text or after another selector is removed. The residual channel is one hidden nibble per visible
+character, accepted like the joiner channel below. Removing the tag block also turns the
+subdivision flags (England, Scotland, Wales) into a plain black flag, and the ideographic variation
+sequences (U+E0100-U+E01EF after a CJK character) fall back to the default glyph; both are accepted.
 
 **Joiners (decision).** ZWJ (U+200D) and ZWNJ (U+200C) are kept only when both neighbours are
 non-ASCII letters, combining marks or emoji (including emoji modifiers and U+FE0F). That keeps
