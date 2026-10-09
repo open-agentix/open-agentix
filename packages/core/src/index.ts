@@ -27,3 +27,4 @@ export * from './egress.js';
 export * from './plan/index.js';
 export * from './credentials.js';
 export * from './network/index.js';
+export * from './tenancy/path.js';
