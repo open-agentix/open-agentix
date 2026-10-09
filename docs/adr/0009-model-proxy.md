@@ -862,3 +862,14 @@ differ from the text above, this section wins.
    empty = none) and each must match `^[a-z0-9._-]{1,64}$`; the rest are dropped silently.
 8. **Metrics.** `oax_model_proxy_requests_total` carries `surface="anthropic" | "openai"` for
    pass-through calls (`native` before).
+9. **Review fixes (2026-10-09).** (a) A request with `cache_control` is reserved at the cache-write
+   rate (`cacheWrite`), so a cache-writing call cannot settle above its reservation; `ttl: "1h"`
+   (written at twice the input price, which the reservation does not model) is refused with
+   `model_parameter_refused`. (b) A thinking budget below the API minimum of 1024 after the output
+   clamp is not sent: thinking is omitted for that call. (c) A content string above 64 KiB in a
+   relayed upstream event ends the stream with a `provider_error` instead of being blanked;
+   synthesised events (providers without a stream) are split into chunks below the limit. (d)
+   Client-visible events and JSON answers carry the model of the step, an id derived from the call id
+   (never the upstream id) and usage capped to the bounds the books use. (e) The model token is
+   checked before the request body is validated. (f) Non-streaming answers stay validated against the
+   wire schema; only a relayed stream (already delivered event by event) skips it.

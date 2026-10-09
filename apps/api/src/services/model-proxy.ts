@@ -27,6 +27,9 @@ import {
   createStreamPlan,
   modelErrorEnvelope,
   sanitizeEvent,
+  anthropicMessageId,
+  openaiCompletionId,
+  type SanitizeOpts,
   synthesizeEvents,
   proposeModels,
   scrub,
@@ -188,6 +191,8 @@ export interface PassCtx {
   images: number;
   extraBytes: number;
   build: PassthroughRequest['build'];
+  /** The request marks content for caching: the reservation prices input at the write rate. */
+  cacheWrite: boolean;
   /** `anthropic-beta` values of the client, already filtered against the allowlist. */
   betas: readonly string[];
 }
@@ -705,6 +710,7 @@ export class ModelProxyService {
           maxOutputTokens,
           minOutputTokens: Math.min(this.cfg().minOutputTokens, maxOutputTokens),
           deadlineMs,
+          ...(pass?.cacheWrite ? { cacheWrite: true } : {}),
         },
       );
     } catch (e) {
@@ -923,6 +929,24 @@ export class ModelProxyService {
       m.inc({ direction: 'cache_write', source: s.usageSource }, usage.cacheWrite);
   }
 
+  /**
+   * What a client-visible event may carry of the upstream: the step's model, an own id and the
+   * capped usage (the same bounds `capUsage` applies to the books).
+   */
+  private sanitizeOpts(adm: Admitted, pass: PassCtx): SanitizeOpts {
+    const resv = adm.reservation;
+    return {
+      includeUsage: pass.includeUsage,
+      model: adm.agent.model,
+      id:
+        pass.surface === 'anthropic'
+          ? anthropicMessageId(resv.reservationId)
+          : openaiCompletionId(resv.reservationId),
+      maxInput: Math.max(adm.inputUpperBound, resv.reservedInputTokens),
+      maxOutput: Math.ceil(resv.reservedOutputTokens * OVERRUN_FACTOR) + OVERRUN_ALLOWANCE_TOKENS,
+    };
+  }
+
   private response(
     adm: Admitted,
     res: ChatResponse,
@@ -954,7 +978,7 @@ export class ModelProxyService {
           cacheWriteTokens: cache.cacheWrite,
         },
         stopReason: res.stopReason,
-        model: res.model,
+        model: adm.pass ? adm.agent.model : res.model,
       },
       usage: {
         inputTokens: Math.max(0, s.tokensIn - cache.cacheRead - cache.cacheWrite),
@@ -1217,9 +1241,7 @@ export class ModelProxyService {
         const sink = io.begin(res.callId);
         if (adm.pass && sink.event) {
           for (const ev of synthesizeEvents(adm.pass.surface, res.response, res.callId)) {
-            const out = sanitizeEvent(adm.pass.surface, ev, {
-              includeUsage: adm.pass.includeUsage,
-            });
+            const out = sanitizeEvent(adm.pass.surface, ev, this.sanitizeOpts(adm, adm.pass));
             if (out) await sink.event(out);
           }
         } else if (res.response.text) await sink.delta(res.response.text);
@@ -1278,6 +1300,7 @@ export class ModelProxyService {
         images: req.images,
         extraBytes: req.extraBytes,
         build: req.build,
+        cacheWrite: req.cacheWrite,
         betas,
       },
     };
@@ -1353,9 +1376,7 @@ export class ModelProxyService {
             const delta = agg.push(ev);
             if (adm.pass) {
               // Pass-through: the client gets the event rebuilt from allowlisted fields only.
-              const out = sanitizeEvent(adm.pass.surface, ev, {
-                includeUsage: adm.pass.includeUsage,
-              });
+              const out = sanitizeEvent(adm.pass.surface, ev, this.sanitizeOpts(adm, adm.pass));
               if (out && sink.event) await sink.event(out);
             } else if (delta) await sink.delta(delta);
           }

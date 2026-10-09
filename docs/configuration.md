@@ -270,6 +270,8 @@ limit are per replica.
 | `OAX_MODEL_PROXY_ANTHROPIC_BETAS` | – | `anthropic-beta` values the Anthropic pass-through surface forwards (comma separated, each `[a-z0-9._-]{1,64}`); every other value a client sends is dropped. Empty = none forwarded. |
 | `OAX_MODEL_PROXY_CAPTURE` | `metadata` | `metadata` stores the response text, tool calls and stop reason in the step record (never the request); `off` stores only metadata. Bodies are never logged. |
 
+Note on betas: a forwarded beta header can change how the provider bills a call (for example long-context pricing). The reservation does not know such surcharges, so only enable betas whose pricing you have checked; a call that costs more than reserved is capped to the reservation and logged as `model.overrun`.
+
 ## Webhooks
 
 | Variable | Default | Meaning |

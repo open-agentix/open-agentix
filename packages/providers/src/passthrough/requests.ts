@@ -47,6 +47,11 @@ export interface PassthroughRequest {
   images: number;
   /** Bytes of parameters that are not part of `chat` but are tokenised (tool choice, stops, ...). */
   extraBytes: number;
+  /**
+   * The request marks content for caching (`cache_control`): the input is priced at the
+   * cache-write rate for the reservation, so a cache write cannot exceed it.
+   */
+  cacheWrite: boolean;
   /** Builds the upstream body with the granted output bound. A fresh object every time. */
   build(maxTokens: number, opts?: BuildOptions): Record<string, unknown>;
 }
@@ -125,6 +130,8 @@ const CacheControl = z.strictObject({
   type: z.literal('ephemeral'),
   ttl: z.enum(['5m', '1h']).optional(),
 });
+
+const MIN_THINKING_BUDGET = 1024;
 
 const AText = z.strictObject({
   type: z.literal('text'),
@@ -359,6 +366,26 @@ function flattenAnthropic(
 }
 
 /**
+ * True when any block, system part or tool carries `cache_control`. The one-hour TTL is refused:
+ * it is written at twice the input price, which the reservation does not model.
+ */
+function usesCacheControl(p: z.infer<typeof AnthropicRequestSchema>): boolean {
+  let found = false;
+  const see = (b: unknown): void => {
+    if (isObj(b) && Array.isArray(b.content)) b.content.forEach(see);
+    const cc = isObj(b) ? b.cache_control : undefined;
+    if (!isObj(cc)) return;
+    found = true;
+    if (cc.ttl === '1h')
+      refused('cache_control with ttl "1h" is not supported (use the default 5-minute cache)');
+  };
+  if (Array.isArray(p.system)) p.system.forEach(see);
+  p.tools?.forEach(see);
+  for (const m of p.messages) if (Array.isArray(m.content)) m.content.forEach(see);
+  return found;
+}
+
+/**
  * Parses an Anthropic Messages request body (already JSON-parsed by the strict parser). Throws
  * `PassthroughRequestError` for a refused or malformed request.
  */
@@ -368,6 +395,7 @@ export function parseAnthropicRequest(body: unknown): PassthroughRequest {
   if (p.stream !== true && p.thinking?.type === 'enabled')
     refused('thinking requires stream: true');
   const { chat, images } = flattenAnthropic(p);
+  const cacheWrite = usesCacheControl(p);
   if (images > PASSTHROUGH_LIMITS.maxImages) refused('too many images');
   const extra = JSON.stringify([p.tool_choice, p.stop_sequences, p.thinking]);
   return {
@@ -379,14 +407,19 @@ export function parseAnthropicRequest(body: unknown): PassthroughRequest {
     chat,
     images,
     extraBytes: Buffer.byteLength(extra),
+    cacheWrite,
     build(maxTokens) {
+      // The thinking budget must stay below the (possibly clamped) output bound and the API needs
+      // at least MIN_THINKING_BUDGET: when the granted bound leaves no room, thinking is omitted
+      // (the request is still answered, within the same bound, without extended thinking).
       const thinking =
         p.thinking?.type === 'enabled'
-          ? // The thinking budget must stay below the (possibly clamped) output bound.
-            {
-              type: 'enabled' as const,
-              budget_tokens: Math.min(p.thinking.budget_tokens, Math.max(1, maxTokens - 1)),
-            }
+          ? maxTokens - 1 >= MIN_THINKING_BUDGET
+            ? {
+                type: 'enabled' as const,
+                budget_tokens: Math.min(p.thinking.budget_tokens, maxTokens - 1),
+              }
+            : undefined
           : p.thinking;
       return {
         model: p.model,
@@ -634,6 +667,7 @@ export function parseOpenAIRequest(body: unknown): PassthroughRequest {
     model: p.model,
     stream,
     includeUsage: p.stream_options?.include_usage === true,
+    cacheWrite: false,
     requestedMaxTokens: requested,
     chat,
     images,

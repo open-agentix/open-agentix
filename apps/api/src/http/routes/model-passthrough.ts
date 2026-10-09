@@ -114,8 +114,9 @@ export function registerPassthroughRoutes(
         schema: { tags, summary, security: modelSec, body },
       },
       async (req, reply) => {
-        const parsed = parse(req.body);
+        // Authenticate first: an unauthenticated caller learns nothing from request validation.
         const auth = await modelProxy.authenticatePassthrough(modelCredentialOf(req));
+        const parsed = parse(req.body);
         reply.header('cache-control', 'no-store');
         const gone = new AbortController();
         reply.raw.once('close', () => {

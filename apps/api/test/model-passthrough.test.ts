@@ -937,3 +937,137 @@ describe('feature flag', () => {
     }
   });
 });
+
+describe('review fixes: cache writes, identity, auth order', () => {
+  const cachingStream = (init: RequestInit, model = 'upstream-secret-model') =>
+    sseResponse(
+      up,
+      async function* () {
+        yield sse(
+          {
+            type: 'message_start',
+            message: {
+              id: 'msg_upstream_internal',
+              model,
+              usage: { input_tokens: 5, output_tokens: 1, cache_creation_input_tokens: 20 },
+            },
+          },
+          'message_start',
+        );
+        yield sse(
+          { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+          'content_block_start',
+        );
+        yield sse(
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } },
+          'content_block_delta',
+        );
+        yield sse({ type: 'content_block_stop', index: 0 }, 'content_block_stop');
+        yield sse(
+          {
+            type: 'message_delta',
+            delta: { stop_reason: 'end_turn' },
+            usage: { output_tokens: 5 },
+          },
+          'message_delta',
+        );
+        yield sse({ type: 'message_stop' }, 'message_stop');
+      },
+      init,
+    );
+
+  const cached = {
+    system: [{ type: 'text', text: 'You are terse.', cache_control: { type: 'ephemeral' } }],
+  };
+
+  it('reserves cache_control calls at the cache-write rate: reserved >= settled, no overrun', async () => {
+    up.handler = (_c, init) => cachingStream(init);
+    const plain = await setup('claude', 'claude-x');
+    expect((await post(A, plain.mt, anthropicBody({ stream: true }))).statusCode).toBe(200);
+    const withCache = await setup('claude', 'claude-x');
+    const res = await post(A, withCache.mt, anthropicBody({ stream: true, ...cached }));
+    expect(res.statusCode).toBe(200);
+    const [plainResv] = await reservations(plain.r.runId);
+    const [resv] = await reservations(withCache.r.runId);
+    const [line] = await ledger(withCache.r.runId);
+    expect(Number(resv!.reservedMicros)).toBeGreaterThan(Number(plainResv!.reservedMicros));
+    expect(Number(resv!.reservedMicros)).toBeGreaterThanOrEqual(line!.costMicros);
+    expect(await audit(withCache.r.runId, 'model.overrun')).toEqual([]);
+  });
+
+  it('refuses a one-hour cache TTL before anything is reserved or sent', async () => {
+    const { r, mt } = await setup('claude', 'claude-x');
+    const res = await post(
+      A,
+      mt,
+      anthropicBody({
+        system: [{ type: 'text', text: 's', cache_control: { type: 'ephemeral', ttl: '1h' } }],
+      }),
+    );
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe('model_parameter_refused');
+    expect(up.calls).toHaveLength(0);
+    expect(await reservations(r.runId)).toEqual([]);
+  });
+
+  it('shows the client the step model and an own id, never the upstream ones', async () => {
+    up.handler = (_c, init) => cachingStream(init);
+    const { mt } = await setup('claude', 'claude-x');
+    const res = await post(A, mt, anthropicBody({ stream: true }));
+    expect(res.body).not.toContain('upstream-secret-model');
+    expect(res.body).not.toContain('msg_upstream_internal');
+    const start = frames(res.body)[0]!.data.message as Record<string, unknown>;
+    expect(start.model).toBe('claude-x');
+    expect(start.id).toBe(
+      `msg_${String(res.headers['x-oax-call-id'])
+        .replace(/[^A-Za-z0-9]/g, '')
+        .slice(0, 40)}`,
+    );
+  });
+
+  it('checks the token before it validates the body', async () => {
+    const bad = { not: 'a request' };
+    const unauth = await post(A, null, bad);
+    expect(unauth.statusCode).toBe(401);
+    const wrong = await post(A, 'oaxmt.garbage.garbage', bad);
+    expect(wrong.statusCode).toBe(401);
+    const { mt } = await setup('claude', 'claude-x');
+    expect((await post(A, mt, bad)).statusCode).toBe(400);
+  });
+
+  it('ends the stream with an error for an oversized upstream delta', async () => {
+    up.handler = (_c, init) =>
+      sseResponse(
+        up,
+        async function* () {
+          yield sse(
+            {
+              type: 'message_start',
+              message: { id: 'm', model: 'claude-x', usage: { input_tokens: 5, output_tokens: 1 } },
+            },
+            'message_start',
+          );
+          yield sse(
+            { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+            'content_block_start',
+          );
+          yield sse(
+            {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: 'x'.repeat(70_000) },
+            },
+            'content_block_delta',
+          );
+          yield sse({ type: 'message_stop' }, 'message_stop');
+        },
+        init,
+      );
+    const { mt } = await setup('claude', 'claude-x');
+    const res = await post(A, mt, anthropicBody({ stream: true, max_tokens: 100_000 }));
+    const last = frames(res.body).at(-1)!;
+    expect(last.event).toBe('error');
+    expect(last.data).toMatchObject({ error: { code: 'provider_error' } });
+    expect(res.body).not.toContain('text_delta');
+  });
+});

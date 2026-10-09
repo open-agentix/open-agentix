@@ -42,7 +42,7 @@ describe('parseAnthropicRequest', () => {
     const req = parseAnthropicRequest(
       A({
         stream: true,
-        system: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral', ttl: '1h' } }],
+        system: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral', ttl: '5m' } }],
         messages: [
           {
             role: 'user',
@@ -649,5 +649,157 @@ describe('protocol errors, rendering and synthesis', () => {
     expect(o.every((e) => e !== null)).toBe(true);
     expect(o.at(-1)!.data.usage).toMatchObject({ prompt_tokens: 4, completion_tokens: 6 });
     expect(synthesizeEvents('openai', { ...res, text: '', toolCalls: [] }, 'c').length).toBe(3);
+  });
+});
+
+describe('review fixes: cache, thinking, oversize strings, identity', () => {
+  it('flags cache_control (system, tools, messages, nested) and refuses ttl 1h', () => {
+    expect(parseAnthropicRequest(A()).cacheWrite).toBe(false);
+    const cc = { type: 'ephemeral' };
+    const viaSystem = A({ system: [{ type: 'text', text: 's', cache_control: cc }] });
+    const viaMsg = A({
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'x', cache_control: cc }] }],
+    });
+    const viaTool = A({
+      tools: [{ name: 't', input_schema: { type: 'object' }, cache_control: cc }],
+    });
+    for (const b of [viaSystem, viaMsg, viaTool])
+      expect(parseAnthropicRequest(b).cacheWrite).toBe(true);
+    const e = refusal(() =>
+      parseAnthropicRequest(
+        A({ system: [{ type: 'text', text: 's', cache_control: { ...cc, ttl: '1h' } }] }),
+      ),
+    );
+    expect(e.code).toBe('model_parameter_refused');
+    expect(parseOpenAIRequest(O()).cacheWrite).toBe(false);
+  });
+
+  it('omits thinking when the granted bound leaves less than the 1024 minimum', () => {
+    const p = parseAnthropicRequest(
+      A({ stream: true, max_tokens: 4000, thinking: { type: 'enabled', budget_tokens: 2048 } }),
+    );
+    expect(p.build(4000).thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
+    expect(p.build(3000).thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
+    expect(p.build(2000).thinking).toEqual({ type: 'enabled', budget_tokens: 1999 });
+    expect(p.build(1025).thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+    expect(p.build(1024)).not.toHaveProperty('thinking');
+    expect(p.build(100)).not.toHaveProperty('thinking');
+  });
+
+  it('ends the stream with an error for an oversized upstream string instead of blanking', () => {
+    const huge = 'x'.repeat(64 * 1024 + 1);
+    expect(() =>
+      sanitizeAnthropicEvent({
+        event: 'content_block_delta',
+        data: { index: 0, delta: { type: 'text_delta', text: huge } },
+      }),
+    ).toThrow(/size limit/);
+    expect(() =>
+      sanitizeOpenAIChunk(
+        { event: 'chunk', data: { choices: [{ index: 0, delta: { content: huge } }] } },
+        { includeUsage: false },
+      ),
+    ).toThrow(/size limit/);
+    const ok = 'y'.repeat(64 * 1024);
+    const out = sanitizeAnthropicEvent({
+      event: 'content_block_delta',
+      data: { index: 0, delta: { type: 'text_delta', text: ok } },
+    });
+    expect((out!.data.delta as { text: string }).text).toHaveLength(64 * 1024);
+  });
+
+  it('splits synthetic events so no field exceeds the limit and the text is intact', () => {
+    const text = 'a😀'.repeat(60_000);
+    const args = { v: 'z'.repeat(150_000) };
+    const res: ChatResponse = {
+      text,
+      toolCalls: [{ id: 't1', name: 'f', args }],
+      usage: { inputTokens: 1, outputTokens: 1 },
+      stopReason: 'tool_use',
+      model: 'sim',
+    };
+    const a = synthesizeEvents('anthropic', res, 'c1').map((e) => sanitizeAnthropicEvent(e)!);
+    const texts = a
+      .filter((e) => (e.data.delta as { type?: string } | undefined)?.type === 'text_delta')
+      .map((e) => (e.data.delta as { text: string }).text);
+    expect(texts.length).toBeGreaterThan(1);
+    expect(texts.join('')).toBe(text);
+    const json = a
+      .filter((e) => (e.data.delta as { type?: string } | undefined)?.type === 'input_json_delta')
+      .map((e) => (e.data.delta as { partial_json: string }).partial_json)
+      .join('');
+    expect(JSON.parse(json)).toEqual(args);
+    const o = synthesizeEvents('openai', res, 'c1').map((e) =>
+      sanitizeOpenAIChunk(e, { includeUsage: true }),
+    );
+    expect(o.every((e) => e !== null)).toBe(true);
+    const content = o
+      .flatMap((e) =>
+        (e!.data.choices as { delta: { content?: string } }[]).map((c) => c.delta.content),
+      )
+      .filter((c): c is string => typeof c === 'string' && c !== '')
+      .join('');
+    expect(content).toBe(text);
+    const argStr = o
+      .flatMap((e) =>
+        (
+          e!.data.choices as { delta: { tool_calls?: { function: { arguments?: string } }[] } }[]
+        ).flatMap((c) => c.delta.tool_calls?.map((t) => t.function.arguments ?? '') ?? []),
+      )
+      .join('');
+    expect(JSON.parse(argStr)).toEqual(args);
+  });
+
+  it('replaces model and id, and caps usage in client-visible events', () => {
+    const opts = {
+      includeUsage: true,
+      model: 'step-model',
+      id: 'msg_own',
+      maxInput: 100,
+      maxOutput: 50,
+    };
+    const start = sanitizeAnthropicEvent(
+      {
+        event: 'message_start',
+        data: {
+          message: {
+            id: 'msg_internal_upstream',
+            model: 'secret-upstream-model',
+            usage: { input_tokens: 9999, output_tokens: 1, cache_read_input_tokens: 7777 },
+          },
+        },
+      },
+      opts,
+    )!;
+    const m = start.data.message as Record<string, unknown>;
+    expect(m.id).toBe('msg_own');
+    expect(m.model).toBe('step-model');
+    expect(m.usage).toMatchObject({
+      input_tokens: 100,
+      output_tokens: 1,
+      cache_read_input_tokens: 100,
+    });
+    const delta = sanitizeAnthropicEvent(
+      { event: 'message_delta', data: { delta: {}, usage: { output_tokens: 999999 } } },
+      opts,
+    )!;
+    expect(delta.data.usage).toEqual({ output_tokens: 50 });
+    const chunk = sanitizeOpenAIChunk(
+      {
+        event: 'chunk',
+        data: {
+          id: 'chatcmpl-up',
+          model: 'secret-upstream-model',
+          choices: [],
+          usage: { prompt_tokens: 9999, completion_tokens: 9999 },
+        },
+      },
+      { ...opts, id: 'chatcmpl-own' },
+    )!;
+    expect(chunk.data).toMatchObject({
+      id: 'chatcmpl-own',
+      model: 'step-model',
+      usage: { prompt_tokens: 100, completion_tokens: 50 },
+    });
   });
 });
