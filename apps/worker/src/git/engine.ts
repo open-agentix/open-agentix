@@ -887,9 +887,15 @@ export class GitSession {
           '--no-follow-tags',
           '--no-signed',
           '--no-recurse-submodules',
+          // Create-only: an empty lease means "the ref must not exist". Git refuses locally when
+          // the ref is advertised, and sends the zero id as the old value, so the host refuses
+          // atomically when the branch appeared after the advertisement. Without it, a branch
+          // created between the ls-remote check and the push at the base commit (or an ancestor)
+          // would be fast-forwarded. This never overwrites anything: the lease only holds for a
+          // missing ref, and the refspec has no leading plus sign.
+          `--force-with-lease=${ref}:`,
           '--',
           this.repo.url,
-          // create-only refspec without a leading plus sign; the host also checks the old value (zero id)
           `${commit}:${ref}`,
         ],
         {},

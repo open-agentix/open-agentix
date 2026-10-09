@@ -491,6 +491,31 @@ describe('GitEngine write side', () => {
     expect(git(srv.bare, 'rev-parse', 'refs/heads/oax/bug-fix/issue-1-abcd1234')).toBe(before);
   });
 
+  it('does not update a branch that appears between the check and the push', async () => {
+    const branch = 'oax/bug-fix/race-1';
+    // A wrapper that creates the branch on the host (at the base commit, so a plain push would be
+    // a fast-forward update) right before git pushes.
+    const bin = path.join(tmp, 'git-race.sh');
+    writeFileSync(
+      bin,
+      `#!/bin/sh
+case " $* " in *" push "*) GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git --git-dir='${srv.bare}' update-ref 'refs/heads/${branch}' '${baseSha}';; esac
+exec git "$@"
+`,
+    );
+    chmodSync(bin, 0o755);
+    const patch = diffOf('src/price.js', PRICE_BEFORE, PRICE_AFTER);
+    const s = await prep({ gitBinary: bin });
+    try {
+      await expect(s.applyAndPushBranch(input(patch, branch))).rejects.toMatchObject({
+        code: 'push_rejected',
+      });
+    } finally {
+      await s.dispose();
+    }
+    expect(git(srv.bare, 'rev-parse', `refs/heads/${branch}`)).toBe(baseSha);
+  });
+
   it('stops before the push in dry-run mode', async () => {
     const patch = diffOf('src/price.js', PRICE_BEFORE, PRICE_AFTER);
     const s = await prep();

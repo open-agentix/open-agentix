@@ -342,8 +342,19 @@ describe('source tree guard: no completion, review, label or dispatch call can e
     ['graphql', /graphql/i],
     ['pull update (close/edit)', /'PATCH'|"PATCH"|'PUT'|"PUT"|'DELETE'|"DELETE"/],
     ['pull endpoint with number', /\/pulls\/\$\{|\/pulls\/\d/],
-    ['branch deletion or force', /--force|--delete|--mirror|\+refs\/|git\/refs/],
+    // the one allowed form is the EMPTY lease (create-only, "the ref must not exist")
+    [
+      'branch deletion or force',
+      /--force(?!-with-lease=\$\{ref\}:`)|--delete|--mirror|\+refs\/|git\/refs/,
+    ],
   ];
+
+  it('uses a lease only in its create-only (empty) form', () => {
+    const leases = files(root).flatMap((f) =>
+      [...readFileSync(f, 'utf8').matchAll(/--force-with-lease\S*/g)].map((m) => m[0]),
+    );
+    expect(leases).toEqual(['--force-with-lease=${ref}:`,']);
+  });
 
   it('finds the sources', () => {
     expect(files(root).length).toBeGreaterThanOrEqual(8);
