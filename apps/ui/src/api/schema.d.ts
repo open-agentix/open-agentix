@@ -6088,6 +6088,11 @@ export interface paths {
                                 runs: number;
                                 windowSeconds: number;
                             };
+                            tenant: {
+                                id: string;
+                                slug: string;
+                                name: string;
+                            };
                             scenarios: {
                                 id: string;
                                 title: string;
@@ -6167,6 +6172,11 @@ export interface paths {
                     content: {
                         "application/json": {
                             runId: string;
+                            tenant: {
+                                id: string;
+                                slug: string;
+                                name: string;
+                            };
                         };
                     };
                 };
