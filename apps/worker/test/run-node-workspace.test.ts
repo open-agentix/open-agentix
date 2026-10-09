@@ -303,6 +303,25 @@ describe('runNode with a pull-request output', () => {
     expect(results(c.calls)[0]!.failure).toMatchObject({ code: 'workspace_result_missing' });
   });
 
+  it('refuses a FIFO at the result path without blocking', { timeout: 10_000 }, async () => {
+    const c = control();
+    const { execFileSync } = await import('node:child_process');
+    const h = new FakeHarness(
+      stateDir,
+      () => void execFileSync('mkfifo', [join(stateDir, 'result.json')]),
+      false,
+    );
+    await runNode(base(c.fetchImpl, h));
+    expect(results(c.calls)[0]!.failure).toMatchObject({ code: 'workspace_result_missing' });
+  });
+
+  it('refuses a result file above the size cap', async () => {
+    const c = control();
+    const big = `{"patch":{"ok":false,"code":"x","message":"${'a'.repeat(2 * 1024 * 1024)}"}}`;
+    await runNode(base(c.fetchImpl, new FakeHarness(stateDir, () => undefined, true, big)));
+    expect(results(c.calls)[0]!.failure).toMatchObject({ code: 'workspace_result_missing' });
+  });
+
   describe('seed problems end the step before the harness starts', () => {
     const failsWith = async (seed: Seed, code: string, message?: RegExp) => {
       const c = control(seed);

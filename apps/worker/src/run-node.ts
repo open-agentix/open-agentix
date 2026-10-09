@@ -270,17 +270,30 @@ async function prepareWorkspace(
 type PatchOutcome =
   { ok: true; patch: PatchAttachment } | { ok: false; code: string; message: string };
 
+const MAX_RESULT_BYTES = 2 * 1024 * 1024;
+
 /** Reads the workspace server's result file (waits for it: the server writes it while it shuts down). */
 async function readWorkspaceResult(file: string, waitMs: number): Promise<PatchOutcome> {
   const deadline = Date.now() + waitMs;
   let text: string | undefined;
   for (;;) {
     try {
-      // O_NOFOLLOW: a link planted at the result path is never followed
-      const fh = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+      // O_NOFOLLOW: a link planted at the result path is never followed. O_NONBLOCK: a FIFO planted
+      // there (test code runs with the node's UID) cannot block the open; only a regular file is
+      // read, and never more than the cap, even when it keeps growing while it is read.
+      const fh = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
-        if ((await fh.stat()).size > 2 * 1024 * 1024) throw new Error('too large');
-        text = await fh.readFile('utf8');
+        const st = await fh.stat();
+        if (!st.isFile() || st.size > MAX_RESULT_BYTES) throw new Error('not a usable result');
+        const buf = Buffer.alloc(MAX_RESULT_BYTES + 1);
+        let n = 0;
+        for (;;) {
+          const { bytesRead } = await fh.read(buf, n, buf.length - n, n);
+          if (bytesRead === 0) break;
+          n += bytesRead;
+          if (n > MAX_RESULT_BYTES) throw new Error('too large');
+        }
+        text = buf.subarray(0, n).toString('utf8');
       } finally {
         await fh.close();
       }
