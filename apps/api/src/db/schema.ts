@@ -52,6 +52,11 @@ export const tenants = pgTable(
      * Empty = no secret at all (fail closed); the default tenant is migrated to `["*"]`.
      */
     secretRefs: jsonb('secret_refs').$type<string[]>().notNull().default([]),
+    /**
+     * Authorisation epoch of an organisation, kept on its root (ADR 0014 section 6.1). Bumped by
+     * every change that can alter an effective permission; read by slice S2 onwards.
+     */
+    authzEpoch: bigint('authz_epoch', { mode: 'number' }).notNull().default(0),
     createdAt: created(),
   },
   (t) => [
@@ -121,6 +126,69 @@ export const users = pgTable('users', {
   createdAt: created(),
   lastLoginAt: ts('last_login_at'),
 });
+
+/** The seven fixed roles as the database accepts them (check constraints below, migration 0018). */
+const ROLE_SQL = sql.raw(
+  "('admin','agent-engineer','integrator','operator','auditor','viewer','pentest')",
+);
+
+/**
+ * Role bindings of users on nodes of the tenant tree (ADR 0014 section 4). `inherit = false`
+ * (the default) applies the role at `tenant_id` only; `true` also at every descendant. The trigger
+ * `trb_same_org` of migration 0018 keeps `tenant_id` inside the user's home organisation, so a
+ * binding can never reach another organisation. The resolver in `@openagentix/core` is the only
+ * reader that turns rows into permissions; nothing reads this table to authorise before slice S2.
+ * `users.global_roles` is mirrored here for one release (write-through).
+ */
+export const tenantRoleBindings = pgTable(
+  'tenant_role_bindings',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    role: text('role').notNull(),
+    useCase: text('use_case'),
+    inherit: boolean('inherit').notNull().default(false),
+    expiresAt: ts('expires_at'),
+    grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: created(),
+  },
+  (t) => [
+    check('trb_role_check', sql`${t.role} in ${ROLE_SQL}`),
+    check('trb_pentest_expiry', sql`${t.role} <> 'pentest' or ${t.expiresAt} is not null`),
+    check(
+      'trb_use_case_len',
+      sql`${t.useCase} is null or char_length(${t.useCase}) between 1 and 200`,
+    ),
+    uniqueIndex('trb_uq').on(t.userId, t.tenantId, t.role, sql`coalesce(${t.useCase}, '')`),
+    index('trb_tenant_idx').on(t.tenantId),
+    index('trb_user_idx').on(t.userId),
+  ],
+);
+
+/** Permissions removed from a role at a node and below (ADR 0014 section 5); unused until S9. */
+export const tenantRoleRestrictions = pgTable(
+  'tenant_role_restrictions',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    role: text('role').notNull(),
+    permission: text('permission').notNull(),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: created(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.tenantId, t.role, t.permission] }),
+    check('trr_role_check', sql`${t.role} in ${ROLE_SQL}`),
+    // A node must not be able to lock out its own administrators.
+    check('trr_not_admin', sql`${t.role} <> 'admin'`),
+  ],
+);
 
 export const teamMembers = pgTable(
   'team_members',
