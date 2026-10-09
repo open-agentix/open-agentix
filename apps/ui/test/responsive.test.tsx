@@ -44,12 +44,17 @@ describe('card rows on phones', () => {
     expect(cards).toHaveLength(2);
     const first = cards[0]!;
     expect(within(first).getByRole('link', { name: 'ticket-updater' })).toBeInTheDocument();
-    expect(within(first).getByText('v1.0.0')).toBeInTheDocument();
+    expect(within(first).getByText(/v1\.0\.0/)).toBeInTheDocument();
     expect(within(first).getByText('Moves triaged tickets')).toBeInTheDocument();
+    expect(within(first).getByText('Changed')).toBeInTheDocument();
     expect(within(first).getByRole('group', { name: 'Tenant: Acme' })).toBeInTheDocument();
-    expect(await within(first).findByText('Security')).toBeInTheDocument();
-    expect(within(cards[1]!).getByText('Draft only')).toBeInTheDocument();
-    expect(within(cards[1]!).getByText('Global')).toBeInTheDocument();
+    expect(within(first).getByText('vulnerability-management')).toBeInTheDocument();
+    expect(within(first).getByText('Security')).toBeInTheDocument();
+    expect(within(first).getByRole('link', { name: /Failed/ })).toBeInTheDocument();
+    expect(
+      within(first).getByRole('progressbar', { name: /Budget used: 82%/ }),
+    ).toBeInTheDocument();
+    expect(within(cards[1]!).getByText('Draft')).toBeInTheDocument();
     await expectNoA11yViolations();
   });
 
@@ -58,14 +63,17 @@ describe('card rows on phones', () => {
     await renderApp('/agents');
     await heading('Agents');
     expect(await screen.findByRole('table')).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'Tenant: Acme' })).not.toBeInTheDocument();
+    expect((await screen.findAllByRole('group', { name: 'Tenant: Acme' })).length).toBeGreaterThan(
+      0,
+    );
   });
 
-  it('lets a viewer read team names (GET /v1/teams needs no users:read)', async () => {
+  it('lets a viewer read the owner team (it comes with the agent, no users:read needed)', async () => {
     asViewer();
     await renderApp('/agents');
     await heading('Agents');
-    expect(await screen.findByText('Security')).toBeInTheDocument();
+    const list = await screen.findByRole('list', { name: 'Agents' });
+    expect(within(list).getByText('Security')).toBeInTheDocument();
     expect(screen.queryByText(/^Team 3333/)).not.toBeInTheDocument();
   });
 
@@ -75,9 +83,9 @@ describe('card rows on phones', () => {
         HttpResponse.json({ error: 'forbidden', message: 'no' }, { status: 403 }),
       ),
     );
-    await renderApp('/agents');
-    await heading('Agents');
-    expect(await screen.findByText('Team 33333333')).toBeInTheDocument();
+    await renderApp('/runs');
+    await heading('Runs');
+    expect((await screen.findAllByText('Team 33333333')).length).toBeGreaterThan(0);
   });
 
   it('renders runs as cards with agent, team, tenant, cost and a status', async () => {

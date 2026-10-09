@@ -15,15 +15,18 @@ describe('agents list', () => {
     const { user } = await renderApp('/agents');
     await heading('Agents');
     expect(await screen.findByRole('link', { name: 'ticket-updater' })).toBeInTheDocument();
-    expect(screen.getByText('v1.0.0')).toBeInTheDocument();
-    expect(screen.getByText('Draft only')).toBeInTheDocument();
-    expect(await screen.findByText('Security')).toBeInTheDocument();
+    expect(screen.getByText(/v1\.0\.0/)).toBeInTheDocument();
+    expect(within(screen.getByRole('table')).getByText('Draft')).toBeInTheDocument();
+    expect(await within(screen.getByRole('table')).findByText('Security')).toBeInTheDocument();
     await expectNoA11yViolations();
     await user.type(screen.getByRole('searchbox', { name: /search agents/i }), 'cve');
-    expect(screen.queryByRole('link', { name: 'ticket-updater' })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole('link', { name: 'ticket-updater' })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole('link', { name: 'cve-triage' })).toBeInTheDocument();
     await user.clear(screen.getByRole('searchbox'));
     await user.type(screen.getByRole('searchbox'), 'zzz');
-    expect(screen.getByText('Nothing matches your filters')).toBeInTheDocument();
+    expect(await screen.findByText('No agents match these filters')).toBeInTheDocument();
   });
 
   it('shows an empty state with the wizard', async () => {
@@ -31,7 +34,7 @@ describe('agents list', () => {
       http.get(api('/v1/agents'), () => HttpResponse.json({ items: [], nextCursor: null })),
     );
     await renderApp('/agents');
-    expect(await screen.findByText('No agents yet')).toBeInTheDocument();
+    expect(await screen.findByText('No agents in Acme yet')).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'Describe a workflow' }).length).toBe(2);
   });
 

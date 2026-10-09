@@ -11,8 +11,9 @@ import {
 import { ApiError } from './api/client';
 import {
   agentQuery,
-  agentsQuery,
+  agentsListQuery,
   agentVersionsQuery,
+  type AgentFilters,
   approvalsQuery,
   auditQuery,
   connectionsQuery,
@@ -25,6 +26,12 @@ import {
   tokensQuery,
   usersQuery,
 } from './api/queries';
+import {
+  AGENT_GROUPS,
+  AGENT_STATUSES,
+  type AgentGroupBy,
+  type AgentsSearch,
+} from './features/agents/filters';
 import { RUN_STATUSES, type CostGroupBy, type RunStatus } from './api/types';
 import { meQuery, settingsQuery } from './auth/auth';
 import { session } from './auth/session';
@@ -37,6 +44,12 @@ export interface RouterContext {
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+
+/** Free text from the URL: the router parses `?q=123` into a number, so accept both. */
+const text = (v: unknown, max: number): string | undefined => {
+  const out = typeof v === 'string' || typeof v === 'number' ? String(v).trim() : '';
+  return out ? out.slice(0, max) : undefined;
+};
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: Outlet,
@@ -91,7 +104,20 @@ const dashboardRoute = createRoute({
 
 const agentsRoute = createRoute({
   ...child('/agents'),
-  loader: ({ context }) => void context.queryClient.prefetchQuery(agentsQuery),
+  validateSearch: (s: Record<string, unknown>): AgentsSearch => ({
+    q: text(s.q, 200),
+    status: (AGENT_STATUSES as readonly string[]).includes(String(s.status))
+      ? (s.status as AgentFilters['status'])
+      : undefined,
+    teamId: text(s.teamId, 64),
+    useCase: text(s.useCase, 200),
+    groupBy: (AGENT_GROUPS as readonly string[]).includes(String(s.groupBy))
+      ? (s.groupBy as AgentGroupBy)
+      : undefined,
+  }),
+  loaderDeps: ({ search: { groupBy: _groupBy, ...filters } }) => filters,
+  loader: ({ context, deps }) =>
+    void context.queryClient.prefetchInfiniteQuery(agentsListQuery(deps)),
   component: lazyRouteComponent(() => import('./features/agents/AgentsPage'), 'AgentsPage'),
 });
 

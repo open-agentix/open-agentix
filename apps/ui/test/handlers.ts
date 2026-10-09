@@ -7,6 +7,36 @@ export const api = (path: string) => `${window.location.origin}${path}`;
 
 const json = <T>(body: T, status = 200) => HttpResponse.json(body as never, { status });
 
+type AgentRow = ResponseOf<'/v1/agents', 'get'>['items'][number];
+
+/**
+ * `GET /v1/agents` over a fixed set: applies the A1 filters (`q`, `teamId`, `useCase` by `/`
+ * segment, `status`) and index-based keyset paging so URL and paging behaviour can be tested.
+ */
+export function agentsList(all: AgentRow[]) {
+  return ({ request }: { request: Request }) => {
+    const u = new URL(request.url);
+    const q = u.searchParams.get('q')?.toLowerCase();
+    const team = u.searchParams.get('teamId');
+    const useCase = u.searchParams.get('useCase');
+    const status = u.searchParams.get('status');
+    const limit = Number(u.searchParams.get('limit') ?? 50);
+    const start = Number(u.searchParams.get('cursor') ?? 0);
+    const rows = all.filter(
+      (a) =>
+        (!q || `${a.name} ${a.description ?? ''} ${a.useCase ?? ''}`.toLowerCase().includes(q)) &&
+        (!team || a.ownerTeam?.id === team) &&
+        (!useCase || a.useCase === useCase || a.useCase?.startsWith(`${useCase}/`)) &&
+        (!status || a.status === status),
+    );
+    const page = rows.slice(start, start + limit);
+    return json<ResponseOf<'/v1/agents', 'get'>>({
+      items: page,
+      nextCursor: start + limit < rows.length ? String(start + limit) : null,
+    });
+  };
+}
+
 const planLint = (
   withError: boolean,
 ): NonNullable<ResponseOf<'/v1/plans/check', 'post'>['lint']> => ({
@@ -60,9 +90,7 @@ export const handlers = [
   http.get(api('/v1/me'), () => json(f.meAdmin)),
   http.get(api('/v1/settings'), () => json(f.settings)),
   http.post(api('/v1/auth/logout'), () => new HttpResponse(null, { status: 200 })),
-  http.get(api('/v1/agents'), () =>
-    json<ResponseOf<'/v1/agents', 'get'>>({ items: [f.agent, f.draftOnlyAgent], nextCursor: null }),
-  ),
+  http.get(api('/v1/agents'), agentsList([f.agent, f.draftOnlyAgent])),
   http.get(api('/v1/agents/:id'), ({ params }) =>
     params.id === f.ids.agent2
       ? json(f.draftOnlyAgent)

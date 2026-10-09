@@ -89,6 +89,10 @@
     "budgetUsed": "Budget used",
     "teamFallback": "Team {id}",
     "teamNoValue": "No team",
+    "percent": "{value}%",
+    "thisTenantFallback": "this tenant",
+    "budgetDetail": "{source} budget ({name}): {spent} of {limit}",
+    "budgetSource": { "tenant": "Tenant", "use_case": "Use case", "team": "Team" },
     "roles": {
       "platformAdmin": "Platform admin",
       "tenantAdmin": "Tenant admin",
@@ -310,7 +314,31 @@
       "eventHint": "Wrapped into a manual CloudEvent; you can also paste a full CloudEvent.",
       "invalidJson": "This is not valid JSON.",
       "start": "Start test run"
-    }
+    },
+    "nameVersion": "Name / version",
+    "status": "Status",
+    "lastRun": "Last run",
+    "neverRun": "Never run",
+    "noBudget": "No budget",
+    "noUseCase": "No use case",
+    "monthSpend": "Spend this month (no budget set)",
+    "needsAttention": "Needs attention",
+    "attention": {
+      "lastRun": "last run failed",
+      "budget": "budget almost used up",
+      "changed": "unpublished changes for over 7 days"
+    },
+    "filters": "Filter agents",
+    "groupBy": "Group by",
+    "groupNone": "None",
+    "groupHint": "Grouping applies to the agents loaded so far.",
+    "clearFilters": "Clear filters",
+    "noMatch": "No agents match these filters",
+    "noMatchText": "Try another search or clear the filters.",
+    "noneVisible": "No agents visible to you in {tenant}",
+    "noneVisibleText": "There may be none yet, or your role does not cover them. Ask a tenant admin of {tenant} to add an agent or to extend your access.",
+    "noneInTenant": "No agents in {tenant} yet",
+    "resultCount": { "one": "{count} agent", "other": "{count} agents" }
   },
   "wizard": {
     "title": "Workflow wizard",

@@ -39,9 +39,12 @@ export function TenantTile({ tenant, small = false }: { tenant: TenantRef; small
 export function ScopeChip({
   tenant,
   compact = false,
+  path,
 }: {
   tenant?: TenantRef | null;
   compact?: boolean;
+  /** Slug path from the organisation root; shown as the tooltip (the name stays the label). */
+  path?: string | undefined;
 }) {
   const t = useT();
   const active = useActiveTenant();
@@ -55,7 +58,7 @@ export function ScopeChip({
       className={compact ? 'scope-chip scope-chip-compact' : 'scope-chip'}
       role="group"
       aria-label={label}
-      title={label}
+      title={path ? `${label} (${path})` : label}
     >
       <TenantTile tenant={value} small={compact} />
       {compact ? null : (

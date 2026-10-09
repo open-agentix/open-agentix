@@ -89,6 +89,10 @@
     "budgetUsed": "Budgetverbrauch",
     "teamFallback": "Team {id}",
     "teamNoValue": "Kein Team",
+    "percent": "{value} %",
+    "thisTenantFallback": "diesem Tenant",
+    "budgetDetail": "{source}-Budget ({name}): {spent} von {limit}",
+    "budgetSource": { "tenant": "Tenant", "use_case": "Use Case", "team": "Team" },
     "roles": {
       "platformAdmin": "Plattform-Admin",
       "tenantAdmin": "Tenant-Admin",
@@ -313,7 +317,31 @@
       "eventHint": "Wird in ein manuelles CloudEvent verpackt; ein vollständiges CloudEvent geht auch.",
       "invalidJson": "Das ist kein gültiges JSON.",
       "start": "Test-Run starten"
-    }
+    },
+    "nameVersion": "Name / Version",
+    "status": "Status",
+    "lastRun": "Letzter Run",
+    "neverRun": "Noch nie gelaufen",
+    "noBudget": "Kein Budget",
+    "noUseCase": "Kein Use Case",
+    "monthSpend": "Kosten diesen Monat (kein Budget gesetzt)",
+    "needsAttention": "Braucht Aufmerksamkeit",
+    "attention": {
+      "lastRun": "letzter Run fehlgeschlagen",
+      "budget": "Budget fast aufgebraucht",
+      "changed": "unveröffentlichte Änderungen seit über 7 Tagen"
+    },
+    "filters": "Agenten filtern",
+    "groupBy": "Gruppieren nach",
+    "groupNone": "Keine",
+    "groupHint": "Die Gruppierung gilt für die bisher geladenen Agenten.",
+    "clearFilters": "Filter zurücksetzen",
+    "noMatch": "Keine Agenten passen zu diesen Filtern",
+    "noMatchText": "Versuche eine andere Suche oder setze die Filter zurück.",
+    "noneVisible": "Für dich sind in {tenant} keine Agenten sichtbar",
+    "noneVisibleText": "Es gibt womöglich noch keine, oder deine Rolle deckt sie nicht ab. Bitte einen Tenant-Admin von {tenant}, einen Agenten anzulegen oder deinen Zugriff zu erweitern.",
+    "noneInTenant": "Noch keine Agenten in {tenant}",
+    "resultCount": { "one": "{count} Agent", "other": "{count} Agenten" }
   },
   "wizard": {
     "title": "Workflow-Assistent",
