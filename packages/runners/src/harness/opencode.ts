@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import {
@@ -15,6 +15,7 @@ import type { ProviderConfig } from '@openagentix/providers';
 import { buildSystemPrompt } from '../executor.js';
 import {
   HARNESS_DEFAULT_TIMEOUT_MS,
+  assertLoaderEnv,
   assertProxyInvocation,
   gateSecrets,
   harnessLimits,
@@ -109,6 +110,26 @@ interface RunMeta {
 }
 
 const trimSlash = (u: string) => u.replace(/\/+$/, '');
+
+/**
+ * OpenCode substitutes `{env:NAME}` and `{file:PATH}` in the raw text of the configuration file
+ * before parsing it. Every string the author controls (instructions, model, ids) must therefore
+ * never reach the file with those sequences intact, or it could pull the model token or the run
+ * token file into the prompt. The opening brace is written as the JSON escape `\u007b`: the
+ * substitution pattern no longer matches the text, JSON.parse still yields the literal characters.
+ */
+const SUBSTITUTION = /\{(?=(?:env|file):)/gi;
+
+export function serializeOpenCodeConfig(
+  config: unknown,
+  placeholders: Record<string, string>,
+): string {
+  let text = JSON.stringify(config, null, 2).replace(SUBSTITUTION, '\\u007b');
+  // Placeholders are inserted last, by a per-build random marker the author cannot know.
+  for (const [marker, placeholder] of Object.entries(placeholders))
+    text = text.split(JSON.stringify(marker)).join(JSON.stringify(placeholder));
+  return text;
+}
 
 function planProvider(cfg: ProviderConfig, model: string): ProviderPlan {
   const models = { [model]: {} };
@@ -238,13 +259,20 @@ export class OpenCodeHarness implements ExternalHarness {
       ...Object.fromEntries(OPENCODE_BUILTIN_TOOLS.map((b) => [b, false])),
       ...Object.fromEntries(allowed.map((n) => [n, true])),
     };
+    const nonce = randomUUID();
+    const placeholders: Record<string, string> = {};
+    const placeholder = (env: string): string => {
+      const marker = `oax-placeholder-${nonce}-${env}`;
+      placeholders[marker] = `{env:${env}}`;
+      return marker;
+    };
     const headers = Object.fromEntries(
-      Object.keys(plan.headerSecrets).map((h, i) => [h, `{env:${HEADER_ENV_PREFIX}${i}}`]),
+      Object.keys(plan.headerSecrets).map((h, i) => [h, placeholder(`${HEADER_ENV_PREFIX}${i}`)]),
     );
     const entry = structuredClone(plan.entry) as { options: Record<string, unknown> };
     if (Object.keys(headers).length)
       entry.options.headers = { ...(entry.options.headers as object), ...headers };
-    if (plan.apiKeySecret || proxy) entry.options.apiKey = `{env:${API_KEY_ENV}}`;
+    if (plan.apiKeySecret || proxy) entry.options.apiKey = placeholder(API_KEY_ENV);
 
     const config = {
       $schema: 'https://opencode.ai/config.json',
@@ -304,7 +332,7 @@ export class OpenCodeHarness implements ExternalHarness {
         OPENCODE_DISABLE_CLAUDE_CODE: 'true',
         OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
       },
-      files: { [CONFIG_FILE]: JSON.stringify(config, null, 2) },
+      files: { [CONFIG_FILE]: serializeOpenCodeConfig(config, placeholders) },
       stdin: prompt,
       limits,
       ...(proxy
@@ -362,6 +390,9 @@ export class OpenCodeHarness implements ExternalHarness {
       env[`${HEADER_ENV_PREFIX}${i++}`] = value;
       if (value) secrets.push(value);
     }
+    // The environment that goes to spawn, with everything the adapter added.
+    if (meta.proxyToken) assertProxyInvocation(inv, undefined, env);
+    else assertLoaderEnv(env);
     return runHarnessProcess(
       inv,
       { cwd, env, secrets, signal: opts.signal },

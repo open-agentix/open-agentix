@@ -154,6 +154,8 @@ export interface CallAuth {
   nodeId: string;
   /** Model token: the one step the token is bound to. Run token: `null` (checked against `steps`). */
   boundAgentId: string | null;
+  /** Model token: the endpoint family it was issued for (`null` for a run token). */
+  surface: 'native' | 'harness' | null;
   steps: readonly string[];
   tenantId: string;
   /** When the session (the step) started: step timeouts are measured from here. */
@@ -269,7 +271,11 @@ export class ModelProxyService {
    * step. Accepts the step-scoped run token of the node or its model token; an orchestrator token
    * (no `sid`), a token of another run and a token whose session is gone are refused.
    */
-  async authenticate(bearer: string | null, runId: string): Promise<CallAuth> {
+  async authenticate(
+    bearer: string | null,
+    runId: string,
+    surface: 'native' | 'harness' = 'native',
+  ): Promise<CallAuth> {
     const secret = this.ctx.config.runToken.secret;
     const now = this.ctx.now().getTime();
     if (!bearer) throw new ModelProxyError('unauthenticated', 'valid model or run token required');
@@ -284,6 +290,7 @@ export class ModelProxyService {
           sid: modelClaims.sid,
           nodeId: modelClaims.nodeId,
           boundAgentId: modelClaims.agentId,
+          surface: modelClaims.surface,
           steps: [modelClaims.agentId],
         };
       } else {
@@ -299,6 +306,7 @@ export class ModelProxyService {
           sid: claims.sid,
           nodeId: claims.workerId,
           boundAgentId: null,
+          surface: null,
           steps: claims.steps ?? [],
         };
       }
@@ -308,6 +316,13 @@ export class ModelProxyService {
     }
     if (auth.runId !== runId)
       throw new ModelProxyError('model_not_allowed', 'the token is not valid for this run');
+    // A model token opens one endpoint family only: the native /model route refuses a harness
+    // token and the harness pass-through surfaces refuse a native one.
+    if (auth.surface !== null && auth.surface !== surface)
+      throw new ModelProxyError(
+        'model_not_allowed',
+        'the model token is not valid for this endpoint',
+      );
     const session = await this.nodes.sessionById(auth.sid);
     const dead = (message: string) => new ModelProxyError('run_node_session_revoked', message);
     if (!session || session.runId !== runId || session.nodeId !== auth.nodeId)
@@ -338,7 +353,7 @@ export class ModelProxyService {
     } catch {
       throw new ModelProxyError('unauthenticated', 'a valid model token is required');
     }
-    return this.authenticate(credential, claims.runId);
+    return this.authenticate(credential, claims.runId, 'harness');
   }
 
   /** The one model of the token's step (`GET .../models` lists exactly this). */
@@ -435,6 +450,8 @@ export class ModelProxyService {
         sid: auth.sid,
         nodeId: auth.nodeId,
         agentId,
+        surface: harness ? 'harness' : 'native',
+        ...(harness ? { harness } : {}),
         ttlSeconds: cfg.runToken.ttlSeconds,
         notAfterMs: session.expiresAt.getTime(),
       },

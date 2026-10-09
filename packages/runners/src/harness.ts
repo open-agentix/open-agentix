@@ -352,15 +352,16 @@ export class ClaudeCodeHarness implements ExternalHarness {
     if (inv.modelProxy) {
       // Through the proxy the egress decision belongs to the control node (ADR 0009 section 9);
       // the CLI only reaches the proxy. No token file, no login of the host, an empty HOME.
-      assertProxyInvocation(inv);
       const cwd = await prepareWorkdir(opts.cwd, inv.files);
       const home = join(cwd, '.home');
       await mkdir(home, { recursive: true, mode: 0o700 });
+      const env = { ...inv.env, HOME: home };
+      assertProxyInvocation(inv, undefined, env);
       return runHarnessProcess(
         inv,
         {
           cwd,
-          env: { ...inv.env, HOME: home },
+          env,
           secrets: [...gateSecrets(inv), ...(inv.redact ?? [])],
           signal: opts.signal,
         },
@@ -388,6 +389,7 @@ export class ClaudeCodeHarness implements ExternalHarness {
       await mkdir(env.HOME, { recursive: true, mode: 0o700 });
       secrets.push(token);
     }
+    assertLoaderEnv(env);
     return runHarnessProcess(
       inv,
       { cwd, env, secrets, signal: opts.signal },
@@ -461,6 +463,44 @@ const FORBIDDEN_PROXY_ENV = [
   /^OPENROUTER_/,
   /^(HTTPS?|ALL|NO)_PROXY$/i,
 ];
+/** Variables that change what code or certificates a harness process loads, or its configuration. */
+const FORBIDDEN_LOADER_ENV = [
+  /^NODE_/,
+  /^LD_/,
+  /^DYLD_/,
+  /^BUN_/,
+  /^SSL_CERT_/,
+  /^(CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|GIT_SSL_CAINFO)$/,
+  /^CLAUDE_CONFIG_DIR$/,
+  /^ANTHROPIC_CUSTOM_HEADERS$/,
+  /^OPENCODE_(CONFIG_CONTENT|CONFIG_DIR|PERMISSION)$/,
+];
+/**
+ * The complete environment of a harness behind the model proxy (allowlist, fail closed): what the
+ * invocation builders set plus what the adapters add right before the start (HOME, XDG, config
+ * path, the key and header values).
+ */
+const ALLOWED_PROXY_ENV = [
+  /^(PATH|LANG|NO_COLOR|HOME)$/,
+  /^XDG_(CONFIG|DATA|CACHE|STATE)_HOME$/,
+  /^(CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC|CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)$/,
+  /^(DISABLE_AUTOUPDATER|DISABLE_TELEMETRY|DISABLE_ERROR_REPORTING)$/,
+  /^ANTHROPIC_(BASE_URL|AUTH_TOKEN|MODEL|SMALL_FAST_MODEL)$/,
+  /^ANTHROPIC_DEFAULT_(HAIKU|SONNET|OPUS)_MODEL$/,
+  /^OPENCODE_CONFIG$/,
+  /^OPENCODE_DISABLE_[A-Z_]+$/,
+  /^OAX_OPENCODE_API_KEY$/,
+];
+
+/** Refuses loader / certificate / configuration variables in the environment of any harness. */
+export function assertLoaderEnv(env: Readonly<Record<string, string>>): void {
+  for (const key of Object.keys(env))
+    if (FORBIDDEN_LOADER_ENV.some((re) => re.test(key)))
+      throw new OaxError(
+        'harness_proxy_invariant',
+        `the environment variable ${key} must not reach a harness`,
+      );
+}
 /** Flags that would switch the permission model off. */
 const FORBIDDEN_PROXY_ARGS = [
   '--dangerously-skip-permissions',
@@ -474,21 +514,32 @@ const FORBIDDEN_PROXY_ARGS = [
  * bypass of the permission model is refused (fail closed). Called when the invocation is built and
  * again right before the process starts.
  */
-export function assertProxyInvocation(inv: HarnessInvocation, proxy?: ModelProxyEndpoint): void {
+export function assertProxyInvocation(
+  inv: HarnessInvocation,
+  proxy?: ModelProxyEndpoint,
+  /** The environment that is actually passed to `spawn` (default: the one of the invocation). */
+  env: Readonly<Record<string, string>> = inv.env,
+): void {
   const refuse = (message: string): never => {
     throw new OaxError('harness_proxy_invariant', message);
   };
   if (!inv.modelProxy && !proxy) refuse('the invocation is not a proxy invocation');
-  for (const key of Object.keys(inv.env))
+  assertLoaderEnv(env);
+  for (const key of Object.keys(env)) {
     if (FORBIDDEN_PROXY_ENV.some((re) => re.test(key)))
       refuse(`the environment variable ${key} must not reach a harness behind the model proxy`);
+    if (!ALLOWED_PROXY_ENV.some((re) => re.test(key)) && !/^OAX_OPENCODE_HEADER_\d+$/.test(key))
+      refuse(`the environment variable ${key} is not on the allowlist of a proxied harness`);
+  }
+  if (env.ANTHROPIC_BASE_URL !== undefined && env.ANTHROPIC_BASE_URL !== inv.modelProxy?.baseUrl)
+    refuse('ANTHROPIC_BASE_URL does not point to the model proxy of the step');
   for (const arg of inv.args)
     if (FORBIDDEN_PROXY_ARGS.includes(arg)) refuse(`the harness flag ${arg} is not allowed`);
   const mode = inv.args.indexOf('--permission-mode');
   if (mode >= 0 && inv.args[mode + 1] !== 'dontAsk')
     refuse('the permission mode of a harness must be dontAsk');
   // Credentials: only the model token of the step may appear in the environment.
-  for (const [key, value] of Object.entries(inv.env)) {
+  for (const [key, value] of Object.entries(env)) {
     if (/(TOKEN|KEY|SECRET|PASSWORD)/i.test(key) && !value.startsWith('oaxmt.'))
       refuse(`the environment variable ${key} is not a model token`);
   }

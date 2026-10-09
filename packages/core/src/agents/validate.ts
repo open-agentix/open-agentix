@@ -4,7 +4,12 @@ import { OaxError, ValidationError, type ValidationIssue } from '../errors.js';
 import { compareSemver, isSemver } from '../semver.js';
 import { checkJsonSchemaSubset, JSON_SCHEMA_LIMITS, SCHEMA_REF_PREFIX } from './json-schema.js';
 import { parseAgentDefinition, type AgentDefinition, type AgentSpec } from './parser.js';
-import { HANDOVER_EVENT_SOURCE, type ArgConstraint, type CredentialRef } from './schema.js';
+import {
+  CONFIG_PLACEHOLDER,
+  HANDOVER_EVENT_SOURCE,
+  type ArgConstraint,
+  type CredentialRef,
+} from './schema.js';
 import { parseWhen, whenStepRefs } from './when.js';
 
 /** Publish-time knowledge the core cannot have on its own (filled by the control node). */
@@ -158,6 +163,12 @@ function checkHandovers(
         errors.push({
           path: `${base}.runtime.harness`,
           message: `a harness step needs an isolating runner (container or kubernetes-job), not "${runner}"`,
+        });
+      if (a.instructions && CONFIG_PLACEHOLDER.test(a.instructions))
+        errors.push({
+          path: `${base}.instructions`,
+          message:
+            'the instructions of a harness step must not contain "{env:" or "{file:" (the harness would substitute them)',
         });
       if (a.simulation)
         errors.push({

@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OaxError, type StepCredentials } from '@openagentix/core';
 import { McpServerConfigSchema, type McpServerConfig } from '@openagentix/mcp';
@@ -204,6 +206,39 @@ describe('runNode', () => {
     // the published simulation script is never sent by the node
     expect(JSON.stringify(model[0]!.body)).not.toContain('simulation');
     expect(res!.usage).toMatchObject({ tokensIn: 7, tokensOut: 3, costMicros: 5 });
+  });
+
+  it('removes the token file once it was read (the token lives in memory only)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oax-token-'));
+    try {
+      const file = join(dir, 'token');
+      writeFileSync(file, 'oaxrt.a.b\n');
+      const { calls, fetchImpl } = control();
+      const code = await runNode(
+        base(fetchImpl, { env: env({ OAX_RUN_TOKEN_FILE: file }), readFile: undefined }),
+      );
+      expect(code).toBe(0);
+      expect(existsSync(file)).toBe(false);
+      // the run still worked: the token is held in memory
+      expect(new Set(calls.map((c) => c.auth))).toEqual(new Set(['Bearer oaxrt.a.b']));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('survives a token file that cannot be removed (mounted Secret, stdin)', async () => {
+    const { fetchImpl } = control();
+    const removed: string[] = [];
+    const code = await runNode(
+      base(fetchImpl, {
+        removeTokenFile: async (p: string) => {
+          removed.push(p);
+          throw new Error('EROFS');
+        },
+      }),
+    );
+    expect(code).toBe(0);
+    expect(removed).toEqual(['/run/oax/token']);
   });
 
   it('waits for the token file the runner uploads after the start', async () => {

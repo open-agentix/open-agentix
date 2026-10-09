@@ -434,6 +434,35 @@ export async function modelToken(n: TestNode, r: MadeRun): Promise<string> {
   return res.json().token as string;
 }
 
+/** Node environment that enables the container runner and both harnesses (harness steps). */
+export const HARNESS_ENV = {
+  OAX_RUNNERS_ENABLED: 'in-process,container',
+  OAX_CONTAINER_RUNNER_ENABLED: 'true',
+  OAX_CONTAINER_ENGINE_URL: 'http://socket-proxy:2375',
+  OAX_CONTAINER_IMAGE: IMAGE,
+  OAX_CONTAINER_NETWORK: 'oax-nodes',
+  OAX_NODE_CONTROL_URL: 'http://api:8080',
+  OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',
+  OAX_CONTAINER_EGRESS_GRANT_SECRET: 'g'.repeat(40),
+  OAX_HARNESSES_ENABLED: 'claude-code,opencode',
+};
+
+/** Issues the harness model token of a run made with `mkRun(..., { harness })`. */
+export async function harnessModelToken(
+  n: TestNode,
+  r: MadeRun,
+  harness: 'claude-code' | 'opencode',
+): Promise<string> {
+  const res = await n.req({
+    method: 'POST',
+    url: `/v1/worker/runs/${r.runId}/model-token`,
+    token: r.runToken,
+    payload: { agentId: 'a', harness },
+  });
+  if (res.statusCode !== 200) throw new Error(`harness model token failed: ${res.body}`);
+  return res.json().token as string;
+}
+
 export const tenantScope = { tenantId: DEFAULT_TENANT_ID };
 
 /** Parses the events of an SSE body. */

@@ -177,7 +177,17 @@ export class HttpControlPlane implements ControlPlane, ModelProxyClient {
       undefined,
       true,
     );
-    return ModelTokenResponseSchema.parse(raw);
+    // Never surface the ZodError: its message quotes the offending values, which may be (parts of)
+    // the token. Only the field names are reported.
+    const parsed = ModelTokenResponseSchema.safeParse(raw);
+    if (!parsed.success)
+      throw new OaxError(
+        'model_token_response_invalid',
+        `the control node answered with an invalid model token response (fields: ${[
+          ...new Set(parsed.error.issues.map((i) => i.path.join('.') || '(root)')),
+        ].join(', ')})`,
+      );
+    return parsed.data;
   }
 
   /** Reservation of an in-process model call (orchestrator token only). */

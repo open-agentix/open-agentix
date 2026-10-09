@@ -939,3 +939,49 @@ the CLI documentation; the first real run is PLAT-60 and updates `docs/verificat
 inside the node beyond what the container runner sets; harness steps with `credentials` that the
 harness itself should see (the child never receives them; only MCP tools of the gate do).
 
+**Review amendment (2026-10-09).** Findings of the PR review and their resolution.
+
+1. **Config placeholder injection (OpenCode).** OpenCode substitutes `{env:NAME}` and `{file:PATH}` in
+   the raw text of its configuration file before parsing. Author-controlled strings (instructions,
+   `provider`, `model`, ids) could therefore pull `OAX_OPENCODE_API_KEY` (the model token) or the run
+   token file (`OAX_RUN_TOKEN_FILE`) into the prompt. Controls: (a) definition validation refuses
+   `{env:` and `{file:` (case-insensitive) in `provider`, `model` and the instructions of a harness
+   step; (b) the adapter writes the opening brace of such sequences as the JSON escape `\u007b` in
+   every string of the generated file, so the substitution pattern never matches while `JSON.parse`
+   still yields the literal text. The adapter's own placeholders (key, header values) are inserted
+   last through a per-build random marker that an author cannot know. (c) The node removes the run
+   token file after reading it (the token is never re-read, there is no refresh); this is best
+   effort, because a container reads `/dev/stdin` and a mounted Secret is read-only. The harness
+   environment never contains the path.
+2. **Environment.** Behind the proxy the environment is an allowlist (PATH, LANG, NO_COLOR, HOME, XDG
+   dirs, the documented Claude/OpenCode switches, the model variables, `OAX_OPENCODE_*`); everything
+   else is refused. For every harness (also the direct modes) the loader and trust variables
+   (`NODE_*`, `LD_*`, `DYLD_*`, `BUN_*`, `SSL_CERT_*`, `CLAUDE_CONFIG_DIR`, `ANTHROPIC_CUSTOM_HEADERS`,
+   `OPENCODE_CONFIG_CONTENT|DIR`, `OPENCODE_PERMISSION`, CA bundle variables) are refused.
+   `ANTHROPIC_BASE_URL` must equal the proxy base URL. The check runs on the environment that is
+   actually passed to `spawn`, after the adapter added HOME, XDG, config path and key.
+3. **Process end and redaction.** The adapter reacts to `exit` and not only `close`; the process
+   group is always signalled (also after the leader exited) so a descendant holding stdout cannot hang
+   the run. stderr is redacted before it is truncated. Model token response errors report field names
+   only. Gate call args and harness errors are redacted with the step's tokens before they are
+   recorded.
+4. **Token surface.** The model token gets the claims `surface` (`native` | `harness`, default
+   `native` for older tokens) and, for `harness`, the harness kind. `POST .../model` accepts only
+   `native` tokens, the pass-through surfaces only `harness` tokens (`model_not_allowed`). The control
+   node still decides which harness a step may use at issue time.
+
+**Merge-blocking verification notes (to be confirmed with the pinned binaries, PLAT-05/PLAT-60).**
+
+- OpenCode must **not install npm provider packages at run time**. The config names
+  `@ai-sdk/anthropic` / `@ai-sdk/openai-compatible`; the node image must bundle them and the node
+  must have no registry egress. Verify with the pinned binary and no network that a run starts and
+  that no `npm`/`bun add` is attempted. Until verified this is a residual risk (a run-time install
+  would execute third-party code with the model token in its environment).
+- Claude Code `managed-settings.json` must **not exist in the node image** (nor
+  `/etc/claude-code`, nor a `CLAUDE_CONFIG_DIR`), because managed settings override flags such as
+  `--restricted` and permissions. Verify by listing the image file system in the image build test.
+- The default egress of harness steps should be **control node only**. The container runner of this
+  change still applies the pipeline's `runtime.egress` allowlist; it has no per-step "control node
+  only" default for harness steps. This is documented as a **residual risk**: until it exists, a
+  harness step should be published with `runtime.egress: []` (the narrowest declaration); whether the
+  egress proxy then admits the control node only was not verified here.

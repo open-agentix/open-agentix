@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile, unlink } from 'node:fs/promises';
 import {
   CostModel,
   OaxError,
@@ -38,6 +38,8 @@ export interface RunNodeOptions {
   /** Injectable for tests. */
   readFile?: (path: string) => Promise<string>;
   sleep?: (ms: number) => Promise<void>;
+  /** Injectable for tests: removes the token file once it was read (default: unlink a regular file). */
+  removeTokenFile?: (path: string) => Promise<void>;
   /** In-process MCP servers (demo/tests); without them `in-memory` connections cannot be reached. */
   inMemoryMcp?: InMemoryTransportFactory;
   /** Providers usable without the control node (unit tests only); default none: all calls are proxied. */
@@ -203,6 +205,10 @@ function stepDefinition(h: StepHandover): AgentDefinition {
   } as AgentDefinition;
 }
 
+async function removeRegularFile(path: string): Promise<void> {
+  if ((await lstat(path)).isFile()) await unlink(path);
+}
+
 /** Runs one step; returns the process exit code (0 only when the result was accepted). */
 export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
   const log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
@@ -215,6 +221,10 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
     env = parseNodeEnv(opts.env ?? process.env);
     const bundle = await readBundle(env.tokenFile, read, sleep, opts.tokenWaitMs ?? 30_000);
     proxyUrl = bundle.proxyUrl;
+    // The token lives in memory from here on (it is never re-read: there is no refresh), so a
+    // file on disk only helps a harness child that learns its path. Best effort: a container
+    // reads `/dev/stdin`, a mounted Secret is read-only; neither can or needs to be removed.
+    await (opts.removeTokenFile ?? removeRegularFile)(env.tokenFile).catch(() => undefined);
     control = new HttpControlPlane({
       baseUrl: env.controlUrl,
       runToken: bundle.token,

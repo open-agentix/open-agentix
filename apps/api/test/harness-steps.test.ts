@@ -5,25 +5,16 @@ import { auditLog } from '../src/db/schema.js';
 import { testNode, type TestNode } from './helpers.js';
 import {
   BASE_ENV,
-  IMAGE,
+  HARNESS_ENV,
+  ask,
   getModelToken,
+  postModel,
   mkRun,
   publicLookup,
   secrets,
 } from './model-proxy-helpers.js';
 
-const ENV = {
-  ...BASE_ENV,
-  OAX_RUNNERS_ENABLED: 'in-process,container',
-  OAX_CONTAINER_RUNNER_ENABLED: 'true',
-  OAX_CONTAINER_ENGINE_URL: 'http://socket-proxy:2375',
-  OAX_CONTAINER_IMAGE: IMAGE,
-  OAX_CONTAINER_NETWORK: 'oax-nodes',
-  OAX_NODE_CONTROL_URL: 'http://api:8080',
-  OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',
-  OAX_CONTAINER_EGRESS_GRANT_SECRET: 'g'.repeat(40),
-  OAX_HARNESSES_ENABLED: 'claude-code,opencode',
-};
+const ENV = { ...BASE_ENV, ...HARNESS_ENV };
 
 let n: TestNode;
 beforeAll(async () => {
@@ -117,6 +108,44 @@ describe('harness model tokens (ADR 0009 section 10)', () => {
   it('rejects unknown harness names at the wire', async () => {
     const r = await mkRun(n, {});
     expect((await token(r, { harness: 'hermes' })).statusCode).toBe(400);
+  });
+});
+
+describe('model token surface (native vs harness)', () => {
+  it('refuses a harness token on the native /model route', async () => {
+    const r = await mkRun(n, { provider: 'claude', model: 'claude-x', harness: 'claude-code' });
+    const mt = ((await token(r, { harness: 'claude-code' })).json() as { token: string }).token;
+    const res = await postModel(n, r.runId, mt, ask('hi', {}, 'claude-x'));
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBeLessThan(500);
+    expect(res.body).toMatch(/model_not_allowed|not valid for this endpoint/);
+  });
+
+  it('refuses a native token on the harness pass-through surface', async () => {
+    const r = await mkRun(n, { provider: 'claude', model: 'claude-x' });
+    const issued = await getModelToken(n, r.runId, r.runToken);
+    expect(issued.statusCode).toBe(200);
+    const mt = (issued.json() as { token: string }).token;
+    const res = await n.req({
+      method: 'GET',
+      url: '/v1/model-proxy/anthropic/v1/models',
+      token: null,
+      headers: { 'x-api-key': mt },
+    });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBeLessThan(500);
+  });
+
+  it('still lets the harness token open its pass-through surface', async () => {
+    const r = await mkRun(n, { provider: 'claude', model: 'claude-x', harness: 'claude-code' });
+    const mt = ((await token(r, { harness: 'claude-code' })).json() as { token: string }).token;
+    const res = await n.req({
+      method: 'GET',
+      url: '/v1/model-proxy/anthropic/v1/models',
+      token: null,
+      headers: { 'x-api-key': mt },
+    });
+    expect(res.statusCode).toBe(200);
   });
 });
 

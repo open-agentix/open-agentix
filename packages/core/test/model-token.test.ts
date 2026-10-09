@@ -48,11 +48,29 @@ describe('model token round trip', () => {
       sid: 'sid1',
       nodeId: 'node1',
       agentId: 'a1',
+      surface: 'native',
       jti: 'j1',
       iat: 1_000_000,
       exp: 1_000_060,
     });
     expect(verifyModelToken(SECRET, token, NOW)).toEqual(claims);
+  });
+
+  it('binds the endpoint family: native by default, harness only with a harness kind', () => {
+    expect(verifyModelToken(SECRET, issueModelToken(SECRET, base, NOW).token, NOW).surface).toBe(
+      'native',
+    );
+    const h = issueModelToken(SECRET, { ...base, surface: 'harness', harness: 'opencode' }, NOW);
+    expect(verifyModelToken(SECRET, h.token, NOW)).toMatchObject({
+      surface: 'harness',
+      harness: 'opencode',
+    });
+    expect(() => issueModelToken(SECRET, { ...base, surface: 'harness' }, NOW)).toThrow(
+      /names its harness/,
+    );
+    expect(() => issueModelToken(SECRET, { ...base, harness: 'opencode' }, NOW)).toThrow(
+      /names its harness/,
+    );
   });
 
   it('generates a unique jti by default', () => {

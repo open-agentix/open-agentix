@@ -201,12 +201,24 @@ export type StepRuntime = z.infer<typeof StepRuntimeSchema>;
 
 export const WHEN_MAX_LENGTH = 512;
 
+/**
+ * Harness configuration files substitute `{env:NAME}` / `{file:PATH}` placeholders (OpenCode). Ids
+ * that end up in such a file must not contain them.
+ */
+export const CONFIG_PLACEHOLDER = /\{(?:env|file):/i;
+
 export const AgentSpecSchema = z.strictObject({
   id: slug,
   description: z.string().optional(),
   /** Name of a configured provider (see docs/configuration.md), e.g. `simulated`, `bedrock`. */
-  provider: z.string().min(1),
-  model: z.string().min(1),
+  provider: z
+    .string()
+    .min(1)
+    .refine((v) => !CONFIG_PLACEHOLDER.test(v), 'must not contain "{env:" or "{file:"'),
+  model: z
+    .string()
+    .min(1)
+    .refine((v) => !CONFIG_PLACEHOLDER.test(v), 'must not contain "{env:" or "{file:"'),
   temperature: z.number().min(0).max(2).optional(),
   maxTokensPerCall: z.number().int().positive().optional(),
   /** Inline instructions; usually taken from the `## Agent: <id>` markdown section instead. */

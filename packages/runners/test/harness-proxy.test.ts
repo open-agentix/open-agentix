@@ -212,7 +212,7 @@ describe('assertProxyInvocation', () => {
     const inv = base();
     mutate(inv);
     expect(() => assertProxyInvocation(inv)).toThrow(
-      /harness_proxy_invariant|must not|not allowed|dontAsk|not a model token|time limit/,
+      /harness_proxy_invariant|must not|not allowed|allowlist|dontAsk|not a model token|time limit/,
     );
   });
   it('refuses a plain invocation and a mismatching base URL', () => {

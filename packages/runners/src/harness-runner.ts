@@ -11,6 +11,8 @@ import {
   recordPolicyDenial,
   recordStepResult,
   recordToolCall,
+  redact,
+  redactString,
   type AgentSpec,
   type Classification,
   type PolicyDecision,
@@ -142,6 +144,10 @@ export async function executeWithHarness(
       abort.abort();
     };
 
+    // Tokens of this step (gate token, model token): never part of a recorded step or error.
+    const tokens: string[] = [];
+    const scrub = <T>(v: T): T => redact(v, { knownSecrets: tokens });
+
     // Policy gate seen by the harness: decision (audited) -> approval -> control agent.
     const gate: PolicyGate = {
       async decide(call: ToolCallRequest): Promise<PolicyDecision> {
@@ -157,7 +163,7 @@ export async function executeWithHarness(
               : decision.effect === 'require_approval'
                 ? 'pending'
                 : 'ok',
-          input: call.args,
+          input: scrub(call.args),
           output: { effect: decision.effect, reasons: decision.reasons },
         });
         let result = decision;
@@ -227,7 +233,7 @@ export async function executeWithHarness(
         agentId,
         name: `${call.server}/${call.tool}`,
         status: res.result.isError ? 'error' : 'ok',
-        input: call.args,
+        input: scrub(call.args),
         output: {
           text: res.result.text,
           truncated: res.result.truncated,
@@ -238,11 +244,13 @@ export async function executeWithHarness(
     };
 
     const handle = await serveGateHttp({ gateway: ctx.tools, gate, tools: exposed, onCall });
+    tokens.push(handle.token);
     const workDir = await mkdtemp(join(options.workRoot ?? tmpdir(), 'oax-harness-'));
     let res: HarnessResult;
     const started = now();
     try {
       const endpoint = options.modelProxy ? await options.modelProxy(scoped) : undefined;
+      if (endpoint) tokens.push(endpoint.token);
       const invocation = harness.buildInvocation(
         def,
         scoped,
@@ -253,17 +261,18 @@ export async function executeWithHarness(
       );
       res = await harness.run(invocation, { cwd: workDir, signal });
     } catch (e) {
+      const message = redactString((e as Error).message, tokens);
       await step({
         kind: 'error',
         agentId,
         name: 'harness',
         status: 'error',
-        output: { message: (e as Error).message },
+        output: { message },
         provider: harness.name,
         model: agent.model,
         durationMs: now() - started,
       });
-      return fail(e instanceof OaxError ? e.code : 'harness_error', (e as Error).message);
+      return fail(e instanceof OaxError ? e.code : 'harness_error', message);
     } finally {
       await handle.close();
       if (!options.keepWorkDir) await rm(workDir, { recursive: true, force: true });

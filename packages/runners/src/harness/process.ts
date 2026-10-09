@@ -44,6 +44,7 @@ export interface ProcessOptions {
 
 export const MAX_STDOUT_BYTES = 16 * 1024 * 1024;
 const KILL_GRACE_MS = 2_000;
+const CLOSE_GRACE_MS = 1_000;
 
 export function runHarnessProcess(
   inv: HarnessInvocation,
@@ -73,7 +74,8 @@ export function runHarnessProcess(
     };
     const stop = (why: HarnessTermination) => {
       if (terminated === 'none') terminated = why;
-      if (child.exitCode === null) {
+      // A process group is signalled even after its leader exited: descendants may still run.
+      if (group || child.exitCode === null) {
         signalTree('SIGTERM');
         setTimeout(() => signalTree('SIGKILL'), KILL_GRACE_MS).unref();
       }
@@ -117,7 +119,22 @@ export function runHarnessProcess(
         ),
       );
     });
-    child.on('close', (code) => {
+    let finished = false;
+    // `exit` fires when the CLI ended, `close` only when all its stdio pipes are closed. A
+    // descendant that inherited stdout and stays alive would delay `close` forever: on `exit` the
+    // rest of the group ends with the run and the pipes are force-closed after a short grace.
+    child.on('exit', (code) => {
+      if (group) signalTree('SIGKILL');
+      setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(code);
+      }, CLOSE_GRACE_MS).unref();
+    });
+    child.on('close', (code) => finish(code));
+    const finish = (code: number | null) => {
+      if (finished) return;
+      finished = true;
       if (timer) clearTimeout(timer);
       // Leftover members of the process group (a harness that forked and left) end with the run.
       if (group) signalTree('SIGKILL');
@@ -140,7 +157,8 @@ export function runHarnessProcess(
           ? {
               errorMessage: redactString(
                 stderr.trim() && !out.complete
-                  ? `${message}: ${stderr.trim().slice(0, 300)}`
+                  ? // Redact first, truncate second: a cut must not leave a token fragment behind.
+                    `${message}: ${redactString(stderr.trim(), p.secrets).slice(0, 300)}`
                   : message,
                 p.secrets,
               ),
@@ -155,7 +173,7 @@ export function runHarnessProcess(
         toolCalls: out.toolCalls.map((t) => ({ ...t, output: redactString(t.output, p.secrets) })),
         terminated,
       });
-    });
+    };
   });
 }
 
