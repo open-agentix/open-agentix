@@ -1,6 +1,7 @@
 import { OaxError, getEgressPolicy } from '@openagentix/core';
-import { createProxyAwareFetch, type Env } from './proxy.js';
-import { assertPublicDestination, type HostLookup } from './ssrf.js';
+import { Agent, fetch as undiciFetch } from 'undici';
+import { createProxyAwareFetch, proxyFor, type Env } from './proxy.js';
+import { assertPublicDestination, createPinnedLookup, type HostLookup } from './ssrf.js';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -56,6 +57,16 @@ export function createGuardedFetch(opts: GuardedFetchOptions): FetchLike {
   const base: FetchLike =
     opts.fetchImpl ??
     createProxyAwareFetch({ proxyUrl: opts.proxyUrl, ...(opts.env ? { env: opts.env } : {}) });
+  // Connect-time pinning: the dispatcher resolves the name itself, validates every address and
+  // connects to exactly those (no second resolution between check and connect). Not possible
+  // behind an HTTP proxy (the proxy resolves the name; only the pre-request check applies there)
+  // or with an injected fetch (tests).
+  const pinned =
+    opts.blockPrivateDestinations && !opts.fetchImpl
+      ? new Agent({
+          connect: { lookup: createPinnedLookup(opts.blockPrivateDestinations) as never },
+        })
+      : undefined;
   return async (input, init) => {
     const origin = new URL(input).origin;
     if (!allowed.has(origin)) {
@@ -67,6 +78,14 @@ export function createGuardedFetch(opts: GuardedFetchOptions): FetchLike {
     if (opts.blockPrivateDestinations)
       await assertPublicDestination(new URL(input).hostname, opts.blockPrivateDestinations);
     // A redirect would carry the request (and its key) to another origin: never followed.
+    if (pinned && !proxyFor(input, opts.env ?? process.env, opts.proxyUrl)) {
+      getEgressPolicy().assert(input, 'http');
+      return undiciFetch(input, {
+        ...init,
+        redirect: 'error',
+        dispatcher: pinned,
+      } as never) as unknown as Promise<Response>;
+    }
     return base(input, { ...init, redirect: 'error' });
   };
 }

@@ -5,7 +5,7 @@ import {
   type ResponseStream,
 } from '@aws-sdk/client-bedrock-runtime';
 import { OaxError, getEgressPolicy } from '@openagentix/core';
-import { createBedrockClient, type BedrockOptions } from '../bedrock.js';
+import { assertBedrockDestination, createBedrockClient, type BedrockOptions } from '../bedrock.js';
 import { createAnthropicHandler } from './anthropic.js';
 import {
   StreamGuard,
@@ -35,7 +35,13 @@ export interface BedrockStreamClient {
 
 export interface BedrockStreamOptions extends Pick<
   BedrockOptions,
-  'region' | 'endpoint' | 'proxyUrl' | 'maxAttempts' | 'credentials' | 'catalogProvider'
+  | 'region'
+  | 'endpoint'
+  | 'proxyUrl'
+  | 'maxAttempts'
+  | 'credentials'
+  | 'catalogProvider'
+  | 'blockPrivateDestinations'
 > {
   limits?: Partial<StreamLimits> | undefined;
   /** `anthropic_version` of the body. Default `bedrock-2023-05-31`. */
@@ -109,7 +115,12 @@ export class BedrockStreamTransport implements StreamingTransport {
 
   constructor(private readonly opts: BedrockStreamOptions) {
     this.endpoint = opts.endpoint ?? `https://bedrock-runtime.${opts.region}.amazonaws.com`;
-    this.client = opts.client ?? (createBedrockClient(opts) as unknown as BedrockRuntimeClient);
+    this.client =
+      opts.client ??
+      (createBedrockClient({
+        ...opts,
+        maxResponseBytes: resolveLimits(opts.limits).maxTotalBytes,
+      }) as unknown as BedrockRuntimeClient);
   }
 
   async open(
@@ -122,6 +133,7 @@ export class BedrockStreamTransport implements StreamingTransport {
     }
     // The AWS SDK does its own networking; the egress policy is asserted here.
     getEgressPolicy().assert(this.endpoint, 'provider');
+    await assertBedrockDestination(this.opts);
     const limits = resolveLimits(this.opts.limits);
     const secrets = [...(this.opts.secrets ?? [])];
     const { model: _model, stream: _stream, anthropic_version: _v, ...rest } = request.body;

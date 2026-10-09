@@ -1,12 +1,13 @@
 import { estimateInputUpperBound } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { costLedger, runSteps } from '../src/db/schema.js';
+import { auditLog, costLedger, runSteps } from '../src/db/schema.js';
 import { ModelProxyService } from '../src/services/model-proxy.js';
 import { testNode, type TestNode } from './helpers.js';
 import {
   BASE_ENV,
   FakeUpstream,
+  publicLookup,
   ask,
   getModelToken,
   mkRun,
@@ -32,13 +33,15 @@ beforeAll(async () => {
       OAX_MODEL_PROXY_CAPTURE: 'off',
       OAX_MODEL_PROXY_RESERVATION: 'estimate',
     },
-    { secrets, fetchImpl: up.fetch },
+    { secrets, fetchImpl: up.fetch, hostLookup: publicLookup },
   );
 });
 afterAll(async () => n.close());
 beforeEach(() => up.reset());
 
 const reservations = (runId: string) => n.services.modelAccounting.list(tenantScope, { runId });
+const audit = async (runId: string, action: string) =>
+  (await n.ctx.db.select().from(auditLog)).filter((r) => r.runId === runId && r.action === action);
 const body = ask('hello', {}, 'gpt-x');
 
 /** An upstream that answers after `ms` milliseconds (or fails when the request is aborted). */
@@ -153,6 +156,36 @@ describe('capture and reservation mode', () => {
   });
 });
 
+describe('estimate mode: reported usage is capped at the upper bound', () => {
+  it('keeps honest input usage between the reserved estimate and the upper bound', async () => {
+    const text = 'word '.repeat(600);
+    const upper = estimateInputUpperBound({ messages: [{ role: 'user', content: text }] });
+    const estimate = Math.ceil(upper / 3);
+    const reported = Math.floor((upper + estimate) / 2);
+    expect(reported).toBeGreaterThan(estimate);
+    up.handler = () => openaiJson({ text: 'ok', prompt: reported, completion: 5 });
+    const r = await mkRun(n, { provider: 'oai', model: 'gpt-x' });
+    const mt = await modelToken(n, r);
+    const res = await postModel(n, r.runId, mt, ask(text, {}, 'gpt-x'));
+    expect(res.statusCode).toBe(200);
+    const [resv] = await reservations(r.runId);
+    expect(resv?.reservedInputTokens).toBe(estimate);
+    const [line] = await n.ctx.db.select().from(costLedger).where(eq(costLedger.runId, r.runId));
+    expect(line?.tokensIn).toBe(reported);
+    expect(await audit(r.runId, 'model.overrun')).toEqual([]);
+  });
+
+  it('still caps absurd input counts at the upper bound', async () => {
+    const upper = estimateInputUpperBound({ messages: [{ role: 'user', content: 'hello' }] });
+    up.handler = () => openaiJson({ text: 'ok', prompt: upper * 50, completion: 5 });
+    const r = await mkRun(n, { provider: 'oai', model: 'gpt-x' });
+    const mt = await modelToken(n, r);
+    expect((await postModel(n, r.runId, mt, body)).statusCode).toBe(200);
+    const [line] = await n.ctx.db.select().from(costLedger).where(eq(costLedger.runId, r.runId));
+    expect(line?.tokensIn).toBe(upper);
+  });
+});
+
 describe('hooks and direct service use', () => {
   it('refuses a provider or model blocked by an emergency override (security_override)', async () => {
     const r = await mkRun(n, { provider: 'oai', model: 'gpt-x' });
@@ -185,7 +218,7 @@ describe('HTTP rate limit', () => {
   it('answers 429 in the model envelope with Retry-After, keyed by peer address', async () => {
     const small = await testNode(
       { ...BASE_ENV, OAX_RATE_LIMIT_MAX: '8' },
-      { secrets, fetchImpl: up.fetch },
+      { secrets, fetchImpl: up.fetch, hostLookup: publicLookup },
     );
     try {
       const r = await mkRun(small, { provider: 'oai', model: 'gpt-x' });

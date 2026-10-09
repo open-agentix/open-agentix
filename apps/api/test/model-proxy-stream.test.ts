@@ -6,6 +6,7 @@ import {
   BASE_ENV,
   DONE,
   FakeUpstream,
+  publicLookup,
   PLATFORM_ANTHROPIC_KEY,
   PLATFORM_OPENAI_KEY,
   ask,
@@ -30,7 +31,12 @@ let n: TestNode;
 
 beforeAll(async () => {
   log = captureLogger();
-  n = await testNode(BASE_ENV, { secrets, fetchImpl: up.fetch, logger: log.logger });
+  n = await testNode(BASE_ENV, {
+    secrets,
+    fetchImpl: up.fetch,
+    hostLookup: publicLookup,
+    logger: log.logger,
+  });
 });
 afterAll(async () => n.close());
 beforeEach(() => up.reset());

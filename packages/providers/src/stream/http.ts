@@ -1,3 +1,4 @@
+import type { HostLookup } from '../ssrf.js';
 import { OaxError } from '@openagentix/core';
 import { ProviderError, createGuardedFetch, isPreSendFailure, type FetchLike } from '../http.js';
 import {
@@ -28,7 +29,7 @@ export interface HttpTransportOptions {
   /** Base backoff in ms (doubles per attempt). Default 250. */
   backoffMs?: number | undefined;
   /** Refuse non-public destinations (SSRF through tenant-controlled base URLs). */
-  blockPrivateDestinations?: { allow?: readonly string[] } | undefined;
+  blockPrivateDestinations?: { allow?: readonly string[]; lookup?: HostLookup } | undefined;
   /** Additional values that must never appear in an error message. */
   secrets?: readonly string[] | undefined;
 }

@@ -64,13 +64,29 @@ export class ModelsService {
     return this.platform;
   }
 
+  /** Tenant-scoped connections must not reach private destinations (SSRF); platform ones may. */
+  private guardFor(row: Pick<ConnectionRow, 'scope'>) {
+    return row.scope !== 'platform'
+      ? {
+          blockPrivateDestinations: {
+            allow: this.ctx.config.modelProxy.privateAllow,
+            ...(this.ctx.hostLookup ? { lookup: this.ctx.hostLookup } : {}),
+          },
+        }
+      : {};
+  }
+
   private async build(rows: readonly ConnectionRow[]): Promise<ProviderRegistry> {
     const providers = [];
     for (const row of rows) {
       const cfg = connectionProviderConfig(row);
       try {
         providers.push(
-          await createProvider(cfg, { secrets: this.ctx.secrets, fetchImpl: this.ctx.fetchImpl }),
+          await createProvider(cfg, {
+            secrets: this.ctx.secrets,
+            fetchImpl: this.ctx.fetchImpl,
+            ...this.guardFor(row),
+          }),
         );
       } catch (e) {
         this.ctx.logger.warn(
@@ -125,6 +141,7 @@ export class ModelsService {
           provider: await createProvider(config, {
             secrets: this.ctx.secrets,
             fetchImpl: this.ctx.fetchImpl,
+            ...this.guardFor(row),
           }),
           config,
           tenantControlled: row.scope !== 'platform',
@@ -217,6 +234,7 @@ export class ModelsService {
       const provider = await createProvider(connectionProviderConfig(row), {
         secrets: this.ctx.secrets,
         fetchImpl: this.ctx.fetchImpl,
+        ...this.guardFor(row),
       });
       const res = await provider.complete({
         model,

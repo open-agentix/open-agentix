@@ -183,6 +183,8 @@ interface Admitted {
   reservation: Reservation;
   plan: StreamPlan | null;
   deadlineMs: number;
+  /** Upper bound of the input tokens (the cap for reported usage; above the estimate reservation). */
+  inputUpperBound: number;
   digest: string;
   startedAt: number;
   messageCount: number;
@@ -474,14 +476,21 @@ export class ModelProxyService {
     const now = this.ctx.now().getTime();
     const left = (seconds: number | undefined, since: number) =>
       seconds === undefined ? Number.POSITIVE_INFINITY : seconds * 1000 - (now - since);
-    const deadlineMs = Math.max(
-      1000,
-      Math.min(
-        this.cfg().maxCallSeconds * 1000,
-        left((definition.budget as Budget).timeoutSeconds, run.startedAt?.getTime() ?? now),
-        left(agent.budget?.timeoutSeconds, auth.sessionCreatedAt.getTime()),
-      ),
+    const timeLeftMs = Math.min(
+      this.cfg().maxCallSeconds * 1000,
+      left((definition.budget as Budget).timeoutSeconds, run.startedAt?.getTime() ?? now),
+      left(agent.budget?.timeoutSeconds, auth.sessionCreatedAt.getTime()),
     );
+    // An exhausted run or step time is a refusal, never a call with a minimum deadline.
+    if (timeLeftMs <= 0)
+      throw await this.deny(
+        auth,
+        agentId,
+        'provider_timeout',
+        'the run or step time is exhausted',
+        pinned,
+      );
+    const deadlineMs = Math.max(1000, timeLeftMs);
     const resolved = await this.models.resolve(
       { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId },
       agent.provider,
@@ -530,6 +539,7 @@ export class ModelProxyService {
         for (const ep of providerEndpoints(config, 'provider'))
           await assertPublicDestination(new URL(ep.url).hostname, {
             allow: this.cfg().privateAllow,
+            ...(this.ctx.hostLookup ? { lookup: this.ctx.hostLookup } : {}),
           });
       } catch (e) {
         if ((e as { code?: string }).code === 'egress_denied')
@@ -595,7 +605,12 @@ export class ModelProxyService {
               secrets: this.ctx.secrets,
               fetchImpl: this.ctx.fetchImpl,
               ...(tenantControlled
-                ? { blockPrivateDestinations: { allow: this.cfg().privateAllow } }
+                ? {
+                    blockPrivateDestinations: {
+                      allow: this.cfg().privateAllow,
+                      ...(this.ctx.hostLookup ? { lookup: this.ctx.hostLookup } : {}),
+                    },
+                  }
                 : {}),
             },
             {
@@ -643,6 +658,7 @@ export class ModelProxyService {
       reservation,
       plan,
       deadlineMs,
+      inputUpperBound: upper,
       digest: this.digest(run.tenantId, chat),
       startedAt: Date.now(),
       messageCount: r.messages.length,
@@ -1242,9 +1258,12 @@ export class ModelProxyService {
     outputBytes: number,
   ) {
     const resv = adm.reservation;
-    const input = Math.min(u.input, resv.reservedInputTokens);
-    const cacheRead = Math.min(u.cacheRead, resv.reservedInputTokens - input);
-    const cacheWrite = Math.min(u.cacheWrite, resv.reservedInputTokens - input - cacheRead);
+    // The bound is the upper bound of the input, not the reserved estimate (`estimate` mode reserves
+    // a third of it; honest usage between the two must not be cut).
+    const inputBound = Math.max(adm.inputUpperBound, resv.reservedInputTokens);
+    const input = Math.min(u.input, inputBound);
+    const cacheRead = Math.min(u.cacheRead, inputBound - input);
+    const cacheWrite = Math.min(u.cacheWrite, inputBound - input - cacheRead);
     const cap = Math.max(
       outputFloorFromBytes(outputBytes),
       Math.ceil(resv.reservedOutputTokens * OVERRUN_FACTOR) + OVERRUN_ALLOWANCE_TOKENS,

@@ -7,6 +7,7 @@ import {
   BASE_ENV,
   DONE,
   FakeUpstream,
+  publicLookup,
   ask,
   captureLogger,
   json,
@@ -39,7 +40,7 @@ beforeAll(async () => {
       OAX_MODEL_PROXY_MAX_CALL_SECONDS: '600',
       OAX_MODEL_PROXY_PRIVATE_ALLOW: '10.9.9.9',
     },
-    { secrets, fetchImpl: up.fetch, logger: log.logger },
+    { secrets, fetchImpl: up.fetch, hostLookup: publicLookup, logger: log.logger },
   );
 });
 afterAll(async () => n.close());
@@ -210,12 +211,23 @@ describe('M1: the deadline of a late step', () => {
     expect(d).toBeLessThanOrEqual(100_000);
   });
 
-  it('keeps the one second floor for a run that is out of time', async () => {
+  it('keeps the one second floor while a little time is left', async () => {
     const r = await mkRun(n, { provider: 'oai', model: 'gpt-x', budget: '  timeoutSeconds: 100' });
-    await startedAgo(r.runId, 5000);
+    await startedAgo(r.runId, 99.5);
     const mt = await modelToken(n, r);
     await postModel(n, r.runId, mt, gpt());
     expect(await deadlineOf(r.runId)).toBe(1000);
+  });
+
+  it('refuses the call once the run time is exhausted (no minimum deadline)', async () => {
+    const r = await mkRun(n, { provider: 'oai', model: 'gpt-x', budget: '  timeoutSeconds: 100' });
+    await startedAgo(r.runId, 5000);
+    const mt = await modelToken(n, r);
+    const res = await postModel(n, r.runId, mt, gpt());
+    expect(res.statusCode).toBe(504);
+    expect(code(res)).toBe('provider_timeout');
+    expect(await reservations(r.runId)).toHaveLength(0);
+    expect(up.calls).toHaveLength(0);
   });
 });
 
@@ -344,6 +356,9 @@ describe('M3: tenant-controlled endpoints', () => {
     ['priv2', 'http://192.168.1.10/v1'],
     ['v6', 'http://[::1]:8080/v1'],
     ['mapped', 'http://[::ffff:127.0.0.1]/v1'],
+    ['nat64', 'http://[64:ff9b::7f00:1]/v1'],
+    ['sixtofour', 'http://[2002:a9fe:a9fe::1]/v1'],
+    ['compat', 'http://[::127.0.0.1]/v1'],
   ] as const) {
     it(`refuses a tenant connection to ${url} (egress_denied) without any request`, async () => {
       await connect(name, url);
@@ -362,6 +377,36 @@ describe('M3: tenant-controlled endpoints', () => {
       expect(await reservations(r.runId)).toEqual([]);
     });
   }
+
+  it('refuses a tenant Bedrock connection with a private custom endpoint', async () => {
+    const res = await asB({
+      method: 'POST',
+      url: '/v1/connections',
+      payload: {
+        name: 'bedrock-priv',
+        kind: 'model',
+        config: {
+          kind: 'bedrock',
+          region: 'eu-central-1',
+          endpoint: 'https://10.0.0.5',
+          clearance: 'internal',
+        },
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const r = await mkRun(n, { provider: 'bedrock-priv', model: 'anthropic.claude-x' }, asB);
+    const tok = await n.req({
+      method: 'POST',
+      url: `/v1/worker/runs/${r.runId}/model-token`,
+      token: r.runToken,
+      payload: { agentId: 'a' },
+    });
+    const mt = tok.json().token as string;
+    const out = await postModel(n, r.runId, mt, ask('hi', {}, 'anthropic.claude-x'));
+    expect(out.statusCode).toBe(403);
+    expect(code(out)).toBe('egress_denied');
+    expect(await reservations(r.runId)).toEqual([]);
+  });
 
   it('lets the operator allowlist a private destination', async () => {
     await connect('allowed', 'http://10.9.9.9/v1');

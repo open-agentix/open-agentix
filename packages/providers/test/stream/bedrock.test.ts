@@ -235,3 +235,24 @@ describe('BedrockStreamTransport', () => {
     }
   });
 });
+
+describe('BedrockStreamTransport destination check', () => {
+  it('refuses a private custom endpoint before sending anything', async () => {
+    let sent = 0;
+    const t = new BedrockStreamTransport({
+      region: 'r',
+      endpoint: 'https://bedrock.internal',
+      blockPrivateDestinations: { lookup: async () => [{ address: '169.254.169.254' }] },
+      client: {
+        async send() {
+          sent++;
+          return { body: undefined };
+        },
+      },
+    });
+    await expect(
+      t.open({ body: { messages: [], max_tokens: 1 }, model: 'anthropic.claude-x' }),
+    ).rejects.toMatchObject({ code: 'egress_denied' });
+    expect(sent).toBe(0);
+  });
+});

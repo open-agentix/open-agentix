@@ -28,7 +28,10 @@ All notable changes to this project are documented here. The format follows
   second billed call), the HTTP timeout follows the call deadline, everything that may have been
   billed is charged, JSON answers use the stream limits, reported usage is capped by the
   reservation, and tenant-controlled endpoints cannot reach private or metadata addresses
-  (`OAX_MODEL_PROXY_PRIVATE_ALLOW`). `docs/runners.md`, `docs/configuration.md`.
+  (`OAX_MODEL_PROXY_PRIVATE_ALLOW`); this also covers NAT64, 6to4 and IPv4-compatible forms, refuses
+  names that cannot be resolved, validates and pins the address at connect time (also for custom
+  Bedrock endpoints, whose responses are size-bounded), refuses calls of a run or step whose time is
+  exhausted and caps estimate-mode usage at the input upper bound. `docs/runners.md`, `docs/configuration.md`.
 - **Streaming upstream transports for the model proxy (W1-3b-5)**: `@openagentix/providers` gets a
   streaming API next to `complete`: `AnthropicStreamTransport`, `BedrockStreamTransport`
   (`InvokeModelWithResponseStream`) and `OpenAIStreamTransport` (OpenAI, Azure, OpenRouter, vLLM,

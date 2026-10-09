@@ -704,17 +704,24 @@ they differ from the text above, this section wins.
     (`OAX_MODEL_PROXY_MAX_RESPONSE_BYTES`), time to first byte, idle and deadline timeouts and the
     output hard stop apply uniformly. Providers without a transport (`simulated`, Bedrock models
     that do not speak the Anthropic body) use the adapter; the adapter paths use a bounded body
-    reader, never follow redirects and have a call deadline, but the AWS SDK path has no response
-    size limit.
+    reader, never follow redirects and have a call deadline. The Bedrock adapter of a tenant-scoped
+    connection runs on an SDK request handler that fails the body beyond 16 MiB (see 14).
 13. **Deadline.** The call deadline is `min(OAX_MODEL_PROXY_MAX_CALL_SECONDS, time left of the run
     timeout since the run start, time left of the step timeout since the session start)`, at least
-    one second.
+    one second while any time is left. A run or step whose time is already exhausted is refused
+    (`504 provider_timeout`) without a reservation.
 14. **Tenant-controlled endpoints.** Redirects are never followed (also in the SDK fetch). Endpoints
     of tenant-scoped connections that are or resolve to loopback, private, link-local, metadata,
-    CGNAT or multicast addresses are refused with `403 egress_denied` before the call and again
-    right before each request, unless listed in `OAX_MODEL_PROXY_PRIVATE_ALLOW`. The check resolves
-    the name itself; a DNS answer that changes between that check and the connection (rebinding)
-    is not covered (a connect-time lookup hook needs a custom dispatcher; follow-up).
+    CGNAT, multicast or translation-embedded (IPv4-mapped, IPv4-compatible, NAT64, 6to4, Teredo)
+    private addresses are refused with `403 egress_denied` before the call and again right before
+    each request, unless listed in `OAX_MODEL_PROXY_PRIVATE_ALLOW`. A name that cannot be
+    resolved is refused too (fail closed). At connect time the HTTP client (an undici dispatcher
+    for fetch, an `https.Agent` for the AWS SDK) resolves the name itself through a lookup that
+    validates every address and connects to exactly those, so a DNS answer that changes between
+    the check and the connection (rebinding) is rejected. Limit: behind an HTTP proxy
+    (`proxyUrl`, `HTTPS_PROXY`) the proxy resolves the name, so only the pre-request check
+    applies; the operator trusts that proxy. A tenant-scoped Bedrock `endpoint` goes through the
+    same check and lookup, and its responses are bounded (stream limit, 16 MiB for the adapter).
 15. **Node-facing errors carry no upstream text.** Provider failures are reported as the HTTP status
     or the kind of stream failure; budget refusals use fixed texts without scope names or numbers.
 16. **Smaller points.** The `requestDigest` is an HMAC under a per-tenant key derived from the server

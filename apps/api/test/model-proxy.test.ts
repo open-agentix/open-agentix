@@ -16,6 +16,7 @@ import {
   ALL_KEYS,
   BASE_ENV,
   FakeUpstream,
+  publicLookup,
   PLATFORM_OPENAI_KEY,
   TENANT_B_KEY,
   ask,
@@ -38,7 +39,12 @@ let n: TestNode;
 
 beforeAll(async () => {
   log = captureLogger();
-  n = await testNode(BASE_ENV, { secrets, fetchImpl: up.fetch, logger: log.logger });
+  n = await testNode(BASE_ENV, {
+    secrets,
+    fetchImpl: up.fetch,
+    hostLookup: publicLookup,
+    logger: log.logger,
+  });
 });
 afterAll(async () => n.close());
 beforeEach(() => up.reset());
@@ -67,6 +73,7 @@ describe('feature flag', () => {
       {
         secrets,
         fetchImpl: up.fetch,
+        hostLookup: publicLookup,
       },
     );
     try {

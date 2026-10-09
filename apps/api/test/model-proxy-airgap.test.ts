@@ -5,6 +5,7 @@ import { testNode, type TestNode } from './helpers.js';
 import {
   BASE_ENV,
   FakeUpstream,
+  publicLookup,
   ask,
   getModelToken,
   mkRun,
@@ -27,7 +28,7 @@ beforeAll(async () => {
       OAX_AIRGAPPED: 'true',
       OAX_AIRGAPPED_ALLOW: 'vllm.internal',
     },
-    { secrets, fetchImpl: up.fetch },
+    { secrets, fetchImpl: up.fetch, hostLookup: publicLookup },
   );
   const local = await n.req({
     method: 'POST',

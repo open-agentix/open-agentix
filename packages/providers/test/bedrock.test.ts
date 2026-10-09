@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { describe, expect, it } from 'vitest';
 import { BedrockProvider, createBedrockClient, type BedrockConverseClient } from '../src/index.js';
@@ -116,5 +118,98 @@ describe('BedrockProvider', () => {
     expect(await c.config.region()).toBe('eu-central-1');
     expect(createBedrockClient({ region: 'us-east-1' })).toBeTruthy();
     expect(new BedrockProvider({ name: 'b', region: 'us-east-1' }).kind).toBe('bedrock');
+  });
+});
+
+describe('Bedrock custom endpoint of a tenant connection', () => {
+  const creds = { accessKeyId: 'AKIAEXAMPLE', secretAccessKey: 'secret' };
+  const guard = (address: string, allow: string[] = []) => ({
+    allow,
+    lookup: async () => [{ address }],
+  });
+
+  it('refuses a private endpoint before any request (adapter path)', async () => {
+    const f = fakeClient({});
+    const p = new BedrockProvider({
+      name: 'b',
+      region: 'r',
+      endpoint: 'https://bedrock.internal',
+      blockPrivateDestinations: guard('10.0.0.5'),
+      client: f.client,
+    });
+    await expect(p.complete({ model: 'm', messages: [] })).rejects.toMatchObject({
+      code: 'egress_denied',
+    });
+    expect(f.inputs).toHaveLength(0);
+  });
+
+  it('accepts a public endpoint, the operator allowlist and the default AWS endpoint', async () => {
+    for (const g of [guard('8.8.8.8'), guard('10.0.0.5', ['10.0.0.0/8'])]) {
+      const f = fakeClient({});
+      const p = new BedrockProvider({
+        name: 'b',
+        region: 'r',
+        endpoint: 'https://bedrock.internal',
+        blockPrivateDestinations: g,
+        client: f.client,
+      });
+      await p.complete({ model: 'm', messages: [] });
+      expect(f.inputs).toHaveLength(1);
+    }
+  });
+
+  it('pins the connection through a validating lookup and bounds the response size', async () => {
+    let hits = 0;
+    const server = createServer((_q, r) => {
+      hits++;
+      r.setHeader('content-type', 'application/json');
+      r.end(
+        JSON.stringify({
+          output: { message: { role: 'assistant', content: [{ text: 'x'.repeat(5000) }] } },
+        }),
+      );
+    });
+    await new Promise<void>((res) => server.listen(0, '127.0.0.1', res));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const cmd = () =>
+        new ConverseCommand({
+          modelId: 'm',
+          messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        });
+      // a name that resolves to a private address never gets a connection
+      const blocked = createBedrockClient({
+        region: 'r',
+        endpoint: `http://bedrock.internal:${port}`,
+        credentials: creds,
+        maxAttempts: 1,
+        blockPrivateDestinations: guard('127.0.0.1'),
+      });
+      await expect(blocked.send(cmd())).rejects.toBeTruthy();
+      expect(hits).toBe(0);
+      // allowed destination: connected, but the oversized body is cut
+      const limited = createBedrockClient({
+        region: 'r',
+        endpoint: `http://bedrock.internal:${port}`,
+        credentials: creds,
+        maxAttempts: 1,
+        maxResponseBytes: 1000,
+        blockPrivateDestinations: guard('127.0.0.1', ['127.0.0.1']),
+      });
+      await expect(limited.send(cmd())).rejects.toBeTruthy();
+      expect(hits).toBe(1);
+      const roomy = createBedrockClient({
+        region: 'r',
+        endpoint: `http://bedrock.internal:${port}`,
+        credentials: creds,
+        maxAttempts: 1,
+        maxResponseBytes: 100_000,
+        blockPrivateDestinations: guard('127.0.0.1', ['127.0.0.1']),
+      });
+      const ok = await roomy.send(cmd());
+      expect(ok.output?.message?.content?.[0]?.text).toHaveLength(5000);
+    } finally {
+      await new Promise((res) => server.close(res));
+    }
   });
 });

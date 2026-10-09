@@ -2,6 +2,7 @@ import { OaxError, type SecretResolver } from '@openagentix/core';
 import { toAnthropicBody } from '../anthropic.js';
 import type { FetchLike } from '../http.js';
 import { toOpenAIBody } from '../openai.js';
+import type { HostLookup } from '../ssrf.js';
 import type { ProviderConfig } from '../registry.js';
 import type { ChatRequest } from '../types.js';
 import type { StreamSurface } from './aggregate.js';
@@ -14,7 +15,7 @@ export interface StreamPlanDeps {
   secrets: SecretResolver;
   fetchImpl?: FetchLike | undefined;
   /** Tenant-controlled endpoints: refuse private destinations (operator `allow` list). */
-  blockPrivateDestinations?: { allow?: readonly string[] } | undefined;
+  blockPrivateDestinations?: { allow?: readonly string[]; lookup?: HostLookup } | undefined;
   bedrockClient?: BedrockStreamClient | undefined;
 }
 
@@ -179,6 +180,7 @@ export async function createStreamPlan(
           region: cfg.region,
           endpoint: cfg.endpoint,
           proxyUrl: cfg.proxyUrl,
+          blockPrivateDestinations: deps.blockPrivateDestinations,
           maxAttempts: 1,
           credentials,
           limits: opts.limits,

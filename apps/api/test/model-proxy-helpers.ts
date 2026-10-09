@@ -67,6 +67,9 @@ export function captureLogger(): LogCapture {
   return { logger: pino({ level: 'trace' }, stream), text: () => buf };
 }
 
+/** Test name resolution: every host name is a public address (IP literals are checked as such). */
+export const publicLookup = async () => [{ address: '203.0.113.9' }];
+
 // ---------- fake upstream provider (injected as ctx.fetchImpl) ----------
 
 export interface UpstreamCall {
