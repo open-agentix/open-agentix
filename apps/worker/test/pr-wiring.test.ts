@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createPullRequestDelivery,
   deliveryAuditSink,
+  knownSecretsOf,
   platformSecretValues,
 } from '../src/pr-wiring.js';
 
@@ -85,6 +86,74 @@ describe('pull request wiring', () => {
     ]);
     expect(platformSecretValues({ runToken: { secret: 'short' }, database: {} } as never)).toEqual(
       [],
+    );
+  });
+
+  it('collects the known secrets of a run: platform, brokered and provider values', async () => {
+    const values = await knownSecretsOf(ctx, services())('r1');
+    expect(values).toEqual(
+      expect.arrayContaining([
+        'run-token-signing-secret-xyz',
+        'brokered-secret-value',
+        'secret-value-123456',
+      ]),
+    );
+  });
+
+  it('wires the fail-closed collector into the delivery', async () => {
+    const f = path.join(dir, 'targets-known.json');
+    writeFileSync(
+      f,
+      JSON.stringify([
+        { name: 't', url: 'https://github.com/open-agentix/dogfood-sandbox', tokenRef: 'g' },
+      ]),
+    );
+    const failing = {
+      runNodes: {
+        knownSecrets: async () => {
+          throw new Error('database unavailable');
+        },
+        platformSecretRefs: async () => new Set<string>(),
+      },
+      audit: { append: async () => undefined },
+    } as never;
+    const d = createPullRequestDelivery(ctx, failing, 'w1', { OAX_PR_TARGETS: f });
+    const known = (d as unknown as { o: { knownSecrets: (r: string) => Promise<string[]> } }).o
+      .knownSecrets;
+    await expect(known('r1')).rejects.toThrow('database unavailable');
+  });
+
+  it('fails closed when the brokered or provider secrets cannot be read', async () => {
+    const broken = (which: 'knownSecrets' | 'platformSecretRefs') =>
+      ({
+        runNodes: {
+          knownSecrets: async () => {
+            if (which === 'knownSecrets') throw new Error('database unavailable');
+            return [];
+          },
+          platformSecretRefs: async () => {
+            if (which === 'platformSecretRefs') throw new Error('database unavailable');
+            return new Set<string>();
+          },
+        },
+      }) as never;
+    await expect(knownSecretsOf(ctx, broken('knownSecrets'))('r1')).rejects.toThrow(
+      'database unavailable',
+    );
+    await expect(knownSecretsOf(ctx, broken('platformSecretRefs'))('r1')).rejects.toThrow(
+      'database unavailable',
+    );
+    // a single reference that does not resolve any more is skipped
+    const unresolvable = {
+      config: (ctx as { config: unknown }).config,
+      secrets: {
+        resolve: async () => {
+          throw new Error('gone');
+        },
+      },
+    } as never;
+    await expect(knownSecretsOf(unresolvable, services())('r1')).resolves.toContain(
+      'brokered-secret-value',
     );
   });
 

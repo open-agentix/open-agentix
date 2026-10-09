@@ -29,6 +29,29 @@ export function platformSecretValues(config: Config): string[] {
   ].filter((v): v is string => typeof v === 'string' && v.length >= 8);
 }
 
+/**
+ * The exact secret values a pull request of a run must not contain: platform secrets, the secrets
+ * brokered to the run and the platform's provider/connection secrets. Fails closed: when the lists
+ * cannot be read (database error), the delivery is refused instead of scanning with fewer values.
+ * Only a single reference that no longer resolves is skipped (nothing in use to keep out).
+ */
+export function knownSecretsOf(
+  ctx: Pick<AppContext, 'config' | 'secrets'>,
+  services: Pick<Services, 'runNodes'>,
+): (runId: string) => Promise<string[]> {
+  return async (runId) => {
+    const out = new Set<string>(platformSecretValues(ctx.config));
+    for (const v of await services.runNodes.knownSecrets(runId)) out.add(v);
+    for (const ref of await services.runNodes.platformSecretRefs())
+      try {
+        out.add(await ctx.secrets.resolve(ref));
+      } catch {
+        // not resolvable: nothing to keep out
+      }
+    return [...out].filter((v) => v.length >= 8);
+  };
+}
+
 /** Writes delivery audit events (codes, digests, counts) to the audit chain of their run. */
 export function deliveryAuditSink(
   services: Pick<Services, 'audit'>,
@@ -75,17 +98,7 @@ export function createPullRequestDelivery(
     dryRun: env.OAX_PR_DRY_RUN === 'true',
     github,
     engine: { ...(privateAllow.length ? { privateAllow } : {}) },
-    knownSecrets: async (runId) => {
-      const out = new Set<string>(platformSecretValues(ctx.config));
-      for (const v of await services.runNodes.knownSecrets(runId).catch(() => [])) out.add(v);
-      for (const ref of await services.runNodes.platformSecretRefs().catch(() => new Set<string>()))
-        try {
-          out.add(await ctx.secrets.resolve(ref));
-        } catch {
-          // not resolvable: nothing to keep out
-        }
-      return [...out].filter((v) => v.length >= 8);
-    },
+    knownSecrets: knownSecretsOf(ctx, services),
     audit: deliveryAuditSink(services, workerId),
   });
 }
