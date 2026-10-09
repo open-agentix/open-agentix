@@ -174,6 +174,8 @@ describe('ContextGuard time and size bounds', () => {
     ['sk- then dashes', `sk-${'-'.repeat(SIZE)}`],
     ['ghp_ repeated', 'ghp_'.repeat(SIZE / 4)],
     ['jwt-like dots', 'eyJ' + 'a'.repeat(100) + '.'.repeat(SIZE / 2)],
+    ['jwt prefixes inside one base64url run', 'eyJ-'.repeat(SIZE / 4)],
+    ['jwt prefixes with a token-like run', 'sk-sk-eyJghp_'.repeat(SIZE / 13)],
     ['assignment lookalikes', 'A_TOKEN = '.repeat(SIZE / 10)],
     ['quote lookalikes', `secret="${'a'.repeat(SIZE)}`],
     ['BEGIN lines without END', '-----BEGIN PRIVATE KEY-----\n'.repeat(SIZE / 28)],
@@ -203,6 +205,7 @@ describe('ContextGuard time and size bounds', () => {
       (n: number) => 'Bearer '.repeat(n),
       (n: number) => 'sk-'.repeat(n),
       (n: number) => 'A_TOKEN = '.repeat(n),
+      (n: number) => 'eyJ-'.repeat(n),
     ];
     for (const make of makers) {
       probe(2_000, make); // warm-up

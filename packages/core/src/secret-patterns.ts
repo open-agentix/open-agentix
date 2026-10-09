@@ -23,7 +23,10 @@ export const SECRET_PATTERNS: readonly (readonly [string, RegExp])[] = [
   ['npm-token', /\bnpm_[A-Za-z0-9]{30,}\b/],
   ['google-api-key', /\bAIza[0-9A-Za-z_-]{35}\b/],
   ['stripe-key', /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b/],
-  ['jwt', /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/],
+  // The lookbehind (not `\b`) keeps a match from starting inside a run of base64url characters:
+  // with `\b`, every `eyJ` after a `-` was a new start that rescanned the whole run (`eyJ-` x 64 Ki
+  // took 8 s, 512 KiB over 3 minutes).
+  ['jwt', /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/],
   ['authorization-header', /\b(?:Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{20,}/],
   ['url-credentials', /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]{1,256}:[^\s/@]{3,256}@/i],
   [
