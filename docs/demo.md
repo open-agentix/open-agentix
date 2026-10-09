@@ -74,19 +74,28 @@ too. Sign-in users (all fictional, `example.org`, one shared fake password):
 | `contractor@` | agent-scoped to `feature-builder` | `platform` |
 | `viewer@` | viewer | `acme-labs` |
 
-The seed also creates `demo-owner@example.org`, the platform admin that builds the tree. It is not
-listed on the sign-in page. `owner@` is the same mechanism (`users.platform_admin`, which
+The seed also creates two helper accounts that are not listed on the sign-in page:
+`demo-owner@example.org`, the platform admin that builds the tree, and `admin@acme.example.org`, the
+first admin of Acme Labs. Both get a random password per seed that is never stored or shown, so the
+shared demo password opens only the listed accounts. `owner@` is the same mechanism (`users.platform_admin`, which
 `GET /v1/me` reports as `platformAdmin` and which allows `X-OAX-Tenant`); no separate privilege path
 exists. The console shows the tenant switcher when `GET /v1/tenants` returns two or more tenants, so
 only `owner@` sees it; the other users have one tenant. The sign-in hint box (image built with
 `VITE_OAX_DEMO=true`) lists all accounts with one line per role. The seed creates sub-tenants
 through `TenantsService.createChild` (service layer; the HTTP API has no child creation yet).
 
-**Read-only, also for the platform admin.** The demo's read-only hook runs before authentication and
-ignores the principal, so `owner@` cannot create, change or delete anything (no tenant, token, user,
+**Read-only, also for the platform admin.** The demo's read-only hook runs right after
+authentication, before the body is parsed and before any handler, and does not look at the
+principal, so `owner@` cannot create, change or delete anything (no tenant, token, user,
 policy, agent, connection, ...). Only sign-in/out, the side-effect-free checks and the fixed
 scenarios pass (`DEMO_ALLOWED_MUTATIONS` in `apps/api/src/http/app.ts`); a test walks every
-registered mutating route as `owner@` to prove it.
+registered mutating route as `owner@` to prove it. The hook matches the method and the route
+pattern that Fastify resolved (not the raw URL), so spelling tricks (trailing or double slashes,
+case, percent-encoding) and method-override headers change nothing.
+
+**Visitors do not see each other's input.** Platform admins read the audit log of every tenant. A
+failed sign-in for a name that is no account is therefore audited as `(unknown account)` in demo
+mode instead of the typed name (outside demo mode the attempted name is kept for operators).
 
 **Known gap (until W13-2/W13-6):** roles do not yet apply across the tree, so a user only sees the
 agents of their own node. Platform admins see every tenant through the tenant switcher (#178) or the
@@ -116,7 +125,9 @@ scenario, switches to that tenant so the run opens. Accounts of other tenants (`
 
 Limits (all configurable, see `docs/configuration.md`): runs per visitor and window (default 3 per
 10 minutes; the visitor is a salted hash of the client IP, so set `OAX_TRUST_PROXY=true` behind an
-ingress), runs per day for the whole demo (100), and `429` with `Retry-After` when exceeded.
+ingress), runs per day for the whole demo (100), and `429` with `Retry-After` when exceeded. The
+API checks and starts scenario runs one at a time, so a burst of parallel requests cannot pass a
+limit; this lock is per process, so the public demo runs one API replica.
 
 > **Planned:** a real read-only agent that answers visitor questions from the public repository
 > (design: [demo-repo-agent.md](demo-repo-agent.md), plan item W11-1). Not implemented yet; until it
