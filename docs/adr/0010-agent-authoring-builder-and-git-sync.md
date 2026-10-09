@@ -819,8 +819,12 @@ delivery, operator targets from `OAX_PR_TARGETS`, DOG-3c) and the seed endpoint 
 pull-request, target }]` with targets from `OAX_PR_TARGETS`. Rules, all in code: the open pull
 request limit is checked before the node starts and again before the push; the branch is
 `<prefix>issue-<n>-<run8>` and is created, never updated; the patch needs a full passing test run on
-the final tree; the secret scan knows the exact run token of the node, brokered secrets, provider
-keys and platform secrets; the pull request is a draft whose body comes from a fixed template; a dry
-run (`OAX_PR_DRY_RUN`) stops after the local commit. Audit: `pull_request.refused|pushed|opened`.
+the final tree (all node-reported test claims must agree: full-suite run, exit code 0, no timeout,
+same tree); the secret scan knows the exact run token of the node, brokered secrets, provider keys
+and platform secrets, and refuses the delivery when these lists cannot be read; the pull request
+is a draft whose body comes from a fixed template, and it is scanned **before** the branch is
+pushed; model text and the issue title are neutralized (mentions, `#n`/`owner/repo#n`/`GH-n`
+references and closing keywords such as `Fixes #n` cannot notify, link or close issues on merge); a
+dry run (`OAX_PR_DRY_RUN`) stops after the local commit. Audit: `pull_request.refused|pushed|opened`.
 The run output is the delivery result (`dryRun`, branch, commit, base, pull request number and URL).
 

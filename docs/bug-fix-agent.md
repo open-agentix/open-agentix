@@ -29,7 +29,9 @@ result as a **draft pull request**. Nothing is merged by the platform. All data 
 3. The node writes the configuration of the `workspace` server, runs the harness and, when the
    server shuts down, reads its result file. It attaches `{ patch, patchSha256, changedFiles,
    lastTestRun, ... }` to the step result.
-4. The worker validates the patch again, applies it to the same commit, pushes a new branch
+4. The worker validates the patch and the pull request text again (secret scan before the push;
+   mentions, issue references and closing keywords from the model text or the issue title are
+   neutralized), applies the patch to the same commit, pushes a new branch
    `oax/bug-fix/issue-<n>-<run8>` and opens the draft pull request. Audit: `pull_request.pushed`,
    `pull_request.opened` or `pull_request.refused` (codes and digests only).
 
@@ -107,4 +109,6 @@ workspace, for example `workspace_forbidden_path_changed`), `tests_not_green`, `
 The test result is reported by the node; the reviewer re-runs the tests. Test code runs with the
 node's UID (ADR 0008 Amendment 3), so the patch is also a possible exfiltration channel: the worker
 scans it for credential patterns and for the exact tokens in use, but the human review of the
-draft stays the control.
+draft stays the control. Open follow-ups: test code isolation (#140), worker-side test re-run
+(#148), pull request limit across workers and orphan branches (#146), purge of session data of
+crashed workers (#147), exact-value scan gaps (#149), node-generated workspace server paths (#150).
