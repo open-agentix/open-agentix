@@ -2,16 +2,24 @@ import { createHash } from 'node:crypto';
 import { createEvent } from '@openagentix/events';
 import { and, eq, gte, inArray, like, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
-import { agents, runs } from '../db/schema.js';
+import { agents, runs, tenants } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
 import type { Services } from '../services/index.js';
 import {
   DEMO_EVENT_SOURCE,
   DEMO_EVENT_TYPE,
+  DEMO_SCENARIO_TENANT_SLUG,
   DEMO_SCENARIOS,
   DEMO_TRIGGER_PREFIX,
   findDemoScenario,
 } from './scenarios.js';
+
+/** The tenant that scenario runs always appear in. */
+export interface DemoTenantRef {
+  id: string;
+  slug: string;
+  name: string;
+}
 
 export interface DemoOverview {
   llm: {
@@ -22,6 +30,8 @@ export interface DemoOverview {
     remainingUsd: number;
   };
   rateLimit: { runs: number; windowSeconds: number };
+  /** Scenario runs are created in this tenant only, regardless of the acting tenant. */
+  tenant: DemoTenantRef;
   scenarios: { id: string; title: string; description: string; agent: string }[];
 }
 
@@ -74,8 +84,18 @@ export class DemoScenarioService {
     return Number(r?.total ?? 0);
   }
 
+  private async scenarioTenant(): Promise<DemoTenantRef> {
+    const [row] = await this.ctx.db
+      .select({ id: tenants.id, slug: tenants.slug, name: tenants.name })
+      .from(tenants)
+      .where(eq(tenants.slug, DEMO_SCENARIO_TENANT_SLUG));
+    if (!row) throw notFound('demo tenant');
+    return row;
+  }
+
   async overview(): Promise<DemoOverview> {
     if (!this.demo.enabled) throw notFound('demo');
+    const tenant = await this.scenarioTenant();
     const spent = (await this.spentTodayMicros()) / 1e6;
     return {
       llm: {
@@ -86,6 +106,7 @@ export class DemoScenarioService {
         remainingUsd: Math.max(0, this.demo.dailyBudgetUsd - spent),
       },
       rateLimit: { runs: this.demo.rate.runs, windowSeconds: this.demo.rate.windowSeconds },
+      tenant,
       scenarios: DEMO_SCENARIOS.map(({ id, title, description, agent }) => ({
         id,
         title,
@@ -95,8 +116,27 @@ export class DemoScenarioService {
     };
   }
 
-  /** Queues a scenario run. `clientIp` identifies the visitor for rate limiting. */
-  async start(scenarioId: string, clientIp: string): Promise<{ runId: string }> {
+  /** Tail of the start queue: starts run one after another (see `start`). */
+  private startQueue: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Queues a scenario run. `clientIp` identifies the visitor for rate limiting.
+   *
+   * The limits are check-then-insert, so concurrent starts are serialised: otherwise a burst of
+   * parallel requests would all pass the checks before any of them had inserted its run (per-visitor
+   * window, daily cap, one live run and daily budget). The lock is per process; the public demo runs
+   * one API replica.
+   */
+  start(scenarioId: string, clientIp: string): Promise<{ runId: string; tenant: DemoTenantRef }> {
+    const next = this.startQueue.then(() => this.startNow(scenarioId, clientIp));
+    this.startQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  private async startNow(
+    scenarioId: string,
+    clientIp: string,
+  ): Promise<{ runId: string; tenant: DemoTenantRef }> {
     if (!this.demo.enabled) throw notFound('demo');
     const scenario = findDemoScenario(scenarioId);
     if (!scenario) throw notFound('scenario');
@@ -156,10 +196,12 @@ export class DemoScenarioService {
         );
     }
 
+    // The agent is resolved inside the scenario tenant only (never from the principal).
+    const tenant = await this.scenarioTenant();
     const [agent] = await this.ctx.db
       .select({ id: agents.id })
       .from(agents)
-      .where(eq(agents.name, scenario.agent));
+      .where(and(eq(agents.name, scenario.agent), eq(agents.tenantId, tenant.id)));
     if (!agent) throw notFound('demo agent');
     const run = await this.services.runs.enqueue({
       agentId: agent.id,
@@ -171,6 +213,6 @@ export class DemoScenarioService {
       }),
       triggeredBy: trigger,
     });
-    return { runId: run.id };
+    return { runId: run.id, tenant };
   }
 }

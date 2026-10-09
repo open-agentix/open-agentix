@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { CostModel, type Principal, type Role } from '@openagentix/core';
 import { createEvent } from '@openagentix/events';
 import {
@@ -81,9 +82,23 @@ export interface DemoUser {
   tenant: DemoTenantKey;
   teams?: { slug: string; role: Role }[];
   agents?: { name: string; role: Role }[];
+  /**
+   * Platform operator, modelled exactly like the seed's bootstrap owner (`users.platform_admin`):
+   * lists every tenant and may act in any of them (`X-OAX-Tenant`). The demo stays read-only for
+   * this user as well (the read-only hook does not look at the principal).
+   */
+  platformAdmin?: boolean;
 }
 
 export const DEMO_USERS: DemoUser[] = [
+  // Platform operator for visitors: sees all four demo tenants and the tenant switcher.
+  {
+    email: 'owner@example.org',
+    displayName: 'Olga Owner',
+    globalRoles: ['admin'],
+    tenant: 'root',
+    platformAdmin: true,
+  },
   {
     email: 'admin@example.org',
     displayName: 'Ada Admin',
@@ -181,6 +196,15 @@ async function executeRun(
 }
 
 /** Seeds the demo data set once (no-op when agents exist unless `force`). */
+/**
+ * Password of the seed's helper accounts that the sign-in page does not list (`demo-owner@`, the
+ * Acme tenant admin): random per seed and never stored or logged, so the shared, published demo
+ * password opens only the listed accounts.
+ */
+function unlistedPassword(): string {
+  return randomBytes(24).toString('base64url');
+}
+
 export async function seedDemo(
   ctx: AppContext,
   services: Services,
@@ -202,7 +226,8 @@ export async function seedDemo(
     {
       email: 'demo-owner@example.org',
       displayName: 'Demo Owner',
-      password: opts.password,
+      // Builds the data set only; nobody signs in as it (owner@ is the visitors' platform admin).
+      password: unlistedPassword(),
       globalRoles: ['admin'],
     },
   );
@@ -235,7 +260,7 @@ export async function seedDemo(
           admin: {
             email: 'admin@acme.example.org',
             displayName: 'Acme Admin',
-            password: opts.password,
+            password: unlistedPassword(),
           },
         });
     tenantIds[t.key] = row.id;
@@ -324,6 +349,11 @@ export async function seedDemo(
       globalRoles: u.globalRoles,
     });
     users[u.email] = created.id;
+    if (u.platformAdmin)
+      await ctx.db
+        .update(usersTable)
+        .set({ platformAdmin: true })
+        .where(eq(usersTable.id, created.id));
   }
   for (const [key, teamId] of Object.entries(teamIds)) {
     const [tenant, slug] = key.split('/') as [DemoTenantKey, string];

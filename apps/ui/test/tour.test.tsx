@@ -23,6 +23,7 @@ import { expectNoA11yViolations, heading, renderApp } from './utils';
 const scenarios = {
   llm: { mode: 'simulated', model: null, dailyBudgetUsd: 1, spentTodayUsd: 0, remainingUsd: 1 },
   rateLimit: { runs: 3, windowSeconds: 600 },
+  tenant: { id: f.tenantRow.id, slug: 'security', name: 'Security (demo)' },
   scenarios: [{ id: 'cve-xz-backdoor', title: 'Triage', description: 'A finding.', agent: 'a' }],
 };
 
@@ -339,10 +340,42 @@ describe('tour in the app', () => {
 });
 
 describe('login hint', () => {
+  it('lists every demo account with a role line and fills the one that is clicked', async () => {
+    vi.stubEnv('VITE_OAX_DEMO', 'true');
+    demoServer();
+    const { user } = await renderApp('/login', { signedIn: false });
+    const hint = await screen.findByRole('complementary', { name: /public demo/i });
+    for (const who of [
+      'owner',
+      'admin',
+      'engineer',
+      'integrator',
+      'operator',
+      'auditor',
+      'viewer',
+      'contractor',
+    ])
+      expect(within(hint).getByText(`${who}@example.org`)).toBeInTheDocument();
+    expect(
+      within(hint).getByText('Platform admin: sees all tenants and the tenant switcher.'),
+    ).toBeInTheDocument();
+    expect(within(hint).getByText('Admin of the Security tenant.')).toBeInTheDocument();
+    // Only fictional example.org accounts, one shared password.
+    expect(hint.textContent).not.toMatch(/@(?!example\.org)[\w.-]+\.[a-z]{2,}/i);
+    expect(within(hint).getAllByText('demo-password-2026')).toHaveLength(1);
+    await user.click(within(hint).getByRole('button', { name: 'Fill in owner@example.org' }));
+    expect(screen.getByLabelText(/username or email/i)).toHaveValue('owner@example.org');
+    expect(screen.getByLabelText(/^password/i)).toHaveValue('demo-password-2026');
+  });
+
   it('is hidden in normal builds', async () => {
     await renderApp('/login', { signedIn: false });
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByText(/public demo/i)).not.toBeInTheDocument();
+    // Neither the shared demo password nor the account list reach a normal sign-in page.
+    expect(document.body.textContent).not.toContain('demo-password-2026');
+    expect(document.body.textContent).not.toMatch(/@example\.org/);
+    expect(screen.queryByRole('button', { name: /^Fill in/ })).not.toBeInTheDocument();
   });
 
   it('shows the shared fake credentials, fills them in and starts the tour after sign-in', async () => {

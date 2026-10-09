@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Demo: platform-admin visitor account, sign-in hint with all accounts, scenario tenant**: the
+  demo seed adds `owner@example.org` ("Olga Owner", fictional), a platform admin (the same
+  `users.platform_admin` mechanism as the seed's bootstrap owner) that sees all four demo tenants and
+  the tenant switcher; the other accounts are unchanged. The demo stays read-only for it: the
+  read-only hook ignores the principal, the allowlist is exported as `DEMO_ALLOWED_MUTATIONS` and a
+  test walks every mutating route as the owner. The sign-in hint box lists every demo account with a
+  one-line role description (EN/DE) and fills in the one you click. Scenario runs are created in the
+  Security tenant only, whatever tenant the caller acts in; `GET /v1/demo/scenarios` and the `202`
+  answer of `POST /v1/demo/scenarios/{id}/run` carry that `tenant`, and the dashboard names it and
+  offers a switch (or explains that the account cannot open it). `docs/demo.md` updated.
 - **API: acting tenant in `/v1/me`, `X-OAX-Tenant` by slug path and the tenant tree (UX
   slices A2 and A3, #156 and #157)**: `GET /v1/me` adds `actingTenant` (with the breadcrumb `path`),
   `homeTenant`, `bindings[].tenantId/tenantSlugPath/useCase/expiresAt`, `visibleTenantCount` and
@@ -236,6 +246,18 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Security
 
+- **Demo: unlisted seed accounts no longer share the published password**: `demo-owner@example.org`
+  (platform admin) and `admin@acme.example.org` (Acme Labs admin) only build the data set; they get
+  a random password per seed, so the shared demo password opens only the accounts on the sign-in
+  page.
+- **Demo: scenario limits hold under concurrent requests**: `POST /v1/demo/scenarios/{id}/run`
+  checked its limits before inserting the run, so a burst of parallel requests passed all of them
+  (per-visitor window, daily cap, one live run and the daily budget in `claude-code` mode). Starts
+  are now checked and queued one at a time (per API process; the demo runs one replica).
+- **Demo: failed sign-ins no longer store what a visitor typed**: in demo mode a failed sign-in for
+  a name that is no account is audited as `(unknown account)` instead of the typed name, because
+  the published platform-admin accounts read the audit log of every tenant (a visitor's real
+  address typed by mistake was visible to every other visitor). Outside demo mode nothing changes.
 - **Invisible-Unicode filter for model input** (ADR 0008 Amendment 6): zero-width, bidi, tag-block,
   variation-selector runs, control and other invisible format characters are removed from prompts,
   tool results, tool error messages and tool descriptions/schemas before they enter the model
