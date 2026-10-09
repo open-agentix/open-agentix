@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Demo seed as a tenant tree with stable ids (A8, #162)**: the demo data set now has the root
+  "Example Org (demo)" with the sub-tenants `security` (cve-triage, ticket-updater, hardening-review,
+  the three scenarios and the pending approval) and `platform` (feature-builder), plus the separate
+  organisation `acme-labs`. Tenants, agents and seeded runs get deterministic UUIDv5 ids, so links
+  survive the nightly reset (`TenantsService.create/createChild`, `AgentsService.create`,
+  `RunsService.enqueue` and `IngestService.ingestEvent` accept an optional fixed id; behaviour is
+  unchanged without it). **Demo behaviour change:** the sign-in users now live in `security`,
+  `contractor@` in `platform`. Docs: `docs/demo.md`.
 - **Kubernetes Job runner wired into the worker (RM-24)**: `apps/worker` now starts the
   `kubernetes-job` runner when `OAX_RUNNERS_ENABLED` lists it and `OAX_K8S_JOB_ENABLED=true`
   (off by default, no cluster client otherwise), next to or instead of the container runner, with a

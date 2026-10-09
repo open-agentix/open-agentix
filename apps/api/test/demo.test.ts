@@ -12,37 +12,43 @@ afterAll(async () => n.close());
 
 describe('demo seed', () => {
   it('loads tenants, users for all roles, agents, runs, approvals and costs with a valid audit chain', async () => {
-    const agents = (await n.req({ method: 'GET', url: '/v1/agents' }))
-      .json()
-      .items.map((a: { name: string }) => a.name)
-      .sort();
-    expect(agents).toEqual([
+    const agentsIn = async (tenant: string) =>
+      (await n.req({ method: 'GET', url: '/v1/agents', headers: { 'x-oax-tenant': tenant } }))
+        .json()
+        .items.map((a: { name: string }) => a.name)
+        .sort();
+    expect(await agentsIn('default')).toEqual(['release-watch']);
+    expect(await agentsIn('security')).toEqual([
       'cve-triage',
-      'feature-builder',
       'hardening-review',
-      'release-watch',
       'ticket-updater',
     ]);
-    const users = (await n.req({ method: 'GET', url: '/v1/users' })).json().items as {
-      email: string;
-      globalRoles: string[];
-    }[];
-    expect(users.filter((u) => u.email.endsWith('@example.org'))).toHaveLength(7);
+    expect(await agentsIn('platform')).toEqual(['feature-builder']);
+    expect(await agentsIn('acme-labs')).toEqual(['log-summary']);
+    const usersIn = async (tenant: string) =>
+      (await n.req({ method: 'GET', url: '/v1/users', headers: { 'x-oax-tenant': tenant } })).json()
+        .items as { email: string }[];
+    const demoUsers = (
+      await Promise.all(['default', 'security', 'platform', 'acme-labs'].map(usersIn))
+    )
+      .flat()
+      .filter((u) => u.email.endsWith('@example.org'));
+    expect(demoUsers).toHaveLength(8);
     const stats = (await n.req({ method: 'GET', url: '/v1/stats/runs' })).json();
-    expect(stats.byStatus.succeeded).toBeGreaterThanOrEqual(8);
-    expect(stats.byStatus.awaiting_approval).toBe(1);
-    expect((await n.req({ method: 'GET', url: '/v1/approvals' })).json().items).toHaveLength(1);
+    expect(stats.byStatus.succeeded).toBeGreaterThanOrEqual(1);
+    const inSecurity = { 'x-oax-tenant': 'security' };
     expect(
-      (await n.req({ method: 'GET', url: '/v1/approvals?status=approved' })).json().items,
+      (await n.req({ method: 'GET', url: '/v1/approvals', headers: inSecurity })).json().items,
+    ).toHaveLength(1);
+    expect(
+      (
+        await n.req({ method: 'GET', url: '/v1/approvals?status=approved', headers: inSecurity })
+      ).json().items,
     ).toHaveLength(1);
     const tenantsWithCosts = (
       await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=tenant&allTenants=true' })
     ).json().items;
-    expect(tenantsWithCosts).toHaveLength(2);
-    const acme = (
-      await n.req({ method: 'GET', url: '/v1/agents', headers: { 'x-oax-tenant': 'acme-labs' } })
-    ).json().items;
-    expect(acme.map((a: { name: string }) => a.name)).toEqual(['log-summary']);
+    expect(tenantsWithCosts).toHaveLength(4);
     const useCases = (
       await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=use_case&allTenants=true' })
     )
@@ -64,6 +70,13 @@ describe('demo seed', () => {
 
   it('enforces the agent-scoped demo user and the read-only demo mode', async () => {
     const contractor = await n.login('contractor@example.org', PW);
+    const admin = await n.login('admin@example.org', PW);
+    expect(
+      (await n.req({ method: 'GET', url: '/v1/agents', token: admin }))
+        .json()
+        .items.map((a: { name: string }) => a.name)
+        .sort(),
+    ).toEqual(['cve-triage', 'hardening-review', 'ticket-updater']);
     expect(
       (await n.req({ method: 'GET', url: '/v1/agents', token: contractor }))
         .json()

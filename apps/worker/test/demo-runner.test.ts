@@ -102,7 +102,9 @@ afterAll(async () => {
 const waitDone = async (id: string) => {
   const end = Date.now() + 20_000;
   for (;;) {
-    const r = (await n.req({ method: 'GET', url: `/v1/runs/${id}` })).json();
+    const r = (
+      await n.req({ method: 'GET', url: `/v1/runs/${id}`, headers: { 'x-oax-tenant': 'security' } })
+    ).json();
     if (['succeeded', 'failed', 'blocked_by_policy'].includes(r.status)) return r;
     if (Date.now() > end) throw new Error('timeout');
     await new Promise((r2) => setTimeout(r2, 25));
@@ -123,7 +125,13 @@ describe('DemoLlmRunner', () => {
     expect(harness.seen.models).toEqual(['haiku', 'haiku']);
     expect(harness.seen.prompts[0]).toContain('CVE-2021-44228');
     expect(run.costMicros).toBeGreaterThan(0);
-    const steps = (await n.req({ method: 'GET', url: `/v1/runs/${run.id}/steps` })).json().items;
+    const steps = (
+      await n.req({
+        method: 'GET',
+        url: `/v1/runs/${run.id}/steps`,
+        headers: { 'x-oax-tenant': 'security' },
+      })
+    ).json().items;
     expect(steps.some((s: { provider?: string }) => s.provider === 'claude-code')).toBe(true);
     expect(
       (await n.req({ method: 'POST', url: '/v1/audit/verify', payload: {} })).json().valid,
@@ -131,7 +139,9 @@ describe('DemoLlmRunner', () => {
   }, 60_000);
 
   it('ignores the stored event payload: only the scenario table feeds the model', async () => {
-    const agent = (await n.req({ method: 'GET', url: '/v1/agents' }))
+    const agent = (
+      await n.req({ method: 'GET', url: '/v1/agents', headers: { 'x-oax-tenant': 'security' } })
+    )
       .json()
       .items.find((a: { name: string }) => a.name === 'cve-triage');
     const before = harness.seen.prompts.length;
@@ -156,7 +166,9 @@ describe('DemoLlmRunner', () => {
   }, 60_000);
 
   it('uses the normal runner for everything that is not a demo scenario', async () => {
-    const agent = (await n.req({ method: 'GET', url: '/v1/agents' }))
+    const agent = (
+      await n.req({ method: 'GET', url: '/v1/agents', headers: { 'x-oax-tenant': 'security' } })
+    )
       .json()
       .items.find((a: { name: string }) => a.name === 'cve-triage');
     const before = harness.seen.models.length;
