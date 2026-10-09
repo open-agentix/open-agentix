@@ -82,7 +82,9 @@ export function AppShell() {
         <TenantBadge placement="side" />
         <nav aria-label={t('nav.main')} className="nav">
           {NAV.map((group) => {
-            const items = group.items.filter((i) => !i.perm || can(i.perm));
+            const items = group.items.filter(
+              (i) => (!i.perm || can(i.perm)) && (!i.when || (!!me && i.when(me))),
+            );
             if (!items.length) return null;
             return (
               <div key={group.label} className="nav-group">

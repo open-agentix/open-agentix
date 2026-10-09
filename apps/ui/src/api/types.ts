@@ -76,3 +76,6 @@ export const TERMINAL_STATUSES: readonly RunStatus[] = [
 export function isTerminal(status: RunStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
+
+export type TenantTree = ResponseOf<'/v1/tenants/tree', 'get'>;
+export type TenantTreeNode = TenantTree['items'][number];

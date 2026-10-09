@@ -14,6 +14,18 @@ export const tenantsQuery = queryOptions({
   staleTime: 60_000,
 });
 
+/**
+ * The tenant tree the principal may see, with counts (`GET /v1/tenants/tree`). Like the tenant
+ * list it belongs to the user, not to the acting tenant, so the key starts with `tenants` and a
+ * tenant switch does not reset it.
+ */
+export const tenantTreeQuery = queryOptions({
+  queryKey: ['tenants', 'tree'],
+  queryFn: ({ signal }) =>
+    call(api.GET('/v1/tenants/tree', { params: { query: { include: 'counts' } }, signal })),
+  staleTime: 30_000,
+});
+
 export const agentsQuery = queryOptions({
   queryKey: ['agents'],
   queryFn: () => call(api.GET('/v1/agents', { params: { query: { limit: 200 } } })),

@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **UI: tenants overview page (UX slice U5)**: a lazy `Tenants` page (`/tenants`, nav entry only in
+  `multi` mode, with `visibleTenantCount > 1` or below other tenants) over `GET /v1/tenants/tree`:
+  accessible treegrid (arrows, Home/End, `*`, `+`/`-`, Enter switches; roving tabindex), two levels
+  open, tenant tile, direct and inherited role badges with text and explanation, compact counts
+  (own and subtree), spend with budget bar when a cap is shown, pending approvals badge, `-` plus
+  "Not permitted" for counts the caller may not read (never 0), truncated banner, path stubs for
+  ancestors, "Switch to this tenant" for platform admins (disabled with a reason for everybody
+  else), debounced search in the URL (`?q=`), skeleton, error and empty states, and a card list
+  with depth indicators below 600 px. EN/DE under `tenancy.overview.*`.
 - **Demo: platform-admin visitor account, sign-in hint with all accounts, scenario tenant**: the
   demo seed adds `owner@example.org` ("Olga Owner", fictional), a platform admin (the same
   `users.platform_admin` mechanism as the seed's bootstrap owner) that sees all four demo tenants and
