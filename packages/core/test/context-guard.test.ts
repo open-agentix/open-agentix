@@ -60,6 +60,24 @@ describe('ContextGuard secret redaction', () => {
     expect(r.report.secrets.kinds).toEqual({ 'known-secret': 4 });
   });
 
+  it('finds a known secret inside a larger base64 or base64url blob and in upper-case hex', () => {
+    const secret = 'Zx9+/q-Secret_Value?42';
+    const g = guard({ knownSecrets: [secret] });
+    const enc = (v: string, kind: BufferEncoding = 'base64') => Buffer.from(v).toString(kind);
+    const inputs = [
+      // docker config.json: auth = base64("user:token"), offsets 1 and 2 (mod 3) of the secret
+      `{"auths":{"ghcr.io":{"auth":"${enc(`user:${secret}`)}"}}}`,
+      `data:\n  env: ${enc(`API_TOKEN=${secret}\n`)}`,
+      `x ${enc(`ab${secret}cd`, 'base64url')} y`,
+      `hex ${enc(secret, 'hex').toUpperCase()}`,
+    ];
+    for (const input of inputs) {
+      const r = g.text(input);
+      expect(r.report.secrets.kinds['known-secret'], input).toBe(1);
+      expect(r.text).toContain('[redacted:known-secret]');
+    }
+  });
+
   it('registers secrets later and prefers the longer of two overlapping secrets', () => {
     const g = guard();
     g.addSecret('abcdefgh-short');

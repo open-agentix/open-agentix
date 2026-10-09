@@ -65,14 +65,32 @@ const GLOBAL_PATTERNS: readonly (readonly [string, RegExp])[] = SECRET_PATTERNS.
   ([kind, re]) => [kind, new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)],
 );
 
+/**
+ * The base64 characters that encode only the secret's bits, for each of the three byte alignments
+ * it can have inside a larger encoded blob (a docker `auth` field is base64 of `user:secret`, a
+ * Kubernetes Secret or an encoded `.env` puts the value at any offset). The characters at either
+ * end mix in neighbouring bits and are left out, so the core matches whatever surrounds it.
+ */
+function base64Cores(bytes: Buffer): string[] {
+  const out: string[] = [];
+  for (let shift = 0; shift < 3; shift++) {
+    const enc = Buffer.concat([Buffer.alloc(shift), bytes]).toString('base64');
+    out.push(enc.slice(Math.ceil((shift * 8) / 6), Math.floor(((shift + bytes.length) * 8) / 6)));
+  }
+  return out;
+}
+
 function forms(secret: string): string[] {
-  const b64 = Buffer.from(secret).toString('base64');
+  const bytes = Buffer.from(secret);
+  const b64 = base64Cores(bytes);
+  const hex = bytes.toString('hex');
   return [
     secret,
     encodeURIComponent(secret),
-    b64,
-    b64.replace(/=+$/, ''),
-    Buffer.from(secret).toString('hex'),
+    ...b64,
+    ...b64.map((c) => c.replace(/\+/g, '-').replace(/\//g, '_')),
+    hex,
+    hex.toUpperCase(),
   ].filter((f, i, all) => f.length >= MIN_KNOWN_SECRET_LENGTH && all.indexOf(f) === i);
 }
 

@@ -61,8 +61,9 @@ normalised (no NFC), so legitimate text is never rewritten beyond the removed co
 
 - **Exact values in use**: secrets resolved for MCP servers (the gateway registers every value its
   resolver hands out), brokered credentials and the step's run token on a run node, and the gate
-  and model tokens of a harness step. Matched plain, URL-encoded, base64 (with and without padding)
-  and hex. Values shorter than 8 characters are not matched exactly (they would mangle ordinary
+  and model tokens of a harness step. Matched plain, URL-encoded, base64 and base64url at any byte
+  alignment (so a value inside a larger encoded blob, such as a docker `auth` field or an encoded
+  `.env`, is found too) and hex in either case. Values shorter than 8 characters are not matched exactly (they would mangle ordinary
   text); the token shapes below still apply.
 - **Token shapes**: the list in `packages/core/src/secret-patterns.ts`, shared with the
   pull-request secret scan (`apps/worker/src/git/secret-scan.ts`, which fails closed on a hit). A
