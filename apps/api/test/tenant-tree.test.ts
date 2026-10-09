@@ -361,7 +361,17 @@ describe('tenant tree service', () => {
     });
     expect(res.statusCode).toBe(201);
     expect(Object.keys(res.json()).sort()).toEqual(
-      ['createdAt', 'id', 'monthlyBudgetUsd', 'name', 'secretRefs', 'slug'].sort(),
+      [
+        'createdAt',
+        'depth',
+        'id',
+        'monthlyBudgetUsd',
+        'name',
+        'parentId',
+        'secretRefs',
+        'slug',
+        'slugPath',
+      ].sort(),
     );
     const root = await n.services.tenants.tree.node(res.json().id);
     expect(root).toMatchObject({ parentId: null, rootId: root!.id, depth: 0 });
@@ -402,11 +412,11 @@ describe('tenant tree service', () => {
     expect(() => t.tree.resolveSlugPath('Bad/Slug')).rejects.toThrow();
   });
 
-  it('keeps the tree invisible to other tenants and to the existing API', async () => {
+  it('keeps the tree invisible to other tenants and its internals out of the API', async () => {
     const t = n.services.tenants;
     const org = await t.tree.resolveSlugPath('acme');
     const team = await t.tree.resolveSlugPath('acme/div-a/team-a');
-    // a user of the root cannot read its descendants (visibility arrives with W13-6)
+    // a user of the root cannot read its descendants (only a tenant admin reaches below the home node until W13-6, see tenant-tree-api.test.ts)
     expect((await t.list(plain(org!.id))).map((x) => x.id)).toEqual([org!.id]);
     await expect(t.get(plain(org!.id), team!.id)).rejects.toMatchObject({ statusCode: 404 });
     // and the child cannot see its parent
@@ -416,8 +426,10 @@ describe('tenant tree service', () => {
     ).rejects.toMatchObject({ statusCode: 403 });
     const res = await n.req({ method: 'GET', url: `/v1/tenants/${team!.id}` });
     expect(res.statusCode).toBe(200);
+    // only the additive tree fields of A3 are exposed, never the materialised id path or the root id
+    expect(res.json()).toMatchObject({ slugPath: 'acme/div-a/team-a', depth: 2 });
     expect(res.json()).not.toHaveProperty('path');
-    expect(res.json()).not.toHaveProperty('parentId');
+    expect(res.json()).not.toHaveProperty('rootId');
   });
 
   it('refuses unknown parents, slug clashes, depth and node limits', async () => {

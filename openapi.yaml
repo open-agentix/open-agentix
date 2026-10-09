@@ -701,9 +701,10 @@ paths:
                 type: string
   /v1/me:
     get:
-      summary: Current principal
+      summary: Current principal, the acting tenant and what the caller can switch to
       tags:
         - auth
+      description: Honours `X-OAX-Tenant` (id, slug or slug path of a node the caller may act in; any other node is 404). The node that was used is also returned in the response header `X-OAX-Acting-Tenant`.
       security:
         - bearer: []
       responses:
@@ -788,6 +789,66 @@ paths:
                       - slug
                       - name
                     additionalProperties: false
+                    description: the tenant the request acts in (same as `actingTenant`; kept for compatibility)
+                  actingTenant:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                      name:
+                        type: string
+                      path:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slug:
+                              type: string
+                            name:
+                              type: string
+                          required:
+                            - id
+                            - slug
+                            - name
+                          additionalProperties: false
+                        description: breadcrumb, root first, ending with the acting tenant itself; ancestors by name only
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                      - path
+                    additionalProperties: false
+                  homeTenant:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      name:
+                        type: string
+                      slugPath:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - name
+                      - slugPath
+                    additionalProperties: false
+                    description: the tenant the user belongs to, regardless of `X-OAX-Tenant`
                   platformAdmin:
                     type: boolean
                   kind:
@@ -812,17 +873,53 @@ paths:
                               format: uuid
                               pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                             - type: "null"
+                        tenantId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          description: the node the role is bound on (the home tenant until per-node bindings)
+                        tenantSlugPath:
+                          type: string
+                        useCase:
+                          description: use case restriction; null = the whole node
+                          type:
+                            - string
+                            - "null"
+                        expiresAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
                       required:
                         - role
                         - teamId
+                        - tenantId
+                        - tenantSlugPath
+                        - useCase
+                        - expiresAt
                       additionalProperties: false
+                  visibleTenantCount:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                    description: number of tenants the caller can act in (`X-OAX-Tenant`), at least 1
+                  installationMode:
+                    type: string
+                    enum:
+                      - single
+                      - multi
+                    description: "`multi` when the caller can act in more than one tenant, else `single`"
                 required:
                   - user
                   - tenant
+                  - actingTenant
+                  - homeTenant
                   - platformAdmin
                   - kind
                   - permissions
                   - bindings
+                  - visibleTenantCount
+                  - installationMode
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -8156,6 +8253,21 @@ paths:
                           pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                         slug:
                           type: string
+                        slugPath:
+                          type: string
+                          description: slugs from the organisation root down to this tenant, e.g. `acme/security`
+                        parentId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                          description: parent tenant; null for an organisation (root)
+                        depth:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                          description: 0 for an organisation, 1 for its children, ...
                         name:
                           type: string
                         monthlyBudgetUsd:
@@ -8173,6 +8285,9 @@ paths:
                       required:
                         - id
                         - slug
+                        - slugPath
+                        - parentId
+                        - depth
                         - name
                         - monthlyBudgetUsd
                         - secretRefs
@@ -8253,6 +8368,21 @@ paths:
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                   slug:
                     type: string
+                  slugPath:
+                    type: string
+                    description: slugs from the organisation root down to this tenant, e.g. `acme/security`
+                  parentId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: parent tenant; null for an organisation (root)
+                  depth:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                    description: 0 for an organisation, 1 for its children, ...
                   name:
                     type: string
                   monthlyBudgetUsd:
@@ -8270,6 +8400,9 @@ paths:
                 required:
                   - id
                   - slug
+                  - slugPath
+                  - parentId
+                  - depth
                   - name
                   - monthlyBudgetUsd
                   - secretRefs
@@ -8313,6 +8446,282 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/tenants/tree:
+    get:
+      summary: The tenant tree the caller may see, with the caller's roles and optional counts per node
+      tags:
+        - tenants
+      description: "Platform operators see every organisation, tenant admins their node and everything below it, everybody else their own node. The ancestors of the caller's node appear as path stubs (`visible: false`: name and slug only). Siblings, cousins and other organisations never appear. A `root` outside the caller's reach is 404. Counts are included only for nodes and metrics the caller may read. Parents come before their children; siblings are ordered by slug. At most `limit` nodes are returned, shallowest first (`truncated`)."
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: root
+          required: false
+          description: "start node: id or slug path"
+        - schema:
+            type: integer
+            minimum: 0
+            maximum: 32
+          in: query
+          name: depth
+          required: false
+          description: levels below the start node
+        - schema:
+            type: string
+          in: query
+          name: include
+          required: false
+          description: "`counts` adds the per-node counts the caller may read"
+        - schema:
+            default: 1000
+            type: integer
+            minimum: 1
+            maximum: 5000
+          in: query
+          name: limit
+          required: false
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        parentId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                        slug:
+                          type: string
+                        slugPath:
+                          type: string
+                        name:
+                          type: string
+                        depth:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                        hasChildren:
+                          type: boolean
+                        visible:
+                          type: boolean
+                          description: "false for an ancestor shown as a path stub: name and slug only, no counts or roles"
+                        status:
+                          type: string
+                          enum:
+                            - active
+                            - blocked
+                        myRoles:
+                          type: array
+                          items:
+                            type: string
+                        inheritedRoles:
+                          type: array
+                          items:
+                            type: string
+                        counts:
+                          anyOf:
+                            - type: object
+                              properties:
+                                agents:
+                                  anyOf:
+                                    - type: integer
+                                      minimum: -9007199254740991
+                                      maximum: 9007199254740991
+                                    - type: "null"
+                                agentsSubtree:
+                                  anyOf:
+                                    - type: integer
+                                      minimum: -9007199254740991
+                                      maximum: 9007199254740991
+                                    - type: "null"
+                                runs30d:
+                                  anyOf:
+                                    - type: integer
+                                      minimum: -9007199254740991
+                                      maximum: 9007199254740991
+                                    - type: "null"
+                                pendingApprovals:
+                                  anyOf:
+                                    - type: integer
+                                      minimum: -9007199254740991
+                                      maximum: 9007199254740991
+                                    - type: "null"
+                                spendMonthUsd:
+                                  type:
+                                    - number
+                                    - "null"
+                                spendMonthSubtreeUsd:
+                                  type:
+                                    - number
+                                    - "null"
+                                capUsd:
+                                  type:
+                                    - number
+                                    - "null"
+                                capSource:
+                                  anyOf:
+                                    - type: string
+                                      enum:
+                                        - tenant
+                                    - type: "null"
+                              required:
+                                - agents
+                                - agentsSubtree
+                                - runs30d
+                                - pendingApprovals
+                                - spendMonthUsd
+                                - spendMonthSubtreeUsd
+                                - capUsd
+                                - capSource
+                              additionalProperties: false
+                            - type: "null"
+                          description: null unless `include=counts`; single fields are null when the caller may not read them
+                      required:
+                        - id
+                        - parentId
+                        - slug
+                        - slugPath
+                        - name
+                        - depth
+                        - hasChildren
+                        - visible
+                        - status
+                        - myRoles
+                        - inheritedRoles
+                        - counts
+                      additionalProperties: false
+                  truncated:
+                    type: boolean
+                    description: more nodes matched than `limit`; the shallowest come first
+                required:
+                  - items
+                  - truncated
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/tenants/search:
+    get:
+      summary: Search the tenants the caller may act in by name or slug (at most 20)
+      tags:
+        - tenants
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+          in: query
+          name: q
+          required: true
+        - schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 20
+          in: query
+          name: limit
+          required: false
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        slug:
+                          type: string
+                        name:
+                          type: string
+                        slugPath:
+                          type: string
+                        depth:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                        parentId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                      required:
+                        - id
+                        - slug
+                        - name
+                        - slugPath
+                        - depth
+                        - parentId
+                      additionalProperties: false
+                required:
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/tenants/{id}:
     get:
       summary: Get a tenant
@@ -8342,6 +8751,21 @@ paths:
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                   slug:
                     type: string
+                  slugPath:
+                    type: string
+                    description: slugs from the organisation root down to this tenant, e.g. `acme/security`
+                  parentId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: parent tenant; null for an organisation (root)
+                  depth:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                    description: 0 for an organisation, 1 for its children, ...
                   name:
                     type: string
                   monthlyBudgetUsd:
@@ -8359,6 +8783,9 @@ paths:
                 required:
                   - id
                   - slug
+                  - slugPath
+                  - parentId
+                  - depth
                   - name
                   - monthlyBudgetUsd
                   - secretRefs
@@ -8433,6 +8860,21 @@ paths:
                     pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                   slug:
                     type: string
+                  slugPath:
+                    type: string
+                    description: slugs from the organisation root down to this tenant, e.g. `acme/security`
+                  parentId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: parent tenant; null for an organisation (root)
+                  depth:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                    description: 0 for an organisation, 1 for its children, ...
                   name:
                     type: string
                   monthlyBudgetUsd:
@@ -8450,6 +8892,9 @@ paths:
                 required:
                   - id
                   - slug
+                  - slugPath
+                  - parentId
+                  - depth
                   - name
                   - monthlyBudgetUsd
                   - secretRefs

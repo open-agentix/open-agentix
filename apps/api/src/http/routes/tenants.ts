@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
+import type { TenantRow } from '../../services/tenants.js';
 import { tenantDto } from '../dto.js';
 import {
   ErrorSchema,
@@ -8,6 +9,10 @@ import {
   TenantCreateBody,
   TenantPatchBody,
   TenantSchema,
+  TenantSearchQuery,
+  TenantSearchSchema,
+  TenantTreeQuery,
+  TenantTreeSchema,
 } from '../schemas.js';
 import type { ZApp } from '../zapp.js';
 
@@ -16,6 +21,8 @@ const tags = ['tenants'];
 
 export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
   const { tenants } = services;
+  const view = async (row: TenantRow) =>
+    tenantDto(row, (await tenants.slugPaths([row])).get(row.id)!);
 
   app.get(
     '/v1/tenants',
@@ -28,7 +35,84 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: z.object({ items: z.array(TenantSchema) }) },
       },
     },
-    async (req) => ({ items: (await tenants.list(principalOf(req))).map(tenantDto) }),
+    async (req) => {
+      const rows = await tenants.list(principalOf(req));
+      const paths = await tenants.slugPaths(rows);
+      return { items: rows.map((t) => tenantDto(t, paths.get(t.id)!)) };
+    },
+  );
+
+  app.get(
+    '/v1/tenants/tree',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags,
+        summary:
+          "The tenant tree the caller may see, with the caller's roles and optional counts per node",
+        description:
+          'Platform operators see every organisation, tenant admins their node and everything below it, ' +
+          "everybody else their own node. The ancestors of the caller's node appear as path stubs " +
+          '(`visible: false`: name and slug only). Siblings, cousins and other organisations never ' +
+          "appear. A `root` outside the caller's reach is 404. Counts are included only for nodes " +
+          'and metrics the caller may read. Parents come before their children; siblings are ordered ' +
+          'by slug. At most `limit` nodes are returned, shallowest first (`truncated`).',
+        security: sec,
+        querystring: TenantTreeQuery,
+        response: { 200: TenantTreeSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => {
+      const r = await tenants.views.visibleTree(principalOf(req), {
+        root: req.query.root,
+        depth: req.query.depth,
+        counts: req.query.include.includes('counts'),
+        limit: req.query.limit,
+      });
+      return {
+        truncated: r.truncated,
+        items: r.items.map((e) => ({
+          id: e.node.id,
+          parentId: e.node.parentId,
+          slug: e.node.slug,
+          slugPath: e.slugPath,
+          name: e.node.name,
+          depth: e.node.depth,
+          hasChildren: e.hasChildren,
+          visible: e.visible,
+          status: 'active' as const,
+          myRoles: e.myRoles,
+          inheritedRoles: e.inheritedRoles,
+          counts: e.counts,
+        })),
+      };
+    },
+  );
+
+  app.get(
+    '/v1/tenants/search',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags,
+        summary: 'Search the tenants the caller may act in by name or slug (at most 20)',
+        security: sec,
+        querystring: TenantSearchQuery,
+        response: { 200: TenantSearchSchema },
+      },
+    },
+    async (req) => ({
+      items: (await tenants.views.search(principalOf(req), req.query.q, req.query.limit)).map(
+        (r) => ({
+          id: r.node.id,
+          slug: r.node.slug,
+          slugPath: r.slugPath,
+          name: r.node.name,
+          depth: r.node.depth,
+          parentId: r.node.parentId,
+        }),
+      ),
+    }),
   );
 
   app.post(
@@ -44,7 +128,7 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req, reply) =>
-      reply.status(201).send(tenantDto(await tenants.create(principalOf(req), req.body))),
+      reply.status(201).send(await view(await tenants.create(principalOf(req), req.body))),
   );
 
   app.get(
@@ -59,7 +143,7 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: TenantSchema },
       },
     },
-    async (req) => tenantDto(await tenants.get(principalOf(req), req.params.id)),
+    async (req) => view(await tenants.get(principalOf(req), req.params.id)),
   );
 
   app.patch(
@@ -75,6 +159,6 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: TenantSchema, 403: ErrorSchema },
       },
     },
-    async (req) => tenantDto(await tenants.update(principalOf(req), req.params.id, req.body)),
+    async (req) => view(await tenants.update(principalOf(req), req.params.id, req.body)),
   );
 }
