@@ -19,6 +19,9 @@ All notable changes to this project are documented here. The format follows
   additive; the `agents.use_case` column and two indexes arrive with migration
   `0015_agent_summary_fields` (down script included). Gaps: no `disabled` status (#161), no `sort`,
   `changed` is a byte-wise comparison of draft and latest version. See `docs/ux/multi-tenant-ux.md`.
+  `labels.useCase` is now limited to 200 characters (the length use case budgets already accept):
+  a longer label is a validation error instead of an internal error on the new index; the backfill
+  leaves such legacy values empty.
 - **UI: tenancy context and mobile card rows (UX slices U1, U2 of `docs/ux/multi-tenant-ux.md`)**:
   new `tenancy.*` i18n namespace (EN and DE) for the tenant glossary; the active tenant from
   `GET /v1/me` is shown as a tile plus name in the top bar (phones) and the sidebar header

@@ -1,5 +1,5 @@
 ALTER TABLE "agents" ADD COLUMN "use_case" text;--> statement-breakpoint
-UPDATE "agents" SET "use_case" = nullif("agent_versions"."definition"->'labels'->>'useCase', '') FROM "agent_versions" WHERE "agent_versions"."id" = "agents"."latest_version_id";--> statement-breakpoint
-UPDATE "agents" SET "use_case" = nullif(btrim(substring("draft_source" from '(?m)^[ \t]+useCase:[ \t]*["'']?([^"''\r\n#]*)')), '') WHERE "latest_version_id" IS NULL;--> statement-breakpoint
+UPDATE "agents" SET "use_case" = nullif("agent_versions"."definition"->'labels'->>'useCase', '') FROM "agent_versions" WHERE "agent_versions"."id" = "agents"."latest_version_id" AND "agent_versions"."agent_id" = "agents"."id" AND char_length("agent_versions"."definition"->'labels'->>'useCase') <= 200;--> statement-breakpoint
+UPDATE "agents" SET "use_case" = "d"."use_case" FROM (SELECT "id", nullif(btrim(substring("draft_source" from '(?m)^[ \t]+useCase:[ \t]*["'']?([^"''\r\n#]*)'), E' \t'), '') AS "use_case" FROM "agents" WHERE "latest_version_id" IS NULL) AS "d" WHERE "agents"."id" = "d"."id" AND char_length("d"."use_case") <= 200;--> statement-breakpoint
 CREATE INDEX "agents_tenant_created_idx" ON "agents" USING btree ("tenant_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "agents_tenant_use_case_idx" ON "agents" USING btree ("tenant_id","use_case" text_pattern_ops);

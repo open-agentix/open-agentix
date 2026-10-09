@@ -197,4 +197,16 @@ describe('runtime.harness (ADR 0009 section 10)', () => {
       expect(validateAgentSource(withFrontMatter(fm)).valid).toBe(false);
     }
   });
+
+  it('caps labels.useCase at 200 characters (it is stored, indexed and matched)', () => {
+    const withUseCase = (v: string) => withFrontMatter(`${MINIMAL_FM}\nlabels:\n  useCase: ${v}`);
+    expect(validateAgentSource(withUseCase('a'.repeat(200))).valid).toBe(true);
+    expect(errorsOf(withUseCase('a'.repeat(201)))).toEqual([
+      'useCase must be at most 200 characters',
+    ]);
+    expect(
+      validateAgentSource(withFrontMatter(`${MINIMAL_FM}\nlabels:\n  team: ${'x'.repeat(500)}`))
+        .valid,
+    ).toBe(true);
+  });
 });

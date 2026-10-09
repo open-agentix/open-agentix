@@ -87,3 +87,54 @@ describe(`migration ${TAG}`, () => {
     expect(rows).toHaveLength(0);
   });
 });
+
+describe(`migration ${TAG} with oversized use cases`, () => {
+  // Incompressible text above the btree entry limit (~2.7 kB): indexing it would abort the migration.
+  const huge = Array.from({ length: 300 }, () => randomUUID().replaceAll('-', '')).join('');
+  let db: PGlite;
+  const ids = { published: randomUUID(), draftOnly: randomUUID(), fine: randomUUID() };
+
+  beforeAll(async () => {
+    db = new PGlite();
+    for (const { tag } of journal.entries.filter((e) => e.tag < TAG)) await applyMigration(db, tag);
+    const insertAgent = (id: string, name: string, source: string) =>
+      db.query(`insert into agents (id, tenant_id, name, draft_source) values ($1, $2, $3, $4)`, [
+        id,
+        DEFAULT_TENANT_ID,
+        name,
+        source,
+      ]);
+    await insertAgent(ids.published, 'huge-published', draft('huge-published', ''));
+    const versionId = randomUUID();
+    await db.query(
+      `insert into agent_versions (id, agent_id, version, digest, source, definition) values ($1, $2, '1.0.0', 'd', 's', $3)`,
+      [versionId, ids.published, JSON.stringify({ labels: { useCase: huge } })],
+    );
+    await db.query(`update agents set latest_version_id = $1 where id = $2`, [
+      versionId,
+      ids.published,
+    ]);
+    await insertAgent(
+      ids.draftOnly,
+      'huge-draft',
+      draft('huge-draft', `labels:\n  useCase: ${huge}`),
+    );
+    await insertAgent(
+      ids.fine,
+      'tab-draft',
+      draft('tab-draft', 'labels:\n  useCase:\tsupport/billing\t# trailing tab'),
+    );
+    await applyMigration(db, TAG);
+  });
+  afterAll(async () => db.close());
+
+  const useCaseOf = async (id: string) =>
+    (await db.query<{ use_case: string | null }>(`select use_case from agents where id = $1`, [id]))
+      .rows[0]!.use_case;
+
+  it('leaves use cases longer than the label limit empty instead of failing on the index', async () => {
+    expect(await useCaseOf(ids.published)).toBeNull();
+    expect(await useCaseOf(ids.draftOnly)).toBeNull();
+    expect(await useCaseOf(ids.fine)).toBe('support/billing');
+  });
+});

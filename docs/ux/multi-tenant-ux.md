@@ -73,7 +73,12 @@ current on create, draft update before the first publish, and publish) and the i
 `agents_tenant_created_idx` and `agents_tenant_use_case_idx`; its down script is
 `apps/api/drizzle/down/0015_agent_summary_fields.down.sql`. The backfill of never published agents
 reads `useCase:` from the draft text with a regular expression, so an exotic YAML layout may leave it
-empty until the next draft save.
+empty until the next draft save. `labels.useCase` is limited to 200 characters (`MAX_USE_CASE_LENGTH`, the same
+length `PUT /v1/budgets/use-cases/{useCase}` accepts), because a btree entry above about 2.7 kB is an
+error in PostgreSQL; the backfill leaves longer legacy values empty instead of aborting.
+The migration runs inside drizzle's migration transaction, so the two indexes are built without
+`CONCURRENTLY`: the `ALTER TABLE` lock on `agents` (one row per agent, not per run) is held until
+the backfill and both index builds commit, which is short at realistic sizes.
 
 Known gaps:
 

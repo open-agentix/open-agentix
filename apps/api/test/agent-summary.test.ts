@@ -216,6 +216,26 @@ describe('agent summary fields', () => {
     expect(await names(alice, '?useCase=invoicing-2')).toEqual(['uc-agent']);
   });
 
+  it('rejects an oversized use case with 400 instead of failing on the index (500)', async () => {
+    // Incompressible text: a btree index entry above ~2.7 kB is an error in PostgreSQL.
+    const huge = Array.from({ length: 300 }, () => randomUUID().replaceAll('-', '')).join('');
+    const res = await as(alice)({
+      method: 'POST',
+      url: '/v1/agents',
+      payload: { source: agentSource('huge-uc-agent', 'team-security', '1.0.0', labels(huge)) },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('useCase must be at most 200 characters');
+    const ok = await createAgent(alice, 'long-uc-agent', 'team-security', labels('u'.repeat(200)));
+    const res2 = await as(alice)({
+      method: 'PUT',
+      url: `/v1/agents/${ok.id}/draft`,
+      payload: { source: agentSource('long-uc-agent', 'team-security', '1.0.0', labels(huge)) },
+    });
+    expect(res2.statusCode).toBe(400);
+    expect((await get(alice, `/v1/agents/${ok.id}`)).useCase).toBe('u'.repeat(200));
+  });
+
   it('shows the latest run the caller may read, the newest first', async () => {
     const a = await createAgent(alice, 'run-agent', 'team-security');
     await publish(alice, a.id);
