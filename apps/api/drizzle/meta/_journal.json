@@ -78,6 +78,13 @@
       "when": 1791579533367,
       "tag": "0016_agent_disable",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791600000000,
+      "tag": "0017_approvals_tenant_status_idx",
+      "breakpoints": true
     }
   ]
 }
