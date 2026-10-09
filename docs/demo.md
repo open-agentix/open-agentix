@@ -52,6 +52,35 @@ mode neither the tour nor its menu entry exist).
   last step are plain `<a>` elements; the offline check allows `github.com` and `openagentix.si`
   for them only.
 
+## Demo data: tenant tree and stable ids
+
+The seed (`apps/api/src/demo/seed.ts`) builds a small tenant tree (ADR 0013, UX proposal in
+[ux/multi-tenant-ux.md](ux/multi-tenant-ux.md) section 12), all fictional on `example.org`:
+
+```text
+Example Org (demo)   root (slug default), cap 300 USD     release-watch
+├── Security (demo)  slug security, cap 120 USD           cve-triage, ticket-updater, hardening-review
+└── Platform (demo)  slug platform                        feature-builder
+Acme Labs (demo)     separate organisation (acme-labs)    log-summary
+```
+
+The three fixed scenarios run `cve-triage` and so live in `security`, where the pending approval is
+too. Sign-in users (`admin@`, `engineer@`, `operator@`, `auditor@`, `integrator@example.org`) belong
+to `security`, `contractor@` to `platform` (agent-scoped to `feature-builder`), `viewer@` to
+`acme-labs`. The seed creates sub-tenants through `TenantsService.createChild` (service layer; the
+HTTP API has no child creation yet).
+
+**Known gap (until W13-2/W13-6):** roles do not yet apply across the tree, so a user only sees the
+agents of their own node, and the console has no tenant switcher (platform operators use the
+`X-OAX-Tenant` header). Budget caps of parent nodes are stored but not enforced. The default tenant
+keeps its technical slug `default`.
+
+**Deterministic ids.** Tenants (except the migrated root), agents and the seeded runs get UUIDv5 ids
+derived from fixed names (`apps/api/src/demo/ids.ts`, namespace constant never to change), so links
+to a demo agent or run keep working after the nightly database reset (for example
+`demoId('run', 'cve-triage:CVE-2024-3094')`). Runs started by visitors, steps, events and users keep
+random ids. The seed stays idempotent: it does nothing when agents already exist.
+
 ## Scenarios
 
 `GET /v1/demo/scenarios` lists them with the limits; `POST /v1/demo/scenarios/{id}/run` (no body)

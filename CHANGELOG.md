@@ -22,6 +22,14 @@ All notable changes to this project are documented here. The format follows
   `labels.useCase` is now limited to 200 characters (the length use case budgets already accept):
   a longer label is a validation error instead of an internal error on the new index; the backfill
   leaves such legacy values empty.
+- **Demo seed as a tenant tree with stable ids (A8, #162)**: the demo data set now has the root
+  "Example Org (demo)" with the sub-tenants `security` (cve-triage, ticket-updater, hardening-review,
+  the three scenarios and the pending approval) and `platform` (feature-builder), plus the separate
+  organisation `acme-labs`. Tenants, agents and seeded runs get deterministic UUIDv5 ids, so links
+  survive the nightly reset (`TenantsService.create/createChild`, `AgentsService.create`,
+  `RunsService.enqueue` and `IngestService.ingestEvent` accept an optional fixed id; behaviour is
+  unchanged without it). **Demo behaviour change:** the sign-in users now live in `security`,
+  `contractor@` in `platform`. Docs: `docs/demo.md`.
 - **UI: tenancy context and mobile card rows (UX slices U1, U2 of `docs/ux/multi-tenant-ux.md`)**:
   new `tenancy.*` i18n namespace (EN and DE) for the tenant glossary; the active tenant from
   `GET /v1/me` is shown as a tile plus name in the top bar (phones) and the sidebar header

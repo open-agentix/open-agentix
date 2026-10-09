@@ -127,7 +127,12 @@ export class AgentsService {
     return { ...result, valid: false, definition: null, errors: [...result.errors, ...errors] };
   }
 
-  async create(principal: Principal, source: string): Promise<AgentRow> {
+  /** `opts.id` fixes the agent id (deterministic demo seed); random when omitted. */
+  async create(
+    principal: Principal,
+    source: string,
+    opts: { id?: string } = {},
+  ): Promise<AgentRow> {
     const def = loadAgentDefinition(source);
     const teamId = await this.teamIdForOwner(principal.tenantId, def.owner);
     if (!hasPermission(principal, 'agents:write', teamId))
@@ -140,7 +145,7 @@ export class AgentsService {
     const [row] = await this.ctx.db
       .insert(agents)
       .values({
-        id: randomUUID(),
+        id: opts.id ?? randomUUID(),
         tenantId: principal.tenantId,
         name: def.name,
         teamId,

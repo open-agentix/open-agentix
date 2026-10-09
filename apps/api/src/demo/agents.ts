@@ -165,7 +165,7 @@ kind: Agent
 name: feature-builder
 version: 0.3.0
 description: Dark software factory demo - turns a small feature ticket into a pull request summary.
-owner: team-security
+owner: team-platform
 classification: internal
 mode: dark-factory
 guidelines: [secure-coding@1.0.0]
@@ -243,7 +243,7 @@ kind: Agent
 name: release-watch
 version: 1.0.0
 description: Change-gated schedule - runs only when the watched release feed changes.
-owner: team-security
+owner: team-operations
 classification: internal
 labels:
   useCase: vulnerability-management

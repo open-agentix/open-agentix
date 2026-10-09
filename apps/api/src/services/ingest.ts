@@ -313,6 +313,7 @@ export class IngestService {
     source: Pick<SourceRow, 'id' | 'name' | 'agentId' | 'tenantId'>,
     event: OaxEvent,
     triggeredBy: string,
+    opts: { runId?: string } = {},
   ): Promise<IngestResult> {
     const eventId = randomUUID();
     await this.ctx.db.insert(events).values({
@@ -328,7 +329,13 @@ export class IngestService {
     let runId: string | null = null;
     if (source.agentId) {
       const latest = await this.runs
-        .enqueue({ agentId: source.agentId, event, eventRowId: eventId, triggeredBy })
+        .enqueue({
+          agentId: source.agentId,
+          event,
+          eventRowId: eventId,
+          triggeredBy,
+          ...(opts.runId ? { id: opts.runId } : {}),
+        })
         .catch((e: unknown) => {
           if (e instanceof HttpError && e.code === 'invalid_state') return null;
           throw e;
