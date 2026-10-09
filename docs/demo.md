@@ -66,6 +66,10 @@ ingress), runs per day for the whole demo (100), and `429` with `Retry-After` wh
 > **Planned:** a real read-only agent that answers visitor questions from the public repository
 > (design: [demo-repo-agent.md](demo-repo-agent.md), plan item W11-1). Not implemented yet; until it
 > ships, nothing a visitor types reaches a model.
+>
+> **Concept:** a separate showcase installation where six real agents work on the project's own
+> repositories, each in its own tenant, with a read-only guest view of runs, costs and audit
+> ([showcase-agents.md](showcase-agents.md)).
 
 ## Optional: live Claude Code runs (`OAX_DEMO_LLM=claude-code`)
 
