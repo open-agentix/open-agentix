@@ -111,7 +111,10 @@ export function entryMatches(e: AllowEntry, host: string, port: number | null = 
  */
 export function entryCoveredBy(entry: AllowEntry, allow: readonly AllowEntry[]): boolean {
   if (entry.kind === 'host' && isLoopback(entry.host)) return true;
-  if (entry.kind === 'suffix' && (entry.suffix === 'localhost' || entry.suffix.endsWith('.localhost')))
+  if (
+    entry.kind === 'suffix' &&
+    (entry.suffix === 'localhost' || entry.suffix.endsWith('.localhost'))
+  )
     return true;
   for (const a of allow) {
     if (a.port !== null && a.port !== entry.port) continue;

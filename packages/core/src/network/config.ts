@@ -46,7 +46,10 @@ const ProxySchema = z.strictObject({
 
 const BundleSchema = z.strictObject({
   name: Name,
-  file: z.string().regex(/^\/[^\0]+$/, 'must be an absolute path').optional(),
+  file: z
+    .string()
+    .regex(/^\/[^\0]+$/, 'must be an absolute path')
+    .optional(),
   secret: SecretRef.optional(),
 });
 
@@ -114,7 +117,9 @@ export function scanForbiddenKeys(value: unknown, path = '', depth = 0): Network
 }
 
 /** Credential-free origin of a proxy URL. Returns an issue text when the URL is not acceptable. */
-function parseProxyUrl(raw: string): { scheme: 'http' | 'https'; host: string; port: number } | string {
+function parseProxyUrl(
+  raw: string,
+): { scheme: 'http' | 'https'; host: string; port: number } | string {
   let u: URL;
   try {
     u = new URL(raw);
@@ -126,18 +131,21 @@ function parseProxyUrl(raw: string): { scheme: 'http' | 'https'; host: string; p
     return 'must not contain credentials; put them in a secret and reference it with authSecret';
   if (u.search || u.hash || (u.pathname !== '/' && u.pathname !== ''))
     return 'must be a bare origin (scheme, host, optional port)';
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const host = u.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
   if (!host) return 'has no host';
   const scheme = u.protocol === 'https:' ? 'https' : 'http';
   return { scheme, host, port: u.port ? Number(u.port) : scheme === 'https' ? 443 : 80 };
 }
 
-export interface ValidationResult {
+export interface NetworkValidationResult {
   errors: NetworkIssue[];
   warnings: string[];
 }
 
-export interface ValidateOptions {
+export interface NetworkValidateOptions {
   /** Production profile: plain `http://` proxies are refused (owner decision, ADR 0011 question 5). */
   production?: boolean;
 }
@@ -145,8 +153,8 @@ export interface ValidateOptions {
 /** Cross-reference and policy checks that the structural schema cannot express. */
 export function validateNetworkConfig(
   cfg: NetworkConfig,
-  opts: ValidateOptions = {},
-): ValidationResult {
+  opts: NetworkValidateOptions = {},
+): NetworkValidationResult {
   const errors: NetworkIssue[] = [];
   const warnings: string[] = [];
   const err = (path: string, message: string) => errors.push({ path, message });
@@ -159,10 +167,22 @@ export function validateNetworkConfig(
       seen.add(n);
     });
   };
-  unique(cfg.proxies.map((p) => p.name), 'proxies');
-  unique(cfg.trust.bundles.map((b) => b.name), 'trust.bundles');
-  unique(cfg.clientCertificates.map((c) => c.name), 'clientCertificates');
-  unique(cfg.routes.map((r) => r.name), 'routes');
+  unique(
+    cfg.proxies.map((p) => p.name),
+    'proxies',
+  );
+  unique(
+    cfg.trust.bundles.map((b) => b.name),
+    'trust.bundles',
+  );
+  unique(
+    cfg.clientCertificates.map((c) => c.name),
+    'clientCertificates',
+  );
+  unique(
+    cfg.routes.map((r) => r.name),
+    'routes',
+  );
 
   const bundles = new Set(cfg.trust.bundles.map((b) => b.name));
   const certs = new Set(cfg.clientCertificates.map((c) => c.name));
@@ -173,7 +193,10 @@ export function validateNetworkConfig(
       err(`trust.bundles[${i}]`, 'set exactly one of "file" and "secret"');
   });
   if (cfg.trust.mode === 'extra-only' && cfg.trust.bundles.length === 0)
-    err('trust.mode', '"extra-only" needs at least one bundle (otherwise nothing would be trusted)');
+    err(
+      'trust.mode',
+      '"extra-only" needs at least one bundle (otherwise nothing would be trusted)',
+    );
 
   cfg.proxies.forEach((p, i) => {
     const at = `proxies[${i}]`;
@@ -215,7 +238,8 @@ export function validateNetworkConfig(
         err(`${at}.clientCertificate`, `unknown client certificate "${r.clientCertificate}"`);
       if (r.via === 'deny') err(`${at}.clientCertificate`, 'meaningless on a deny route');
     }
-    if (catchAllAt >= 0) warnings.push(`${at} is unreachable: routes[${catchAllAt}] matches everything`);
+    if (catchAllAt >= 0)
+      warnings.push(`${at} is unreachable: routes[${catchAllAt}] matches everything`);
     if (!r.match.purposes && patterns.some(isWildcardAll) && catchAllAt < 0) catchAllAt = i;
   });
 
@@ -231,7 +255,8 @@ export function validateNetworkConfig(
       const p = parseHostPattern(t);
       const ok =
         (p.kind === 'cidr' && p.bits > 0) || (p.kind === 'host' && parseIp(p.host) !== null);
-      if (!ok) err(`privateAllow[${i}]`, 'must be an IP or a CIDR range (never a wildcard or a name)');
+      if (!ok)
+        err(`privateAllow[${i}]`, 'must be an IP or a CIDR range (never a wildcard or a name)');
     } catch (e) {
       err(`privateAllow[${i}]`, (e as Error).message);
     }
@@ -247,7 +272,7 @@ function fail(code: string, issues: NetworkIssue[]): never {
 /** Validates a parsed document (JSON/YAML value). Throws `network_config_invalid`. */
 export function parseNetworkConfig(
   raw: unknown,
-  opts: ValidateOptions = {},
+  opts: NetworkValidateOptions = {},
 ): { config: NetworkConfig; warnings: string[] } {
   if (raw === null || raw === undefined) raw = {};
   const forbidden = scanForbiddenKeys(raw);
@@ -330,7 +355,10 @@ export function compileProxyUrl(
     return null;
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const host = u.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
   if (!host) return null;
   const scheme = u.protocol === 'https:' ? 'https' : 'http';
   const port = u.port ? Number(u.port) : scheme === 'https' ? 443 : 80;
@@ -385,13 +413,17 @@ export interface CompileOptions {
 }
 
 /** Compiles a validated configuration. Throws `network_config_invalid` for an invalid one. */
-export function compileNetwork(cfg: NetworkConfig, opts: CompileOptions & ValidateOptions = {}): CompiledNetwork {
+export function compileNetwork(
+  cfg: NetworkConfig,
+  opts: CompileOptions & NetworkValidateOptions = {},
+): CompiledNetwork {
   const { errors } = validateNetworkConfig(cfg, opts);
   if (errors.length) fail('network_config_invalid', errors);
   const proxies = new Map<string, CompiledProxy>();
   for (const p of cfg.proxies) {
     const parsed = parseProxyUrl(p.url);
-    if (typeof parsed === 'string') fail('network_config_invalid', [{ path: p.name, message: parsed }]);
+    if (typeof parsed === 'string')
+      fail('network_config_invalid', [{ path: p.name, message: parsed }]);
     const shown = parsed.host.includes(':') ? `[${parsed.host}]` : parsed.host;
     const isDefault = parsed.port === (parsed.scheme === 'https' ? 443 : 80);
     proxies.set(p.name, {
@@ -451,7 +483,7 @@ export interface NetworkSettings {
   testEnabled: boolean;
 }
 
-export interface LoadNetworkOptions extends ValidateOptions {
+export interface LoadNetworkOptions extends NetworkValidateOptions {
   /** Injectable for tests; defaults to a size-limited `readFileSync`. */
   readFile?: (path: string) => string;
   egress?: CompiledNetwork['egress'];
@@ -547,7 +579,9 @@ export function checkNetworkAirgap(net: CompiledNetwork, policy: EgressPolicy): 
     if (r.via === 'deny') continue;
     for (const pat of r.patterns) {
       if (isWildcardAll(pat)) {
-        problems.push(`route "${r.name}": "${pat.raw}" matches every destination, refused in air-gapped mode`);
+        problems.push(
+          `route "${r.name}": "${pat.raw}" matches every destination, refused in air-gapped mode`,
+        );
       } else if (pat.kind !== 'any' && !policy.covers(pat)) {
         problems.push(`route "${r.name}": "${pat.raw}" is not covered by OAX_AIRGAPPED_ALLOW`);
       }

@@ -130,7 +130,10 @@ export function matchesAny(patterns: readonly HostPattern[], target: NormalizedT
 export function parseNoProxy(raw: string | undefined): HostPattern[] {
   const out: HostPattern[] = [];
   for (const piece of (raw ?? '').split(/[,\s]+/)) {
-    const token = piece.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+    const token = piece
+      .trim()
+      .toLowerCase()
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
     if (!token) continue;
     let p: HostPattern;
     try {

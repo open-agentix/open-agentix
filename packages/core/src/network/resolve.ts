@@ -132,14 +132,20 @@ export function resolveRoute(
       ca,
       code,
       reasons,
-      ...(target ? { target: { scheme: target.scheme, host: target.host, port: target.port } } : {}),
+      ...(target
+        ? { target: { scheme: target.scheme, host: target.host, port: target.port } }
+        : {}),
     };
   };
 
   if (!isPurpose(purpose)) return deny('invalid_purpose', 'unknown purpose', 'default');
   const target = normalizeTarget(url);
   if (!target)
-    return deny('invalid_target', 'destination is not a valid http(s)/ws(s)/ldap(s) URL', 'default');
+    return deny(
+      'invalid_target',
+      'destination is not a valid http(s)/ws(s)/ldap(s) URL',
+      'default',
+    );
   const origin = scope.origin ?? 'platform';
   const where = `${target.host}:${target.port}`;
 
@@ -148,19 +154,40 @@ export function resolveRoute(
     return deny('metadata_destination', `${where} is a cloud metadata address`, 'default', target);
 
   const privateOk = matchesAny(net.privateAllow, target);
-  const loopback = isLocalName(target.host) || (target.ip && classifyAddress(target.ip) === 'loopback');
+  const loopback =
+    isLocalName(target.host) || (target.ip && classifyAddress(target.ip) === 'loopback');
 
   // 2. Tenant-supplied destinations must be public by name (the address check is the dispatcher's).
   if (origin === 'tenant' && !privateOk) {
     if (isLocalName(target.host) || target.host === 'localhost')
-      return deny('destination_not_public', `${where}: local names are not allowed for tenant destinations`, 'default', target);
+      return deny(
+        'destination_not_public',
+        `${where}: local names are not allowed for tenant destinations`,
+        'default',
+        target,
+      );
     if (target.ip && classifyAddress(target.ip) !== 'public')
-      return deny('destination_not_public', `${where}: a non-public address is not allowed for tenant destinations`, 'default', target);
+      return deny(
+        'destination_not_public',
+        `${where}: a non-public address is not allowed for tenant destinations`,
+        'default',
+        target,
+      );
   }
 
   // 3. No plain http for traffic that carries keys or tenant data (outside loopback/private-allow).
-  if ((target.scheme === 'http' || target.scheme === 'ws') && TLS_ONLY_PURPOSES.has(purpose) && !loopback && !privateOk)
-    return deny('plain_http_refused', `${purpose} traffic to ${where} must use TLS`, 'default', target);
+  if (
+    (target.scheme === 'http' || target.scheme === 'ws') &&
+    TLS_ONLY_PURPOSES.has(purpose) &&
+    !loopback &&
+    !privateOk
+  )
+    return deny(
+      'plain_http_refused',
+      `${purpose} traffic to ${where} must use TLS`,
+      'default',
+      target,
+    );
 
   // First matching route (also used for the client certificate and for the deny veto).
   const route: CompiledRoute | undefined = net.routes.find(
@@ -171,25 +198,44 @@ export function resolveRoute(
 
   const certName = scope.clientCertificate ?? route?.clientCertificate;
   if (certName !== undefined && !net.clientCertificates.has(certName))
-    return deny('client_certificate_unknown', `client certificate "${certName}" is not configured`, route?.name ?? 'default', target);
+    return deny(
+      'client_certificate_unknown',
+      `client certificate "${certName}" is not configured`,
+      route?.name ?? 'default',
+      target,
+    );
 
-  const finish = (
-    proxy: CompiledProxy | null,
-    routeName: string,
-    why: string,
-  ): RouteResolution => {
+  const finish = (proxy: CompiledProxy | null, routeName: string, why: string): RouteResolution => {
     reasons.push(why);
     if (proxy) {
-      if (proxy.maxClassification && scope.classification &&
-          classificationRank(scope.classification) > classificationRank(proxy.maxClassification))
-        return deny('classification_exceeds_route', `${scope.classification} data may not pass proxy "${proxy.name}" (max ${proxy.maxClassification})`, routeName, target);
+      if (
+        proxy.maxClassification &&
+        scope.classification &&
+        classificationRank(scope.classification) > classificationRank(proxy.maxClassification)
+      )
+        return deny(
+          'classification_exceeds_route',
+          `${scope.classification} data may not pass proxy "${proxy.name}" (max ${proxy.maxClassification})`,
+          routeName,
+          target,
+        );
     }
     const eg = net.egress;
     if (eg?.airgapped) {
       if (!eg.isAllowed(target.host, target.port))
-        return deny('egress_denied', `air-gapped: ${where} is not on the allowlist`, routeName, target);
+        return deny(
+          'egress_denied',
+          `air-gapped: ${where} is not on the allowlist`,
+          routeName,
+          target,
+        );
       if (proxy && !eg.isAllowed(proxy.host, proxy.port))
-        return deny('proxy_not_allowlisted', `air-gapped: proxy "${proxy.name}" host is not on the allowlist`, routeName, target);
+        return deny(
+          'proxy_not_allowlisted',
+          `air-gapped: proxy "${proxy.name}" host is not on the allowlist`,
+          routeName,
+          target,
+        );
     }
     return {
       decision: proxy ? 'proxy' : 'direct',
@@ -203,30 +249,71 @@ export function resolveRoute(
     };
   };
 
+  // Loopback is never sent to a proxy (a proxy cannot reach it and would only see local traffic)
+  // unless the connection explicitly asks for one.
+  if (loopback && scope.proxy === undefined && scope.proxyUrl === undefined)
+    return finish(null, 'loopback', 'loopback destinations are always direct');
+
   // 4. The connection's explicit selection.
   if (scope.proxy !== undefined) {
     if (scope.proxy === 'direct') {
       if (origin === 'tenant' && !net.tenantDirect)
-        return deny('proxy_not_selectable', 'direct access is not enabled for tenants', 'connection:direct', target);
+        return deny(
+          'proxy_not_selectable',
+          'direct access is not enabled for tenants',
+          'connection:direct',
+          target,
+        );
       return finish(null, 'connection:direct', 'connection selected direct');
     }
     const p = net.proxies.get(scope.proxy);
-    if (!p) return deny('proxy_unknown', `proxy "${scope.proxy}" is not configured`, 'connection', target);
+    if (!p)
+      return deny(
+        'proxy_unknown',
+        `proxy "${scope.proxy}" is not configured`,
+        'connection',
+        target,
+      );
     if (origin === 'tenant' && !net.tenantSelectable.has(p.name))
-      return deny('proxy_not_selectable', `proxy "${p.name}" is not selectable by tenants`, `connection:${p.name}`, target);
+      return deny(
+        'proxy_not_selectable',
+        `proxy "${p.name}" is not selectable by tenants`,
+        `connection:${p.name}`,
+        target,
+      );
     if (origin === 'tenant' && scope.proxyUrl !== undefined && !scope.proxyUrlGrandfathered)
-      return deny('proxy_url_not_allowed', 'a tenant connection must not carry a proxyUrl', `connection:${p.name}`, target);
+      return deny(
+        'proxy_url_not_allowed',
+        'a tenant connection must not carry a proxyUrl',
+        `connection:${p.name}`,
+        target,
+      );
     return finish(p, `connection:${p.name}`, `connection selected proxy "${p.name}"`);
   }
 
   // 5. Legacy per-connection proxyUrl (NO_PROXY still applies).
   if (scope.proxyUrl !== undefined) {
     if (origin === 'tenant' && !scope.proxyUrlGrandfathered)
-      return deny('proxy_url_not_allowed', 'a tenant connection must not set proxyUrl; select a named proxy with network.proxy', 'legacy-proxyUrl', target);
+      return deny(
+        'proxy_url_not_allowed',
+        'a tenant connection must not set proxyUrl; select a named proxy with network.proxy',
+        'legacy-proxyUrl',
+        target,
+      );
     if (matchesAny(net.legacy.noProxy, target))
-      return finish(null, 'legacy-proxyUrl', 'NO_PROXY matches, the connection proxyUrl is bypassed');
+      return finish(
+        null,
+        'legacy-proxyUrl',
+        'NO_PROXY matches, the connection proxyUrl is bypassed',
+      );
     const p = compileLegacy(scope.proxyUrl);
-    if (!p) return deny('proxy_url_invalid', 'proxyUrl is not a valid http(s) proxy URL', 'legacy-proxyUrl', target);
+    if (!p)
+      return deny(
+        'proxy_url_invalid',
+        'proxyUrl is not a valid http(s) proxy URL',
+        'legacy-proxyUrl',
+        target,
+      );
     return finish(p, 'legacy-proxyUrl', 'legacy connection proxyUrl (deprecated)');
   }
 
@@ -234,14 +321,21 @@ export function resolveRoute(
   if (route) {
     if (route.via === 'direct') return finish(null, route.name, `route "${route.name}" is direct`);
     const p = net.proxies.get(route.via);
-    if (!p) return deny('proxy_unknown', `route "${route.name}" names an unknown proxy`, route.name, target);
+    if (!p)
+      return deny(
+        'proxy_unknown',
+        `route "${route.name}" names an unknown proxy`,
+        route.name,
+        target,
+      );
     return finish(p, route.name, `route "${route.name}" via proxy "${p.name}"`);
   }
 
   // 7. Legacy environment as the implicit last route.
-  const envProxy = target.scheme === 'https' || target.scheme === 'wss'
-    ? (net.legacy.httpsProxy ?? net.legacy.httpProxy)
-    : net.legacy.httpProxy;
+  const envProxy =
+    target.scheme === 'https' || target.scheme === 'wss'
+      ? (net.legacy.httpsProxy ?? net.legacy.httpProxy)
+      : net.legacy.httpProxy;
   if (envProxy) {
     if (matchesAny(net.legacy.noProxy, target))
       return finish(null, 'legacy-env', 'NO_PROXY matches');
