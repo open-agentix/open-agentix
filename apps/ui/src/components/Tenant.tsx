@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
+import { useSyncExternalStore } from 'react';
 import { meQuery } from '../auth/auth';
 import { useT } from '../i18n/i18n';
+import { activeTenant } from '../lib/activeTenant';
 import { tenantColorIndex, tenantInitials } from '../lib/tenant';
 
 export interface TenantRef {
@@ -10,12 +12,15 @@ export interface TenantRef {
 }
 
 /**
- * The acting tenant from `GET /v1/me`. Shown while the API reports it; once the installation mode
- * exists (issue #156) single-tenant installs can hide all tenant UI here, in one place.
+ * The acting tenant. `GET /v1/me` reports the tenant the API really used (it echoes
+ * `X-OAX-Tenant`); while that answer is pending after a switch the chosen tenant is shown, so the
+ * chip never shows the tenant the user just left.
  */
 export function useActiveTenant(): TenantRef | null {
   const { data } = useQuery(meQuery);
-  return data?.tenant ?? null;
+  const chosen = useSyncExternalStore(activeTenant.subscribe, activeTenant.snapshot);
+  if (data && (!chosen || data.tenant.id === chosen.id)) return data.tenant;
+  return chosen;
 }
 
 /** Coloured tile with two initials. Decorative: the tenant name is always rendered next to it. */
@@ -39,9 +44,12 @@ export function TenantTile({ tenant, small = false }: { tenant: TenantRef; small
 export function ScopeChip({
   tenant,
   compact = false,
+  path,
 }: {
   tenant?: TenantRef | null;
   compact?: boolean;
+  /** Slug path from the organisation root; shown as the tooltip (the name stays the label). */
+  path?: string | undefined;
 }) {
   const t = useT();
   const active = useActiveTenant();
@@ -55,7 +63,7 @@ export function ScopeChip({
       className={compact ? 'scope-chip scope-chip-compact' : 'scope-chip'}
       role="group"
       aria-label={label}
-      title={label}
+      title={path ? `${label} (${path})` : label}
     >
       <TenantTile tenant={value} small={compact} />
       {compact ? null : (
@@ -66,24 +74,6 @@ export function ScopeChip({
       <span className="scope-name" aria-hidden="true">
         {value.name}
       </span>
-    </span>
-  );
-}
-
-/** Active tenant in the shell (top bar on phones, sidebar header on desktop). */
-export function TenantBadge({ placement }: { placement: 'top' | 'side' }) {
-  const t = useT();
-  const tenant = useActiveTenant();
-  if (!tenant) return null;
-  return (
-    <span
-      className={`tenant-badge tenant-badge-${placement}`}
-      role="group"
-      aria-label={t('tenancy.active')}
-      title={`${t('tenancy.active')}: ${tenant.name}`}
-    >
-      <TenantTile tenant={tenant} />
-      <span className="tenant-name">{tenant.name}</span>
     </span>
   );
 }

@@ -4,7 +4,7 @@ import { api, call } from '../../api/client';
 import { connectionsQuery } from '../../api/queries';
 import type { Connection, ModelProposal } from '../../api/types';
 import { useCan } from '../../auth/auth';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { ConfirmTenantAction } from '../../components/ConfirmTenantAction';
 import { Icon } from '../../components/Icon';
 import { useToast } from '../../components/toast';
 import {
@@ -165,7 +165,7 @@ export function ConnectionsPage() {
         </ul>
       )}
       <ConnectionDialog editing={editing} onClose={() => setEditing(null)} />
-      <ConfirmDialog
+      <ConfirmTenantAction
         open={!!deleting}
         onClose={() => setDeleting(null)}
         title={t('connections.deleteTitle', { name: deleting?.name ?? '' })}
@@ -174,7 +174,7 @@ export function ConnectionsPage() {
         onConfirm={() => (deleting ? remove(deleting) : undefined)}
       >
         <p>{t('connections.deleteText')}</p>
-      </ConfirmDialog>
+      </ConfirmTenantAction>
     </div>
   );
 }

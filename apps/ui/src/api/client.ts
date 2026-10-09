@@ -1,5 +1,6 @@
 import createClient, { type Middleware } from 'openapi-fetch';
 import { session } from '../auth/session';
+import { activeTenant } from '../lib/activeTenant';
 import type { paths } from './schema';
 
 /** Base URL of the control node API; empty = same origin (dev server proxies /v1). */
@@ -35,17 +36,41 @@ export function toApiError(status: number, body: unknown): ApiError {
 
 export function authHeaders(): Record<string, string> {
   const token = session.token();
-  return token ? { authorization: `Bearer ${token}` } : {};
+  const tenant = activeTenant.header();
+  return {
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+    ...(token && tenant ? { 'x-oax-tenant': tenant } : {}),
+  };
 }
 
 const auth: Middleware = {
   onRequest({ request }) {
     const token = session.token();
-    if (token) request.headers.set('authorization', `Bearer ${token}`);
+    if (token) {
+      request.headers.set('authorization', `Bearer ${token}`);
+      // The acting tenant travels on every call; the API is the authority and refuses (404) a
+      // tenant the principal may not act in. Without a choice the header is removed, never left
+      // over from the caller.
+      const tenant = activeTenant.header();
+      if (tenant) request.headers.set('x-oax-tenant', tenant);
+      else request.headers.delete('x-oax-tenant');
+    }
     return request;
   },
-  onResponse({ response }) {
+  async onResponse({ request, response }) {
     if (response.status === 401 && session.token()) session.expire();
+    // A stale choice (tenant deleted, access removed): fall back to the home tenant.
+    const sent = request.headers.get('x-oax-tenant');
+    if (response.status === 404 && sent) {
+      try {
+        const body = (await response.clone().json()) as { message?: unknown };
+        // A late answer for a tenant the user already left must not undo the newer choice.
+        if (body.message === 'tenant not found' && activeTenant.header() === sent)
+          activeTenant.clear('stale');
+      } catch {
+        /* not the tenant refusal */
+      }
+    }
     return response;
   },
 };

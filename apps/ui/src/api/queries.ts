@@ -4,10 +4,44 @@ import type { CostGroupBy, RunStatus } from './types';
 
 const PAGE = 50;
 
+/**
+ * Tenants the principal may act in (`GET /v1/tenants`): every tenant for platform operators, the
+ * home tenant for everybody else. The tenant switcher is only shown for more than one.
+ */
+export const tenantsQuery = queryOptions({
+  queryKey: ['tenants'],
+  queryFn: () => call(api.GET('/v1/tenants')),
+  staleTime: 60_000,
+});
+
 export const agentsQuery = queryOptions({
   queryKey: ['agents'],
   queryFn: () => call(api.GET('/v1/agents', { params: { query: { limit: 200 } } })),
 });
+
+export type AgentStatus = 'draft' | 'published' | 'changed';
+
+export interface AgentFilters {
+  q?: string | undefined;
+  status?: AgentStatus | undefined;
+  teamId?: string | undefined;
+  useCase?: string | undefined;
+}
+
+/** Filtered agent list with keyset paging (`nextCursor`); filters are applied by the API. */
+export const agentsListQuery = (filters: AgentFilters) =>
+  infiniteQueryOptions({
+    queryKey: ['agents', 'list', filters],
+    queryFn: ({ pageParam, signal }) =>
+      call(
+        api.GET('/v1/agents', {
+          params: { query: { limit: PAGE, cursor: pageParam, ...clean(filters) } },
+          signal,
+        }),
+      ),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+  });
 
 export const agentQuery = (id: string) =>
   queryOptions({

@@ -58,6 +58,13 @@ export const adminUser: User = {
 
 const tenant = { id: tenantId, slug: 'acme', name: 'Acme' };
 
+export const tenantRow = {
+  ...tenant,
+  monthlyBudgetUsd: null,
+  secretRefs: [],
+  createdAt: new Date(Date.now() - 86_400_000 * 90).toISOString(),
+};
+
 export const meAdmin: Me = {
   user: adminUser,
   tenant,
@@ -133,12 +140,12 @@ export const agent: Agent = {
   draftUpdatedAt: iso(-3_600_000),
   createdAt: iso(-86_400_000),
   tenant: { ...tenant, slugPath: 'acme' },
-  useCase: null,
-  ownerTeam: null,
+  useCase: 'vulnerability-management',
+  ownerTeam: { id: ids.team, slug: 'team-security', name: 'Security' },
   status: 'changed',
-  lastRun: null,
-  monthSpendUsd: 0,
-  budget: null,
+  lastRun: { id: ids.run, status: 'failed', createdAt: iso(-3_600_000) },
+  monthSpendUsd: 41,
+  budget: { limitUsd: 50, spentUsd: 41, percentUsed: 82, source: 'team', sourceName: 'Security' },
   draftSource,
 };
 
@@ -150,6 +157,11 @@ export const draftOnlyAgent: Agent = {
   latestVersion: null,
   latestVersionId: null,
   teamId: null,
+  useCase: null,
+  ownerTeam: null,
+  lastRun: null,
+  monthSpendUsd: null,
+  budget: null,
   status: 'draft',
 };
 

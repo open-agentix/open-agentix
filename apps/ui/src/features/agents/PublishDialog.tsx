@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { api, call } from '../../api/client';
 import type { Agent } from '../../api/types';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { ConfirmTenantAction } from '../../components/ConfirmTenantAction';
 import { useToast } from '../../components/toast';
 import { Badge, Spinner } from '../../components/ui';
 import { useT } from '../../i18n/i18n';
@@ -36,7 +36,7 @@ export function PublishDialog({
     else toast.info(t('agents.publish.unchanged', { version: res.version.version }));
   };
   return (
-    <ConfirmDialog
+    <ConfirmTenantAction
       open={open}
       onClose={onClose}
       title={t('agents.publish.title', { name: agent.name })}
@@ -69,6 +69,6 @@ export function PublishDialog({
       ) : (
         <p className="muted">{t('agents.publish.first')}</p>
       )}
-    </ConfirmDialog>
+    </ConfirmTenantAction>
   );
 }

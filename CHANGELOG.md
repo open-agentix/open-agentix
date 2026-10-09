@@ -20,6 +20,35 @@ All notable changes to this project are documented here. The format follows
   (`{ id, displayName }`) and `disabledReason`. Migration `0016_agent_disable` (additive, down
   script included); `openapi.yaml` and the UI client types are regenerated, the buttons come with a
   later slice. See `docs/ux/multi-tenant-ux.md` section 1.2.2.
+- **UI: tenant switcher, breadcrumb and cross-tenant confirmations (UX slice U4)**: principals
+  that may act in more than one tenant (platform admins, as `GET /v1/tenants` reports) get a tenant
+  switcher in the top bar (phones, bottom sheet) and the sidebar header (desktop): an accessible
+  combobox popover with search by name or slug, the five most recent tenants (per user, in
+  `localStorage`), the current tenant marked, and full keyboard use (arrow keys, Home/End, Enter,
+  Escape, focus returns to the button, or to the page heading after a switch). The choice is the
+  acting tenant of every API call (`X-OAX-Tenant`, also for downloads and event streams), is kept per
+  browser tab (`sessionStorage`, never a token in `localStorage`), and a switch cancels in-flight
+  requests and drops every cached query, so no data of the previous tenant stays visible; it is
+  announced as "Switched to ..." and item pages (agent, run) return to their list. A stale choice
+  (the API answers 404 for the tenant) falls back to the home tenant with a message. With one
+  tenant the switcher and the breadcrumb are hidden and the static tile stays. A breadcrumb shows
+  the tenant path and the page, with an "Acting in ..." label and the tenant colour as a top
+  border outside the home tenant. The new `ConfirmTenantAction` wrapper names the target tenant in
+  the publish, revoke token, delete connection and cancel run confirmations. No API change; the
+  tenant tree (parent, path) arrives with the A2 to A4 slices. EN and DE keys under `tenancy.*`.
+- **UI: Agents list v2 (UX slice U3)**: the agents page shows name and version, a status badge
+  (Draft, Published, Changed, with an attention marker for a failed last run, a budget of 80 % or
+  more, or changes unpublished for over 7 days), the tenant chip, use case, owner team, the last run
+  (status and relative time, linking to the run) and the budget use as an accessible progress bar
+  with the tightest scope in its label. A filter bar (search, status, owner team, use case) and a
+  group-by option (none, use case, owner team; sticky headed groups, card groups on phones) keep
+  their state in the URL, so views are deep-linkable and back/forward work. Filters are applied by
+  the API (`teamId`, `useCase`, `status`, `q`), paging uses the keyset cursor ("Load more").
+  Permission-aware empty states separate "no agents match these filters" from "no agents visible to
+  you in this tenant"; loading skeletons replace the spinner; phones keep every field in the card
+  rows. The owner team now comes with the agent, so viewers no longer depend on `GET /v1/teams` for
+  the team name. Sorting is not part of this slice (the API has no `sort`). EN and DE keys under
+  `agents.*` and `tenancy.*`.
 - **API: agent summary fields and list filters (UX slice A1, #155)**: `GET /v1/agents`,
   `GET /v1/agents/{id}`, `POST /v1/agents` and `PUT /v1/agents/{id}/draft` return `tenant`
   (`id, slug, slugPath, name`), `useCase`, `ownerTeam` (`id, slug, name`, readable with
@@ -94,7 +123,7 @@ All notable changes to this project are documented here. The format follows
   time limits, a fixed test command without shell and with a scrubbed environment, process-group
   kill and a memory watchdog. The node computes the final patch itself
   (`{ patch, patchSha256, changedFiles, lastTestRun, fullSuitePassed, treeMatchesLastRun,
-  testedFinalTree }`, refused as a whole for
+testedFinalTree }`, refused as a whole for
   changes outside `src/` and `test/`, links, mode changes, binary files); `workspaceToolGrants()`
   gives the matching gate grants. Docs: `docs/workspace-tools.md`. Seed endpoint, image and output
   delivery are separate tasks (DOG-1, DOG-3c).
@@ -177,7 +206,7 @@ All notable changes to this project are documented here. The format follows
   allowlist for proxy hosts and routes). The configuration is file/Helm only; there is no write API.
   Dispatchers and client migration follow in W10-1-2 and later.
 - **Harness adapters through the model proxy (W1-3b-7, PLAT-04)**: `agents[].runtime.harness:
-  claude-code | opencode` runs a step in a run node with the harness as executor. The harness reaches
+claude-code | opencode` runs a step in a run node with the harness as executor. The harness reaches
   its model only through `/v1/model-proxy/anthropic|openai` with the step's model token and never
   holds a provider key or OAuth token. `POST /v1/worker/runs/{id}/model-token` accepts `harness` and
   answers with the pass-through surface. New `OAX_HARNESSES_ENABLED` (default empty, requires the model
