@@ -22,6 +22,7 @@ import {
 } from '../../components/ui';
 import { useI18n } from '../../i18n/i18n';
 import { useDebounced, useDocumentTitle } from '../../lib/hooks';
+import { rememberTenantPath } from '../tenancy/paths';
 import { AGENT_GROUPS, AGENT_STATUSES, type AgentGroupBy } from './filters';
 
 const route = getRouteApi('/_app/agents');
@@ -61,6 +62,10 @@ export function AgentsPage() {
   });
   const teams = useQuery(teamsQuery);
   const rows = useMemo(() => agents.data?.pages.flatMap((p) => p.items) ?? [], [agents.data]);
+  // The summaries carry the only tenant slug path the API reports today; the breadcrumb uses it.
+  useEffect(() => {
+    for (const a of rows) rememberTenantPath(a.tenant.id, a.tenant.slugPath);
+  }, [rows]);
 
   // Search text: local state for typing, debounced into the URL (replace); URL changes made by
   // back/forward flow back into the input.

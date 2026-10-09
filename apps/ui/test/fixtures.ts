@@ -58,6 +58,13 @@ export const adminUser: User = {
 
 const tenant = { id: tenantId, slug: 'acme', name: 'Acme' };
 
+export const tenantRow = {
+  ...tenant,
+  monthlyBudgetUsd: null,
+  secretRefs: [],
+  createdAt: new Date(Date.now() - 86_400_000 * 90).toISOString(),
+};
+
 export const meAdmin: Me = {
   user: adminUser,
   tenant,

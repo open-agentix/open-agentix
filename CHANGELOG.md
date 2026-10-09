@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **UI: tenant switcher, breadcrumb and cross-tenant confirmations (UX slice U4)**: principals
+  that may act in more than one tenant (platform admins, as `GET /v1/tenants` reports) get a tenant
+  switcher in the top bar (phones, bottom sheet) and the sidebar header (desktop): an accessible
+  combobox popover with search by name or slug, the five most recent tenants (per user, in
+  `localStorage`), the current tenant marked, and full keyboard use (arrow keys, Home/End, Enter,
+  Escape, focus returns to the button, or to the page heading after a switch). The choice is the
+  acting tenant of every API call (`X-OAX-Tenant`, also for downloads and event streams), is kept per
+  browser tab (`sessionStorage`, never a token in `localStorage`), and a switch cancels in-flight
+  requests and drops every cached query, so no data of the previous tenant stays visible; it is
+  announced as "Switched to ..." and item pages (agent, run) return to their list. A stale choice
+  (the API answers 404 for the tenant) falls back to the home tenant with a message. With one
+  tenant the switcher and the breadcrumb are hidden and the static tile stays. A breadcrumb shows
+  the tenant path and the page, with an "Acting in ..." label and the tenant colour as a top
+  border outside the home tenant. The new `ConfirmTenantAction` wrapper names the target tenant in
+  the publish, revoke token, delete connection and cancel run confirmations. No API change; the
+  tenant tree (parent, path) arrives with the A2 to A4 slices. EN and DE keys under `tenancy.*`.
 - **UI: Agents list v2 (UX slice U3)**: the agents page shows name and version, a status badge
   (Draft, Published, Changed, with an attention marker for a failed last run, a budget of 80 % or
   more, or changes unpublished for over 7 days), the tenant chip, use case, owner team, the last run
