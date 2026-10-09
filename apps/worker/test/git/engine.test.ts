@@ -210,6 +210,13 @@ describe('GitEngine read side', () => {
           /^(GIT_|LC_|LANG)/.test(n!),
         n,
       ).toBe(true);
+    // every call, the version check included, uses the fixed PATH (never the worker's own)
+    const argvCount = text.split('\n').filter((l) => l.startsWith('ARGV:')).length;
+    expect(argvCount).toBeGreaterThan(0);
+    expect(
+      text.split('\n').filter((l) => l === 'ENV:PATH=/usr/local/bin:/usr/bin:/bin'),
+    ).toHaveLength(argvCount);
+    expect(text).toContain('ARGV:--version');
     expect(text).toContain('ENV:GIT_CONFIG_NOSYSTEM=1');
     expect(text).toContain('ENV:GIT_TERMINAL_PROMPT=0');
     expect(text).toMatch(/core\.hooksPath=\/dev\/null/);

@@ -213,7 +213,13 @@ export class GitEngine {
 
   private async checkVersion(): Promise<void> {
     if (this.versionChecked) return;
-    const r = await this.run(['--version'], { cwd: tmpdir(), env: {}, maxStdout: 256 });
+    // Same PATH as every later call: an empty env would make spawn fall back to the worker's own
+    // PATH and possibly check another binary than the one that runs afterwards.
+    const r = await this.run(['--version'], {
+      cwd: tmpdir(),
+      env: { PATH: SAFE_PATH, LC_ALL: 'C' },
+      maxStdout: 256,
+    });
     const m = /git version (\d+\.\d+\.\d+)/.exec(r.stdout.toString('utf8'));
     const min = this.opts.minGitVersion ?? '2.39.5';
     if (!m || !versionAtLeast(m[1]!, min))
