@@ -6,6 +6,7 @@ export class Metrics {
   readonly httpDuration: Histogram<'method' | 'route' | 'status'>;
   readonly eventsIngested: Counter<'source' | 'outcome'>;
   readonly runsCreated: Counter<'trigger'>;
+  readonly runsRefused: Counter<'trigger' | 'reason'>;
   readonly runsFinished: Counter<'status'>;
   readonly policyDecisions: Counter<'effect'>;
   readonly queueDepth: Gauge<'status'>;
@@ -38,6 +39,12 @@ export class Metrics {
       name: `${prefix}runs_created_total`,
       help: 'Runs created',
       labelNames: ['trigger'],
+      registers: [this.registry],
+    });
+    this.runsRefused = new Counter({
+      name: `${prefix}runs_refused_total`,
+      help: 'Runs refused at admission (for example because the agent is disabled)',
+      labelNames: ['trigger', 'reason'],
       registers: [this.registry],
     });
     this.runsFinished = new Counter({

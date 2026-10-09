@@ -18,6 +18,20 @@ All notable changes to this project are documented here. The format follows
   Security tenant only, whatever tenant the caller acts in; `GET /v1/demo/scenarios` and the `202`
   answer of `POST /v1/demo/scenarios/{id}/run` carry that `tenant`, and the dashboard names it and
   offers a switch (or explains that the account cannot open it). `docs/demo.md` updated.
+- **API: disable and enable agents (UX slice A7, #161)**: `POST /v1/agents/{id}/disable` and
+  `/enable` (permission `agents:publish` on the agent, optional `reason` up to 500 characters with
+  control, invisible and bidi characters removed, idempotent,
+  audited as `agent.disabled` / `agent.enabled`). A disabled agent accepts no new runs: manual API
+  runs, webhook and mail-in ingest, event sources, cron triggers and demo scenarios are refused with
+  `409 agent_disabled` and a `run.refused` audit entry (the event is still stored; webhook senders
+  get `202` with `runId: null` and `reason: "agent_disabled"`), and the worker never claims its
+  queued runs; the check runs under a row lock, so no run can start after `disable` returned. Cron
+  triggers and cron event sources of a disabled agent are not scheduled (no change probe per tick).
+  Running runs finish unless cancelled; published versions stay immutable and visible. Agent
+  summaries gain `status: disabled` (also a `status` filter value), `disabledAt`, `disabledBy`
+  (`{ id, displayName }`) and `disabledReason`. Migration `0016_agent_disable` (additive, down
+  script included); `openapi.yaml` and the UI client types are regenerated, the buttons come with a
+  later slice. See `docs/ux/multi-tenant-ux.md` section 1.2.2.
 - **UI: tenant switcher, breadcrumb and cross-tenant confirmations (UX slice U4)**: principals
   that may act in more than one tenant (platform admins, as `GET /v1/tenants` reports) get a tenant
   switcher in the top bar (phones, bottom sheet) and the sidebar header (desktop): an accessible
@@ -56,7 +70,7 @@ All notable changes to this project are documented here. The format follows
   `teamId`, `useCase` (prefix per `/` segment), `status` and an extended `q` (name, description,
   use case) that narrow within the caller's visibility; paging is unchanged. The fields are
   additive; the `agents.use_case` column and two indexes arrive with migration
-  `0015_agent_summary_fields` (down script included). Gaps: no `disabled` status (#161), no `sort`,
+  `0015_agent_summary_fields` (down script included). Gaps: no `sort`,
   `changed` is a byte-wise comparison of draft and latest version. See `docs/ux/multi-tenant-ux.md`.
   `labels.useCase` is now limited to 200 characters (the length use case budgets already accept):
   a longer label is a validation error instead of an internal error on the new index; the backfill

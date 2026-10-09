@@ -5,10 +5,11 @@ import { agentVersions, agents } from '../db/schema.js';
  * Lifecycle status of an agent in the console:
  * - `draft`: never published,
  * - `published`: the draft is identical to the latest published version,
- * - `changed`: the draft differs from the latest published version.
- * A `disabled` status joins once agents can be disabled (UX slice A7).
+ * - `changed`: the draft differs from the latest published version,
+ * - `disabled`: switched off (UX slice A7); it wins over the three above, which only describe
+ *   enabled agents.
  */
-export const AGENT_STATUSES = ['draft', 'published', 'changed'] as const;
+export const AGENT_STATUSES = ['draft', 'published', 'changed', 'disabled'] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
 
 /** Separator of sub-use cases: `support/billing` is a child of `support` (ADR 0013 section 7.2). */
@@ -26,13 +27,16 @@ export function escapeLike(input: string): string {
  */
 export function statusFilter(status: AgentStatus): SQL {
   const hasVersion = isNotNull(agentVersions.id);
+  const enabled = isNull(agents.disabledAt);
   switch (status) {
     case 'draft':
-      return isNull(agents.latestVersionId);
+      return and(enabled, isNull(agents.latestVersionId))!;
     case 'published':
-      return and(hasVersion, eq(agentVersions.source, agents.draftSource))!;
+      return and(enabled, hasVersion, eq(agentVersions.source, agents.draftSource))!;
     case 'changed':
-      return and(hasVersion, ne(agentVersions.source, agents.draftSource))!;
+      return and(enabled, hasVersion, ne(agentVersions.source, agents.draftSource))!;
+    case 'disabled':
+      return isNotNull(agents.disabledAt);
   }
 }
 

@@ -67,6 +67,8 @@ export interface SourceInput {
 export interface IngestResult {
   eventId: string;
   runId: string | null;
+  /** Why no run was queued although an agent is bound: the event is stored all the same. */
+  reason: 'agent_disabled' | null;
   status: 'accepted';
 }
 
@@ -327,6 +329,7 @@ export class IngestService {
       receivedAt: this.ctx.now(),
     });
     let runId: string | null = null;
+    let reason: IngestResult['reason'] = null;
     if (source.agentId) {
       const latest = await this.runs
         .enqueue({
@@ -338,12 +341,17 @@ export class IngestService {
         })
         .catch((e: unknown) => {
           if (e instanceof HttpError && e.code === 'invalid_state') return null;
+          // Stored, audited by enqueue (run.refused); the sender gets no error to retry on.
+          if (e instanceof HttpError && e.code === 'agent_disabled') {
+            reason = 'agent_disabled';
+            return null;
+          }
           throw e;
         });
       runId = latest?.id ?? null;
     }
     this.ctx.metrics.eventsIngested.inc({ source: source.name, outcome: 'accepted' });
-    return { eventId, runId, status: 'accepted' };
+    return { eventId, runId, reason, status: 'accepted' };
   }
 
   async listEvents(

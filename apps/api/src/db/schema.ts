@@ -182,6 +182,13 @@ export const agents = pgTable(
      * published. Denormalised so that the agent list can filter and page by it (UX slice A1).
      */
     useCase: text('use_case'),
+    /**
+     * Set while the agent is disabled (UX slice A7): it accepts no new runs, its published versions
+     * stay immutable and visible. `disabledBy` is the user who switched it off.
+     */
+    disabledAt: ts('disabled_at'),
+    disabledBy: uuid('disabled_by'),
+    disabledReason: text('disabled_reason'),
     createdBy: uuid('created_by'),
     createdAt: created(),
   },
@@ -190,6 +197,7 @@ export const agents = pgTable(
     index('agents_tenant_created_idx').on(t.tenantId, t.createdAt.desc(), t.id.desc()),
     index('agents_tenant_use_case_idx').on(t.tenantId, t.useCase.op('text_pattern_ops')),
     uniqueIndex('agents_tenant_name_uq').on(t.tenantId, t.name),
+    check('agents_disabled_reason_len', sql`char_length(${t.disabledReason}) <= 500`),
   ],
 );
 

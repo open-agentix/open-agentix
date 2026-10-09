@@ -886,6 +886,7 @@ paths:
               - draft
               - published
               - changed
+              - disabled
           in: query
           name: status
           required: false
@@ -988,7 +989,35 @@ paths:
                             - draft
                             - published
                             - changed
-                          description: "draft: never published; published: draft equals latest version; changed: it differs"
+                            - disabled
+                          description: "draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)"
+                        disabledAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                          description: when the agent was disabled; null while it is enabled
+                        disabledBy:
+                          anyOf:
+                            - type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                displayName:
+                                  type: string
+                              required:
+                                - id
+                                - displayName
+                              additionalProperties: false
+                            - type: "null"
+                          description: user who disabled the agent; null while enabled or if that user no longer exists
+                        disabledReason:
+                          description: optional reason given when the agent was disabled (at most 500 characters)
+                          type:
+                            - string
+                            - "null"
                         lastRun:
                           anyOf:
                             - type: object
@@ -1063,6 +1092,9 @@ paths:
                         - useCase
                         - ownerTeam
                         - status
+                        - disabledAt
+                        - disabledBy
+                        - disabledReason
                         - lastRun
                         - monthSpendUsd
                         - budget
@@ -1197,7 +1229,35 @@ paths:
                       - draft
                       - published
                       - changed
-                    description: "draft: never published; published: draft equals latest version; changed: it differs"
+                      - disabled
+                    description: "draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)"
+                  disabledAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                    description: when the agent was disabled; null while it is enabled
+                  disabledBy:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          displayName:
+                            type: string
+                        required:
+                          - id
+                          - displayName
+                        additionalProperties: false
+                      - type: "null"
+                    description: user who disabled the agent; null while enabled or if that user no longer exists
+                  disabledReason:
+                    description: optional reason given when the agent was disabled (at most 500 characters)
+                    type:
+                      - string
+                      - "null"
                   lastRun:
                     anyOf:
                       - type: object
@@ -1274,6 +1334,9 @@ paths:
                   - useCase
                   - ownerTeam
                   - status
+                  - disabledAt
+                  - disabledBy
+                  - disabledReason
                   - lastRun
                   - monthSpendUsd
                   - budget
@@ -1526,7 +1589,35 @@ paths:
                       - draft
                       - published
                       - changed
-                    description: "draft: never published; published: draft equals latest version; changed: it differs"
+                      - disabled
+                    description: "draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)"
+                  disabledAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                    description: when the agent was disabled; null while it is enabled
+                  disabledBy:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          displayName:
+                            type: string
+                        required:
+                          - id
+                          - displayName
+                        additionalProperties: false
+                      - type: "null"
+                    description: user who disabled the agent; null while enabled or if that user no longer exists
+                  disabledReason:
+                    description: optional reason given when the agent was disabled (at most 500 characters)
+                    type:
+                      - string
+                      - "null"
                   lastRun:
                     anyOf:
                       - type: object
@@ -1603,6 +1694,9 @@ paths:
                   - useCase
                   - ownerTeam
                   - status
+                  - disabledAt
+                  - disabledBy
+                  - disabledReason
                   - lastRun
                   - monthSpendUsd
                   - budget
@@ -1745,7 +1839,35 @@ paths:
                       - draft
                       - published
                       - changed
-                    description: "draft: never published; published: draft equals latest version; changed: it differs"
+                      - disabled
+                    description: "draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)"
+                  disabledAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                    description: when the agent was disabled; null while it is enabled
+                  disabledBy:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          displayName:
+                            type: string
+                        required:
+                          - id
+                          - displayName
+                        additionalProperties: false
+                      - type: "null"
+                    description: user who disabled the agent; null while enabled or if that user no longer exists
+                  disabledReason:
+                    description: optional reason given when the agent was disabled (at most 500 characters)
+                    type:
+                      - string
+                      - "null"
                   lastRun:
                     anyOf:
                       - type: object
@@ -1822,6 +1944,9 @@ paths:
                   - useCase
                   - ownerTeam
                   - status
+                  - disabledAt
+                  - disabledBy
+                  - disabledReason
                   - lastRun
                   - monthSpendUsd
                   - budget
@@ -1970,6 +2095,556 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/agents/{id}/disable:
+    post:
+      summary: "Disable an agent: it accepts no new runs until it is enabled again"
+      tags:
+        - agents
+      description: "Needs agents:publish on the agent. New runs from the API, schedules, webhooks and event sources are refused with 409 agent_disabled (events are stored, the refusal is audited); queued runs wait and are not claimed; runs that already started finish unless they are cancelled. Published versions stay immutable and readable. Idempotent: disabling a disabled agent returns 200 with the unchanged state."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  description: free text for the audit log, at most 500 characters
+                  type: string
+                  maxLength: 500
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  name:
+                    type: string
+                  teamId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  description:
+                    type:
+                      - string
+                      - "null"
+                  latestVersion:
+                    type:
+                      - string
+                      - "null"
+                  latestVersionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  draftUpdatedAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  tenant:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
+                    description: tenant the agent belongs to (always the tenant the request acts in)
+                  useCase:
+                    description: labels.useCase of the latest published version, of the draft while unpublished
+                    type:
+                      - string
+                      - "null"
+                  ownerTeam:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          slug:
+                            type: string
+                          name:
+                            type: string
+                        required:
+                          - id
+                          - slug
+                          - name
+                        additionalProperties: false
+                      - type: "null"
+                    description: owner team; readable with agents:read, like GET /v1/teams
+                  status:
+                    type: string
+                    enum:
+                      - draft
+                      - published
+                      - changed
+                      - disabled
+                    description: "draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)"
+                  disabledAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                    description: when the agent was disabled; null while it is enabled
+                  disabledBy:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          displayName:
+                            type: string
+                        required:
+                          - id
+                          - displayName
+                        additionalProperties: false
+                      - type: "null"
+                    description: user who disabled the agent; null while enabled or if that user no longer exists
+                  disabledReason:
+                    description: optional reason given when the agent was disabled (at most 500 characters)
+                    type:
+                      - string
+                      - "null"
+                  lastRun:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          status:
+                            type: string
+                            enum:
+                              - queued
+                              - running
+                              - awaiting_approval
+                              - succeeded
+                              - failed
+                              - cancelled
+                              - blocked_by_policy
+                          createdAt:
+                            type: string
+                            description: ISO 8601 timestamp
+                        required:
+                          - id
+                          - status
+                          - createdAt
+                        additionalProperties: false
+                      - type: "null"
+                    description: latest run of the agent the caller may read (runs:read); null if none or no access
+                  monthSpendUsd:
+                    description: spend of this agent in the current UTC month; null without costs:read
+                    type:
+                      - number
+                      - "null"
+                  budget:
+                    anyOf:
+                      - type: object
+                        properties:
+                          limitUsd:
+                            type: number
+                          spentUsd:
+                            type: number
+                            description: spend of the whole budget scope this month, not of the agent
+                          percentUsed:
+                            type: number
+                          source:
+                            type: string
+                            enum:
+                              - tenant
+                              - use_case
+                              - team
+                          sourceName:
+                            type: string
+                        required:
+                          - limitUsd
+                          - spentUsd
+                          - percentUsed
+                          - source
+                          - sourceName
+                        additionalProperties: false
+                      - type: "null"
+                    description: monthly budget closest to its limit among the scopes that apply; null without costs:read or limit
+                  draftSource:
+                    type: string
+                required:
+                  - id
+                  - name
+                  - teamId
+                  - description
+                  - latestVersion
+                  - latestVersionId
+                  - draftUpdatedAt
+                  - createdAt
+                  - tenant
+                  - useCase
+                  - ownerTeam
+                  - status
+                  - disabledAt
+                  - disabledBy
+                  - disabledReason
+                  - lastRun
+                  - monthSpendUsd
+                  - budget
+                  - draftSource
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/agents/{id}/enable:
+    post:
+      summary: Enable a disabled agent again
+      tags:
+        - agents
+      description: "Needs agents:publish on the agent. Runs, schedules and triggers work again; queued runs are claimed. Idempotent: enabling an enabled agent returns 200."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  description: free text for the audit log, at most 500 characters
+                  type: string
+                  maxLength: 500
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  name:
+                    type: string
+                  teamId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  description:
+                    type:
+                      - string
+                      - "null"
+                  latestVersion:
+                    type:
+                      - string
+                      - "null"
+                  latestVersionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  draftUpdatedAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  tenant:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
+                    description: tenant the agent belongs to (always the tenant the request acts in)
+                  useCase:
+                    description: labels.useCase of the latest published version, of the draft while unpublished
+                    type:
+                      - string
+                      - "null"
+                  ownerTeam:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          slug:
+                            type: string
+                          name:
+                            type: string
+                        required:
+                          - id
+                          - slug
+                          - name
+                        additionalProperties: false
+                      - type: "null"
+                    description: owner team; readable with agents:read, like GET /v1/teams
+                  status:
+                    type: string
+                    enum:
+                      - draft
+                      - published
+                      - changed
+                      - disabled
+                    description: "draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)"
+                  disabledAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                    description: when the agent was disabled; null while it is enabled
+                  disabledBy:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          displayName:
+                            type: string
+                        required:
+                          - id
+                          - displayName
+                        additionalProperties: false
+                      - type: "null"
+                    description: user who disabled the agent; null while enabled or if that user no longer exists
+                  disabledReason:
+                    description: optional reason given when the agent was disabled (at most 500 characters)
+                    type:
+                      - string
+                      - "null"
+                  lastRun:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          status:
+                            type: string
+                            enum:
+                              - queued
+                              - running
+                              - awaiting_approval
+                              - succeeded
+                              - failed
+                              - cancelled
+                              - blocked_by_policy
+                          createdAt:
+                            type: string
+                            description: ISO 8601 timestamp
+                        required:
+                          - id
+                          - status
+                          - createdAt
+                        additionalProperties: false
+                      - type: "null"
+                    description: latest run of the agent the caller may read (runs:read); null if none or no access
+                  monthSpendUsd:
+                    description: spend of this agent in the current UTC month; null without costs:read
+                    type:
+                      - number
+                      - "null"
+                  budget:
+                    anyOf:
+                      - type: object
+                        properties:
+                          limitUsd:
+                            type: number
+                          spentUsd:
+                            type: number
+                            description: spend of the whole budget scope this month, not of the agent
+                          percentUsed:
+                            type: number
+                          source:
+                            type: string
+                            enum:
+                              - tenant
+                              - use_case
+                              - team
+                          sourceName:
+                            type: string
+                        required:
+                          - limitUsd
+                          - spentUsd
+                          - percentUsed
+                          - source
+                          - sourceName
+                        additionalProperties: false
+                      - type: "null"
+                    description: monthly budget closest to its limit among the scopes that apply; null without costs:read or limit
+                  draftSource:
+                    type: string
+                required:
+                  - id
+                  - name
+                  - teamId
+                  - description
+                  - latestVersion
+                  - latestVersionId
+                  - draftUpdatedAt
+                  - createdAt
+                  - tenant
+                  - useCase
+                  - ownerTeam
+                  - status
+                  - disabledAt
+                  - disabledBy
+                  - disabledReason
+                  - lastRun
+                  - monthSpendUsd
+                  - budget
+                  - draftSource
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
           description: Default Response
           content:
             application/json:
@@ -9838,6 +10513,13 @@ paths:
                         format: uuid
                         pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                       - type: "null"
+                  reason:
+                    anyOf:
+                      - type: string
+                        enum:
+                          - agent_disabled
+                      - type: "null"
+                    description: why no run was queued although an agent is bound; the event is stored all the same
                   status:
                     type: string
                     enum:
@@ -9845,6 +10527,7 @@ paths:
                 required:
                   - eventId
                   - runId
+                  - reason
                   - status
                 additionalProperties: false
         "401":
@@ -9924,6 +10607,13 @@ paths:
                         format: uuid
                         pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
                       - type: "null"
+                  reason:
+                    anyOf:
+                      - type: string
+                        enum:
+                          - agent_disabled
+                      - type: "null"
+                    description: why no run was queued although an agent is bound; the event is stored all the same
                   status:
                     type: string
                     enum:
@@ -9931,6 +10621,7 @@ paths:
                 required:
                   - eventId
                   - runId
+                  - reason
                   - status
                 additionalProperties: false
         "401":

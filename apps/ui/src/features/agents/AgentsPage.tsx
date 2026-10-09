@@ -31,8 +31,14 @@ const STATUS_TONE: Record<AgentSummary['status'], Tone> = {
   draft: 'neutral',
   published: 'success',
   changed: 'warning',
+  disabled: 'danger',
 };
-const STATUS_ICON = { draft: 'edit', published: 'check', changed: 'refresh' } as const;
+const STATUS_ICON = {
+  draft: 'edit',
+  published: 'check',
+  changed: 'refresh',
+  disabled: 'stop',
+} as const;
 const BUDGET_WARN_PERCENT = 80;
 const CHANGED_STALE_MS = 7 * 86_400_000;
 

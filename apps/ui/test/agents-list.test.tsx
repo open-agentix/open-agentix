@@ -208,6 +208,30 @@ describe('agents list v2: filters and URL state', () => {
     expect(screen.getByLabelText('Status')).toHaveValue('draft');
   });
 
+  it('shows a disabled agent with its own badge and offers "Disabled" as a status filter', async () => {
+    const off = agent({
+      name: 'paused-bot',
+      useCase: 'governance',
+      ownerTeam: sec,
+      teamId: sec.id,
+      status: 'disabled',
+      disabledAt: new Date(Date.now() - 3_600_000).toISOString(),
+      disabledBy: { id: 'u-1', displayName: 'Admin Example' },
+      disabledReason: 'token rotation',
+    });
+    useTree([...tree(), off]);
+    const { user, router } = await renderApp('/agents');
+    await heading('Agents');
+    const row = (await screen.findByRole('link', { name: 'paused-bot' })).closest('tr')!;
+    expect(within(row).getByText('Disabled')).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Status'), 'disabled');
+    await waitFor(() =>
+      expect(screen.queryAllByRole('link').map((l) => l.textContent)).toContain('paused-bot'),
+    );
+    expect(router.state.location.search).toEqual({ status: 'disabled' });
+    expect(screen.queryByRole('link', { name: 'cve-triage' })).not.toBeInTheDocument();
+  });
+
   it('is deep-linkable: filters in the URL are applied and shown in the controls', async () => {
     useTree();
     await renderApp(`/agents?status=published&teamId=${prod.id}&useCase=software-factory&q=docs`);

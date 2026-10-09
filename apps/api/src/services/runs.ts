@@ -5,6 +5,7 @@ import {
   isTerminal,
   visibleAgents,
   visibleTeams,
+  type AgentDefinition,
   type OaxEvent,
   type Principal,
   type RunStatus,
@@ -24,6 +25,17 @@ import {
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
+
+/** What `enqueue` reads before it opens its transaction. */
+interface AdmissionPlan {
+  latest: Awaited<ReturnType<AgentsService['latestVersionId']>>;
+  versionId: string | null;
+  definition: AgentDefinition | null;
+}
+
+/** The 409 every trigger path gets for a disabled agent. */
+export const agentDisabled = () =>
+  new HttpError(409, 'agent_disabled', 'agent is disabled and accepts no new runs');
 
 export type RunRow = typeof runs.$inferSelect;
 export type StepRow = typeof runSteps.$inferSelect;
@@ -82,7 +94,15 @@ export class RunsService {
       .prepare('oax_run_steps');
   }
 
-  /** Stores an event (if not stored yet) and queues a run for the agent's latest published version. */
+  /**
+   * Stores an event (if not stored yet) and queues a run for the agent's latest published version.
+   *
+   * Every trigger (API, cron, webhook, event sources, demo scenarios) is admitted here. A disabled
+   * agent is refused with `409 agent_disabled`: the agent row is read with `FOR SHARE` in the same
+   * transaction that inserts the run, so a concurrent `disable` (which updates that row) either
+   * commits first and the check sees it, or waits until this transaction has committed. The event
+   * is stored and the refusal is audited (`run.refused`) before the error is thrown.
+   */
   async enqueue(input: {
     agentId: string;
     event: OaxEvent;
@@ -93,10 +113,32 @@ export class RunsService {
     /** Fixed run id (deterministic demo seed); random when omitted. */
     id?: string;
   }): Promise<RunRow> {
+    // Reads of immutable or cached data happen before the transaction: PGlite (tests, demo) runs
+    // one connection, so a query on `ctx.db` while a transaction is open would wait for it.
     const latest = await this.agents.latestVersionId(input.agentId);
     const versionId = input.versionId ?? latest.versionId;
-    if (!versionId) throw new HttpError(409, 'invalid_state', 'agent has no published version');
-    const db = input.tx ?? this.ctx.db;
+    const definition = versionId ? (await this.agents.definitionOf(versionId)).definition : null;
+    const plan = { latest, versionId, definition };
+    const outcome = input.tx
+      ? await this.admit(input.tx, input, plan)
+      : await this.ctx.db.transaction((tx) => this.admit(tx as unknown as Db, input, plan));
+    if (outcome.refused) throw agentDisabled();
+    return outcome.run;
+  }
+
+  private async admit(
+    db: Db,
+    input: Parameters<RunsService['enqueue']>[0],
+    { latest, versionId, definition }: AdmissionPlan,
+  ): Promise<{ refused: false; run: RunRow } | { refused: true }> {
+    // Share lock on the agent row: serialises with disable/enable until this transaction ends.
+    const lockedRes = (await db.execute(
+      sql`select disabled_at from agents where id = ${input.agentId} for share`,
+    )) as unknown as { rows: { disabled_at: Date | string | null }[] };
+    if (lockedRes.rows.length === 0) throw notFound('agent');
+    const disabled = lockedRes.rows[0]!.disabled_at !== null;
+    if (!disabled && !versionId)
+      throw new HttpError(409, 'invalid_state', 'agent has no published version');
     let eventRowId = input.eventRowId ?? null;
     if (!eventRowId) {
       eventRowId = randomUUID();
@@ -110,12 +152,32 @@ export class RunsService {
         payload: input.event as object,
       });
     }
-    const { definition } = await this.agents.definitionOf(versionId);
+    if (disabled) {
+      this.ctx.metrics.runsRefused.inc({
+        trigger: input.triggeredBy.split(':')[0] ?? 'unknown',
+        reason: 'agent_disabled',
+      });
+      await this.audit.append(
+        {
+          actor: input.triggeredBy,
+          tenantId: latest.tenantId,
+          action: 'run.refused',
+          target: input.agentId,
+          payload: {
+            reason: 'agent_disabled',
+            versionId: versionId ?? null,
+            eventId: input.event.id,
+          },
+        },
+        db,
+      );
+      return { refused: true };
+    }
     const verdict = await this.budgets.verdictFor(
       {
         tenantId: latest.tenantId,
         teamId: latest.teamId,
-        useCase: definition.labels.useCase ?? null,
+        useCase: definition!.labels.useCase ?? null,
       },
       db,
     );
@@ -130,7 +192,7 @@ export class RunsService {
         id,
         tenantId: latest.tenantId,
         agentId: input.agentId,
-        agentVersionId: versionId,
+        agentVersionId: versionId!,
         teamId: latest.teamId,
         eventId: eventRowId,
         status: budget ? 'blocked_by_policy' : 'queued',
@@ -143,20 +205,23 @@ export class RunsService {
       })
       .returning();
     this.ctx.metrics.runsCreated.inc({ trigger: input.triggeredBy.split(':')[0] ?? 'unknown' });
-    await this.audit.append({
-      actor: input.triggeredBy,
-      tenantId: latest.tenantId,
-      action: budget ? 'run.blocked' : 'run.queued',
-      target: input.agentId,
-      runId: id,
-      payload: {
-        versionId,
-        eventId: input.event.id,
-        reason: budget,
-        ...(verdict.blocked ? { breaches: verdict.breaches } : {}),
+    await this.audit.append(
+      {
+        actor: input.triggeredBy,
+        tenantId: latest.tenantId,
+        action: budget ? 'run.blocked' : 'run.queued',
+        target: input.agentId,
+        runId: id,
+        payload: {
+          versionId,
+          eventId: input.event.id,
+          reason: budget,
+          ...(verdict.blocked ? { breaches: verdict.breaches } : {}),
+        },
       },
-    });
-    return row!;
+      db,
+    );
+    return { refused: false, run: row! };
   }
 
   async get(id: string): Promise<RunRow> {

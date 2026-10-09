@@ -28,11 +28,16 @@ export class CronScheduler {
       schedule: w.schedule,
       timezone: w.timezone,
     }));
-    // Cron event sources (kind "cron") bound to an agent.
-    for (const s of await this.services.ingest.listAllSources()) {
+    // Cron event sources (kind "cron") bound to an enabled agent. A source of a disabled agent is
+    // not scheduled: no change-gate probe (egress), no event and no audit entry per tick.
+    const sources = (await this.services.ingest.listAllSources()).filter((s) => {
+      const cfg = s.config as { schedule?: unknown };
+      return s.kind === 'cron' && s.enabled && s.agentId && typeof cfg.schedule === 'string';
+    });
+    const disabled = await this.services.agents.disabledAgentIds(sources.map((s) => s.agentId!));
+    for (const s of sources) {
       const cfg = s.config as { schedule?: unknown; timezone?: unknown };
-      if (s.kind !== 'cron' || !s.enabled || !s.agentId || typeof cfg.schedule !== 'string')
-        continue;
+      if (!s.agentId || disabled.has(s.agentId) || typeof cfg.schedule !== 'string') continue;
       wanted.push({
         key: `source|${s.id}|${cfg.schedule}`,
         agentId: s.agentId,
@@ -82,18 +87,27 @@ export class CronScheduler {
     if (inserted.length === 0) return null;
     if (sourceId) {
       const source = await this.services.ingest.getSource(sourceId);
+      // Disabled between the reload and the tick: no probe; the plain tick is refused and audited.
+      if ((await this.services.agents.disabledAgentIds([agentId])).has(agentId))
+        return (await this.services.ingest.ingestEvent(source, event, `cron:${source.name}`)).runId;
       const gate = await this.services.ingest.changeGate(source);
       // Change gate: no event, no run, no tokens when the probe did not change.
       if (gate && !gate.changed) return null;
       const gated = gate ? { ...event, data: { ...(event.data as object), change: gate } } : event;
       return (await this.services.ingest.ingestEvent(source, gated, `cron:${source.name}`)).runId;
     }
-    const run = await this.services.runs.enqueue({
-      agentId,
-      event,
-      triggeredBy: `cron:${schedule}`,
-    });
-    return run.id;
+    try {
+      const run = await this.services.runs.enqueue({
+        agentId,
+        event,
+        triggeredBy: `cron:${schedule}`,
+      });
+      return run.id;
+    } catch (e) {
+      // Disabled between the reload and the tick: refused and audited by enqueue, not an error.
+      if ((e as { code?: unknown }).code === 'agent_disabled') return null;
+      throw e;
+    }
   }
 
   start(reloadMs = 60_000): void {
