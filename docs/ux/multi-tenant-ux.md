@@ -37,11 +37,11 @@ sees five rows with names and versions and nothing that says "tenant" (the scree
 
 | Endpoint | Fields relevant here | Missing for this design |
 | --- | --- | --- |
-| `GET /v1/agents` | `id, name, teamId, description, latestVersion, latestVersionId, draftUpdatedAt, createdAt`; since slice A1 (#155) also `tenant`, `useCase`, `ownerTeam`, `status`, `lastRun`, `monthSpendUsd`, `budget` and the filters `teamId`, `useCase`, `status`, `q` (see "Agent summary API" below) | `disabled` status (#161), `sort` |
+| `GET /v1/agents` | `id, name, teamId, description, latestVersion, latestVersionId, draftUpdatedAt, createdAt`; since slice A1 (#155) also `tenant`, `useCase`, `ownerTeam`, `status`, `lastRun`, `monthSpendUsd`, `budget` and the filters `teamId`, `useCase`, `status`, `q` (see "Agent summary API" below) | `sort` (disable and enable: slice A7, see 1.2.2) |
 | `GET /v1/me` | `user`, `tenant {id, slug, name}`, `platformAdmin`, `permissions`, `bindings [{role, teamId}]` | tenant path, bindings per node/use case, installation mode (#156) |
 | `GET /v1/tenants` | flat list for platform admins | visible tree with counts and roles (#157) |
 | `GET /v1/runs`, approvals, events, costs, audit, budgets | one tenant; `allTenants` for platform admins on costs and audit | `scope=subtree` with a tenant on each row (#158) |
-| (none) | | effective governance with source (#159), allowed actions with reasons (#160), agent disable (#161), locate for deep links (#163), preferences (#164) |
+| (none) | | effective governance with source (#159), allowed actions with reasons (#160), locate for deep links (#163), preferences (#164) |
 
 ### 1.2.1 Agent summary API (slice A1)
 
@@ -54,7 +54,7 @@ touch other data are `null` when the caller may not read that data.
 | `tenant` | `{ id, slug, slugPath, name }` of the acting tenant; `slugPath` lists the slugs from the organisation root (`acme/security`) | `agents:read` |
 | `useCase` | `labels.useCase` of the latest published version; of the draft while the agent was never published | `agents:read` |
 | `ownerTeam` | `{ id, slug, name }` or `null` | `agents:read`, same as `GET /v1/teams` (any signed-in user of the tenant) |
-| `status` | `draft` (never published), `published` (draft equals latest version), `changed` (draft differs) | `agents:read` |
+| `status` | `draft` (never published), `published` (draft equals latest version), `changed` (draft differs), `disabled` (switched off, wins over the other three; slice A7) | `agents:read` |
 | `lastRun` | `{ id, status, createdAt }` of the newest run, or `null` | only runs the caller may read (`runs:read`, team and agent scopes) |
 | `monthSpendUsd` | spend of this agent in the current UTC month | `null` without `costs:read` for the agent |
 | `budget` | the monthly budget closest to its limit among tenant, use case and team: `{ limitUsd, spentUsd, percentUsed, source, sourceName }`; `spentUsd` is the spend of the whole budget scope | `null` without `costs:read` or when no scope has a limit |
@@ -82,8 +82,7 @@ the backfill and both index builds commit, which is short at realistic sizes.
 
 Known gaps:
 
-- `status: disabled` is not returned and `disabled` is not a filter value yet; it arrives with agent
-  disable/enable (#161) as an additive enum value.
+- (closed by slice A7, section 1.2.2) `status: disabled` is returned and is a filter value.
 - `changed` compares the draft with the latest version **byte for byte**. A cosmetic edit (whitespace,
   comments) counts as `changed` although publishing it would be a no-op.
 - No `sort` parameter (`lastRun`, `spend`): the list stays ordered by creation time. A sort by last run
@@ -98,6 +97,60 @@ Known gaps:
 - `budget.spentUsd` is the spend of the whole scope (tenant, use case or team), also for callers whose
   `costs:read` is limited to one team or agent. This matches `GET /v1/budgets` today, which shows the
   same totals to every `costs:read` holder; narrowing both is tracked in #174.
+
+### 1.2.2 Disable and enable agents (slice A7, #161)
+
+`POST /v1/agents/{id}/disable` and `POST /v1/agents/{id}/enable` switch an agent off and on without
+deleting it. Both need `agents:publish` on the agent (team or agent-scoped binding, API token scope
+`agents:publish`), take an optional body `{ "reason": "<= 500 characters" }` and return the agent
+detail (`200`). Another tenant's agent, or one the caller cannot read, is `404`; a reader without
+`agents:publish` (viewer, operator, auditor, token with `agents:read` only) is `403`.
+
+| Field | Meaning |
+| --- | --- |
+| `status: disabled` | wins over `draft`, `published` and `changed`; also a value of the `status` filter (the other three filter values only match enabled agents) |
+| `disabledAt`, `disabledBy`, `disabledReason` | when, `{ id, displayName }` of the user (resolved inside the acting tenant only, else `null`) and the optional reason; all `null` while the agent is enabled. Visible to every `agents:read` holder, like the members of a team |
+
+Behaviour of a disabled agent:
+
+- **No new runs.** Every trigger passes `RunsService.enqueue`: the manual API run
+  (`POST /v1/agents/{id}/runs`, also for a pinned older version), webhook and mail-in ingest, Kafka
+  and cron event sources, the cron triggers of the definition and the demo scenarios. A refused
+  trigger gets `409 agent_disabled` (HTTP callers), the event is stored all the same, nothing is
+  queued, and the refusal is audited as `run.refused` with `reason: agent_disabled`, the trigger as
+  actor (`manual:<user>`, `webhook:<source>`, `cron:<schedule>`) and the metric
+  `oax_runs_refused_total{trigger,reason}`. Webhook senders get `202` with `runId: null` and the new
+  field `reason: "agent_disabled"` (no error to retry on); event sources stay bound and enabled.
+  The scheduler drops the cron jobs of the definition on its next reload (within 60 s); a tick that
+  still fires is refused and audited.
+- **Handovers.** A pipeline hands over between steps *inside one run* (`run-nodes`); there is no
+  handover that starts another agent, so nothing can bypass the check. If agent-to-agent calls
+  arrive later they must start the callee through `enqueue`.
+- **Queued runs wait.** Runs that were queued before `disable` returned are not cancelled and not
+  claimed: the worker claim skips runs of disabled agents, they start after `enable` (or are
+  cancelled by hand). **Running runs finish** (and can be cancelled with `runs:cancel` as usual);
+  approvals, steps, cost accounting and the audit of a running run are untouched.
+- **Versions stay.** Published versions remain immutable and readable; drafts can still be edited and
+  new versions published while disabled (publishing does not enable).
+- **Idempotent.** Disabling a disabled agent (or enabling an enabled one) returns `200` with the
+  unchanged state: the first actor, time and reason are kept and no second audit entry is written.
+- **Audit.** `agent.disabled` (payload `reason`) and `agent.enabled` (payload `reason`,
+  `wasDisabledAt`) with the user as actor, written in the same transaction as the change.
+
+No admission race: `enqueue` reads the agent row `FOR SHARE` in the transaction that inserts the run,
+and the worker's claim locks it the same way. `disable` updates that row, so it either commits first
+(the enqueue/claim then sees `disabled_at` and refuses) or waits until the in-flight enqueue/claim has
+committed. A run admitted or claimed before `disable` returned counts as started or queued before the
+switch-off; none can start after it returned. This is proven by service-level tests and, on a real
+PostgreSQL with several connections, by `apps/worker/test/agent-disable.pg.test.ts` (opt in with
+`OAX_TEST_DATABASE_URL`).
+
+Migration `0016_agent_disable` adds `agents.disabled_at`, `disabled_by`, `disabled_reason` (nullable,
+reason limited to 500 characters by a check); existing agents stay enabled. Down script:
+`apps/api/drizzle/down/0016_agent_disable.down.sql` (disabled agents become enabled when it runs).
+Known gaps: no automatic cancellation of queued runs on disable, no per-agent "disable until"
+timestamp, no bulk disable, and the W3-6 archive (which implies disabled) is still to come; the
+console buttons arrive with a later slice.
 
 ### 1.3 Users and jobs
 

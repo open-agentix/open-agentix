@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **API: disable and enable agents (UX slice A7, #161)**: `POST /v1/agents/{id}/disable` and
+  `/enable` (permission `agents:publish` on the agent, optional `reason` up to 500 characters, idempotent,
+  audited as `agent.disabled` / `agent.enabled`). A disabled agent accepts no new runs: manual API
+  runs, webhook and mail-in ingest, event sources, cron triggers and demo scenarios are refused with
+  `409 agent_disabled` and a `run.refused` audit entry (the event is still stored; webhook senders
+  get `202` with `runId: null` and `reason: "agent_disabled"`), and the worker never claims its
+  queued runs; the check runs under a row lock, so no run can start after `disable` returned.
+  Running runs finish unless cancelled; published versions stay immutable and visible. Agent
+  summaries gain `status: disabled` (also a `status` filter value), `disabledAt`, `disabledBy`
+  (`{ id, displayName }`) and `disabledReason`. Migration `0016_agent_disable` (additive, down
+  script included); `openapi.yaml` and the UI client types are regenerated, the buttons come with a
+  later slice. See `docs/ux/multi-tenant-ux.md` section 1.2.2.
 - **API: agent summary fields and list filters (UX slice A1, #155)**: `GET /v1/agents`,
   `GET /v1/agents/{id}`, `POST /v1/agents` and `PUT /v1/agents/{id}/draft` return `tenant`
   (`id, slug, slugPath, name`), `useCase`, `ownerTeam` (`id, slug, name`, readable with
@@ -17,7 +29,7 @@ All notable changes to this project are documented here. The format follows
   `teamId`, `useCase` (prefix per `/` segment), `status` and an extended `q` (name, description,
   use case) that narrow within the caller's visibility; paging is unchanged. The fields are
   additive; the `agents.use_case` column and two indexes arrive with migration
-  `0015_agent_summary_fields` (down script included). Gaps: no `disabled` status (#161), no `sort`,
+  `0015_agent_summary_fields` (down script included). Gaps: no `sort`,
   `changed` is a byte-wise comparison of draft and latest version. See `docs/ux/multi-tenant-ux.md`.
   `labels.useCase` is now limited to 200 characters (the length use case budgets already accept):
   a longer label is a validation error instead of an internal error on the new index; the backfill
