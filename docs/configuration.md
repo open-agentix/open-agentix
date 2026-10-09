@@ -229,8 +229,15 @@ The `container` runner is implemented and opt-in (see [runners.md](runners.md)).
 | `OAX_CONTAINER_EGRESS_ALLOW` | – | Operator ceiling for step egress (`host`, `host:port`, `*.suffix`, IP, CIDR no wider than /8); steps can only narrow it; empty = no step egress. Checked at publish, at node start and by the proxy. |
 | `OAX_CONTAINER_EGRESS_PRIVATE_ALLOW` | – | Private CIDRs the egress proxy may reach where a rule matches; private ranges are closed otherwise. Proxy-side (`OAX_EGRESS_PROXY_LISTEN` is its listen address). |
 | `OAX_CONTAINER_MAX_CPUS` / `OAX_CONTAINER_MAX_MEMORY_MB` / `OAX_CONTAINER_MAX_PIDS` | `1` / `512` / `256` | Upper bounds for a node container. |
-| `OAX_NODE_CONTROL_URL` | – | Control node base URL as seen from run nodes (internal network). |
+| `OAX_NODE_CONTROL_URL` | – | Control node base URL as seen from run nodes (internal network). Required by `container`; for `kubernetes-job` it is required too and must be `https://`. |
 | `OAX_K8S_JOB_ENABLED` | `false` | Feature flag; required when `kubernetes-job` is enabled. |
+| `OAX_K8S_IMAGE` | – | Default run node image, `repo@sha256:<digest>` under `OAX_TOOLBOX_REGISTRY` and allowlisted (`OAX_K8S_RUN_NODE_IMAGES`/toolbox name). **Required** when `kubernetes-job` is enabled; checked at config load. |
+| `OAX_K8S_TOOLBOX_IMAGES` | `{}` | JSON map toolbox name -> digest-pinned image (must be in `OAX_TOOLBOX_ALLOWLIST`); an unknown toolbox fails closed (`toolbox_image_unknown`). |
+| `OAX_K8S_CONTROL_PLANE_POD_SELECTOR` / `OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR` | – | JSON label selectors (non-empty) of the control node Pods that run Pods may reach; prefer `{"kubernetes.io/metadata.name":"<ns>"}` for the namespace. At least one of the two selectors or `OAX_K8S_CONTROL_PLANE_CIDRS` is **required** when `kubernetes-job` is enabled. |
+| `OAX_K8S_CONTROL_PLANE_CIDRS` / `OAX_K8S_CONTROL_PLANE_PORTS` | – / `443` | Comma lists: control node CIDRs and TCP ports a run Pod may reach. |
+| `OAX_K8S_DNS_EGRESS` | `true` | Allow DNS to kube-dns (needed to resolve the control node). |
+| `OAX_K8S_AUTOMOUNT_SA_TOKEN` | `false` | Mount the ServiceAccount API token into run Pods (a step never needs it). |
+| `OAX_K8S_DEFAULT_DENY_POLICY` | `default-deny-all` | Name of the namespace-wide default-deny NetworkPolicy that must exist; a step does not start without it. |
 | `OAX_K8S_NAMESPACE` | `openagentix-runs` | Namespace for run Jobs. |
 | `OAX_K8S_SERVICE_ACCOUNT` | `openagentix-run-node` | ServiceAccount of run Jobs (annotate for IRSA on EKS); must differ from the worker's. |
 | `OAX_K8S_WORKER_SERVICE_ACCOUNT` / `OAX_K8S_WORKER_NAMESPACE` | `openagentix-worker` / – | Worker identity the runner refuses to reuse for step Pods. |

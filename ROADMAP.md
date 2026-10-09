@@ -68,7 +68,7 @@ Wave 2:
 Release and verification gaps (found in the 2026-10-09 gap analysis against the website; none built yet):
 
 - [ ] **First pre-release `v0.2.0-alpha.1`: API image on GHCR, GitHub release, signed images (cosign, SBOM), Helm install test on kind** – blocked while GitHub Actions is disabled for the account; the release workflow exists (`.github/workflows/release.yml`) but has never run.
-- [ ] **Wire the Kubernetes Job runner into the worker** – the runner (W1-4) and its configuration exist, `apps/worker` instantiates only the container runner; open review follow-ups, a test against kind and Helm wiring.
+- [ ] **Wire the Kubernetes Job runner into the worker** – the worker wiring is done (opt-in, fail closed, unit-tested with a fake client, see `docs/kubernetes-job-runner.md`); still open: a run against a real kind cluster (the test exists, skipped by default, because kind needs a privileged node container), the remaining review follow-ups (orphan sweeper, harness steps) and the Helm values.
 - [ ] **Real-run verification of providers and harnesses** – OpenCode with a pinned binary; Claude Code through the model proxy inside a run node (the verified path of 2026-10-04 ran in-process); OpenAI, Azure OpenAI, OpenRouter, Bedrock with real accounts. Only Claude Code in-process is verified with real runs today.
 - [ ] **Visibility of platform connections across tenants (known gap, ADR 0012)** – tracked by W12-1 (#113, #114).
 - [ ] **Demo on the release images** (W8-4, #62) – the live demo runs on images built from source.

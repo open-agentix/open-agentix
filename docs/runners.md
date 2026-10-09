@@ -11,7 +11,7 @@ ships in v0.2 (`container`), the run node it starts and the per-step credential 
 | `in-process` | available | inside the worker process (default) |
 | `local` | available | the CLI (`oax run`) |
 | `container` | available, opt-in (this page) | one short-lived, hardened container per isolated step |
-| `kubernetes-job` | planned (W1-4) | one Job per step |
+| `kubernetes-job` | available, opt-in ([kubernetes-job-runner.md](kubernetes-job-runner.md)) | one hardened Job per isolated step |
 | `aws-lambda`, `github-actions`, `gitlab-ci` | planned (v0.3) | typed stubs |
 
 ## What is isolated

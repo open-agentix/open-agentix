@@ -5,6 +5,21 @@ The `kubernetes-job` runner executes **one run node per step** as a Kubernetes J
 Kubernetes unless you enable it: `OAX_RUNNERS_ENABLED` contains `kubernetes-job` **and**
 `OAX_K8S_JOB_ENABLED=true` (see [configuration](configuration.md#runners-and-toolboxes-v02-contract-feature-flagged-off)).
 
+## Enabling it in the worker
+
+The worker (`apps/worker/src/main.ts`, `isolation.ts`) starts the runner only when
+`OAX_RUNNERS_ENABLED` contains `kubernetes-job` **and** `OAX_K8S_JOB_ENABLED=true`; otherwise the code
+path is never reached and no cluster client is built. It is **fail closed**: configuration loading
+refuses an enabled runner without `OAX_K8S_IMAGE` (digest-pinned, allowlisted), an `https://`
+`OAX_NODE_CONTROL_URL`, a control plane selector/CIDR, an allowlist and the admission-signature
+acknowledgement; the worker refuses to start when it is not running in a cluster (in-cluster
+ServiceAccount client) or the runner rejects its configuration. Isolated steps whose effective
+runner is `kubernetes-job` are dispatched like `container` steps (session, step-scoped token,
+`runnode.*` audit entries, revoke before stop); it can run next to the container runner, each with
+its own control URL. Harness steps (`runtime.harness`) are not supported on this runner yet
+(`harness_image_unknown`). Step credentials are never part of the Job: the node pulls them from the
+credential broker; the Secret holds only the run token.
+
 ## What is created per step
 
 All objects live in the run namespace (`OAX_K8S_NAMESPACE`) and are named `oax-step-<nodeId>`:
@@ -117,10 +132,22 @@ chart (open-agentix-helm) renders the same rules; that work is tracked there.
 
 ## Tests
 
-Unit tests use an in-memory Kubernetes client and a local HTTP server (no cluster needed). The
-opt-in end-to-end test runs against a real cluster: `OAX_TEST_KIND=1 OAX_TEST_KUBE_API=http://127.0.0.1:8001
-OAX_TEST_IMAGE=ghcr.io/open-agentix/openagentix-worker@sha256:... pnpm vitest run packages/runners/test/kubernetes-job.e2e.test.ts`
-(with `kubectl proxy` against a kind cluster).
+Unit tests use an in-memory Kubernetes client and a local HTTP server (no cluster needed):
+`packages/runners/test/kubernetes-job.test.ts`, `apps/worker/test/isolation.test.ts` (worker wiring,
+hardening, no token outside the Secret, cleanup on cancel and timeout) and `apps/api/test/config.test.ts`.
+
+The end-to-end test against a real cluster is **skipped by default**. It is not run in this project's
+homelab CI because a kind node is a privileged container (and needs cgroup/sysctl access), which
+the throwaway-container policy of that host does not allow. Run it anywhere a cluster is available
+(kind on a workstation or a CI runner), with a `kubectl proxy` to it, the namespace with the
+default-deny policy (see the RBAC example) and a digest-pinned image:
+
+```sh
+kubectl proxy --port 8001 &
+OAX_TEST_KIND=1 OAX_TEST_KUBE_API=http://127.0.0.1:8001 \
+  OAX_TEST_IMAGE=ghcr.io/open-agentix/openagentix-worker@sha256:... \
+  pnpm vitest run packages/runners/test/kubernetes-job.e2e.test.ts
+```
 
 ## Known follow-ups
 
@@ -128,7 +155,7 @@ OAX_TEST_IMAGE=ghcr.io/open-agentix/openagentix-worker@sha256:... pnpm vitest ru
   filtering resolver or DNS policy (Cilium/CoreDNS).
 - No per-step ServiceAccount/IRSA role yet (one shared ServiceAccount).
 - Host-name egress needs an egress gateway; there is no built-in proxy.
-- Wire `controlPlane`, `dnsEgress` and `automountServiceAccountToken` to env settings (until then a step cannot reach the control node; W1-3a integration), default `denyCidrs`.
+- Default `denyCidrs` (the operator still sets pod/service/node CIDRs), per-runner harness images, Helm values for the new `OAX_K8S_*` settings (open-agentix-helm).
 - Orphan sweeper for suspended Jobs after a worker crash; Job status is polled, not watched.
 - Pod Security Admission, image signature checks and the CNI prerequisite are cluster
   responsibilities (documented above, not verified by the runner).

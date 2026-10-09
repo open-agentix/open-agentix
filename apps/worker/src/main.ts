@@ -1,6 +1,7 @@
 import { createContext, createLogger, initTelemetry, loadConfig } from '@openagentix/api';
 import { demoServerFactories, inMemoryServers } from '@openagentix/mcp';
 import { ContainerRunner } from '@openagentix/runners';
+import { buildIsolation, createKubernetesJobRunner } from './isolation.js';
 import { createWorkerHttpServer } from './http.js';
 import { KafkaSources } from './sources.js';
 import { CronScheduler } from './scheduler.js';
@@ -21,6 +22,21 @@ const container = config.runners.container;
 // a worker attached to the engine network never carries a path to the internet or the platform.
 const containerRunner =
   container.enabled && container.config ? new ContainerRunner(container.config) : undefined;
+// Opt-in Kubernetes Job runner (OAX_K8S_JOB_ENABLED): one hardened Job per isolated step. Throws
+// at start-up (fail closed) when enabled but not running in a cluster or misconfigured.
+const kubernetesRunner = createKubernetesJobRunner(config, {
+  warn: (m) => ctx.logger.warn(m),
+});
+const isolation = buildIsolation(config, {
+  ...(containerRunner ? { container: containerRunner } : {}),
+  ...(kubernetesRunner ? { kubernetes: kubernetesRunner } : {}),
+});
+if (kubernetesRunner) {
+  ctx.logger.info(
+    { namespace: kubernetesRunner.config.namespace },
+    'kubernetes-job runner enabled',
+  );
+}
 // OAX_DEMO_MCP=true registers the built-in demo MCP servers (cve-db, tickets) for `in-memory` connections.
 const worker = new Worker(ctx, {
   ...(config.demoMcp ? { inMemoryMcp: inMemoryServers(demoServerFactories()) } : {}),
@@ -28,16 +44,7 @@ const worker = new Worker(ctx, {
   ...(config.demo.enabled && config.demo.llm === 'claude-code'
     ? { runner: new DemoLlmRunner(config.demo) }
     : {}),
-  ...(containerRunner && container.config && container.nodeControlUrl
-    ? {
-        isolation: {
-          runners: { container: containerRunner },
-          controlUrl: container.nodeControlUrl,
-          // Ordinary nodes get the default memory, not the ceiling (OAX_CONTAINER_MEMORY_MB).
-          limits: containerRunner.defaultLimits(),
-        },
-      }
-    : {}),
+  ...(isolation ? { isolation } : {}),
 });
 if (containerRunner?.unsafeSocket) {
   ctx.logger.warn(
