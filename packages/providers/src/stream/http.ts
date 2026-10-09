@@ -1,6 +1,12 @@
 import type { HostLookup } from '../ssrf.js';
 import { OaxError } from '@openagentix/core';
-import { ProviderError, createGuardedFetch, isPreSendFailure, type FetchLike } from '../http.js';
+import {
+  ProviderError,
+  createGuardedFetch,
+  isPreSendFailure,
+  type FetchLike,
+  type GuardedFetchOptions,
+} from '../http.js';
 import {
   StreamGuard,
   createUpstreamStream,
@@ -21,6 +27,7 @@ export interface HttpTransportOptions {
   /** Endpoint origin(s) the transport may talk to (the configured base URL). */
   baseUrl: string;
   proxyUrl?: string | undefined;
+  outbound?: GuardedFetchOptions['outbound'];
   /** Injected fetch (tests); defaults to the proxy-aware global fetch behind the guarded fetch. */
   fetchImpl?: FetchLike | undefined;
   limits?: Partial<StreamLimits> | undefined;
@@ -132,6 +139,7 @@ export async function openSseStream(
     proxyUrl: opts.proxyUrl,
     fetchImpl: opts.fetchImpl,
     blockPrivateDestinations: opts.blockPrivateDestinations,
+    outbound: opts.outbound,
   });
   const guard = new StreamGuard(limits, req.call.signal);
   const maxRetries = opts.maxRetries ?? 2;

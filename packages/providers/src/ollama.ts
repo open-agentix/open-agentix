@@ -1,5 +1,11 @@
 import type { Classification } from '@openagentix/core';
-import { createGuardedFetch, parseToolArgs, postJson, type FetchLike } from './http.js';
+import {
+  createGuardedFetch,
+  parseToolArgs,
+  postJson,
+  type FetchLike,
+  type GuardedFetchOptions,
+} from './http.js';
 import type { ChatRequest, ChatResponse, CompleteOptions, ModelProvider } from './types.js';
 
 export interface OllamaOptions {
@@ -7,6 +13,7 @@ export interface OllamaOptions {
   baseUrl?: string;
   clearance?: Classification;
   proxyUrl?: string | undefined;
+  outbound?: GuardedFetchOptions['outbound'];
   timeoutMs?: number | undefined;
   maxRetries?: number | undefined;
   fetchImpl?: FetchLike | undefined;
@@ -37,6 +44,7 @@ export class OllamaProvider implements ModelProvider {
     this.fetch = createGuardedFetch({
       allowedOrigins: [this.baseUrl],
       proxyUrl: opts.proxyUrl,
+      outbound: opts.outbound,
       fetchImpl: opts.fetchImpl,
     });
   }

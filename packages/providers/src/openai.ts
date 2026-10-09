@@ -1,5 +1,11 @@
 import type { Classification } from '@openagentix/core';
-import { createGuardedFetch, parseToolArgs, postJson, type FetchLike } from './http.js';
+import {
+  createGuardedFetch,
+  parseToolArgs,
+  postJson,
+  type FetchLike,
+  type GuardedFetchOptions,
+} from './http.js';
 import type {
   ChatRequest,
   ChatResponse,
@@ -29,6 +35,7 @@ export interface OpenAICompatibleOptions {
   catalogProvider?: string | undefined;
   clearance?: Classification;
   proxyUrl?: string | undefined;
+  outbound?: GuardedFetchOptions['outbound'];
   timeoutMs?: number | undefined;
   maxRetries?: number | undefined;
   fetchImpl?: FetchLike | undefined;
@@ -110,6 +117,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.fetch = createGuardedFetch({
       allowedOrigins: [opts.baseUrl],
       proxyUrl: opts.proxyUrl,
+      outbound: opts.outbound,
       fetchImpl: opts.fetchImpl,
     });
   }

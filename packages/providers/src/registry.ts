@@ -3,7 +3,7 @@ import { CLASSIFICATIONS, OaxError, type PriceEntry, type SecretResolver } from 
 import { z } from 'zod';
 import { AnthropicProvider } from './anthropic.js';
 import { BedrockProvider, type BedrockConverseClient } from './bedrock.js';
-import type { FetchLike } from './http.js';
+import type { FetchLike, GuardedFetchOptions } from './http.js';
 import { OllamaProvider } from './ollama.js';
 import { OpenAICompatibleProvider } from './openai.js';
 import { SimulatedProvider } from './simulated.js';
@@ -188,6 +188,8 @@ export interface RegistryDeps {
   bedrockClient?: BedrockConverseClient;
   /** Tenant-controlled endpoints: refuse non-public destinations (operator `allow` list). */
   blockPrivateDestinations?: { allow?: readonly string[]; lookup?: HostLookup } | undefined;
+  /** Outbound dispatcher factory and scope (ADR 0011); default: legacy proxy environment. */
+  outbound?: GuardedFetchOptions['outbound'];
 }
 
 export async function createProvider(
@@ -197,6 +199,7 @@ export async function createProvider(
   const base = {
     name: cfg.name,
     proxyUrl: cfg.proxyUrl,
+    outbound: deps.outbound,
     timeoutMs: cfg.timeoutMs,
     maxRetries: cfg.maxRetries,
   };
@@ -298,6 +301,7 @@ export async function createProvider(
         region: cfg.region,
         endpoint: cfg.endpoint,
         proxyUrl: cfg.proxyUrl,
+        outbound: deps.outbound,
         blockPrivateDestinations: deps.blockPrivateDestinations,
         maxAttempts: cfg.maxRetries === undefined ? undefined : cfg.maxRetries + 1,
         credentials,

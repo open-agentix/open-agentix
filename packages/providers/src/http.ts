@@ -1,7 +1,7 @@
-import { OaxError, getEgressPolicy } from '@openagentix/core';
-import { Agent, fetch as undiciFetch } from 'undici';
-import { createProxyAwareFetch, proxyFor, type Env } from './proxy.js';
-import { assertPublicDestination, createPinnedLookup, type HostLookup } from './ssrf.js';
+import { OaxError, getEgressPolicy, type NetworkPurpose, type RouteScope } from '@openagentix/core';
+import { createOutboundDispatcher, type OutboundDispatcher } from './outbound.js';
+import type { Env } from './proxy.js';
+import { assertPublicDestination, type HostLookup } from './ssrf.js';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -40,33 +40,34 @@ export interface GuardedFetchOptions {
   env?: Env;
   /**
    * Refuse destinations that resolve to loopback, private, link-local or metadata addresses (SSRF
-   * through tenant-controlled base URLs). Checked right before each request. `allow` lists
-   * operator-approved entries (`OAX_MODEL_PROXY_PRIVATE_ALLOW`).
+   * through tenant-controlled base URLs). Checked right before each request and pinned at connect
+   * time. `allow` lists operator-approved entries (`OAX_MODEL_PROXY_PRIVATE_ALLOW`).
    */
   blockPrivateDestinations?: { allow?: readonly string[]; lookup?: HostLookup } | undefined;
-  /** Injected fetch (tests). Defaults to global fetch, or undici fetch when a proxy is set. */
+  /** Injected fetch (tests). Bypasses the outbound dispatcher factory entirely. */
   fetchImpl?: FetchLike | undefined;
+  /**
+   * The outbound dispatcher (ADR 0011). Default: a factory over the legacy proxy environment, which
+   * keeps the behaviour of installs without a network configuration. Pass the factory built from
+   * the configured network (and a `scope`) to use named proxies, trust bundles and certificates.
+   */
+  outbound?:
+    { dispatcher: OutboundDispatcher; purpose?: NetworkPurpose; scope?: RouteScope } | undefined;
 }
 
 /**
- * fetch wrapper that enforces "network calls only to configured endpoints" and routes through an
- * optional proxy (undici ProxyAgent).
+ * fetch wrapper that enforces "network calls only to configured endpoints" and sends every request
+ * through the outbound dispatcher factory (routing, proxy, DNS pinning, no redirects, limits).
  */
 export function createGuardedFetch(opts: GuardedFetchOptions): FetchLike {
   const allowed = new Set(opts.allowedOrigins.map((o) => new URL(o).origin));
-  const base: FetchLike =
-    opts.fetchImpl ??
-    createProxyAwareFetch({ proxyUrl: opts.proxyUrl, ...(opts.env ? { env: opts.env } : {}) });
-  // Connect-time pinning: the dispatcher resolves the name itself, validates every address and
-  // connects to exactly those (no second resolution between check and connect). Not possible
-  // behind an HTTP proxy (the proxy resolves the name; only the pre-request check applies there)
-  // or with an injected fetch (tests).
-  const pinned =
-    opts.blockPrivateDestinations && !opts.fetchImpl
-      ? new Agent({
-          connect: { lookup: createPinnedLookup(opts.blockPrivateDestinations) as never },
-        })
-      : undefined;
+  let own: OutboundDispatcher | undefined;
+  const dispatcher = (): OutboundDispatcher =>
+    opts.outbound?.dispatcher ??
+    (own ??= createOutboundDispatcher({
+      ...(opts.env ? { env: opts.env } : {}),
+      allowPlainHttpForPlatform: true,
+    }));
   return async (input, init) => {
     const origin = new URL(input).origin;
     if (!allowed.has(origin)) {
@@ -77,16 +78,19 @@ export function createGuardedFetch(opts: GuardedFetchOptions): FetchLike {
     getEgressPolicy().assert(input, 'provider');
     if (opts.blockPrivateDestinations)
       await assertPublicDestination(new URL(input).hostname, opts.blockPrivateDestinations);
-    // A redirect would carry the request (and its key) to another origin: never followed.
-    if (pinned && !proxyFor(input, opts.env ?? process.env, opts.proxyUrl)) {
-      getEgressPolicy().assert(input, 'http');
-      return undiciFetch(input, {
-        ...init,
-        redirect: 'error',
-        dispatcher: pinned,
-      } as never) as unknown as Promise<Response>;
-    }
-    return base(input, { ...init, redirect: 'error' });
+    if (opts.fetchImpl) return opts.fetchImpl(input, { ...init, redirect: 'error' });
+    getEgressPolicy().assert(input, 'http');
+    const scope: RouteScope = {
+      ...opts.outbound?.scope,
+      ...(opts.proxyUrl && !opts.outbound?.scope?.proxyUrl
+        ? { proxyUrl: opts.proxyUrl, proxyUrlGrandfathered: true }
+        : {}),
+    };
+    return dispatcher().fetch(input, init, {
+      purpose: opts.outbound?.purpose ?? 'model',
+      scope,
+      ...(opts.blockPrivateDestinations ? { pin: opts.blockPrivateDestinations } : {}),
+    });
   };
 }
 

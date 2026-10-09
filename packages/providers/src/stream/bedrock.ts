@@ -38,6 +38,7 @@ export interface BedrockStreamOptions extends Pick<
   | 'region'
   | 'endpoint'
   | 'proxyUrl'
+  | 'outbound'
   | 'maxAttempts'
   | 'credentials'
   | 'catalogProvider'
