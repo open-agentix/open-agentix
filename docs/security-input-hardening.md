@@ -15,16 +15,26 @@ Code: `packages/core/src/invisible-text.ts`, `secret-patterns.ts`, `context-guar
 
 1. **Tool results: `ToolGateway.call`** (`packages/mcp/src/gateway.ts`). Every tool call of every
    runner passes this method: inline runs, the harness gate (`serveGateHttp`) and run nodes (each
-   node has its own gateway). The result text (and `structured` content) is guarded before the
-   caller sees it, so the model context and the stored `tool_call` step output both carry the
-   guarded text. Tool error messages are guarded in the executor.
-2. **Prompts: `executePipeline` / `executeWithHarness`**. The finished first prompt (event data,
+   node has its own gateway). The result text (and `structured` content, keys included) is guarded
+   before the caller sees it, so the model context and the stored `tool_call` step output both
+   carry the guarded text. The message of a failed call (connect error, server error) is guarded
+   here too, so the harness gate never passes server text through unguarded.
+2. **Tool specs: `ToolGateway.exposedTools`**. Tool descriptions and input schemas (property names
+   included) come from the MCP server and become tool specs in the model context; they are
+   guarded like a result.
+3. **Prompts: `executePipeline` / `executeWithHarness`**. The finished first prompt (event data,
    handed-over input, previous agent output) is guarded once, where all of them meet.
 
-Not covered (stated honestly): text that a harness produces *inside* its own process (for example
-the output of a shell command Claude Code runs itself) and reaches the model through the model
-proxy. Harness steps run with the workspace and gate tools only; guarding the model proxy request
-is a possible follow-up. Model output is not rewritten.
+Not covered (stated honestly):
+
+- Text that a harness produces *inside* its own process (for example the output of a shell command
+  Claude Code runs itself, or a workspace file it reads) and reaches the model through the model
+  proxy. Guarding the model proxy request is follow-up #170.
+- Steps a compromised run node reports: the control node reduces the `input_guard` step to counts,
+  but stores `tool_call` and `output` steps as reported (only the broker values of the run are
+  scrubbed). Follow-up #171.
+- Operator-authored text (agent instructions, policy reasons) is not guarded. Model output is not
+  rewritten.
 
 ## Invisible Unicode
 
@@ -72,8 +82,9 @@ normalised (no NFC), so legitimate text is never rewritten beyond the removed co
   kinds (`env-secret-assignment`, `secret-assignment`, `authorization-header`) replace the whole
   match, including the variable name; that over-redacts on purpose.
 - Limits: a secret the platform never saw and that has no known shape is not found; an attacker who
-  controls a tool can encode a value beyond the decoded forms. This is a tripwire and a hygiene
-  measure, not a guarantee.
+  controls a tool can encode a value beyond the matched forms (split across lines, escaped, cut at
+  the result size limit, which applies before the guard). This is a tripwire and a hygiene
+  measure, not a guarantee (follow-up #172; trade-offs of both stages: #173).
 - All patterns are bounded; the test suite runs them against hostile 256 KiB inputs with a time limit
   and checks that doubling the input does not quadruple the time (a quadratic pattern was found
   once in review).
