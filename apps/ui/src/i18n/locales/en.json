@@ -36,7 +36,14 @@
     "generic": "Something went wrong.",
     "pageNotFound": "Page not found",
     "pageNotFoundText": "The address may be mistyped, or the page has moved.",
-    "backHome": "Back to the dashboard"
+    "backHome": "Back to the dashboard",
+    "runNotFound": "This run no longer exists",
+    "runNotFoundText": "The link may be wrong, or the run was deleted.",
+    "agentNotFound": "This agent no longer exists",
+    "agentNotFoundText": "The link may be wrong, or the agent was deleted.",
+    "demoReset": "The demo is reset daily, so links to earlier runs and agents stop working.",
+    "backToRuns": "Back to all runs",
+    "backToAgents": "Back to all agents"
   },
   "status": {
     "queued": "Queued",

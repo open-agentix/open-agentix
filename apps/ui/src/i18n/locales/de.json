@@ -36,7 +36,14 @@
     "generic": "Etwas ist schiefgelaufen.",
     "pageNotFound": "Seite nicht gefunden",
     "pageNotFoundText": "Vielleicht ist die Adresse vertippt oder die Seite ist umgezogen.",
-    "backHome": "Zurück zum Dashboard"
+    "backHome": "Zurück zum Dashboard",
+    "runNotFound": "Diesen Run gibt es nicht mehr",
+    "runNotFoundText": "Der Link ist vielleicht falsch, oder der Run wurde gelöscht.",
+    "agentNotFound": "Diesen Agent gibt es nicht mehr",
+    "agentNotFoundText": "Der Link ist vielleicht falsch, oder der Agent wurde gelöscht.",
+    "demoReset": "Die Demo wird täglich zurückgesetzt, daher funktionieren Links zu früheren Runs und Agents nicht mehr.",
+    "backToRuns": "Zurück zu allen Runs",
+    "backToAgents": "Zurück zu allen Agents"
   },
   "status": {
     "queued": "Wartend",

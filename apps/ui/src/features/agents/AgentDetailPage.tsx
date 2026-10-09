@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
+import { ApiError } from '../../api/client';
 import { agentQuery, agentVersionQuery, agentVersionsQuery, useTeamNames } from '../../api/queries';
 import { useCan } from '../../auth/auth';
 import { Icon } from '../../components/Icon';
+import { ItemNotFound } from '../../components/ItemNotFound';
 import { Badge, ErrorState, Loading, PageHeader, TabPanel, Tabs } from '../../components/ui';
 import { useI18n } from '../../i18n/i18n';
 import { useDocumentTitle } from '../../lib/hooks';
@@ -38,7 +40,11 @@ export function AgentDetailPage() {
   if (agent.isError)
     return (
       <div className="page">
-        <ErrorState error={agent.error} onRetry={() => void agent.refetch()} />
+        {agent.error instanceof ApiError && agent.error.status === 404 ? (
+          <ItemNotFound kind="agent" />
+        ) : (
+          <ErrorState error={agent.error} onRetry={() => void agent.refetch()} />
+        )}
       </div>
     );
   const a = agent.data;
