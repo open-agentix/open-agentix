@@ -1,4 +1,4 @@
-import { CostModel, type Role } from '@openagentix/core';
+import { CostModel, type Principal, type Role } from '@openagentix/core';
 import { createEvent } from '@openagentix/events';
 import {
   McpServerConfigSchema,
@@ -14,6 +14,7 @@ import { agents } from '../db/schema.js';
 import type { AppContext } from '../context.js';
 import { DEFAULT_TENANT_ID, runs, users as usersTable } from '../db/schema.js';
 import type { Services } from '../services/index.js';
+import { demoId } from './ids.js';
 import {
   CVE_TRIAGE,
   FEATURE_BUILDER,
@@ -38,32 +39,83 @@ export const DEMO_PRICE_TABLE = [
   },
 ];
 
+/** Tenant tree of the demo (ADR 0013): `root` > `security`, `platform`; `acme-labs` is a separate organisation. */
+export type DemoTenantKey = 'root' | 'security' | 'platform' | 'acme-labs';
+
+export const DEMO_TENANTS: {
+  key: DemoTenantKey;
+  slug: string;
+  name: string;
+  parent: DemoTenantKey | null;
+  budgetUsd?: number;
+}[] = [
+  { key: 'root', slug: 'default', name: 'Example Org (demo)', parent: null, budgetUsd: 300 },
+  { key: 'security', slug: 'security', name: 'Security (demo)', parent: 'root', budgetUsd: 120 },
+  { key: 'platform', slug: 'platform', name: 'Platform (demo)', parent: 'root' },
+  { key: 'acme-labs', slug: 'acme-labs', name: 'Acme Labs (demo)', parent: null },
+];
+
+/** Which tenant each demo agent lives in; the three fixed scenarios run in `security`. */
+export const DEMO_AGENT_TENANT: Record<string, DemoTenantKey> = {
+  'cve-triage': 'security',
+  'ticket-updater': 'security',
+  'hardening-review': 'security',
+  'feature-builder': 'platform',
+  'release-watch': 'root',
+  'log-summary': 'acme-labs',
+};
+
+/** Teams per tenant (slug, name, monthly budget in USD). */
+const DEMO_TEAMS: Record<DemoTenantKey, { slug: string; name: string; budgetUsd: number }[]> = {
+  root: [{ slug: 'team-operations', name: 'Operations (demo)', budgetUsd: 10 }],
+  security: [{ slug: 'team-security', name: 'Security (demo)', budgetUsd: 50 }],
+  platform: [{ slug: 'team-platform', name: 'Platform (demo)', budgetUsd: 20 }],
+  'acme-labs': [{ slug: 'team-platform', name: 'Platform (Acme demo)', budgetUsd: 20 }],
+};
+
 export interface DemoUser {
   email: string;
   displayName: string;
   globalRoles: Role[];
-  /** Tenant slug; the default tenant when omitted. */
-  tenant?: 'acme-labs';
+  /** Tenant of the user; roles apply inside it only (the tree grants nothing across nodes yet). */
+  tenant: DemoTenantKey;
   teams?: { slug: string; role: Role }[];
   agents?: { name: string; role: Role }[];
 }
 
 export const DEMO_USERS: DemoUser[] = [
-  { email: 'admin@example.org', displayName: 'Ada Admin', globalRoles: ['admin'] },
+  {
+    email: 'admin@example.org',
+    displayName: 'Ada Admin',
+    globalRoles: ['admin'],
+    tenant: 'security',
+  },
   {
     email: 'engineer@example.org',
     displayName: 'Erin Engineer',
+    tenant: 'security',
     globalRoles: [],
     teams: [{ slug: 'team-security', role: 'agent-engineer' }],
   },
-  { email: 'integrator@example.org', displayName: 'Ivan Integrator', globalRoles: ['integrator'] },
+  {
+    email: 'integrator@example.org',
+    displayName: 'Ivan Integrator',
+    globalRoles: ['integrator'],
+    tenant: 'security',
+  },
   {
     email: 'operator@example.org',
     displayName: 'Olga Operator',
+    tenant: 'security',
     globalRoles: [],
     teams: [{ slug: 'team-security', role: 'operator' }],
   },
-  { email: 'auditor@example.org', displayName: 'Aria Auditor', globalRoles: ['auditor'] },
+  {
+    email: 'auditor@example.org',
+    displayName: 'Aria Auditor',
+    globalRoles: ['auditor'],
+    tenant: 'security',
+  },
   {
     email: 'viewer@example.org',
     displayName: 'Vic Viewer',
@@ -71,10 +123,12 @@ export const DEMO_USERS: DemoUser[] = [
     globalRoles: [],
     teams: [{ slug: 'team-platform', role: 'viewer' }],
   },
-  // Agent-scoped binding: sees and edits feature-builder only, none of the other agents.
+  // Agent-scoped binding: sees and edits feature-builder only, none of the other agents. Lives in
+  // `platform`, where feature-builder runs.
   {
     email: 'contractor@example.org',
     displayName: 'Casey Contractor',
+    tenant: 'platform',
     globalRoles: [],
     agents: [{ name: 'feature-builder', role: 'agent-engineer' }],
   },
@@ -154,50 +208,76 @@ export async function seedDemo(
   );
   await ctx.db.update(usersTable).set({ platformAdmin: true }).where(eq(usersTable.id, admin.id));
   const ownerPrincipal = await services.identity.principalForUser(admin.id);
-  const actor = ownerPrincipal;
-  const sec = await services.identity.createTeam(actor, {
-    slug: 'team-security',
-    name: 'Security (demo)',
-    monthlyBudgetUsd: 50,
-  });
-  const platform = await services.identity.createTeam(actor, {
-    slug: 'team-platform',
-    name: 'Platform (demo)',
-    monthlyBudgetUsd: 20,
-  });
-  // A second, fully isolated tenant with its own team, administrator and agent.
-  const acme = await services.tenants.create(ownerPrincipal, {
-    slug: 'acme-labs',
-    name: 'Acme Labs (demo)',
-    admin: {
-      email: 'admin@acme.example.org',
-      displayName: 'Acme Admin',
-      password: opts.password,
-    },
-  });
-  const acmePrincipal = await services.identity.actingIn(ownerPrincipal, acme.id);
-  const acmePlatform = await services.identity.createTeam(acmePrincipal, {
-    slug: 'team-platform',
-    name: 'Platform (Acme demo)',
-    monthlyBudgetUsd: 20,
-  });
 
-  for (const name of ['cve-db', 'tickets'])
-    await services.catalog.createConnection(actor, {
-      name,
-      kind: 'mcp',
-      config: { transport: 'in-memory' },
+  // Tenant tree: the migrated default tenant becomes the root of "Example Org (demo)", the two
+  // sub-tenants are created through the service layer (no HTTP route for children exists yet) and
+  // the separate organisation keeps proving isolation. Ids are fixed (see ids.ts).
+  const tenantIds = {} as Record<DemoTenantKey, string>;
+  for (const t of DEMO_TENANTS) {
+    if (t.key === 'root') {
+      await services.tenants.update(ownerPrincipal, DEFAULT_TENANT_ID, {
+        name: t.name,
+        monthlyBudgetUsd: t.budgetUsd ?? null,
+      });
+      tenantIds.root = DEFAULT_TENANT_ID;
+      continue;
+    }
+    const input = {
+      id: demoId('tenant', t.slug),
+      slug: t.slug,
+      name: t.name,
+      ...(t.budgetUsd === undefined ? {} : { monthlyBudgetUsd: t.budgetUsd }),
+    };
+    const row = t.parent
+      ? await services.tenants.createChild(ownerPrincipal, tenantIds[t.parent], input)
+      : await services.tenants.create(ownerPrincipal, {
+          ...input,
+          admin: {
+            email: 'admin@acme.example.org',
+            displayName: 'Acme Admin',
+            password: opts.password,
+          },
+        });
+    tenantIds[t.key] = row.id;
+  }
+  const actors = {} as Record<DemoTenantKey, Principal>;
+  for (const t of DEMO_TENANTS)
+    actors[t.key] = await services.identity.actingIn(ownerPrincipal, tenantIds[t.key]);
+  const actor = actors.root;
+
+  const teamIds: Record<string, string> = {};
+  for (const [key, list] of Object.entries(DEMO_TEAMS) as [
+    DemoTenantKey,
+    (typeof DEMO_TEAMS)[DemoTenantKey],
+  ][])
+    for (const t of list) {
+      const team = await services.identity.createTeam(actors[key], {
+        slug: t.slug,
+        name: t.name,
+        monthlyBudgetUsd: t.budgetUsd,
+      });
+      teamIds[`${key}/${t.slug}`] = team.id;
+    }
+
+  // Every tenant that runs agents needs its own connections and baseline policy.
+  for (const key of ['root', 'security', 'platform'] as const) {
+    for (const name of ['cve-db', 'tickets'])
+      await services.catalog.createConnection(actors[key], {
+        name,
+        kind: 'mcp',
+        config: { transport: 'in-memory' },
+      });
+    await services.catalog.createPolicy(actors[key], {
+      name: 'baseline',
+      description: 'Demo baseline: no destructive tools, approvals for merges and deploys.',
+      bundle: {
+        forbiddenTools: ['*/delete_*', 'shell/*'],
+        requireApprovalTools: ['*/merge_*', '*/deploy_*'],
+        forbiddenArgPatterns: [{ pattern: 'rm\\s+-rf', reason: 'destructive shell command' }],
+      },
+      enabled: true,
     });
-  await services.catalog.createPolicy(actor, {
-    name: 'baseline',
-    description: 'Demo baseline: no destructive tools, approvals for merges and deploys.',
-    bundle: {
-      forbiddenTools: ['*/delete_*', 'shell/*'],
-      requireApprovalTools: ['*/merge_*', '*/deploy_*'],
-      forbiddenArgPatterns: [{ pattern: 'rm\\s+-rf', reason: 'destructive shell command' }],
-    },
-    enabled: true,
-  });
+  }
   await services.guidelines.create(actor, {
     scope: 'global',
     name: 'company',
@@ -228,21 +308,16 @@ export async function seedDemo(
     RELEASE_WATCH,
     LOG_SUMMARY,
   ]) {
-    // log-summary belongs to the second tenant, everything else to the default tenant.
-    const owner = source === LOG_SUMMARY ? acmePrincipal : ownerPrincipal;
-    const a = await services.agents.create(owner, source);
+    const name = /^name: (\S+)$/m.exec(source)![1]!;
+    const owner = actors[DEMO_AGENT_TENANT[name]!];
+    const a = await services.agents.create(owner, source, { id: demoId('agent', name) });
     await services.agents.publish(owner, a.id);
     agentIds.set(a.name, a.id);
   }
 
-  const teamIds: Record<string, string> = {
-    'team-security': sec.id,
-    'team-platform': platform.id,
-    'acme-labs/team-platform': acmePlatform.id,
-  };
   const users: Record<string, string> = {};
   for (const u of DEMO_USERS) {
-    const created = await services.identity.createLocalUser(u.tenant ? acmePrincipal : actor, {
+    const created = await services.identity.createLocalUser(actors[u.tenant], {
       email: u.email,
       displayName: u.displayName,
       password: opts.password,
@@ -251,29 +326,31 @@ export async function seedDemo(
     users[u.email] = created.id;
   }
   for (const [key, teamId] of Object.entries(teamIds)) {
-    const [tenant, slug] = key.includes('/') ? key.split('/') : [undefined, key];
+    const [tenant, slug] = key.split('/') as [DemoTenantKey, string];
     const members = DEMO_USERS.filter((u) => u.tenant === tenant).flatMap((u) =>
       (u.teams ?? [])
         .filter((t) => t.slug === slug)
         .map((t) => ({ userId: users[u.email]!, role: t.role })),
     );
-    await services.identity.setTeamMembers(tenant ? acmePrincipal : actor, teamId, members);
+    await services.identity.setTeamMembers(actors[tenant], teamId, members);
   }
   for (const u of DEMO_USERS) {
     for (const b of u.agents ?? [])
-      await services.identity.setAgentMembers(actor, agentIds.get(b.name)!, [
-        { userId: users[u.email]!, role: b.role },
-      ]);
+      await services.identity.setAgentMembers(
+        actors[DEMO_AGENT_TENANT[b.name]!],
+        agentIds.get(b.name)!,
+        [{ userId: users[u.email]!, role: b.role }],
+      );
   }
 
   // Event sources: a signed webhook (fake secret reference) and a change-gated schedule.
-  await services.ingest.createSource(actor, {
+  await services.ingest.createSource(actors.security, {
     name: 'trivy',
     kind: 'webhook',
     secretRefs: ['demo-hook'],
     agentId: agentIds.get('cve-triage')!,
   });
-  const watch = await services.ingest.createSource(actor, {
+  const watch = await services.ingest.createSource(actors.root, {
     name: 'release-feed',
     kind: 'cron',
     agentId: agentIds.get('release-watch')!,
@@ -297,8 +374,9 @@ export async function seedDemo(
   // Runs with steps, tool calls, policy decisions, approvals and costs.
   const tickets = new Map<string, Ticket>();
   const runIds: string[] = [];
-  const enqueue = async (name: string, data: unknown, triggeredBy = 'demo') => {
+  const enqueue = async (name: string, key: string, data: unknown, triggeredBy = 'demo') => {
     const run = await services.runs.enqueue({
+      id: demoId('run', key),
       agentId: agentIds.get(name)!,
       event: createEvent({ source: '/demo', type: 'io.openagentix.demo', data }),
       triggeredBy,
@@ -316,6 +394,7 @@ export async function seedDemo(
       services,
       await enqueue(
         'cve-triage',
+        `cve-triage:${cve}`,
         { image, finding: { cveId: cve, package: 'demo-package', installed: '1.0' }, ticket },
         'webhook:trivy',
       ),
@@ -324,7 +403,7 @@ export async function seedDemo(
   }
   const approver = await services.identity.principalForUser(users['operator@example.org']!);
   const approveAll = () => {
-    void services.runs.listApprovals(ownerPrincipal, 'pending', 10).then(async (page) => {
+    void services.runs.listApprovals(actors.security, 'pending', 10).then(async (page) => {
       for (const a of page.items)
         await services.runs
           .decide(approver, a.id, 'approve', 'Looks good (demo)')
@@ -334,14 +413,16 @@ export async function seedDemo(
   await executeRun(
     ctx,
     services,
-    await enqueue('ticket-updater', { issue: { key: 'SEC-42', severity: 'critical' } }),
+    await enqueue('ticket-updater', 'ticket-updater:SEC-42', {
+      issue: { key: 'SEC-42', severity: 'critical' },
+    }),
     tickets,
     approveAll,
   );
   await executeRun(
     ctx,
     services,
-    await enqueue('feature-builder', {
+    await enqueue('feature-builder', 'feature-builder:DEV-7', {
       ticket: 'DEV-7',
       slug: 'export-costs-csv',
       title: 'Export costs as CSV',
@@ -351,13 +432,15 @@ export async function seedDemo(
   await executeRun(
     ctx,
     services,
-    await enqueue('hardening-review', { pullRequest: 'feat/export-costs-csv' }),
+    await enqueue('hardening-review', 'hardening-review:export-costs-csv', {
+      pullRequest: 'feat/export-costs-csv',
+    }),
     tickets,
   );
   await executeRun(
     ctx,
     services,
-    await enqueue('log-summary', { window: '6h' }, 'cron:0 */6 * * *'),
+    await enqueue('log-summary', 'log-summary:6h', { window: '6h' }, 'cron:0 */6 * * *'),
     tickets,
   );
   // Change gate: first probe = change (run), second = unchanged (no run), third = change (run).
@@ -372,6 +455,7 @@ export async function seedDemo(
           data: { minute, change: gate },
         }),
         'cron:release-feed',
+        { runId: demoId('run', `release-watch:tick-${minute}`) },
       );
       if (r.runId) {
         runIds.push(r.runId);
@@ -380,7 +464,7 @@ export async function seedDemo(
     }
   }
   // One approval left pending for the approval inbox.
-  const pendingRun = await enqueue('ticket-updater', {
+  const pendingRun = await enqueue('ticket-updater', 'ticket-updater:SEC-43', {
     issue: { key: 'SEC-43', severity: 'high' },
   });
   await ctx.db
@@ -402,7 +486,7 @@ export async function seedDemo(
   await services.audit.checkpoint();
   return {
     seeded: true,
-    tenants: 2,
+    tenants: DEMO_TENANTS.length,
     users: DEMO_USERS.length + 1,
     agents: agentIds.size,
     runs: runIds.length + 1,

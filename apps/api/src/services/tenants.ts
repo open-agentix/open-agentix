@@ -62,6 +62,8 @@ export class TenantsService {
       name: string;
       monthlyBudgetUsd?: number | undefined;
       admin?: { email: string; displayName: string; password: string } | undefined;
+      /** Fixed id (the deterministic demo seed); random when omitted. */
+      id?: string | undefined;
     },
   ): Promise<TenantRow> {
     return this.insert(p, null, input);
@@ -76,7 +78,13 @@ export class TenantsService {
   async createChild(
     p: Principal,
     parentId: string,
-    input: { slug: string; name: string; monthlyBudgetUsd?: number | undefined },
+    input: {
+      slug: string;
+      name: string;
+      monthlyBudgetUsd?: number | undefined;
+      /** Fixed id (the deterministic demo seed); random when omitted. */
+      id?: string | undefined;
+    },
   ): Promise<TenantRow> {
     this.assertOperator(p);
     const parent = await this.tree.node(parentId);
@@ -92,11 +100,12 @@ export class TenantsService {
       name: string;
       monthlyBudgetUsd?: number | undefined;
       admin?: { email: string; displayName: string; password: string } | undefined;
+      id?: string | undefined;
     },
   ): Promise<TenantRow> {
     this.assertOperator(p);
     const { maxDepth, maxNodesPerRoot } = this.ctx.config.tenancy;
-    const id = randomUUID();
+    const id = input.id ?? randomUUID();
     const placement = parent ? placeNode(id, parent, maxDepth) : placeNode(id, null, maxDepth);
     const row = await this.ctx.db
       .transaction(async (t) => {
