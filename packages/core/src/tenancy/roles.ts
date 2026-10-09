@@ -170,8 +170,13 @@ export function effectiveAt(
     if (b.useCase !== null) continue;
     // `pentest` is time-boxed by definition; without an expiry it never applies.
     if (b.role === 'pentest' && b.expiresAt === null) continue;
-    // Expiry is evaluated per call, never at cache time.
-    if (b.expiresAt !== null && b.expiresAt.getTime() <= now) continue;
+    // Expiry is evaluated per call, never at cache time. Only `null` means "no expiry"; anything
+    // that is not a valid date in the future (an invalid date, a string from a JSON cache, an
+    // invalid `now`) ends the binding instead of keeping it forever.
+    if (b.expiresAt !== null) {
+      const expires = b.expiresAt instanceof Date ? b.expiresAt.getTime() : Number.NaN;
+      if (!(expires > now)) continue;
+    }
     const at = position.get(b.tenantId);
     if (at === undefined) continue; // not in the chain: below, beside or in another organisation
     let source: BindingSource;

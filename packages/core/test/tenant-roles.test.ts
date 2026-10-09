@@ -272,6 +272,29 @@ describe('effectiveAt', () => {
     );
   });
 
+  it('fails closed on an expiry or a clock that is not a valid date', () => {
+    const invalid = rawOf(f.a, {
+      nodeBindings: [
+        grant(f.a.id, 'auditor', { expiresAt: new Date('not a date') }),
+        grant(f.a.id, 'pentest', { expiresAt: new Date(Number.NaN) }),
+        // what a JSON round trip (a cached principal) turns a Date into
+        grant(f.a.id, 'viewer', { expiresAt: ahead(60_000).toISOString() as unknown as Date }),
+        grant(f.a.id, 'operator', { expiresAt: undefined as unknown as Date }),
+      ],
+    });
+    expect(effectiveAt(invalid, f.a, opts)).toEqual([]);
+    // An invalid `now` ends every expiring binding; bindings without an expiry are unaffected.
+    const mixed = rawOf(f.a, {
+      nodeBindings: [
+        grant(f.a.id, 'auditor', { expiresAt: ahead(60_000) }),
+        grant(f.a.id, 'viewer'),
+      ],
+    });
+    expect(effectiveAt(mixed, f.a, { now: new Date(Number.NaN) }).map((b) => b.role)).toEqual([
+      'viewer',
+    ]);
+  });
+
   it('makes a platform admin admin everywhere, unless asked not to', () => {
     const raw = rawOf(f.a, { platformAdmin: true, nodeBindings: [grant(f.a.id, 'viewer')] });
     for (const n of f.all) {
