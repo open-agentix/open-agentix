@@ -202,7 +202,7 @@ describe('runner, toolbox, secrets and worker settings', () => {
         trivy: `ghcr.io/open-agentix/toolbox-trivy@${DIGEST}`,
       }),
       OAX_K8S_CONTROL_PLANE_POD_SELECTOR: '{"app":"api"}',
-      OAX_K8S_CONTROL_PLANE_CIDRS: '10.96.0.0/12',
+      OAX_K8S_CONTROL_PLANE_CIDRS: '10.96.0.10/32',
       OAX_K8S_CONTROL_PLANE_PORTS: '8443, 443',
     });
     expect(c.runners.kubernetesJob).toMatchObject({
@@ -213,7 +213,7 @@ describe('runner, toolbox, secrets and worker settings', () => {
       controlPlane: {
         podSelector: { app: 'api' },
         namespaceSelector: { 'kubernetes.io/metadata.name': 'oax' },
-        cidrs: ['10.96.0.0/12'],
+        cidrs: ['10.96.0.10/32'],
         ports: [8443, 443],
       },
     });
@@ -274,5 +274,20 @@ describe('runner, toolbox, secrets and worker settings', () => {
       /OAX_K8S_CONTROL_PLANE_PORTS/,
     );
     expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_PORTS: 'https' })).toThrow();
+  });
+
+  it('refuses broad, invalid or denied control plane CIDRs at start-up', () => {
+    const ok = K8S_OK;
+    // Broad or invalid CIDRs are a start-up error, not a surprise at the first step.
+    expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_CIDRS: '0.0.0.0/1' })).toThrow(
+      /OAX_K8S_CONTROL_PLANE_CIDRS.*too broad/,
+    );
+    expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_CIDRS: 'oax-api' })).toThrow(
+      /OAX_K8S_CONTROL_PLANE_CIDRS/,
+    );
+    expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_CIDRS: '169.254.169.254/32' })).toThrow(
+      /always-denied/,
+    );
+    expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_CIDRS: '10.96.0.10/32' })).not.toThrow();
   });
 });

@@ -220,6 +220,59 @@ export function effectiveResources(
   return { cpu: `${Math.max(1, Math.round(cpu * 1000))}m`, memory: `${mem}Mi` };
 }
 
+/**
+ * Narrowest the operator may make a control plane CIDR: /24 (IPv4), /64 (IPv6). The control node is
+ * a few addresses (a Service IP, a load balancer); a wider block would let run Pods reach every
+ * neighbour on the control ports. Use the pod/namespace selectors for in-cluster Pods instead.
+ */
+export const CONTROL_PLANE_MIN_PREFIX: Readonly<Record<4 | 6, number>> = { 4: 24, 6: 64 };
+
+/**
+ * The control plane `ipBlock`s: each CIDR must be valid, no broader than
+ * {@link CONTROL_PLANE_MIN_PREFIX} and not inside an always-denied range (IMDS, link-local,
+ * loopback). Always-denied ranges and `denyCidrs` that lie inside a control plane CIDR are
+ * punched out with `except`. A control plane CIDR inside a `denyCidrs` range is an explicit
+ * operator exception (e.g. the control node's Service IP inside the denied service CIDR).
+ */
+export function controlPlaneBlocks(cfg: KubernetesJobRunnerConfig): EgressCidr[] {
+  const always = ALWAYS_DENIED_CIDRS.map((d) => parseCidr(d)!);
+  const denied = [
+    ...always,
+    ...cfg.denyCidrs.map((d) => {
+      const c = parseCidr(d);
+      if (!c) throw bad(`deny CIDR "${d}" is not a valid CIDR`);
+      return c;
+    }),
+  ];
+  return cfg.controlPlane.cidrs.map((raw) => {
+    const c = parseCidr(raw);
+    if (!c) throw bad(`control plane CIDR "${raw}" is not a valid CIDR`);
+    const min = CONTROL_PLANE_MIN_PREFIX[c.version];
+    if (c.bits < min) {
+      throw bad(`control plane CIDR "${raw}" is too broad (minimum prefix /${min})`);
+    }
+    if (always.some((d) => cidrContains(d, c))) {
+      throw bad(`control plane CIDR "${raw}" is inside an always-denied range`);
+    }
+    const except = [
+      ...new Set(
+        denied
+          .filter((d) => d.version === c.version && d.bits > c.bits && cidrContains(c, d))
+          .map((d) => formatCidr(d)),
+      ),
+    ];
+    return { cidr: formatCidr(c), except };
+  });
+}
+
+/** Start-up check of the control plane settings (fail closed, before the first step). */
+export function validateControlPlane(cfg: KubernetesJobRunnerConfig): void {
+  if (cfg.controlPlane.ports.length === 0) {
+    throw bad('controlPlane.ports must list at least one port');
+  }
+  controlPlaneBlocks(cfg);
+}
+
 function selectorPeer(
   podSelector?: Record<string, string>,
   namespaceSelector?: Record<string, string>,
@@ -273,10 +326,8 @@ export function buildNetworkPolicy(spec: RunNodeSpec, cfg: KubernetesJobRunnerCo
   const cpTo: Record<string, unknown>[] = [];
   const peer = selectorPeer(cp.podSelector, cp.namespaceSelector);
   if (peer) cpTo.push(peer);
-  for (const c of cp.cidrs) {
-    const pc = parseCidr(c);
-    if (!pc || pc.bits === 0) throw bad(`invalid control plane CIDR "${c}"`);
-    cpTo.push({ ipBlock: { cidr: c } });
+  for (const { cidr, except } of controlPlaneBlocks(cfg)) {
+    cpTo.push({ ipBlock: { cidr, ...(except.length > 0 ? { except } : {}) } });
   }
   if (cpTo.length > 0) {
     // An empty `ports` list would allow every port to the control plane peers (fail closed).
@@ -453,6 +504,7 @@ export class KubernetesJobRunner implements IsolatingRunner {
       throw bad('the run namespace must differ from the worker namespace');
     }
     validateResourceCeiling(this.config.resources);
+    validateControlPlane(this.config);
     // Misconfigured images are a start-up error, not a surprise at the first step (fail closed).
     for (const image of [this.config.image, ...Object.values(this.config.toolboxImages)]) {
       if (image !== undefined) validateImage(image, this.config);

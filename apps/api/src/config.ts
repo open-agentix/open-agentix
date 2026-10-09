@@ -15,6 +15,7 @@ import {
   KubernetesJobRunnerConfigSchema,
   parseCidr,
   parseEgressEntries,
+  validateControlPlane,
   validateImage,
   validateResourceCeiling,
 } from '@openagentix/runners';
@@ -766,6 +767,14 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
       throw new OaxError(
         'config_invalid',
         'invalid configuration: runner "kubernetes-job" needs OAX_K8S_CONTROL_PLANE_POD_SELECTOR / OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR / OAX_K8S_CONTROL_PLANE_CIDRS (where run nodes may reach the control node)',
+      );
+    }
+    try {
+      validateControlPlane(job);
+    } catch (err) {
+      throw new OaxError(
+        'config_invalid',
+        `invalid configuration: OAX_K8S_CONTROL_PLANE_CIDRS / OAX_K8S_DENY_CIDRS: ${(err as Error).message}`,
       );
     }
     if (!e.OAX_NODE_CONTROL_URL || !e.OAX_NODE_CONTROL_URL.startsWith('https://')) {

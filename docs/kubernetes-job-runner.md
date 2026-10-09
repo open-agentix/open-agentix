@@ -91,7 +91,16 @@ can only narrow). Further rules, all enforced when the Job is built:
 
 The control node is reachable through `controlPlane` (non-empty pod/namespace selectors, prefer
 `kubernetes.io/metadata.name`; CIDRs; ports). DNS goes to kube-dns (see follow-ups). With an empty
-`controlPlane` and `dnsEgress: false` the Pod is completely isolated.
+`controlPlane` and `dnsEgress: false` the Pod is completely isolated. Checked at config load and in
+the runner constructor:
+
+- at least one port (`ports: []` in a NetworkPolicy rule would mean every port);
+- control plane CIDRs no broader than `/24` (IPv4) or `/64` (IPv6) and never inside an
+  always-denied range; always-denied ranges and `OAX_K8S_DENY_CIDRS` inside a control plane CIDR
+  get an `ipBlock.except` entry. A control plane CIDR inside a `OAX_K8S_DENY_CIDRS` range (the
+  control node's Service IP inside the denied service CIDR) is treated as a deliberate exception;
+- a pod selector without a namespace selector matches Pods in the **run** namespace only (that is
+  how NetworkPolicy peers work); set both to reach the control node in its own namespace.
 
 ## Images
 

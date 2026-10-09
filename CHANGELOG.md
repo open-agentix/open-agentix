@@ -19,7 +19,9 @@ All notable changes to this project are documented here. The format follows
   (**behaviour change** for configurations that enabled the runner before it was wired). The kind
   end-to-end test stays opt-in. Docs: `docs/kubernetes-job-runner.md`, `docs/runners.md`.
   `OAX_K8S_CONTROL_PLANE_PORTS` must list at least one port (an empty list would have rendered
-  `ports: []`, which a NetworkPolicy reads as every port).
+  `ports: []`, which a NetworkPolicy reads as every port). `OAX_K8S_CONTROL_PLANE_CIDRS` are
+  checked at start-up: no broader than `/24` (IPv4) or `/64` (IPv6), never inside an always-denied
+  range, and always-denied ranges plus `OAX_K8S_DENY_CIDRS` inside them are excluded.
 - **Git delivery in the worker (DOG-3a/3b, ADR 0010 Amendment 2)**: `apps/worker/src/git/` with a
   hardened minimal Git engine over https (child process with allowlisted environment, forced `-c`
   options, one-target loopback relay that dials through the outbound dispatcher, shallow fetch of

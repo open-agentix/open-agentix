@@ -234,7 +234,7 @@ The `container` runner is implemented and opt-in (see [runners.md](runners.md)).
 | `OAX_K8S_IMAGE` | – | Default run node image, `repo@sha256:<digest>` under `OAX_TOOLBOX_REGISTRY` and allowlisted (`OAX_K8S_RUN_NODE_IMAGES`/toolbox name). **Required** when `kubernetes-job` is enabled; checked at config load. |
 | `OAX_K8S_TOOLBOX_IMAGES` | `{}` | JSON map toolbox name -> digest-pinned image (must be in `OAX_TOOLBOX_ALLOWLIST`); an unknown toolbox fails closed (`toolbox_image_unknown`). |
 | `OAX_K8S_CONTROL_PLANE_POD_SELECTOR` / `OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR` | – | JSON label selectors (non-empty) of the control node Pods that run Pods may reach; prefer `{"kubernetes.io/metadata.name":"<ns>"}` for the namespace. At least one of the two selectors or `OAX_K8S_CONTROL_PLANE_CIDRS` is **required** when `kubernetes-job` is enabled. |
-| `OAX_K8S_CONTROL_PLANE_CIDRS` / `OAX_K8S_CONTROL_PLANE_PORTS` | – / `443` | Comma lists: control node CIDRs and TCP ports a run Pod may reach. |
+| `OAX_K8S_CONTROL_PLANE_CIDRS` / `OAX_K8S_CONTROL_PLANE_PORTS` | – / `443` | Comma lists: control node CIDRs (no broader than `/24` IPv4 or `/64` IPv6, never inside IMDS/link-local/loopback; denied ranges inside are excluded) and TCP ports (at least one) a run Pod may reach. |
 | `OAX_K8S_DNS_EGRESS` | `true` | Allow DNS to kube-dns (needed to resolve the control node). |
 | `OAX_K8S_AUTOMOUNT_SA_TOKEN` | `false` | Mount the ServiceAccount API token into run Pods (a step never needs it). |
 | `OAX_K8S_DEFAULT_DENY_POLICY` | `default-deny-all` | Name of the namespace-wide default-deny NetworkPolicy that must exist; a step does not start without it. |

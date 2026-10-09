@@ -489,6 +489,34 @@ describe('resources and identity', () => {
         }),
     ).toThrow();
   });
+  it('bounds control plane CIDRs and punches the always-denied ranges out of them', () => {
+    const mkr = (cidrs: string[], over: Record<string, unknown> = {}) =>
+      new KubernetesJobRunner({
+        client: new FakeKube(),
+        config: { namespace: 'runs', controlPlane: { cidrs }, ...over },
+      });
+    // too broad: a /1 split would open half of the internet on the control ports
+    expect(() => mkr(['0.0.0.0/1'])).toThrow(/too broad/);
+    expect(() => mkr(['10.0.0.0/8'])).toThrow(/too broad/);
+    expect(() => mkr(['2001:db8::/32'])).toThrow(/too broad/);
+    expect(() => mkr(['not-a-cidr'])).toThrow(/control plane CIDR/);
+    // inside an always-denied range (cloud metadata)
+    expect(() => mkr(['169.254.169.254/32'])).toThrow(/always-denied/);
+    expect(() => mkr(['10.9.0.0/24'])).not.toThrow();
+    // denied ranges inside an allowed control plane CIDR become `except` entries
+    const p = buildNetworkPolicy(
+      spec({ egress: [] }),
+      cfg({
+        dnsEgress: false,
+        denyCidrs: ['10.9.0.1/32'],
+        controlPlane: { cidrs: ['10.9.0.0/24', '168.63.129.0/24'] },
+      }),
+    ) as any;
+    expect(p.spec.egress[0].to).toEqual([
+      { ipBlock: { cidr: '10.9.0.0/24', except: ['10.9.0.1/32'] } },
+      { ipBlock: { cidr: '168.63.129.0/24', except: ['168.63.129.16/32'] } },
+    ]);
+  });
 });
 
 describe('KubernetesJobRunner lifecycle', () => {
