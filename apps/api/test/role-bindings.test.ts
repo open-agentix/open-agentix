@@ -19,6 +19,7 @@ import {
   tenants as tenantsTable,
   users as usersTable,
 } from '../src/db/schema.js';
+import { IdentityService } from '../src/services/identity.js';
 import { loadRawGrants } from '../src/services/role-bindings.js';
 import { sqlState, sqlTargets } from './db-targets.js';
 import { testNode, type TestNode } from './helpers.js';
@@ -67,7 +68,7 @@ describe.each(sqlTargets)(
       );
     };
     const shadow = async () => {
-      const out = { match: 0, mismatch: 0, error: 0 };
+      const out = { match: 0, mismatch: 0, error: 0, skipped: 0 };
       for (const v of (await n.ctx.metrics.roleBindingsShadow.get()).values)
         out[v.labels.outcome as keyof typeof out] = v.value;
       return out;
@@ -387,6 +388,33 @@ describe.each(sqlTargets)(
               .sql`alter table trb_hidden rename to tenant_role_bindings`,
           );
         }
+      });
+
+      it('is skipped under load instead of adding database reads, and still changes nothing', async () => {
+        const u = await createUser('busy@example.org', ['viewer']);
+        await n.ctx.db.delete(tenantRoleBindings).where(eq(tenantRoleBindings.userId, u)); // drift
+        const identity = n.services.identity as unknown as { shadowInFlight: number };
+        const counts = await shadow();
+        identity.shadowInFlight = IdentityService.SHADOW_MAX_IN_FLIGHT;
+        try {
+          const p = await n.services.identity.principalForUser(u);
+          expect(p.bindings.map((b) => b.role)).toEqual(['viewer']);
+          const after = await shadow();
+          expect(after.skipped).toBe(counts.skipped + 1);
+          expect(after.mismatch).toBe(counts.mismatch);
+          expect(after.match).toBe(counts.match);
+        } finally {
+          identity.shadowInFlight = 0;
+        }
+        // Below the cap the check runs again (and sees the drift), and the slot is released.
+        await n.services.identity.principalForUser(u);
+        expect((await shadow()).mismatch).toBe(counts.mismatch + 1);
+        expect(identity.shadowInFlight).toBe(0);
+        // Concurrent principal builds never leave a slot behind, whatever was skipped.
+        await Promise.all(
+          Array.from({ length: 8 }, () => n.services.identity.principalForUser(u)),
+        );
+        expect(identity.shadowInFlight).toBe(0);
       });
 
       it('refuses a binding outside the home organisation at the database', async () => {

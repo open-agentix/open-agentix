@@ -70,7 +70,7 @@ Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
 | --- | --- | --- |
 | `OAX_BOOTSTRAP_ADMIN_EMAIL` | – | Creates a local admin when the user table is empty. |
 | `OAX_BOOTSTRAP_ADMIN_PASSWORD` | – (*secret*, >= 12 chars) | Password of the bootstrap admin. |
-| `OAX_ROLE_BINDINGS_SHADOW` | `true` | Compare the tenant role resolver with the legacy role bindings after each principal build and count the result in `oax_role_bindings_shadow_total` (ADR 0014 S1). The legacy result always decides; set `false` to skip the extra reads. |
+| `OAX_ROLE_BINDINGS_SHADOW` | `true` | Compare the tenant role resolver with the legacy role bindings after each principal build and count the result in `oax_role_bindings_shadow_total` (ADR 0014 S1; at most two checks at once, the rest count as `skipped`). The legacy result always decides; set `false` to skip the extra reads. |
 | `OAX_SESSION_TTL_SECONDS` | `28800` | Lifetime of session tokens from login. |
 | `OAX_TOKEN_MAX_TTL_DAYS` | `365` | Upper bound for API token lifetimes. |
 | `OAX_TENANT_MAX_DEPTH` | `32` | Levels allowed below an organisation (root = 0), 1 to 32. 32 is the technical safety maximum of the tenant tree (ADR 0013); lower it only to forbid deep trees. |

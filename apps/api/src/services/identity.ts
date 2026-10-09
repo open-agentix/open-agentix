@@ -163,14 +163,29 @@ export class IdentityService {
   private readonly shadowLogged = new Map<string, number>();
 
   /**
+   * At most this many shadow checks run at once. The check costs four extra reads per principal
+   * build; under load (many cache misses, stream tokens) further checks are skipped and counted as
+   * `outcome="skipped"`, never queued, so the shadow mode cannot add more than a fixed number of
+   * database connections to the authentication path.
+   */
+  static readonly SHADOW_MAX_IN_FLIGHT = 2;
+  private shadowInFlight = 0;
+
+  /**
    * Shadow mode of the tenant role resolver (ADR 0014 slice S1): resolves the user's bindings from
    * `tenant_role_bindings` at the home node and compares them with the legacy result. Never throws,
    * never changes the result; a difference is counted (`oax_role_bindings_shadow_total`) and logged
-   * (at most once per user and ten minutes). A non-zero `mismatch` count means the mirror of
-   * `users.global_roles` drifted or a binding exists that the legacy path does not know.
+   * (at most once per user and ten minutes); skipped under load (`SHADOW_MAX_IN_FLIGHT`). A non-zero
+   * `mismatch` count means the mirror of `users.global_roles` drifted or a binding exists that the
+   * legacy path does not know.
    */
   private async shadowCheck(user: UserRow, legacy: RoleBinding[]): Promise<void> {
     const counter = this.ctx.metrics.roleBindingsShadow;
+    if (this.shadowInFlight >= IdentityService.SHADOW_MAX_IN_FLIGHT) {
+      counter.inc({ outcome: 'skipped' });
+      return;
+    }
+    this.shadowInFlight++;
     try {
       const loaded = await loadRawGrants(this.ctx.db, user);
       if (!loaded) {
@@ -205,6 +220,8 @@ export class IdentityService {
     } catch (e) {
       counter.inc({ outcome: 'error' });
       this.ctx.logger.warn({ err: e, userId: user.id }, 'role binding shadow check failed');
+    } finally {
+      this.shadowInFlight--;
     }
   }
 

@@ -115,8 +115,10 @@ authoritative, so upgrading changes nobody's access.
   no clock, no recursion; unusable input yields fewer bindings, never more.
 - **Shadow mode**: after every principal build the API resolves the same user at the home node from
   the bindings table and compares it with the legacy result. The outcome is counted in
-  `oax_role_bindings_shadow_total{outcome="match|mismatch|error"}`; a mismatch also logs a warning
-  with the differing lines (at most once per user and ten minutes). A non-zero `mismatch` means the
+  `oax_role_bindings_shadow_total{outcome="match|mismatch|error|skipped"}`; a mismatch also logs a
+  warning with the differing lines (at most once per user and ten minutes). At most two checks run
+  at once; under load the rest are skipped (`skipped`), so the check adds a bounded number of
+  database reads to authentication. A non-zero `mismatch` means the
   mirror drifted or a binding exists that the legacy path does not know. The legacy result is always
   what authorises; the check never fails a request. Turn it off with `OAX_ROLE_BINDINGS_SHADOW=false`.
 - `pentest` exists in the role set (read-only, ADR 0014 section 8) but cannot be granted before S6:
