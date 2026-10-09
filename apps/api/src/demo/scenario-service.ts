@@ -116,8 +116,24 @@ export class DemoScenarioService {
     };
   }
 
-  /** Queues a scenario run. `clientIp` identifies the visitor for rate limiting. */
-  async start(
+  /** Tail of the start queue: starts run one after another (see `start`). */
+  private startQueue: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Queues a scenario run. `clientIp` identifies the visitor for rate limiting.
+   *
+   * The limits are check-then-insert, so concurrent starts are serialised: otherwise a burst of
+   * parallel requests would all pass the checks before any of them had inserted its run (per-visitor
+   * window, daily cap, one live run and daily budget). The lock is per process; the public demo runs
+   * one API replica.
+   */
+  start(scenarioId: string, clientIp: string): Promise<{ runId: string; tenant: DemoTenantRef }> {
+    const next = this.startQueue.then(() => this.startNow(scenarioId, clientIp));
+    this.startQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  private async startNow(
     scenarioId: string,
     clientIp: string,
   ): Promise<{ runId: string; tenant: DemoTenantRef }> {

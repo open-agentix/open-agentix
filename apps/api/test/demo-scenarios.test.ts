@@ -213,3 +213,48 @@ describe('demo scenarios', () => {
     });
   });
 });
+
+describe('demo scenario limits under concurrent requests', () => {
+  const burst = (count: number, ip: (i: number) => string) =>
+    Promise.all(Array.from({ length: count }, (_, i) => run(n, 'cve-xz-backdoor', ip(i))));
+  const codes = (res: Awaited<ReturnType<typeof burst>>) => res.map((r) => r.statusCode).sort();
+
+  it('a burst from one visitor gets no more runs than the window allows', async () => {
+    await resetRuns();
+    tune({ rate: { runs: 3, windowSeconds: 600 }, dailyRuns: 1000, llm: 'simulated' });
+    const res = await burst(12, () => '198.51.100.10');
+    expect(codes(res)).toEqual([...Array(3).fill(202), ...Array(9).fill(429)]);
+    expect(res.filter((r) => r.statusCode === 429).map((r) => r.json().error)).toEqual(
+      Array(9).fill('rate_limited'),
+    );
+  }, 120_000);
+
+  it('a burst from many visitors does not pass the daily cap', async () => {
+    await resetRuns();
+    tune({ rate: { runs: 10, windowSeconds: 600 }, dailyRuns: 2, llm: 'simulated' });
+    const res = await burst(8, (i) => `198.51.100.${20 + i}`);
+    expect(codes(res)).toEqual([202, 202, ...Array(6).fill(429)]);
+  }, 120_000);
+
+  it('claude-code mode: a burst starts one live run only', async () => {
+    await resetRuns();
+    tune({
+      llm: 'claude-code',
+      dailyBudgetUsd: 10,
+      runBudgetUsd: 0.05,
+      rate: { runs: 10, windowSeconds: 600 },
+      dailyRuns: 1000,
+    });
+    const res = await burst(6, (i) => `198.51.100.${40 + i}`);
+    expect(codes(res)).toEqual([202, ...Array(5).fill(429)]);
+    expect(
+      res.filter((r) => r.statusCode === 429).every((r) => r.json().error === 'demo_busy'),
+    ).toBe(true);
+    // A refused start does not block the ones after it (the queue keeps going after errors).
+    await n.ctx.database.db.execute(
+      `update runs set status = 'succeeded' where triggered_by like 'demo-scenario:%'` as never,
+    );
+    expect((await run(n, 'cve-log4shell', '198.51.100.60')).statusCode).toBe(202);
+    tune({ llm: 'simulated' });
+  }, 120_000);
+});

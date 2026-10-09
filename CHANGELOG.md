@@ -230,6 +230,10 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Security
 
+- **Demo: scenario limits hold under concurrent requests**: `POST /v1/demo/scenarios/{id}/run`
+  checked its limits before inserting the run, so a burst of parallel requests passed all of them
+  (per-visitor window, daily cap, one live run and the daily budget in `claude-code` mode). Starts
+  are now checked and queued one at a time (per API process; the demo runs one replica).
 - **Demo: failed sign-ins no longer store what a visitor typed**: in demo mode a failed sign-in for
   a name that is no account is audited as `(unknown account)` instead of the typed name, because
   the published platform-admin accounts read the audit log of every tenant (a visitor's real
