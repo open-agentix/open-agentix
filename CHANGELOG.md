@@ -230,6 +230,10 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Security
 
+- **Demo: failed sign-ins no longer store what a visitor typed**: in demo mode a failed sign-in for
+  a name that is no account is audited as `(unknown account)` instead of the typed name, because
+  the published platform-admin accounts read the audit log of every tenant (a visitor's real
+  address typed by mistake was visible to every other visitor). Outside demo mode nothing changes.
 - **Invisible-Unicode filter for model input** (ADR 0008 Amendment 6): zero-width, bidi, tag-block,
   variation-selector runs, control and other invisible format characters are removed from prompts,
   tool results, tool error messages and tool descriptions/schemas before they enter the model

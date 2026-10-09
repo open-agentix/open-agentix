@@ -69,6 +69,9 @@ interface CachedPrincipal {
   exp: number;
 }
 
+/** Audit target of a failed demo sign-in for a name that is no account (the input is not stored). */
+export const DEMO_UNKNOWN_LOGIN_TARGET = '(unknown account)';
+
 const unauthenticated = (msg = 'authentication required') =>
   new HttpError(401, 'unauthenticated', msg);
 
@@ -426,6 +429,11 @@ export class IdentityService {
   async login(username: string, password: string, method: 'local' | 'ldap' | 'auto' = 'auto') {
     const email = username.toLowerCase();
     const [local] = await this.ctx.db.select().from(users).where(eq(users.email, email));
+    // Public demo: anonymous visitors share one audit log that the published platform-admin accounts
+    // can read across tenants. Whatever a visitor typed as the user name (possibly a real address)
+    // must not end up there, so failed attempts name existing (fictional) accounts only.
+    const failedTarget = (name: string) =>
+      this.ctx.config.demo.enabled && !local ? DEMO_UNKNOWN_LOGIN_TARGET : name;
     if ((method === 'local' || method === 'auto') && local?.source === 'local') {
       if (local.disabled || !(await verifyPassword(password, local.passwordHash))) {
         await this.audit.append({
@@ -447,7 +455,7 @@ export class IdentityService {
         await this.audit.append({
           actor: 'anonymous',
           action: 'auth.failed',
-          target: username,
+          target: failedTarget(username),
           payload: { method: 'ldap' },
         });
         if (e instanceof OaxError && e.code === 'unauthenticated')
@@ -466,7 +474,7 @@ export class IdentityService {
     await this.audit.append({
       actor: 'anonymous',
       action: 'auth.failed',
-      target: email,
+      target: failedTarget(email),
       payload: { method },
     });
     throw unauthenticated('invalid credentials');
