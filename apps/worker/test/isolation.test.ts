@@ -92,6 +92,21 @@ describe('worker isolation wiring', () => {
     expect(createKubernetesJobRunner(config)).toBeUndefined();
   });
 
+  it('warns when run Pods get a ServiceAccount token and stays quiet by default', () => {
+    const quiet: string[] = [];
+    createKubernetesJobRunner(loadConfig(base), {
+      client: new FakeKube(),
+      warn: (m) => quiet.push(m),
+    });
+    expect(quiet).toEqual([]);
+    const loud: string[] = [];
+    createKubernetesJobRunner(loadConfig({ ...base, OAX_K8S_AUTOMOUNT_SA_TOKEN: 'true' }), {
+      client: new FakeKube(),
+      warn: (m) => loud.push(m),
+    });
+    expect(loud.join('\n')).toMatch(/OAX_K8S_AUTOMOUNT_SA_TOKEN=true.*openagentix-run-node/);
+  });
+
   it('fails closed when enabled outside a cluster', () => {
     const config = loadConfig(base);
     const saved = process.env.KUBERNETES_SERVICE_HOST;

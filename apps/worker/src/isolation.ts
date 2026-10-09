@@ -18,11 +18,18 @@ export function createKubernetesJobRunner(
   const job = config.runners.kubernetesJob;
   if (!job.enabled || !config.runners.enabled.includes('kubernetes-job')) return undefined;
   const { enabled: _enabled, nodeControlUrl: _url, ...runnerConfig } = job;
-  return new KubernetesJobRunner({
+  const runner = new KubernetesJobRunner({
     client: deps.client ?? InClusterKubeClient.fromEnv(),
     config: runnerConfig,
     ...(deps.warn ? { warn: deps.warn } : {}),
   });
+  // An explicit opt-in, but it hands a Kubernetes API credential to untrusted step code: say so.
+  if (runner.config.automountServiceAccountToken) {
+    deps.warn?.(
+      `OAX_K8S_AUTOMOUNT_SA_TOKEN=true: run Pods get the API token of ServiceAccount "${runner.config.serviceAccountName}"; make sure it has no RoleBinding`,
+    );
+  }
+  return runner;
 }
 
 /** The isolating runners of this worker (container and/or Kubernetes Job), or undefined if none. */
