@@ -33,7 +33,8 @@ describe('demo seed', () => {
     )
       .flat()
       .filter((u) => u.email.endsWith('@example.org'));
-    expect(demoUsers).toHaveLength(8);
+    // 7 role accounts, the platform owner and the seed's bootstrap owner (demo-owner).
+    expect(demoUsers).toHaveLength(9);
     const stats = (await n.req({ method: 'GET', url: '/v1/stats/runs' })).json();
     expect(stats.byStatus.succeeded).toBeGreaterThanOrEqual(1);
     const inSecurity = { 'x-oax-tenant': 'security' };

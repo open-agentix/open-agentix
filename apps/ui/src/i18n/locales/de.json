@@ -214,7 +214,11 @@
       "started": "Szenario gestartet",
       "live": "Echtes Modell: {model}. Verbleibendes Budget heute: {remaining}.",
       "simulated": "Simuliertes Modell (kein Netzwerk, keine Kosten).",
-      "limit": "Bis zu {runs} Runs pro {minutes} Minuten und Besucher."
+      "limit": "Bis zu {runs} Runs pro {minutes} Minuten und Besucher.",
+      "tenantNote": "Runs von Szenarien erscheinen in {tenant}.",
+      "tenantSwitch": "Zu {tenant} wechseln",
+      "tenantSwitched": "Zu {tenant} gewechselt",
+      "tenantLocked": "Runs von Szenarien erscheinen in {tenant}. Dieses Konto kann den Tenant nicht öffnen; melde dich als admin@example.org oder owner@example.org an, um sie zu verfolgen."
     }
   },
   "agents": {
@@ -922,7 +926,18 @@
     },
     "hint": {
       "title": "Öffentliche Demo",
-      "credentials": "Melde dich mit dem gemeinsamen Fake-Konto an:",
+      "credentials": "Melde dich mit einem dieser Fake-Konten an. Gemeinsames Passwort:",
+      "useAccount": "{email} eintragen",
+      "role": {
+        "owner": "Plattform-Admin: sieht alle Tenants und den Tenant-Umschalter.",
+        "admin": "Admin des Tenants Security.",
+        "engineer": "Agenten-Engineer in Security: Agenten und ihre Versionen.",
+        "integrator": "Integrator in Security: Verbindungen, Policies und Ereignisquellen.",
+        "operator": "Operator in Security: Runs und Freigaben.",
+        "auditor": "Auditor in Security: Audit-Log und Kosten.",
+        "viewer": "Betrachter im separaten Tenant Acme Labs.",
+        "contractor": "Externer in Platform: sieht nur den Agenten feature-builder."
+      },
       "reset": "Alle Daten sind erfunden und werden nachts zurückgesetzt. Gib keine echten Zugangsdaten ein.",
       "fill": "Eintragen",
       "afterSignIn": "Die Tour startet, sobald du angemeldet bist."

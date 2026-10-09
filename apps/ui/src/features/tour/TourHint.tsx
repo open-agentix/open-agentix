@@ -9,6 +9,18 @@ export function isDemoBuild(): boolean {
 
 export const DEMO_LOGIN = { username: 'admin@example.org', password: 'demo-password-2026' };
 
+/** The seeded demo accounts (apps/api/src/demo/seed.ts), all with the shared fake password. */
+export const DEMO_ACCOUNTS = [
+  'owner',
+  'admin',
+  'engineer',
+  'integrator',
+  'operator',
+  'auditor',
+  'viewer',
+  'contractor',
+] as const;
+
 /** Login page, demo only: the shared fake credentials, the nightly reset and the tour link. */
 export function TourHint({ onFill }: { onFill: (username: string, password: string) => void }) {
   const { t } = useI18n();
@@ -19,9 +31,26 @@ export function TourHint({ onFill }: { onFill: (username: string, password: stri
         {t('tour.hint.title')}
       </p>
       <p>
-        {t('tour.hint.credentials')} <code>{DEMO_LOGIN.username}</code> /{' '}
-        <code>{DEMO_LOGIN.password}</code>
+        {t('tour.hint.credentials')} <code>{DEMO_LOGIN.password}</code>
       </p>
+      <ul className="tour-accounts">
+        {DEMO_ACCOUNTS.map((key) => {
+          const email = `${key}@example.org`;
+          return (
+            <li key={key}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                aria-label={t('tour.hint.useAccount', { email })}
+                onClick={() => onFill(email, DEMO_LOGIN.password)}
+              >
+                <code>{email}</code>
+              </button>{' '}
+              <span className="muted">{t(`tour.hint.role.${key}`)}</span>
+            </li>
+          );
+        })}
+      </ul>
       <p className="muted">{t('tour.hint.reset')}</p>
       <div className="cluster">
         <button

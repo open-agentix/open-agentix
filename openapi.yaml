@@ -8983,6 +8983,20 @@ paths:
                       - runs
                       - windowSeconds
                     additionalProperties: false
+                  tenant:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      slug:
+                        type: string
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - name
+                    additionalProperties: false
                   scenarios:
                     type: array
                     items:
@@ -9005,6 +9019,7 @@ paths:
                 required:
                   - llm
                   - rateLimit
+                  - tenant
                   - scenarios
                 additionalProperties: false
         "401":
@@ -9060,8 +9075,23 @@ paths:
                 properties:
                   runId:
                     type: string
+                  tenant:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                      slug:
+                        type: string
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - name
+                    additionalProperties: false
                 required:
                   - runId
+                  - tenant
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials

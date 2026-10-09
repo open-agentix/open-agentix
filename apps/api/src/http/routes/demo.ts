@@ -7,6 +7,8 @@ import type { ZApp } from '../zapp.js';
 const sec = [{ bearer: [] }];
 const tags = ['demo'];
 
+const TenantRefSchema = z.object({ id: z.string(), slug: z.string(), name: z.string() });
+
 const OverviewSchema = z.object({
   llm: z.object({
     mode: z.enum(['simulated', 'claude-code']),
@@ -16,6 +18,7 @@ const OverviewSchema = z.object({
     remainingUsd: z.number(),
   }),
   rateLimit: z.object({ runs: z.number().int(), windowSeconds: z.number().int() }),
+  tenant: TenantRefSchema,
   scenarios: z.array(
     z.object({ id: z.string(), title: z.string(), description: z.string(), agent: z.string() }),
   ),
@@ -48,7 +51,11 @@ export function registerDemoRoutes(app: ZApp, { ctx, services }: Deps): void {
         summary: 'Demo mode: run a fixed scenario (no free-text input; rate limited per visitor)',
         security: sec,
         params: z.object({ scenario: z.string().min(1).max(64) }),
-        response: { 202: z.object({ runId: z.string() }), 404: ErrorSchema, 429: ErrorSchema },
+        response: {
+          202: z.object({ runId: z.string(), tenant: TenantRefSchema }),
+          404: ErrorSchema,
+          429: ErrorSchema,
+        },
       },
     },
     async (req, reply) => {

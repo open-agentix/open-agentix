@@ -214,7 +214,11 @@
       "started": "Scenario started",
       "live": "Live model: {model}. Budget left today: {remaining}.",
       "simulated": "Simulated model (no network, no cost).",
-      "limit": "Up to {runs} runs per {minutes} minutes per visitor."
+      "limit": "Up to {runs} runs per {minutes} minutes per visitor.",
+      "tenantNote": "Runs of scenarios appear in {tenant}.",
+      "tenantSwitch": "Switch to {tenant}",
+      "tenantSwitched": "Switched to {tenant}",
+      "tenantLocked": "Runs of scenarios appear in {tenant}, which this account cannot open. Sign in as admin@example.org or owner@example.org to follow them."
     }
   },
   "agents": {
@@ -915,7 +919,18 @@
     },
     "hint": {
       "title": "Public demo",
-      "credentials": "Sign in with the shared fake account:",
+      "credentials": "Sign in with one of these fake accounts. Shared password:",
+      "useAccount": "Fill in {email}",
+      "role": {
+        "owner": "Platform admin: sees all tenants and the tenant switcher.",
+        "admin": "Admin of the Security tenant.",
+        "engineer": "Agent engineer in Security: agents and their versions.",
+        "integrator": "Integrator in Security: connections, policies and event sources.",
+        "operator": "Operator in Security: runs and approvals.",
+        "auditor": "Auditor in Security: audit log and costs.",
+        "viewer": "Viewer in the separate Acme Labs tenant.",
+        "contractor": "Contractor in Platform: sees only the feature-builder agent."
+      },
       "reset": "All data is fake and resets nightly. Do not enter real credentials.",
       "fill": "Fill in",
       "afterSignIn": "The tour starts as soon as you have signed in."
