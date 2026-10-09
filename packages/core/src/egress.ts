@@ -1,5 +1,5 @@
-import { isIP } from 'node:net';
 import { OaxError } from './errors.js';
+import { parseIp } from './network/ip.js';
 
 /**
  * Egress policy. In air-gapped mode (`OAX_AIRGAPPED=true`) the process may only talk to loopback
@@ -19,37 +19,7 @@ export type AllowEntry =
       port: number | null;
     };
 
-interface ParsedIp {
-  version: 4 | 6;
-  value: bigint;
-}
-
-function parseIp(host: string): ParsedIp | null {
-  const h = host.replace(/^\[|\]$/g, '');
-  const v = isIP(h);
-  if (v === 4) {
-    const value = h.split('.').reduce((acc, p) => (acc << 8n) + BigInt(Number(p)), 0n);
-    return { version: 4, value };
-  }
-  if (v === 6) {
-    // IPv4-mapped (::ffff:a.b.c.d) is treated as the embedded IPv4 address.
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(h);
-    if (mapped) return parseIp(mapped[1]!);
-    const [head = '', tail = ''] = h.split('::') as [string?, string?];
-    const hasGap = h.includes('::');
-    const headParts = head ? head.split(':') : [];
-    const tailParts = tail ? tail.split(':') : [];
-    const fill = hasGap ? 8 - headParts.length - tailParts.length : 0;
-    const groups = [...headParts, ...Array<string>(Math.max(fill, 0)).fill('0'), ...tailParts];
-    return {
-      version: 6,
-      value: groups.reduce((acc, g) => (acc << 16n) + BigInt(parseInt(g, 16)), 0n),
-    };
-  }
-  return null;
-}
-
-function normalizeHost(host: string): string {
+export function normalizeHost(host: string): string {
   return host
     .toLowerCase()
     .replace(/^\[|\]$/g, '')
@@ -118,6 +88,49 @@ export function parseAllowlist(raw: string | undefined): AllowEntry[] {
   return out;
 }
 
+/** True when one allowlist entry matches `host` (already normalised) on `port` (null = any). */
+export function entryMatches(e: AllowEntry, host: string, port: number | null = null): boolean {
+  if (e.port !== null && port !== null && e.port !== port) return false;
+  const h = normalizeHost(host);
+  const ip = parseIp(h);
+  if (e.kind === 'host') {
+    if (e.host === h) return true;
+    const eip = parseIp(e.host);
+    return !!(ip && eip && ip.version === eip.version && ip.value === eip.value);
+  }
+  if (e.kind === 'suffix') return !ip && (h === e.suffix || h.endsWith(`.${e.suffix}`));
+  if (!ip || ip.version !== e.version) return false;
+  const shift = BigInt(e.total - e.bits);
+  return (ip.value >> shift) << shift === e.base;
+}
+
+/**
+ * True when every destination that `entry` can match is also matched by one allowlist entry (a
+ * route to a host the allowlist does not cover is refused at start-up). A missing port means all
+ * ports, so it is only covered by an allowlist entry without a port.
+ */
+export function entryCoveredBy(entry: AllowEntry, allow: readonly AllowEntry[]): boolean {
+  if (entry.kind === 'host' && isLoopback(entry.host)) return true;
+  if (entry.kind === 'suffix' && (entry.suffix === 'localhost' || entry.suffix.endsWith('.localhost')))
+    return true;
+  for (const a of allow) {
+    if (a.port !== null && a.port !== entry.port) continue;
+    if (entry.kind === 'host') {
+      if (entryMatches({ ...a, port: null }, entry.host, null)) return true;
+    } else if (entry.kind === 'suffix') {
+      if (
+        a.kind === 'suffix' &&
+        (a.suffix === entry.suffix || entry.suffix.endsWith(`.${a.suffix}`))
+      )
+        return true;
+    } else if (a.kind === 'cidr' && a.version === entry.version && a.bits <= entry.bits) {
+      const shift = BigInt(a.total - a.bits);
+      if (entry.base >> shift === a.base >> shift) return true;
+    }
+  }
+  return false;
+}
+
 export function isLoopback(host: string): boolean {
   const h = normalizeHost(host);
   if (h === 'localhost' || h.endsWith('.localhost')) return true;
@@ -164,21 +177,13 @@ export class EgressPolicy {
     if (!this.airgapped) return true;
     if (isLoopback(host)) return true;
     const h = normalizeHost(host);
-    const ip = parseIp(h);
-    for (const e of this.entries) {
-      if (e.port !== null && port !== null && e.port !== port) continue;
-      if (e.kind === 'host') {
-        if (e.host === h) return true;
-        const eip = parseIp(e.host);
-        if (ip && eip && ip.version === eip.version && ip.value === eip.value) return true;
-      } else if (e.kind === 'suffix') {
-        if (!ip && (h === e.suffix || h.endsWith(`.${e.suffix}`))) return true;
-      } else if (ip && ip.version === e.version) {
-        const shift = BigInt(e.total - e.bits);
-        if ((ip.value >> shift) << shift === e.base) return true;
-      }
-    }
+    for (const e of this.entries) if (entryMatches(e, h, port)) return true;
     return false;
+  }
+
+  /** True when `entry` is fully inside the allowlist (always true outside air-gapped mode). */
+  covers(entry: AllowEntry): boolean {
+    return !this.airgapped || entryCoveredBy(entry, this.entries);
   }
 
   /** Throws `egress_denied` (and records the attempt) when the target is not allowed. */
