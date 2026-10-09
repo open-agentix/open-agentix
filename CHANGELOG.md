@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Git delivery in the worker (DOG-3a/3b, ADR 0010 Amendment 2)**: `apps/worker/src/git/` with a
+  hardened minimal Git engine over https (child process with allowlisted environment, forced `-c`
+  options, one-target loopback relay that dials through the outbound dispatcher, shallow fetch of
+  one commit, tree snapshot and deterministic seed archive without checkout), worker-side patch
+  re-validation, `git apply --check`/`--cached` in a temporary index, commit with the platform
+  identity and create-only branch push; a credential scan of patch, message and pull request text
+  that blocks delivery; and a minimal `GitHubExtension` that can only count open pull requests
+  under a branch prefix and open a **draft** pull request on the one configured repository (limit
+  of open pull requests, base and head rules, body cap, no merge, review, label or workflow call;
+  a test greps the sources). Audit entries `git.clone`, `git.apply`, `git.push`, `git.refused`,
+  `git.pr_open` with digests only. New `OutboundDispatcher.dial()` (raw pinned stream or `CONNECT`
+  through the selected proxy) for such relays. Consuming `pull-request` outputs (DOG-3c) and the
+  seed endpoint (DOG-4) are separate tasks.
 - **Workspace tools for harness steps (DOG-2, ADR 0008 Amendment 2)**: new package
   `@openagentix/workspace` with the MCP server `workspace` (`list_files`, `read_file`, `search`,
   `diff`, `edit_file`, `write_file`, `run_tests`; stdio binary `oax-workspace`). Path-confined without
