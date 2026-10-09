@@ -89,10 +89,17 @@ describe('ContextGuard secret redaction', () => {
     expect(r.text).not.toContain('abcdefghijklmnop1234');
   });
 
-  it('guards the strings of a nested value, not the keys', () => {
+  it('guards the strings of a nested value', () => {
     const r = guard().value({ a: [`x\u200B ${FAKE.github}`], b: { c: 'ok' }, n: 1 });
     expect(r.value).toEqual({ a: ['x [redacted:github-token]'], b: { c: 'ok' }, n: 1 });
     expect(r.report.invisible.total).toBe(1);
+    expect(r.report.secrets.total).toBe(1);
+  });
+
+  it('guards keys too (property names of a schema reach the model)', () => {
+    const r = guard().value({ [`path\u{E0041}\u{E0042}`]: 1, nested: { [FAKE.aws]: 'v' } });
+    expect(r.value).toEqual({ path: 1, nested: { '[redacted:aws-access-key]': 'v' } });
+    expect(r.report.invisible.total).toBe(2);
     expect(r.report.secrets.total).toBe(1);
   });
 

@@ -142,7 +142,10 @@ export class ContextGuard {
     return { text: out, report };
   }
 
-  /** Guards every string value of a JSON-like value (keys are left alone). Cycles are not followed. */
+  /**
+   * Guards every string of a JSON-like value, keys included (a JSON schema's property names reach
+   * the model as much as its descriptions do). Cycles are not followed.
+   */
   value<T>(input: T): { value: T; report: GuardReport } {
     const report = emptyGuardReport();
     const seen = new WeakSet<object>();
@@ -156,7 +159,7 @@ export class ContextGuard {
       if (seen.has(v)) return '[Circular]';
       seen.add(v);
       if (Array.isArray(v)) return v.map(walk);
-      return Object.fromEntries(Object.entries(v).map(([k, val]) => [k, walk(val)]));
+      return Object.fromEntries(Object.entries(v).map(([k, val]) => [walk(k) as string, walk(val)]));
     };
     return { value: walk(input) as T, report };
   }

@@ -116,8 +116,10 @@ export class ToolGateway {
           modelName: modelToolName(server, t.name),
           server,
           tool: t.name,
-          description: t.description ?? '',
-          inputSchema: t.inputSchema,
+          // Descriptions and schemas come from the server and enter the model context as tool
+          // specs (natively and through the harness gate): guarded like a tool result.
+          description: this.guard.text(t.description ?? '').text,
+          inputSchema: this.guard.value(t.inputSchema).value,
           access: classifyTool(
             Object.hasOwn(declared, t.name) ? declared[t.name]!.access : undefined,
             t.annotations,
