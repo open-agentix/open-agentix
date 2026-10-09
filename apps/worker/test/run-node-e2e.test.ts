@@ -16,6 +16,7 @@ import { NodeDispatcher, Worker, runNode } from '../src/index.js';
 const IMAGE = `ghcr.io/open-agentix/open-agentix-worker@sha256:${'a'.repeat(64)}`;
 const ENV = {
   OAX_RUNNERS_ENABLED: 'in-process,container',
+  OAX_MODEL_PROXY_ENABLED: 'true',
   OAX_CONTAINER_RUNNER_ENABLED: 'true',
   OAX_CONTAINER_ENGINE_URL: 'http://socket-proxy:2375',
   OAX_CONTAINER_IMAGE: IMAGE,
@@ -229,6 +230,21 @@ describe('isolated step end to end (run node code in-process, fake engine)', () 
     // the node did the model call of the isolated step; the orchestrator did the other one
     const modelCalls = steps.filter((s) => s.kind === 'model_call').map((s) => s.agentId);
     expect(modelCalls.sort()).toEqual(['action', 'research']);
+    // both calls are reserved and settled by the control node: the orchestrator's through the
+    // control plane, the node's through the model proxy; the run counters are the ledger's
+    const ledger = await n.ctx.db
+      .select()
+      .from(schema.costLedger)
+      .where(eq(schema.costLedger.runId, run.id));
+    expect(ledger.map((l) => l.via).sort()).toEqual(['in-process', 'proxy']);
+    expect(ledger.every((l) => l.reservationId)).toBe(true);
+    expect(run.tokensIn).toBe(ledger.reduce((a, l) => a + l.tokensIn, 0));
+    expect(run.tokensIn).toBeGreaterThan(0);
+    const reserved = await n.ctx.db.select().from(schema.modelReservations);
+    expect(reserved.filter((r) => r.runId === run.id).map((r) => r.status)).toEqual([
+      'settled',
+      'settled',
+    ]);
     // audit: started -> issued -> revoked -> stopped, no values
     const actions = audit.map((e) => e.action);
     for (const a of [
@@ -320,7 +336,7 @@ describe('isolated step end to end (run node code in-process, fake engine)', () 
     expect(sessions[0]!.revokedAt).not.toBeNull();
   });
 
-  it('carries a failure of the node (no model access in W1-3a) into the run', async () => {
+  it('carries the proxy refusal for a provider the control node cannot serve into the run', async () => {
     const src = source('e2e-provider', '').replace(
       'id: action\n    provider: simulated',
       'id: action\n    provider: anthropic',
@@ -328,8 +344,8 @@ describe('isolated step end to end (run node code in-process, fake engine)', () 
     const id = await publish(src);
     const { run, steps } = await runWith(id, new InProcessNodeRunner(n));
     expect(run.status).toBe('failed');
-    expect(run.errorCode).toBe('provider_error');
-    expect(run.errorMessage).toContain('W1-3b');
+    expect(run.errorCode).toBe('model_not_allowed');
+    expect(run.errorMessage).not.toContain('W1-3b');
     expect(steps.some((s) => s.agentId === 'action' && s.kind === 'error')).toBe(true);
   });
 
@@ -410,7 +426,7 @@ describe('NodeDispatcher', () => {
       mk(def(), { container: strict }).dispatch(req({ id: 's', toolbox: 'git+node' })),
     ).rejects.toMatchObject({ code: 'toolbox_image_unknown' });
   });
-  it('ignores cost and token numbers reported by a node and bounds its counters', async () => {
+  it('takes tokens and cost from the ledger of the control node, not from the node, and bounds its counters', async () => {
     const calls: string[] = [];
     const services = {
       runNodes: {
@@ -429,7 +445,14 @@ describe('NodeDispatcher', () => {
           usage: { tokensIn: 9e9, tokensOut: 9e9, costMicros: 9e12, steps: 5e6, toolCalls: 7 },
         }),
       },
-      control: { isCancelled: async () => false },
+      // the ledger counters of the run: what the model proxy recorded while the node ran
+      control: {
+        isCancelled: async () => false,
+        runUsage: async () =>
+          calls.includes('stopped')
+            ? { tokensIn: 1100, tokensOut: 220, costMicros: 3300 }
+            : { tokensIn: 1000, tokensOut: 200, costMicros: 3000 },
+      },
     };
     const runner = {
       imageFor: () => IMAGE,
@@ -450,10 +473,11 @@ describe('NodeDispatcher', () => {
       def(),
     );
     const res = await d.dispatch({ runId: 'r', agent: { id: 's' } as never, input: null });
+    // tokens and cost are what the ledger gained during the step, never the node's 9e9 report
     expect(res.usage).toEqual({
-      tokensIn: 0,
-      tokensOut: 0,
-      costMicros: 0,
+      tokensIn: 100,
+      tokensOut: 20,
+      costMicros: 300,
       steps: 1000,
       toolCalls: 7,
     });

@@ -584,6 +584,29 @@ export const StepBody = z.object({
   durationMs: z.number().int().nonnegative().max(86_400_000).optional(),
   provider: z.string().max(100).optional(),
   model: z.string().max(200).optional(),
+  /** Trusted worker only: settles this model reservation (ignored for run nodes). */
+  reservationId: z.uuid().optional(),
+});
+
+/** Request of an in-process model call reservation (ADR 0009 section 4.4). */
+export const ModelReservationBody = z.strictObject({
+  agentId: z.string().min(1).max(200),
+  inputTokens: z.number().int().nonnegative().max(1e9),
+  maxOutputTokens: z.number().int().positive().max(1e9),
+  minOutputTokens: z.number().int().positive().max(1e9).optional(),
+  cacheWrite: z.boolean().optional(),
+});
+export const ModelReservationSchema = z.strictObject({
+  reservationId: z.string(),
+  maxOutputTokens: z.number().int(),
+  reservedMicros: z.number().int(),
+  priced: z.boolean(),
+  deadlineMs: z.number().int().positive().optional(),
+  remaining: z.strictObject({
+    costMicros: z.number().int().optional(),
+    tokens: z.number().int().optional(),
+    modelCalls: z.number().int().optional(),
+  }),
 });
 
 /** Run node protocol (ADR 0008): the node's own step only; nothing about other steps. */

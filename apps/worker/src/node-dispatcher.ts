@@ -72,6 +72,9 @@ export class NodeDispatcher implements StepDispatcher {
       throw new OaxError('egress_denied', `step "${agent.id}" widens the pipeline's egress`);
     const image = runner.imageFor(agent.toolbox ?? this.definition.runtime.toolbox);
     const { runNodes, control } = this.opts.services;
+    // The run's ledger counters before the node starts: what the model proxy adds while it runs is
+    // this step's measured usage (ADR 0009 section 5). Steps of a run are sequential.
+    const before = await control.runUsage(runId);
     const session = await runNodes.createSession(runId, this.opts.workerId, {
       agentId: agent.id,
       input: req.input,
@@ -151,17 +154,18 @@ export class NodeDispatcher implements StepDispatcher {
       ...(Object.hasOwn(result, 'json') ? { json: result.json } : {}),
     };
     // Cost and tokens of a node are NOT taken from its report: an untrusted node must not steer
-    // the run's budget accounting, and the control node does not record them either (from W1-3b the
-    // model proxy measures them). Counters are bounded. Isolated steps therefore count against
-    // maxCostUsd/maxTokens only once W1-3b lands; until then nodes cannot reach a paid model, and
-    // maxSteps/maxToolCalls/timeout are enforced inside the node from the REMAINING budget.
+    // the run's budget accounting. The model proxy measured and recorded every model call of the
+    // node on the control node (ledger and run counters), so the authoritative usage is what the
+    // counters gained while the node ran. Steps and tool calls are bounded reports of the node
+    // (enforced against its REMAINING budget inside the node).
     const cap = (n: number | undefined) => Math.min(Math.max(0, n ?? 0), 1000);
+    const after = await control.runUsage(runId);
     return {
       output,
       usage: {
-        tokensIn: 0,
-        tokensOut: 0,
-        costMicros: 0,
+        tokensIn: Math.max(0, after.tokensIn - before.tokensIn),
+        tokensOut: Math.max(0, after.tokensOut - before.tokensOut),
+        costMicros: Math.max(0, after.costMicros - before.costMicros),
         steps: cap(result.usage?.steps),
         toolCalls: cap(result.usage?.toolCalls),
       },

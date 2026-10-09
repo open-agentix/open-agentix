@@ -6,7 +6,47 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Breaking
+
+- **Model proxy cutover (W1-3b-4)**: isolated run node steps now call models only through the
+  model proxy. With `OAX_MODEL_PROXY_ENABLED=false` (the default) they fail with
+  `model_proxy_unavailable`, the simulated provider included. Old `oax run-node` images report
+  `model_call` steps themselves and now get `400 step_kind_refused`: roll out control node and node
+  images together. As soon as any cost limit applies (run, step, team or monthly), a model without
+  a price is rejected with `422 model_unpriced`.
+
+### Security
+
+- Price lookups resolve the fallback keys (catalog provider, adapter kind) against the platform
+  table only; a tenant connection named like a catalog provider can no longer zero the price of
+  another connection. Tenant overrides apply only under the connection name the agent uses.
+- In-process reservations are settled only by the in-process call of the same agent; reservations
+  of a proxied session are refused.
+
+### Fixed
+
+- In-process model errors release their reservation only for failures that provably did no work
+  (egress refusal, DNS or refused connection, 4xx other than 408, 409 and 429); everything else
+  expires at the reserved amount like the proxy does.
+- The in-process provider call is bounded by the reservation deadline, and a late report for an
+  already expired reservation is recorded as a `model.late_settlement` correction in the audit log
+  instead of failing the run.
+- A price lookup that fails during reservation or settlement is logged as a warning.
+
 ### Added
+
+- **Run node and executor on the model proxy (W1-3b-4)**: `oax run-node` sends every model call of
+  its step through the control node's model proxy (`ModelProxyProvider`, a metered provider, the
+  simulated provider included; `ModelProxyUnavailableProvider` is gone), the executor records no
+  cost or `model_call` step for metered providers, and refusals of the proxy keep their code in the
+  run's failure. In-process steps now reserve their worst case before each call
+  (`ControlPlane.reserveModelCall`, new `POST /v1/worker/runs/{id}/model-reservations` for
+  orchestrator tokens) and the control node settles the reservation from the usage (`reservationId`
+  on the `model_call` step), so run, step and monthly budgets hold across concurrent calls. The
+  dispatcher takes the cost and tokens of an isolated step from the run's ledger counters, so
+  isolated steps count against `maxCostUsd`, `maxTokens` and the monthly budgets. Reservation and
+  settlement use the run's prices including BYOK connection overrides and the connection's catalog
+  provider. ADR 0009 amendment W1-3b-4.
 
 - **Model proxy: native endpoint and model token (W1-3b-3, opt-in `OAX_MODEL_PROXY_ENABLED`)**: the
   control node serves `POST /v1/worker/runs/{id}/model-token` (a step-scoped, session-bound,
@@ -187,6 +227,12 @@ All notable changes to this project are documented here. The format follows
   with W1-3b-3 and W1-3b-4, so the budgets documented in `docs/budgets.md` still check after a call until then.
 
 ### Changed
+
+- A model call is refused before it is made when its worst case does not fit a run, step or monthly
+  budget (it used to be checked only after the call); an in-process step without `maxTokensPerCall`
+  is capped at 4096 output tokens when the control plane reserves. A run node can no longer report
+  `model_call` steps (`400 step_kind_refused`); the proxy records them. **Breaking for custom
+  workers** that post `model_call` steps from a node token.
 
 - **UI navigation**: the governance group (policies, audit trail, users & teams, API tokens) is now
   labelled "Governance" in English (was "Govern") and German (was "Steuern"); the key

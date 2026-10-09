@@ -1,7 +1,13 @@
 import { PolicyBundleSchema, loadAgentDefinition } from '@openagentix/core';
 import { SimulatedProvider, type ModelProvider } from '@openagentix/providers';
 import { afterEach, describe, expect, it } from 'vitest';
-import { InProcessRunner, buildUserPrompt, executePipeline, type StepInput } from '../src/index.js';
+import {
+  InProcessRunner,
+  buildUserPrompt,
+  executePipeline,
+  type ModelReservationRequest,
+  type StepInput,
+} from '../src/index.js';
 import { agentFile, example, prepared, setup } from './helpers.js';
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -379,5 +385,261 @@ describe('executePipeline', () => {
     expect(text).toContain('[REDACTED]');
     expect(text).toContain('(subject: S)');
     expect(text).toContain('Output of the previous agent "prev"');
+  });
+});
+
+describe('executePipeline model reservations and metered providers (ADR 0009)', () => {
+  const def = agentFile(
+    `    maxTokensPerCall: 1000
+    simulation:
+      responses:
+        - text: done`,
+  );
+
+  it('reserves before each call, caps the output at the grant and settles with the reservation id', async () => {
+    const { ctx, control } = env(def);
+    const reserved: ModelReservationRequest[] = [];
+    const seen: (number | undefined)[] = [];
+    const base = ctx.providers.get('simulated');
+    ctx.providers.get = () => ({
+      ...base,
+      name: base.name,
+      kind: base.kind,
+      clearance: base.clearance,
+      complete: async (...a: Parameters<typeof base.complete>) => (
+        seen.push(a[0].maxTokens),
+        base.complete(...a)
+      ),
+    });
+    (control as { reserveModelCall?: unknown }).reserveModelCall = async (
+      _run: string,
+      req: (typeof reserved)[number],
+    ) => {
+      reserved.push(req);
+      return {
+        reservationId: 'res-1',
+        maxOutputTokens: 300,
+        reservedMicros: 7,
+        priced: true,
+        remaining: {},
+      };
+    };
+    const r = await executePipeline(prepared(def), ctx);
+    expect(r.status).toBe('succeeded');
+    expect(reserved).toHaveLength(1);
+    expect(reserved[0]).toMatchObject({
+      agentId: 'a',
+      maxOutputTokens: 1000,
+      minOutputTokens: 256,
+    });
+    expect(reserved[0]!.inputTokens).toBeGreaterThan(64);
+    expect(seen).toEqual([300]);
+    const call = control.steps.find((s) => s.kind === 'model_call');
+    expect(call?.reservationId).toBe('res-1');
+  });
+
+  it('uses the default output bound when the step names none', async () => {
+    const d = agentFile(`    simulation:\n      responses:\n        - text: done`);
+    const { ctx, control } = env(d);
+    let asked = 0;
+    (control as { reserveModelCall?: unknown }).reserveModelCall = async (
+      _run: string,
+      req: { maxOutputTokens: number },
+    ) => {
+      asked = req.maxOutputTokens;
+      return {
+        reservationId: 'r',
+        maxOutputTokens: 100,
+        reservedMicros: 0,
+        priced: false,
+        remaining: {},
+      };
+    };
+    await executePipeline(prepared(d), ctx);
+    expect(asked).toBe(4096);
+  });
+
+  it.each([
+    ['control_budget_cost', 'failed'],
+    ['control_budget_tenant', 'failed'],
+    ['model_unpriced', 'failed'],
+    ['classification_denied', 'blocked_by_policy'],
+  ])(
+    'keeps the code of a refused reservation (%s) and never calls the model',
+    async (code, status) => {
+      const { ctx, control } = env(def);
+      let model = 0;
+      const base = ctx.providers.get('simulated');
+      ctx.providers.get = () => ({
+        ...base,
+        name: base.name,
+        kind: base.kind,
+        clearance: base.clearance,
+        complete: async (...a: Parameters<typeof base.complete>) => (model++, base.complete(...a)),
+      });
+      (control as { reserveModelCall?: unknown }).reserveModelCall = async () => {
+        throw Object.assign(new Error('refused'), { code });
+      };
+      const r = await executePipeline(prepared(def), ctx);
+      expect(r.status).toBe(status);
+      expect(r.error?.code).toBe(code);
+      expect(model).toBe(0);
+      // the failed call is recorded as an error without a reservation to give back
+      expect(control.steps.find((s) => s.kind === 'error')?.reservationId).toBeUndefined();
+    },
+  );
+
+  it('gives the reservation back only for failures that provably did no work', async () => {
+    const failWith = (err: Error): ModelProvider => ({
+      name: 'simulated',
+      kind: 'simulated',
+      clearance: 'restricted',
+      complete: async () => {
+        throw err;
+      },
+    });
+    const grantOf = () => async () => ({
+      reservationId: 'res-x',
+      maxOutputTokens: 10,
+      reservedMicros: 1,
+      priced: true,
+      remaining: {},
+    });
+    const released = async (err: Error): Promise<boolean> => {
+      const e = env(def, { providers: [failWith(err)] });
+      (e.control as { reserveModelCall?: unknown }).reserveModelCall = grantOf();
+      await executePipeline(prepared(def), e.ctx);
+      return e.control.steps.find((s) => s.kind === 'error')?.reservationId === 'res-x';
+    };
+    const withProps = (m: string, p: object) => Object.assign(new Error(m), p);
+    expect(await released(withProps('denied', { code: 'egress_denied' }))).toBe(true);
+    expect(await released(withProps('dns', { status: null, preSend: true }))).toBe(true);
+    expect(await released(withProps('bad request', { status: 400 }))).toBe(true);
+    expect(await released(withProps('forbidden', { status: 403 }))).toBe(true);
+    // may have been billed: the reservation stays and expires at the reserved amount
+    expect(await released(new Error('upstream 500'))).toBe(false);
+    expect(await released(withProps('server', { status: 500 }))).toBe(false);
+    expect(await released(withProps('timeout', { status: 408 }))).toBe(false);
+    expect(await released(withProps('conflict', { status: 409 }))).toBe(false);
+    expect(await released(withProps('rate', { status: 429 }))).toBe(false);
+    expect(await released(withProps('reset', { status: null }))).toBe(false);
+  });
+
+  it('bounds the provider call by the reservation deadline and keeps the reservation', async () => {
+    const waiting: ModelProvider = {
+      name: 'simulated',
+      kind: 'simulated',
+      clearance: 'restricted',
+      complete: (_req, opts) =>
+        new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => reject(new Error('call timed out')));
+        }),
+    };
+    const e = env(def, { providers: [waiting] });
+    (e.control as { reserveModelCall?: unknown }).reserveModelCall = async () => ({
+      reservationId: 'res-d',
+      maxOutputTokens: 10,
+      reservedMicros: 1,
+      priced: true,
+      deadlineMs: 30,
+      remaining: {},
+    });
+    const r = await executePipeline(prepared(def), e.ctx);
+    expect(r.status).toBe('failed');
+    expect(r.error?.code).toBe('provider_error');
+    expect(e.control.steps.find((s) => s.kind === 'error')?.reservationId).toBeUndefined();
+  });
+
+  it('gives the reservation back when the provider fails on its own, but not when aborted', async () => {
+    const failing: ModelProvider = {
+      name: 'simulated',
+      kind: 'simulated',
+      clearance: 'restricted',
+      complete: async () => {
+        throw Object.assign(new Error('bad request'), { status: 400 });
+      },
+    };
+    const { ctx, control } = env(def, { providers: [failing] });
+    (control as { reserveModelCall?: unknown }).reserveModelCall = async () => ({
+      reservationId: 'res-9',
+      maxOutputTokens: 10,
+      reservedMicros: 1,
+      priced: true,
+      remaining: {},
+    });
+    const r = await executePipeline(prepared(def), ctx);
+    expect(r.error?.code).toBe('provider_error');
+    expect(control.steps.find((s) => s.kind === 'error')?.reservationId).toBe('res-9');
+
+    const ac = new AbortController();
+    const hanging: ModelProvider = {
+      ...failing,
+      complete: async () => {
+        ac.abort();
+        throw new Error('aborted');
+      },
+    };
+    const s2 = env(def, { providers: [hanging] });
+    (s2.control as { reserveModelCall?: unknown }).reserveModelCall = async () => ({
+      reservationId: 'res-10',
+      maxOutputTokens: 10,
+      reservedMicros: 1,
+      priced: true,
+      remaining: {},
+    });
+    const r2 = await executePipeline(prepared(def), { ...s2.ctx, signal: ac.signal });
+    expect(r2.status).toBe('cancelled');
+    expect(s2.control.steps.find((s) => s.kind === 'error')?.reservationId).toBeUndefined();
+  });
+
+  it('trusts a metered provider: no reservation, no model_call step, cost from the proxy', async () => {
+    const metered: ModelProvider = {
+      name: 'simulated',
+      kind: 'simulated',
+      clearance: 'restricted',
+      metered: true,
+      complete: async () => ({
+        text: 'done',
+        toolCalls: [],
+        usage: { inputTokens: 11, outputTokens: 4 },
+        stopReason: 'end_turn',
+        model: 'sim-1',
+        metered: { callId: 'c1', costMicros: 123, priced: true, remaining: {} },
+      }),
+    };
+    const { ctx, control } = env(def, { providers: [metered] });
+    let reserved = 0;
+    (control as { reserveModelCall?: unknown }).reserveModelCall = async () => (reserved++, {});
+    const r = await executePipeline(prepared(def), ctx);
+    expect(r.status).toBe('succeeded');
+    expect(reserved).toBe(0);
+    expect(control.steps.some((s) => s.kind === 'model_call')).toBe(false);
+    expect(r.usage).toMatchObject({ tokensIn: 11, tokensOut: 4, costMicros: 123 });
+  });
+
+  it('turns a refusal of the proxy into the run failure with the same code', async () => {
+    const refusing: ModelProvider = {
+      name: 'simulated',
+      kind: 'simulated',
+      clearance: 'restricted',
+      metered: true,
+      complete: async () => {
+        throw Object.assign(new Error('the token budget cannot cover the call'), {
+          code: 'control_budget_tokens',
+        });
+      },
+    };
+    const { ctx } = env(def, { providers: [refusing] });
+    const r = await executePipeline(prepared(def), ctx);
+    expect(r.status).toBe('failed');
+    expect(r.error?.code).toBe('control_budget_tokens');
+  });
+
+  it('calls the model unreserved when the control plane has no ledger', async () => {
+    const { ctx, control } = env(def);
+    expect('reserveModelCall' in control).toBe(false);
+    const r = await executePipeline(prepared(def), ctx);
+    expect(r.status).toBe('succeeded');
+    expect(control.steps.find((s) => s.kind === 'model_call')?.reservationId).toBeUndefined();
   });
 });

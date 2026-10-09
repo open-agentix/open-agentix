@@ -5,12 +5,25 @@ import {
   type PolicyDecision,
   type ToolCallRequest,
 } from '@openagentix/core';
+import type {
+  CompleteOptions,
+  WorkerModelRequest,
+  WorkerModelResponse,
+} from '@openagentix/providers';
+import type { ModelProxyClient } from './model-proxy.js';
 import {
   StepHandoverSchema,
   type StepHandover,
   type StepHandoverResult,
 } from './run-node-protocol.js';
-import type { ApprovalOutcome, ControlPlane, RunResult, StepInput } from './types.js';
+import type {
+  ApprovalOutcome,
+  ControlPlane,
+  ModelReservationGrant,
+  ModelReservationRequest,
+  RunResult,
+  StepInput,
+} from './types.js';
 
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -27,7 +40,7 @@ export interface HttpControlPlaneOptions {
  * Control plane client for remote worker nodes (container, Kubernetes Job, Lambda, CI): the same
  * contract as the in-process worker, over HTTPS with a run token.
  */
-export class HttpControlPlane implements ControlPlane {
+export class HttpControlPlane implements ControlPlane, ModelProxyClient {
   private readonly fetch: FetchFn;
 
   constructor(private readonly opts: HttpControlPlaneOptions) {
@@ -39,6 +52,8 @@ export class HttpControlPlane implements ControlPlane {
     path: string,
     body?: unknown,
     signal?: AbortSignal,
+    /** Model routes answer with `{ error: { code } }`: surface that code (ADR 0009 section 2.5). */
+    keepCode = false,
   ): Promise<T> {
     const res = await this.fetch(`${this.opts.baseUrl.replace(/\/$/, '')}${path}`, {
       method,
@@ -50,6 +65,16 @@ export class HttpControlPlane implements ControlPlane {
       ...(signal ? { signal } : {}),
     });
     if (!res.ok) {
+      if (keepCode) {
+        const e = (await res.json().catch(() => null)) as {
+          error?: { code?: unknown; message?: unknown };
+        } | null;
+        const code = e?.error?.code;
+        if (typeof code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(code))
+          throw new OaxError(code, String(e?.error?.message ?? code).slice(0, 300), {
+            status: res.status,
+          });
+      }
       throw new OaxError(
         'control_plane_error',
         `control node returned HTTP ${res.status} for ${method} ${path}`,
@@ -120,6 +145,31 @@ export class HttpControlPlane implements ControlPlane {
 
   checkBudget(runId: string): Promise<BudgetVerdict> {
     return this.request('GET', `/v1/worker/runs/${runId}/budget`);
+  }
+
+  // ---------- model proxy (ADR 0009) ----------
+
+  /** One model call through the control node's proxy (native, non-streaming). */
+  modelCall(
+    runId: string,
+    req: WorkerModelRequest,
+    opts: CompleteOptions = {},
+  ): Promise<WorkerModelResponse> {
+    return this.request('POST', `/v1/worker/runs/${runId}/model`, req, opts.signal, true);
+  }
+
+  /** Reservation of an in-process model call (orchestrator token only). */
+  async reserveModelCall(
+    runId: string,
+    req: ModelReservationRequest,
+  ): Promise<ModelReservationGrant> {
+    return this.request(
+      'POST',
+      `/v1/worker/runs/${runId}/model-reservations`,
+      req,
+      undefined,
+      true,
+    );
   }
 
   async completeRun(runId: string, result: RunResult): Promise<void> {

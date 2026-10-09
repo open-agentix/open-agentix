@@ -42,6 +42,36 @@ export interface StepInput {
   durationMs?: number;
   provider?: string;
   model?: string;
+  /**
+   * Trusted in-process `model_call` (or the `error` of a failed call) that settles a reservation
+   * from {@link ControlPlane.reserveModelCall}; the control node then computes cost and writes the
+   * ledger itself (ADR 0009 section 4.4). Ignored for steps reported by run nodes.
+   */
+  reservationId?: string;
+}
+
+/** What a trusted executor asks to reserve before a model call (ADR 0009 section 4.3). */
+export interface ModelReservationRequest {
+  agentId: string;
+  /** Upper bound of the input tokens. */
+  inputTokens: number;
+  /** Largest output the call may produce. */
+  maxOutputTokens: number;
+  /** Shrink the output to what the budgets allow, down to this many tokens, instead of refusing. */
+  minOutputTokens?: number;
+  /** `cache_control` blocks present: price the input at the cache-write rate. */
+  cacheWrite?: boolean;
+}
+
+export interface ModelReservationGrant {
+  reservationId: string;
+  /** The granted output bound: pass it as the provider's max-tokens. */
+  maxOutputTokens: number;
+  reservedMicros: number;
+  priced: boolean;
+  /** Time the provider call may take: the reservation expires shortly after this deadline. */
+  deadlineMs?: number;
+  remaining: { costMicros?: number; tokens?: number; modelCalls?: number };
 }
 
 export interface AgentOutput {
@@ -92,6 +122,12 @@ export interface ControlPlane {
    * without a ledger (local CLI) keep working; the executor asks before every step.
    */
   checkBudget?(runId: string): Promise<BudgetVerdict>;
+  /**
+   * Reserves the worst-case cost of one model call against every applicable budget, or throws a
+   * `control_budget_*` / `model_unpriced` / `model_rate_limited` error. Optional so that control
+   * planes without a ledger (local CLI) keep working; the executor then calls the model unreserved.
+   */
+  reserveModelCall?(runId: string, req: ModelReservationRequest): Promise<ModelReservationGrant>;
   completeRun(runId: string, result: RunResult): Promise<void>;
 }
 
@@ -174,7 +210,7 @@ export interface StepDispatchRequest {
 
 export interface StepDispatchResult {
   output: AgentOutput;
-  /** Usage reported by the node (the model proxy of W1-3b will measure it on the control node). */
+  /** Usage measured on the control node (the model proxy recorded it); never the node's own numbers. */
   usage: RunUsage;
 }
 

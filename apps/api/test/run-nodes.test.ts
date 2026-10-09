@@ -903,7 +903,7 @@ describe('a node cannot steer cost accounting or flood the records', () => {
       method: 'POST',
       url: `/v1/worker/runs/${runId}/steps`,
       token: s.token,
-      payload: stepBody(),
+      payload: stepBody({ kind: 'tool_call' }),
     });
     expect(res.statusCode).toBe(204);
     const [row] = await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId));
@@ -918,6 +918,21 @@ describe('a node cannot steer cost accounting or flood the records', () => {
     const [run] = await n.ctx.db.select().from(runs).where(eq(runs.id, runId));
     expect(Number(run!.costMicros)).toBe(0);
     expect(run!.tokensIn + run!.tokensOut).toBe(0);
+  });
+  it('refuses a model_call from a node with step_kind_refused: only the proxy records them', async () => {
+    const runId = await newRun();
+    const s = await session(runId);
+    const res = await n.req({
+      method: 'POST',
+      url: `/v1/worker/runs/${runId}/steps`,
+      token: s.token,
+      payload: stepBody({ kind: 'model_call' }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('step_kind_refused');
+    expect(await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId))).toEqual([]);
+    const [run] = await n.ctx.db.select().from(runs).where(eq(runs.id, runId));
+    expect(Number(run!.costMicros)).toBe(0);
   });
   it('the trusted worker token still records cost (in-process behaviour is unchanged)', async () => {
     const runId = await newRun();
@@ -1220,13 +1235,13 @@ describe('what a node may report, and who said it', () => {
   it('records model_call, tool_call, output and error with provenance', async () => {
     const runId = await newRun();
     const s = await session(runId);
-    for (const kind of ['model_call', 'tool_call', 'output', 'error'])
+    for (const kind of ['tool_call', 'output', 'error'])
       expect(
         (await post(runId, s.token, { kind, agentId: 'research', name: kind, status: 'ok' }))
           .statusCode,
       ).toBe(204);
     const rows = await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId));
-    expect(rows.map((r) => r.kind).sort()).toEqual(['error', 'model_call', 'output', 'tool_call']);
+    expect(rows.map((r) => r.kind).sort()).toEqual(['error', 'output', 'tool_call']);
     expect(rows.every((r) => r.reportedBy === `node:${s.nodeId}`)).toBe(true);
     const entries = (
       await n.req({ method: 'GET', url: `/v1/audit?runId=${runId}&limit=200` })
@@ -1236,7 +1251,7 @@ describe('what a node may report, and who said it', () => {
       payload: { reportedBy?: string };
     }[];
     const derived = entries.filter((e) => e.action.startsWith('step.'));
-    expect(derived).toHaveLength(4);
+    expect(derived).toHaveLength(3);
     expect(
       derived.every(
         (e) => e.actor === `node:${s.nodeId}` && e.payload.reportedBy === `node:${s.nodeId}`,

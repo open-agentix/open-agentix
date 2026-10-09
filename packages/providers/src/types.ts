@@ -47,12 +47,25 @@ export interface Usage {
   cacheWriteTokens?: number;
 }
 
+/** What the control node's model proxy measured for one call (ADR 0009 section 5). */
+export interface MeteredCall {
+  /** Reservation id, also in the audit entry. */
+  callId: string;
+  /** Cost measured and recorded by the control node, integer micro-USD. */
+  costMicros: number;
+  priced: boolean;
+  /** Tightest remaining headroom after the call; for local control decisions only. */
+  remaining: { costMicros?: number; tokens?: number; modelCalls?: number };
+}
+
 export interface ChatResponse {
   text: string;
   toolCalls: ToolCall[];
   usage: Usage;
   stopReason: StopReason;
   model: string;
+  /** Set by metered providers (the model proxy): the control node already recorded this call. */
+  metered?: MeteredCall;
 }
 
 export interface CompleteOptions {
@@ -69,5 +82,10 @@ export interface ModelProvider {
   readonly catalogProvider?: string;
   /** Highest data classification that may be sent to this provider. */
   readonly clearance: Classification;
+  /**
+   * `true` when the control node measures and records every call itself (the model proxy). The
+   * executor then neither computes cost nor records the `model_call` step (ADR 0009 section 5).
+   */
+  readonly metered?: boolean;
   complete(req: ChatRequest, opts?: CompleteOptions): Promise<ChatResponse>;
 }

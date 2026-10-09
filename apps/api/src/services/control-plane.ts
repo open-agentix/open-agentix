@@ -15,6 +15,8 @@ import {
 import type {
   ApprovalOutcome,
   ControlPlane,
+  ModelReservationGrant,
+  ModelReservationRequest,
   PreparedRun,
   RunResult,
   StepInput,
@@ -29,6 +31,7 @@ import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
 import type { CatalogService } from './catalog.js';
 import type { GuidelinesService } from './guidelines.js';
+import type { ModelAccountingService } from './model-accounting.js';
 import type { RunNodesService } from './run-nodes.js';
 import { writeStepRows } from './step-writer.js';
 
@@ -36,12 +39,7 @@ const ACTIVE = ['running', 'awaiting_approval'];
 /** Largest input or output a run node may attach to one step record. */
 const NODE_STEP_MAX_BYTES = 64 * 1024;
 /** Step kinds a run node may report. */
-const NODE_STEP_KINDS: ReadonlySet<string> = new Set([
-  'model_call',
-  'tool_call',
-  'output',
-  'error',
-]);
+const NODE_STEP_KINDS: ReadonlySet<string> = new Set(['tool_call', 'output', 'error']);
 
 /**
  * The control node side of the worker contract. Every method is scoped by a signed run token,
@@ -56,6 +54,8 @@ export class ControlPlaneService {
     private readonly budgets: BudgetsService,
     private readonly nodes: RunNodesService,
     private readonly guidelines?: GuidelinesService,
+    /** Reservation and settlement of model calls (ADR 0009 section 4.4); absent in unit tests. */
+    private readonly accounting?: ModelAccountingService,
   ) {}
 
   /** Policy bundles + the hardening agent's guideline bundle (stricter only). */
@@ -150,11 +150,134 @@ export class ControlPlaneService {
         await this.authorize(token, runId),
         this.budgets.verdictForRun(runId)
       ),
+      reserveModelCall: async (runId, req) => (
+        await this.authorizeOrchestrator(token, runId),
+        this.reserveModelCall(runId, req)
+      ),
       completeRun: async (runId, result) => (
         await this.authorize(token, runId),
         this.completeRun(runId, result)
       ),
     };
+  }
+
+  /**
+   * Reserves the worst-case cost of an in-process model call (ADR 0009 section 4.4): the same
+   * reservation as the model proxy makes for a run node, so the monthly and run budgets hold across
+   * concurrent runs. Refusals carry the `control_budget_*` / `model_unpriced` codes.
+   */
+  async reserveModelCall(
+    runId: string,
+    req: ModelReservationRequest,
+  ): Promise<ModelReservationGrant> {
+    if (!this.accounting)
+      throw new HttpError(503, 'model_proxy_unavailable', 'model accounting is not available');
+    const [run] = await this.ctx.db
+      .select({ tenantId: runs.tenantId })
+      .from(runs)
+      .where(eq(runs.id, runId));
+    if (!run) throw notFound('run');
+    const r = await this.accounting.reserve(
+      { tenantId: run.tenantId },
+      {
+        runId,
+        agentId: req.agentId,
+        inputTokens: req.inputTokens,
+        maxOutputTokens: req.maxOutputTokens,
+        ...(req.minOutputTokens !== undefined ? { minOutputTokens: req.minOutputTokens } : {}),
+        ...(req.cacheWrite ? { cacheWrite: true } : {}),
+      },
+    );
+    return {
+      reservationId: r.reservationId,
+      maxOutputTokens: r.reservedOutputTokens,
+      reservedMicros: r.reservedMicros,
+      priced: r.priced,
+      deadlineMs: r.deadlineMs,
+      remaining: r.remaining,
+    };
+  }
+
+  /**
+   * Counters of the run as written by the ledger (proxy settlements and trusted steps). The
+   * dispatcher reads them after a node step: they, and never the node's report, are authoritative.
+   */
+  async runUsage(
+    runId: string,
+  ): Promise<{ tokensIn: number; tokensOut: number; costMicros: number }> {
+    const [r] = await this.ctx.db
+      .select({ i: runs.tokensIn, o: runs.tokensOut, c: runs.costMicros })
+      .from(runs)
+      .where(eq(runs.id, runId));
+    if (!r) throw notFound('run');
+    return { tokensIn: Number(r.i), tokensOut: Number(r.o), costMicros: Number(r.c) };
+  }
+
+  /**
+   * A trusted `model_call` (or the `error` of a failed call) that carries a reservation settles it:
+   * the accounting service computes the cost from the usage and writes step, ledger and audit entry.
+   * Returns false when the step is not tied to a reservation and must be written the normal way.
+   */
+  private async settleReserved(runId: string, step: StepInput): Promise<boolean> {
+    if (!step.reservationId || (step.kind !== 'model_call' && step.kind !== 'error')) return false;
+    if (!this.accounting)
+      throw new HttpError(503, 'model_proxy_unavailable', 'model accounting is not available');
+    const [run] = await this.ctx.db
+      .select({ tenantId: runs.tenantId })
+      .from(runs)
+      .where(eq(runs.id, runId));
+    if (!run) throw notFound('run');
+    const scope = { tenantId: run.tenantId };
+    // A reservation of another run, of a proxied session or of another agent looks exactly like a
+    // missing one: only the in-process executor of this very step may settle it.
+    const mine = (await this.accounting.list(scope, { runId })).find(
+      (r) => r.id === step.reservationId && r.sessionId === null && r.agentId === step.agentId,
+    );
+    if (!mine) throw notFound('reservation');
+    if (mine.status === 'settled') throw notFound('reservation');
+    if (mine.status !== 'active') {
+      // The reaper already booked the reserved amount (the call outlived its deadline or the
+      // worker was slow). A late report must not fail a run whose call succeeded: record the
+      // reported usage as a correction in the audit trail; the ledger keeps the conservative
+      // amount that was already booked.
+      if (step.kind === 'model_call') {
+        await this.audit.append({
+          actor: 'system',
+          tenantId: scope.tenantId,
+          action: 'model.late_settlement',
+          target: `${mine.provider}/${mine.model}`,
+          runId,
+          payload: {
+            callId: mine.id,
+            agentId: mine.agentId,
+            reservedMicros: Number(mine.reservedMicros),
+            bookedMicros: Number(mine.actualMicros ?? 0),
+            reportedTokensIn: step.tokensIn ?? 0,
+            reportedTokensOut: step.tokensOut ?? 0,
+          },
+        });
+      }
+      return true;
+    }
+    if (step.kind === 'error') {
+      const message = (step.output as { message?: unknown } | undefined)?.message;
+      await this.accounting.release(
+        scope,
+        step.reservationId,
+        typeof message === 'string' ? message.slice(0, 300) : 'model call failed',
+      );
+      return true;
+    }
+    await this.accounting.settle(scope, step.reservationId, {
+      usage: { inputTokens: step.tokensIn ?? 0, outputTokens: step.tokensOut ?? 0 },
+      status: step.status === 'ok' ? 'ok' : 'error',
+      detail: {
+        ...(step.input !== undefined ? { input: step.input } : {}),
+        ...(step.output !== undefined ? { output: step.output } : {}),
+        ...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
+      },
+    });
+    return true;
   }
 
   async prepare(runId: string): Promise<PreparedRun> {
@@ -231,7 +354,7 @@ export class ControlPlaneService {
 
   /**
    * A step reported by an untrusted run node. Cost, token counts, provider and model are measured
-   * by the control node only (from W1-3b, through the model proxy); a node's own numbers would feed
+   * by the control node only (through the model proxy); a node's own numbers would feed
    * the cost ledger and the budget alerts, so they are dropped. Everything else is bounded.
    */
   private sanitizeNodeStep(step: StepInput): StepInput {
@@ -264,7 +387,15 @@ export class ControlPlaneService {
     // recorded by the control node and the orchestrator; a node's claim of such a step is ignored,
     // so it can neither forge nor trigger the audit entries derived from them (step.skipped,
     // condition.error, handover.invalid, ...).
+    // Model calls are recorded by the model proxy from its own measurement (ADR 0009 section 5).
+    if (node && rawStep.kind === 'model_call')
+      throw new HttpError(
+        400,
+        'step_kind_refused',
+        'a run node cannot report model calls; the model proxy records them',
+      );
     if (node && !NODE_STEP_KINDS.has(rawStep.kind)) return;
+    if (!node && (await this.settleReserved(runId, rawStep))) return;
     // Values the broker handed out for this run never reach step rows or audit payloads.
     const step = await this.nodes.scrub(runId, node ? this.sanitizeNodeStep(rawStep) : rawStep);
     const written = await this.ctx.db.transaction((tx) =>

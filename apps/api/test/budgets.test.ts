@@ -181,7 +181,7 @@ describe('hard stop', () => {
     );
   });
 
-  it('stops a running run mid-run once the budget is spent and audits the stop', async () => {
+  it('stops a running run mid-run: the next call cannot be reserved once the budget is spent', async () => {
     const baseline = await start();
     expect((await execute(baseline.id)).status).toBe('succeeded');
     const spent = (await n.req({ method: 'GET', url: `/v1/runs/${baseline.id}` })).json()
@@ -190,9 +190,19 @@ describe('hard stop', () => {
       .items as { kind: string; costMicros: number }[];
     const first = steps.find((s) => s.kind === 'model_call')!.costMicros;
     expect(first).toBeGreaterThan(0);
+    // Every model call reserves its worst case before it is made; when the headroom is smaller than
+    // that, the output bound shrinks down to 256 tokens, and below that the call is refused. The
+    // smallest reservation of the first call is its input bound plus 256 output tokens (10 and 20
+    // micro-USD per token).
+    const [first1] = await n.services.modelAccounting.list(
+      { tenantId: DEFAULT_TENANT_ID },
+      { runId: baseline.id },
+    );
+    const smallest = first1!.reservedInputTokens * 10 + 256 * 20;
 
-    // Room for exactly one more model call: the run starts, then hits the limit after step one.
-    await put(USE_CASE, (spent + first) / 1_000_000);
+    // Room for the smallest first reservation plus half an actual call: the first call is granted,
+    // the second cannot be reserved any more (its input bound is larger, the headroom is smaller).
+    await put(USE_CASE, (spent + smallest + first / 2) / 1_000_000);
     const run = await start();
     expect(run.status).toBe('queued');
     const result = await execute(run.id);
@@ -201,15 +211,13 @@ describe('hard stop', () => {
     const record = (await n.req({ method: 'GET', url: `/v1/runs/${run.id}` })).json();
     expect(record).toMatchObject({ status: 'failed', errorCode: 'control_budget_use_case' });
     expect(record.costMicros).toBe(first);
-    const stop = (await auditActions('budget.blocked')).find((e) => e.runId === run.id);
-    expect(stop?.payload).toMatchObject({ stage: 'run' });
-    expect(['100']).toEqual(
-      (await alertEvents())
-        .map((e) =>
-          String((e.payload as { data: { thresholdPercent: number } }).data.thresholdPercent),
-        )
-        .slice(-1),
-    );
+    // nothing stays reserved
+    expect(
+      await n.services.modelAccounting.list(
+        { tenantId: DEFAULT_TENANT_ID },
+        { runId: run.id, status: 'active' },
+      ),
+    ).toEqual([]);
     await n.req({ method: 'DELETE', url: `/v1/budgets/use-cases/${USE_CASE}` });
   });
 
