@@ -5,6 +5,7 @@ import {
   expandProfiles,
   hasPermission,
   loadAgentDefinition,
+  stripInvisible,
   validateAgentSource,
   visibleAgents,
   visibleTeams,
@@ -25,6 +26,17 @@ import type { CatalogService } from './catalog.js';
 
 /** Longest reason accepted when an agent is disabled or enabled. */
 export const MAX_DISABLE_REASON_LENGTH = 500;
+
+/**
+ * Normalises a free-text disable/enable reason before it is stored, audited and shown: invisible
+ * and bidi Unicode and control characters are removed (they could hide or reorder text in the
+ * console and the audit export, and NUL is rejected by PostgreSQL), and line breaks, tabs and runs
+ * of whitespace become one space, so the reason stays a single line. Empty results become null.
+ */
+export function cleanReason(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  return stripInvisible(reason).text.replace(/\s+/gu, ' ').trim() || null;
+}
 
 export type AgentRow = typeof agents.$inferSelect;
 export type AgentVersionRow = typeof agentVersions.$inferSelect;
@@ -382,7 +394,7 @@ export class AgentsService {
   ): Promise<{ agent: AgentRow; changed: boolean }> {
     const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:publish');
-    const text = reason?.trim() || null;
+    const text = cleanReason(reason);
     if (text && text.length > MAX_DISABLE_REASON_LENGTH)
       throw new HttpError(400, 'validation_failed', 'reason must not exceed 500 characters');
     return this.ctx.db.transaction(async (tx) => {
@@ -421,7 +433,7 @@ export class AgentsService {
   ): Promise<{ agent: AgentRow; changed: boolean }> {
     const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:publish');
-    const text = reason?.trim() || null;
+    const text = cleanReason(reason);
     if (text && text.length > MAX_DISABLE_REASON_LENGTH)
       throw new HttpError(400, 'validation_failed', 'reason must not exceed 500 characters');
     return this.ctx.db.transaction(async (tx) => {

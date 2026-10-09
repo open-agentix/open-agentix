@@ -179,6 +179,23 @@ describe('disable and enable', () => {
     expect(verify.json().valid).toBe(true);
   });
 
+  it('strips control, invisible and bidi characters from the reason and keeps it on one line', async () => {
+    const id = await createAgent(alice, 'reason-clean-agent');
+    // NUL would make PostgreSQL reject the row; bidi overrides and zero-width characters would hide
+    // or reorder text in the console and the audit export; line breaks would forge extra lines.
+    const raw = 'leak\u0000ed \u202Etoken\u202C\u200B rotate\r\nnext\tline\u0007';
+    const res = await disable(alice, id, raw);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().disabledReason).toBe('leaked token rotate next line');
+    const [entry] = await auditOf('agent.disabled', id);
+    expect((entry!.payload as { reason: string }).reason).toBe('leaked token rotate next line');
+    // A reason of invisible characters only is no reason.
+    await enable(alice, id);
+    expect((await disable(alice, id, '\u200B\u202E\u0000')).json().disabledReason).toBeNull();
+    const verify = await n.req({ method: 'POST', url: '/v1/audit/verify', payload: {} });
+    expect(verify.json().valid).toBe(true);
+  });
+
   it('stays editable and publishable while disabled, without enabling it', async () => {
     const id = await createAgent(alice, 'edit-while-off');
     await disable(alice, id);
