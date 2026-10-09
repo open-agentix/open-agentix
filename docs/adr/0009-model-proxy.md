@@ -813,3 +813,63 @@ Where these differ from the W1-3b-4 section above, this section wins.
    provider included. Old `oax run-node` images report `model_call` steps and now get `400
    step_kind_refused`: roll out control node and node images together. A model without a price is
    rejected with `422 model_unpriced` as soon as any cost limit applies.
+
+### W1-3b-6: pass-through surfaces (2026-10-09)
+
+Decisions taken while implementing `/v1/model-proxy/anthropic/...` and `/openai/...`. Where they
+differ from the text above, this section wins.
+
+1. **Scope.** Delivered: `POST .../anthropic/v1/messages`, `POST .../openai/v1/chat/completions`
+   (JSON and SSE) and `GET .../v1/models` on both surfaces. Not delivered: `POST
+   .../messages/count_tokens` (needs an upstream call or an honest local estimate; open) and `GET
+   .../models/{id}`. A harness that needs them falls back to its own estimate or fails visibly with a
+   404.
+2. **Credential.** The model token only. The access kind is still `model-token`, but on these routes
+   the authentication hook accepts nothing else: a run token is `401 unauthenticated` (least
+   privilege, section 2.2). The token comes from `Authorization: Bearer` or `x-api-key`; if both are
+   present and differ the request is treated as unauthenticated. No client credential or header is
+   forwarded, and the upstream header set stays the one of section 6.1.
+3. **One admission chain.** A pass-through call is an ordinary `admit` -> `reserve` -> stream ->
+   `settle` call of the native route (shared code path), so token binding, model allowlist
+   (`model` must equal the step's published model: a harness has to set its default and small-fast
+   model to it, section 10), classification, air-gap, tenant endpoint SSRF checks with DNS pinning,
+   emergency-override hook, budgets, rate and concurrency limits, usage caps and the hard stop are
+   the same. The run and agent come from the token. The simulated provider works on both surfaces
+   (synthesised events).
+4. **Request path.** The strict allowlist schemas of section 6.2 are implemented in
+   `packages/providers/src/passthrough`. The upstream body is built from the parsed value: `metadata`
+   (Anthropic) and `user` (OpenAI) are dropped, `max_tokens` / `max_completion_tokens` is the granted
+   bound (never above the request), `stream_options` is overwritten, the OpenAI `developer` role is
+   sent as `system`, and an extended-thinking budget is clamped below the output bound. The input
+   upper bound counts every text, tool and schema string plus a fixed bound per image and the bytes
+   of the remaining parameters. Additions to the table of section 6.2: OpenAI `reasoning_effort`
+   (enum) is accepted; Anthropic `thinking` requires `stream: true` (a JSON answer would have to drop
+   thinking blocks and their signatures).
+5. **Response path.** Every relayed stream event is rebuilt from allowlisted fields and length-limited
+   (unknown keys, vendor fields and unknown event types never reach the client). OpenAI `choices`
+   other than index 0 are dropped, and the usage-only chunk is relayed only when the client set
+   `stream_options.include_usage`. Non-streaming answers are produced through the same stream
+   transport (item 12 of the W1-3b-3 review fixes) and rendered from the settled response: text and tool calls
+   only, usage from the capped settlement. Headers: `x-oax-call-id` always; `x-oax-cost-micros` for
+   JSON answers only (a stream's headers are sent before its cost is known).
+6. **Hard stop and errors.** A stop after the first byte is sent as `event: error` with the
+   Anthropic error body (`{ type: "error", error: { type, message, code } }`) or as a final
+   `data: { error: { message, type, code } }` chunk **without** `[DONE]`; the stream is then closed
+   and the call is settled from what was streamed (`model.aborted`, usage source `estimated`).
+   Errors before the first byte are plain HTTP errors in the protocol's envelope, `error.code` being
+   the platform code and the message prefixed with it.
+7. **Betas.** `anthropic-beta` values are intersected with `OAX_MODEL_PROXY_ANTHROPIC_BETAS` (default
+   empty = none) and each must match `^[a-z0-9._-]{1,64}$`; the rest are dropped silently.
+8. **Metrics.** `oax_model_proxy_requests_total` carries `surface="anthropic" | "openai"` for
+   pass-through calls (`native` before).
+9. **Review fixes (2026-10-09).** (a) A request with `cache_control` is reserved at the cache-write
+   rate (`cacheWrite`), so a cache-writing call cannot settle above its reservation; `ttl: "1h"`
+   (written at twice the input price, which the reservation does not model) is refused with
+   `model_parameter_refused`. (b) A thinking budget below the API minimum of 1024 after the output
+   clamp is not sent: thinking is omitted for that call. (c) A content string above 64 KiB in a
+   relayed upstream event ends the stream with a `provider_error` instead of being blanked;
+   synthesised events (providers without a stream) are split into chunks below the limit. (d)
+   Client-visible events and JSON answers carry the model of the step, an id derived from the call id
+   (never the upstream id) and usage capped to the bounds the books use. (e) The model token is
+   checked before the request body is validated. (f) Non-streaming answers stay validated against the
+   wire schema; only a relayed stream (already delivered event by event) skips it.

@@ -13,3 +13,4 @@ export * from './unavailable.js';
 export * from './stream/index.js';
 export * from './model-wire.js';
 export * from './ssrf.js';
+export * from './passthrough/index.js';

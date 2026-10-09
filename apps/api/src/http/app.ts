@@ -76,6 +76,23 @@ export function bearerOf(req: FastifyRequest): string | null {
   return m?.[1] ?? null;
 }
 
+/** Path prefix of the pass-through surfaces (Anthropic and OpenAI protocols, ADR 0009 section 2). */
+export const MODEL_PROXY_PREFIX = '/v1/model-proxy/';
+
+/**
+ * The credential of a pass-through request: `Authorization: Bearer` (OpenAI clients, Claude Code
+ * with `ANTHROPIC_AUTH_TOKEN`) or `x-api-key` (Anthropic clients). Two different credentials are
+ * ambiguous and count as none. The credential is only ever compared and verified here; it is never
+ * forwarded upstream.
+ */
+export function modelCredentialOf(req: FastifyRequest): string | null {
+  const bearer = bearerOf(req);
+  const key = req.headers['x-api-key'];
+  const apiKey = typeof key === 'string' && key.trim() !== '' ? key.trim() : null;
+  if (bearer && apiKey && bearer !== apiKey) return null;
+  return bearer ?? apiKey;
+}
+
 /** Throws unless the request carries a principal (set by the auth hook). */
 export function principalOf(req: FastifyRequest): Principal {
   if (!req.principal) throw new HttpError(401, 'unauthenticated', 'authentication required');
@@ -186,7 +203,8 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   app.addHook('onRequest', async (req) => {
     const access = req.routeOptions.config?.access;
     if (!access || access === 'public' || access === 'webhook') return;
-    const token = bearerOf(req);
+    const passthrough = (req.routeOptions.url ?? '').startsWith(MODEL_PROXY_PREFIX);
+    const token = passthrough ? modelCredentialOf(req) : bearerOf(req);
     const query = req.query as { access_token?: string } | undefined;
     if (!token && req.routeOptions.config?.streamToken && query?.access_token) {
       const runId = (req.params as { id?: string }).id ?? '';
@@ -221,6 +239,9 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       // prefixes and keys, so neither verifies as the other). Session and binding checks follow in
       // the handler; here only the signature and expiry are checked before the body is parsed.
       try {
+        // The pass-through surfaces open with the model token only, never with a run token.
+        if (passthrough && !token?.startsWith(`${MODEL_TOKEN_PREFIX}.`))
+          throw new Error('model token required');
         if (token?.startsWith(`${MODEL_TOKEN_PREFIX}.`))
           verifyModelToken(ctx.config.runToken.secret, token, ctx.now().getTime());
         else verifyRunToken(ctx.config.runToken.secret, token ?? '', ctx.now().getTime());

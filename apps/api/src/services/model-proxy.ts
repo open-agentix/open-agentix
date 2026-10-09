@@ -26,14 +26,21 @@ import {
   WorkerModelResponseSchema,
   createStreamPlan,
   modelErrorEnvelope,
+  sanitizeEvent,
+  anthropicMessageId,
+  openaiCompletionId,
+  type SanitizeOpts,
+  synthesizeEvents,
   proposeModels,
   scrub,
   type ChatRequest,
   type ChatResponse,
+  type ClientEvent,
   type ModelErrorCode,
   type ModelErrorEnvelope,
   type ModelProvider,
   type ModelTokenResponse,
+  type PassthroughRequest,
   type ProviderConfig,
   type StreamPlan,
   type StreamResult,
@@ -153,6 +160,11 @@ export interface CallAuth {
 export interface StreamSink {
   /** Resolves when the client is ready for more (backpressure); rejects when the client is gone. */
   delta(text: string): Promise<void>;
+  /**
+   * Pass-through sinks only: one rebuilt protocol event for the client (ADR 0009 section 6.3).
+   * When set, `delta` is not used and `done` only closes the stream (`[DONE]` for OpenAI).
+   */
+  event?(ev: ClientEvent): Promise<void>;
   done(res: WorkerModelResponse): void;
   error(code: ModelErrorCode, message: string): void;
 }
@@ -170,6 +182,19 @@ export interface ModelProxyHooks {
    * yet; the admission order already reserves the slot (ADR 0009 section 3, step 6).
    */
   checkOverride?: (target: { provider: string; model: string }) => Promise<string | null>;
+}
+
+/** What a pass-through call adds to the native one (ADR 0009 sections 2.4 and 6). */
+export interface PassCtx {
+  surface: PassthroughRequest['surface'];
+  includeUsage: boolean;
+  images: number;
+  extraBytes: number;
+  build: PassthroughRequest['build'];
+  /** The request marks content for caching: the reservation prices input at the write rate. */
+  cacheWrite: boolean;
+  /** `anthropic-beta` values of the client, already filtered against the allowlist. */
+  betas: readonly string[];
 }
 
 interface Admitted {
@@ -192,6 +217,9 @@ interface Admitted {
   priced: boolean;
   /** The in-flight gauges were already decremented (settled, released or expired). */
   gaugesReleased: boolean;
+  pass: PassCtx | undefined;
+  /** Pass-through: the upstream body built from the client's validated request. */
+  upstreamBody: Record<string, unknown> | undefined;
 }
 
 type SessionRow = NonNullable<Awaited<ReturnType<RunNodesService['sessionById']>>>;
@@ -288,6 +316,35 @@ export class ModelProxyService {
     if (modelClaims && session.modelTokenJti !== modelClaims.jti)
       throw new ModelProxyError('unauthenticated', 'model token is not the one issued');
     return { ...auth, tenantId: session.tenantId, sessionCreatedAt: session.createdAt };
+  }
+
+  /**
+   * Authentication of the pass-through surfaces: the model token only (a run token never opens
+   * them), and the run comes from the token because the path has no run id.
+   */
+  async authenticatePassthrough(credential: string | null): Promise<CallAuth> {
+    if (!credential?.startsWith(`${MODEL_TOKEN_PREFIX}.`))
+      throw new ModelProxyError('unauthenticated', 'a valid model token is required');
+    let claims: ModelTokenClaims;
+    try {
+      claims = verifyModelToken(
+        this.ctx.config.runToken.secret,
+        credential,
+        this.ctx.now().getTime(),
+      );
+    } catch {
+      throw new ModelProxyError('unauthenticated', 'a valid model token is required');
+    }
+    return this.authenticate(credential, claims.runId);
+  }
+
+  /** The one model of the token's step (`GET .../models` lists exactly this). */
+  async stepModel(auth: CallAuth): Promise<string> {
+    this.assertEnabled();
+    const agentId = auth.boundAgentId;
+    if (!agentId) throw new ModelProxyError('unauthenticated', 'a valid model token is required');
+    const { agent } = await this.context(auth, agentId);
+    return agent.model;
   }
 
   /** Why a session cannot make calls any more, or `null` when it is alive and its run is running. */
@@ -455,7 +512,7 @@ export class ModelProxyService {
 
   // ---------- admission (ADR 0009 section 3) ----------
 
-  private async admit(auth: CallAuth, body: WorkerModelRequest): Promise<Admitted> {
+  private async admit(auth: CallAuth, body: WorkerModelRequest, pass?: PassCtx): Promise<Admitted> {
     const agentId = body.agentId;
     // 3. The token binds the step; a node cannot call for another agent of the run.
     if (auth.boundAgentId !== null ? auth.boundAgentId !== agentId : !auth.steps.includes(agentId))
@@ -584,7 +641,13 @@ export class ModelProxyService {
       },
     };
     const contextTokens = limits?.contextTokens ?? null;
-    const upper = estimateInputUpperBound(chat, { contextTokens });
+    const upper = pass
+      ? Math.min(
+          estimateInputUpperBound(chat, { contextTokens: null, images: pass.images }) +
+            pass.extraBytes,
+          contextTokens && contextTokens > 0 ? contextTokens : Number.POSITIVE_INFINITY,
+        )
+      : estimateInputUpperBound(chat, { contextTokens });
     const inputTokens =
       this.cfg().reservation === 'estimate' ? Math.max(1, Math.ceil(upper / 3)) : upper;
     const outputCap = [
@@ -625,6 +688,16 @@ export class ModelProxyService {
           )
         : null;
 
+    // A pass-through step must use a provider that speaks the surface's protocol (no translation).
+    if (pass && provider.kind !== 'simulated' && plan?.surface !== pass.surface)
+      throw await this.deny(
+        auth,
+        agentId,
+        'model_surface_mismatch',
+        `the provider of this step does not speak the ${pass.surface} protocol`,
+        pinned,
+      );
+
     let reservation: Reservation;
     try {
       reservation = await this.accounting.reserve(
@@ -637,6 +710,7 @@ export class ModelProxyService {
           maxOutputTokens,
           minOutputTokens: Math.min(this.cfg().minOutputTokens, maxOutputTokens),
           deadlineMs,
+          ...(pass?.cacheWrite ? { cacheWrite: true } : {}),
         },
       );
     } catch (e) {
@@ -665,6 +739,10 @@ export class ModelProxyService {
       toolNames: (r.tools ?? []).map((t) => t.name),
       priced: reservation.priced,
       gaugesReleased: false,
+      pass,
+      upstreamBody: pass
+        ? pass.build(reservation.reservedOutputTokens, { maxTokensParam: plan?.maxTokensParam })
+        : undefined,
     };
   }
 
@@ -815,9 +893,13 @@ export class ModelProxyService {
     return false;
   }
 
-  private count(code: string, adm: Pick<Admitted, 'provider'> | undefined): void {
+  private count(
+    code: string,
+    adm: Pick<Admitted, 'provider' | 'pass'> | undefined,
+    surface?: string,
+  ): void {
     this.ctx.metrics.modelProxyRequests.inc({
-      surface: 'native',
+      surface: adm?.pass?.surface ?? surface ?? 'native',
       // Bounded label: the provider family, never a tenant-chosen connection name.
       provider: adm ? (adm.provider.family ?? adm.provider.kind) : 'unknown',
       code,
@@ -825,10 +907,14 @@ export class ModelProxyService {
   }
 
   /** Counts a failed request once, however many catch blocks it passes. */
-  private countError(err: ModelProxyError, adm: Pick<Admitted, 'provider'> | undefined): void {
+  private countError(
+    err: ModelProxyError,
+    adm: Pick<Admitted, 'provider' | 'pass'> | undefined,
+    surface?: string,
+  ): void {
     if (err.counted) return;
     err.counted = true;
-    this.count(err.code, adm);
+    this.count(err.code, adm, surface);
   }
 
   private tokens(s: Settlement, usage: { cacheRead: number; cacheWrite: number }): void {
@@ -843,11 +929,30 @@ export class ModelProxyService {
       m.inc({ direction: 'cache_write', source: s.usageSource }, usage.cacheWrite);
   }
 
+  /**
+   * What a client-visible event may carry of the upstream: the step's model, an own id and the
+   * capped usage (the same bounds `capUsage` applies to the books).
+   */
+  private sanitizeOpts(adm: Admitted, pass: PassCtx): SanitizeOpts {
+    const resv = adm.reservation;
+    return {
+      includeUsage: pass.includeUsage,
+      model: adm.agent.model,
+      id:
+        pass.surface === 'anthropic'
+          ? anthropicMessageId(resv.reservationId)
+          : openaiCompletionId(resv.reservationId),
+      maxInput: Math.max(adm.inputUpperBound, resv.reservedInputTokens),
+      maxOutput: Math.ceil(resv.reservedOutputTokens * OVERRUN_FACTOR) + OVERRUN_ALLOWANCE_TOKENS,
+    };
+  }
+
   private response(
     adm: Admitted,
     res: ChatResponse,
     s: Settlement,
     cache: { cacheRead: number; cacheWrite: number },
+    validate = true,
   ): WorkerModelResponse {
     const resv = adm.reservation;
     const refundMicros = Math.max(0, resv.reservedMicros - s.costMicros);
@@ -873,7 +978,7 @@ export class ModelProxyService {
           cacheWriteTokens: cache.cacheWrite,
         },
         stopReason: res.stopReason,
-        model: res.model,
+        model: adm.pass ? adm.agent.model : res.model,
       },
       usage: {
         inputTokens: Math.max(0, s.tokensIn - cache.cacheRead - cache.cacheWrite),
@@ -888,6 +993,9 @@ export class ModelProxyService {
     };
     // The response is validated against the wire schema: a malformed provider answer (for example a
     // tool call with a prototype key) fails closed instead of reaching the node.
+    // A relayed pass-through stream was delivered event by event before this point; only the
+    // accounting record is built here, so there is nothing left to refuse.
+    if (!validate) return out as WorkerModelResponse;
     const parsed = WorkerModelResponseSchema.safeParse(out);
     if (!parsed.success)
       throw new ModelProxyError('provider_error', 'the provider answered with an invalid response');
@@ -907,13 +1015,14 @@ export class ModelProxyService {
     auth: CallAuth,
     body: WorkerModelRequest,
     clientGone: AbortSignal,
+    pass?: PassCtx,
   ): Promise<WorkerModelResponse> {
     this.assertEnabled();
     this.checkRate(auth.runId);
     this.acquire();
     let adm: Admitted | undefined;
     try {
-      adm = await this.admit(auth, body);
+      adm = await this.admit(auth, body, pass);
       const out = adm.plan
         ? await this.runCollected(adm, adm.plan, clientGone)
         : await this.runJson(adm, clientGone);
@@ -921,7 +1030,7 @@ export class ModelProxyService {
       return out;
     } catch (e) {
       const err = toModelProxyError(e);
-      this.countError(err, adm);
+      this.countError(err, adm, pass?.surface);
       throw err;
     } finally {
       this.inflight--;
@@ -1113,30 +1222,110 @@ export class ModelProxyService {
    * it, failures are sent as an `error` event. Providers without a streaming transport answer with
    * a single `delta` and `done`.
    */
-  async stream(auth: CallAuth, body: WorkerModelRequest, io: StreamIo): Promise<void> {
+  async stream(
+    auth: CallAuth,
+    body: WorkerModelRequest,
+    io: StreamIo,
+    pass?: PassCtx,
+  ): Promise<void> {
     this.assertEnabled();
     this.checkRate(auth.runId);
     this.acquire();
     let adm: Admitted | undefined;
     try {
-      adm = await this.admit(auth, body);
+      adm = await this.admit(auth, body, pass);
       if (!adm.plan) {
         // No streaming transport (simulated, Bedrock non-Anthropic): complete, then replay.
         const res = await this.runJson(adm, io.signal);
         this.count('ok', adm);
         const sink = io.begin(res.callId);
-        if (res.response.text) await sink.delta(res.response.text);
+        if (adm.pass && sink.event) {
+          for (const ev of synthesizeEvents(adm.pass.surface, res.response, res.callId)) {
+            const out = sanitizeEvent(adm.pass.surface, ev, this.sanitizeOpts(adm, adm.pass));
+            if (out) await sink.event(out);
+          }
+        } else if (res.response.text) await sink.delta(res.response.text);
         sink.done(res);
         return;
       }
       await this.runStream(adm, adm.plan, io);
     } catch (e) {
       const err = toModelProxyError(e);
-      this.countError(err, adm);
+      this.countError(err, adm, pass?.surface);
       throw err;
     } finally {
       this.inflight--;
     }
+  }
+
+  // ---------- pass-through surfaces (ADR 0009 sections 2.4 and 6) ----------
+
+  /**
+   * Builds the native-shaped request and the pass-through context from a validated client request.
+   * The agent is the one the model token is bound to; the client cannot name another. Only betas on
+   * the operator's allowlist survive.
+   */
+  private passInput(
+    auth: CallAuth,
+    req: PassthroughRequest,
+    betaHeader: string | readonly string[] | undefined,
+  ): { body: WorkerModelRequest; pass: PassCtx } {
+    const agentId = auth.boundAgentId;
+    if (!agentId) throw new ModelProxyError('unauthenticated', 'a valid model token is required');
+    const allowed = new Set(this.cfg().anthropicBetas);
+    const joined: string =
+      typeof betaHeader === 'string' ? betaHeader : (betaHeader ?? []).join(',');
+    const asked = joined
+      .split(',')
+      .map((b) => b.trim())
+      .filter(Boolean);
+    const betas =
+      req.surface === 'anthropic' ? [...new Set(asked.filter((b) => allowed.has(b)))] : [];
+    const c = req.chat;
+    return {
+      body: {
+        agentId,
+        request: {
+          model: req.model,
+          messages: c.messages as WorkerModelRequest['request']['messages'],
+          ...(c.system ? { system: c.system } : {}),
+          ...(c.tools ? { tools: c.tools } : {}),
+          ...(req.requestedMaxTokens !== undefined ? { maxTokens: req.requestedMaxTokens } : {}),
+          ...(c.temperature !== undefined ? { temperature: c.temperature } : {}),
+        },
+      },
+      pass: {
+        surface: req.surface,
+        includeUsage: req.includeUsage,
+        images: req.images,
+        extraBytes: req.extraBytes,
+        build: req.build,
+        cacheWrite: req.cacheWrite,
+        betas,
+      },
+    };
+  }
+
+  /** A pass-through call answered as one JSON document (`stream` is not set). */
+  async callPassthrough(
+    auth: CallAuth,
+    req: PassthroughRequest,
+    betaHeader: string | readonly string[] | undefined,
+    clientGone: AbortSignal,
+  ): Promise<WorkerModelResponse> {
+    const { body, pass } = this.passInput(auth, req, betaHeader);
+    return this.call(auth, body, clientGone, pass);
+  }
+
+  /** A pass-through call relayed as Server-Sent Events, with the mid-stream hard stop. */
+  async streamPassthrough(
+    auth: CallAuth,
+    req: PassthroughRequest,
+    betaHeader: string | readonly string[] | undefined,
+    io: StreamIo,
+  ): Promise<void> {
+    const { body, pass } = this.passInput(auth, req, betaHeader);
+    return this.stream(auth, body, io, pass);
   }
 
   private async runStream(adm: Admitted, plan: StreamPlan, io: StreamIo): Promise<void> {
@@ -1159,9 +1348,10 @@ export class ModelProxyService {
     try {
       try {
         upstream = await plan.transport.open(
-          { body: plan.buildBody(adm.chat), model: adm.agent.model },
+          { body: adm.upstreamBody ?? plan.buildBody(adm.chat), model: adm.agent.model },
           {
             signal: ac.signal,
+            ...(adm.pass?.betas.length ? { anthropicBeta: adm.pass.betas } : {}),
             inputEstimate: adm.reservation.reservedInputTokens,
             shouldStop: (snap) => {
               if (stopReason) return stopReason;
@@ -1184,7 +1374,11 @@ export class ModelProxyService {
         try {
           for await (const ev of upstream.events) {
             const delta = agg.push(ev);
-            if (delta) await sink.delta(delta);
+            if (adm.pass) {
+              // Pass-through: the client gets the event rebuilt from allowlisted fields only.
+              const out = sanitizeEvent(adm.pass.surface, ev, this.sanitizeOpts(adm, adm.pass));
+              if (out && sink.event) await sink.event(out);
+            } else if (delta) await sink.delta(delta);
           }
         } catch (e) {
           failure = stopReason
@@ -1374,7 +1568,7 @@ export class ModelProxyService {
       return;
     }
     try {
-      sink.done(this.response(adm, res, s, cache));
+      sink.done(this.response(adm, res, s, cache, !adm.pass));
       this.count('ok', adm);
       this.log(adm, 'ok', s, ms);
     } catch (e) {

@@ -267,7 +267,10 @@ limit are per replica.
 | `OAX_MODEL_PROXY_REVOCATION_POLL_MS` | `2000` | While a call is open the session and run are polled this often; revocation, cancellation or lease loss ends the call within one interval. |
 | `OAX_MODEL_PROXY_MAX_RESPONSE_BYTES` | `16777216` | Largest upstream response of one call (16 MiB). |
 | `OAX_MODEL_PROXY_PRIVATE_ALLOW` | – | Private destinations (hosts, suffixes, CIDRs) that tenant-controlled endpoints (BYOK model connections) may reach; everything private, loopback, link-local or metadata is refused otherwise (`403 egress_denied`). |
+| `OAX_MODEL_PROXY_ANTHROPIC_BETAS` | – | `anthropic-beta` values the Anthropic pass-through surface forwards (comma separated, each `[a-z0-9._-]{1,64}`); every other value a client sends is dropped. Empty = none forwarded. |
 | `OAX_MODEL_PROXY_CAPTURE` | `metadata` | `metadata` stores the response text, tool calls and stop reason in the step record (never the request); `off` stores only metadata. Bodies are never logged. |
+
+Note on betas: a forwarded beta header can change how the provider bills a call (for example long-context pricing). The reservation does not know such surcharges, so only enable betas whose pricing you have checked; a call that costs more than reserved is capped to the reservation and logged as `model.overrun`.
 
 ## Webhooks
 
