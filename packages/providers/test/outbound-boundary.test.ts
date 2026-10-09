@@ -139,4 +139,15 @@ describe('outbound boundary', () => {
       ).toBe(true);
     }
   });
+
+  it('keeps the git relay exception to a loopback server (no client socket of its own)', () => {
+    const text = readFileSync(path.join(root, 'apps/worker/src/git/relay.ts'), 'utf8');
+    const imports = [...text.matchAll(/import\s+([^;]*?)\s+from\s+'(?:node:)?(net|tls)'/g)];
+    expect(imports.map((m) => m[2])).toEqual(['net']);
+    expect(imports[0]?.[1]?.replace(/\s+/g, ' ')).toBe(
+      '{ createServer, type Server, type Socket }',
+    );
+    expect(text).not.toMatch(/\.connect\(|createConnection|new Socket\(/);
+    expect(text).toMatch(/dispatcher\s*\.dial\(/);
+  });
 });
