@@ -470,6 +470,25 @@ describe('resources and identity', () => {
       KubernetesJobRunnerConfigSchema.parse({ controlPlane: { namespaceSelector: {} } }),
     ).toThrow(/must not be empty/);
   });
+
+  it('rejects an empty control plane port list (an empty `ports` opens every port)', () => {
+    expect(() =>
+      KubernetesJobRunnerConfigSchema.parse({
+        controlPlane: { namespaceSelector: { a: 'b' }, ports: [] },
+      }),
+    ).toThrow();
+    // Defence in depth: a config that bypassed the schema never yields a port-less rule.
+    const c = cfg();
+    c.controlPlane.ports = [];
+    expect(() => buildNetworkPolicy(spec({ egress: [] }), c)).toThrow(/port/);
+    expect(
+      () =>
+        new KubernetesJobRunner({
+          client: new FakeKube(),
+          config: { namespace: 'runs', controlPlane: { cidrs: ['10.9.0.1/32'], ports: [] } },
+        }),
+    ).toThrow();
+  });
 });
 
 describe('KubernetesJobRunner lifecycle', () => {

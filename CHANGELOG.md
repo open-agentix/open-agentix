@@ -18,6 +18,8 @@ All notable changes to this project are documented here. The format follows
   `https://` `OAX_NODE_CONTROL_URL`, a digest-pinned `OAX_K8S_IMAGE` and a control plane selector or CIDR
   (**behaviour change** for configurations that enabled the runner before it was wired). The kind
   end-to-end test stays opt-in. Docs: `docs/kubernetes-job-runner.md`, `docs/runners.md`.
+  `OAX_K8S_CONTROL_PLANE_PORTS` must list at least one port (an empty list would have rendered
+  `ports: []`, which a NetworkPolicy reads as every port).
 - **Git delivery in the worker (DOG-3a/3b, ADR 0010 Amendment 2)**: `apps/worker/src/git/` with a
   hardened minimal Git engine over https (child process with allowlisted environment, forced `-c`
   options, one-target loopback relay that dials through the outbound dispatcher, shallow fetch of

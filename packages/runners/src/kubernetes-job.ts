@@ -279,6 +279,8 @@ export function buildNetworkPolicy(spec: RunNodeSpec, cfg: KubernetesJobRunnerCo
     cpTo.push({ ipBlock: { cidr: c } });
   }
   if (cpTo.length > 0) {
+    // An empty `ports` list would allow every port to the control plane peers (fail closed).
+    if (cp.ports.length === 0) throw bad('controlPlane.ports must list at least one port');
     egress.push({ to: cpTo, ports: cp.ports.map((port) => ({ protocol: 'TCP', port })) });
   }
   for (const { cidr, except } of plan.cidrs) {

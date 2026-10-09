@@ -257,4 +257,22 @@ describe('runner, toolbox, secrets and worker settings', () => {
     // an empty selector would match every pod
     expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_POD_SELECTOR: '{}' })).toThrow();
   });
+
+  const K8S_OK = {
+    ...base,
+    ...K8S_REQUIRED,
+    OAX_RUNNERS_ENABLED: 'kubernetes-job',
+    OAX_K8S_JOB_ENABLED: 'true',
+    OAX_TOOLBOX_ALLOWLIST: 'trivy',
+    OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false',
+  };
+
+  it('refuses an empty or non-numeric control plane port list', () => {
+    const ok = K8S_OK;
+    // An empty port list would render `ports: []`, which Kubernetes reads as "every port".
+    expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_PORTS: '' })).toThrow(
+      /OAX_K8S_CONTROL_PLANE_PORTS/,
+    );
+    expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_PORTS: 'https' })).toThrow();
+  });
 });

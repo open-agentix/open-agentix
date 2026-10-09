@@ -67,7 +67,8 @@ export const KubernetesJobRunnerConfigSchema = z.strictObject({
       /** Non-empty when set; prefer `kubernetes.io/metadata.name: <ns>`. */
       namespaceSelector: selector.optional(),
       cidrs: z.array(z.string()).default([]),
-      ports: z.array(z.number().int().min(1).max(65535)).default([443]),
+      /** At least one port: an empty `ports` list in a NetworkPolicy rule means EVERY port. */
+      ports: z.array(z.number().int().min(1).max(65535)).min(1).default([443]),
     })
     .default({ cidrs: [], ports: [443] }),
 });

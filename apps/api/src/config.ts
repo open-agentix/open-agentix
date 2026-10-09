@@ -687,6 +687,18 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
       );
     }
   }
+  // An empty list would become `ports: []` in the NetworkPolicy, which Kubernetes reads as
+  // "every port"; refuse it (and non-numeric entries) with the setting's name.
+  const controlPlanePorts = list(e.OAX_K8S_CONTROL_PLANE_PORTS).map(Number);
+  if (
+    controlPlanePorts.length === 0 ||
+    !controlPlanePorts.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535)
+  ) {
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: OAX_K8S_CONTROL_PLANE_PORTS must list at least one TCP port (1-65535)',
+    );
+  }
   const job = KubernetesJobRunnerConfigSchema.parse({
     namespace: e.OAX_K8S_NAMESPACE,
     serviceAccountName: e.OAX_K8S_SERVICE_ACCOUNT,
@@ -712,7 +724,7 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
         ? { namespaceSelector: e.OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR }
         : {}),
       cidrs: list(e.OAX_K8S_CONTROL_PLANE_CIDRS),
-      ports: list(e.OAX_K8S_CONTROL_PLANE_PORTS).map(Number),
+      ports: controlPlanePorts,
     },
     dnsEgress: e.OAX_K8S_DNS_EGRESS,
     automountServiceAccountToken: e.OAX_K8S_AUTOMOUNT_SA_TOKEN,
