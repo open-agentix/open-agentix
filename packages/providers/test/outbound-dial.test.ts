@@ -52,6 +52,7 @@ const roundTrip = (s: net.Socket) =>
       s.destroy();
     });
     s.write('ping');
+    s.resume();
   });
 
 describe('OutboundDispatcher.dial', () => {
@@ -69,6 +70,38 @@ describe('OutboundDispatcher.dial', () => {
     await expect(
       d.dial({ host: 'git.example.org', port: echoPort }, { purpose: 'git', pin: { lookup } }),
     ).rejects.toMatchObject({ code: 'egress_denied' });
+  });
+
+  it('checks an IP literal against the pinning rules (Node skips the lookup hook for it)', async () => {
+    const d = createOutboundDispatcher({});
+    for (const host of ['127.0.0.1', '10.1.2.3', '::1'])
+      await expect(
+        d.dial({ host, port: echoPort }, { purpose: 'git', pin: {} }),
+        host,
+      ).rejects.toMatchObject({ code: 'egress_denied' });
+    const ok = await d.dial(
+      { host: '127.0.0.1', port: echoPort },
+      { purpose: 'git', pin: { allow: ['127.0.0.1'] } },
+    );
+    expect(await roundTrip(ok)).toBe('echo:ping');
+  });
+
+  it('checks a tenant destination before tunnelling it through a proxy', async () => {
+    connects.length = 0;
+    proxyAnswer = '200 Connection Established';
+    const d = createOutboundDispatcher({
+      network: netOf({
+        proxies: [{ name: 'corp', url: `http://127.0.0.1:${proxyPort}` }],
+        routes: [{ match: { hosts: ['git.example.org'] }, via: 'corp' }],
+      }),
+    });
+    await expect(
+      d.dial(
+        { host: 'git.example.org', port: 443 },
+        { purpose: 'git', scope: { origin: 'tenant' }, pin: { lookup } },
+      ),
+    ).rejects.toMatchObject({ code: 'egress_denied' });
+    expect(connects).toHaveLength(0);
   });
 
   it('refuses a denied route before any connection', async () => {

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ClientRequest } from 'node:http';
-import { connect as netConnect, type Socket } from 'node:net';
+import { isIP, connect as netConnect, type Socket } from 'node:net';
 import { connect as tlsConnect, rootCertificates, type ConnectionOptions } from 'node:tls';
 import { Agent as HttpAgent } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
@@ -137,7 +137,8 @@ export interface OutboundDispatcher {
    * Amendment 1 A1.5): direct to the checked and pinned address, or through the selected proxy
    * with `CONNECT`. The route decision, the air-gapped allowlist and the pinning rules are the
    * same as for `plan`; TLS (if any) stays end to end between the caller and the destination.
-   * Throws `egress_denied` on a deny result.
+   * Throws `egress_denied` on a deny result. The socket is returned paused: `pipe()` or `resume()`
+   * starts the flow, so no byte that arrived during the proxy handshake is lost.
    */
   dial(target: { host: string; port: number }, ctx: OutboundContext): Promise<Socket>;
   /** The effective network (for diagnostics). */
@@ -488,8 +489,16 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
       const url = new URL(`https://${host.includes(':') ? `[${host}]` : host}:${target.port}/`);
       const r = resolve(url, ctx);
       const p = r.route.proxy;
+      // Node skips the `lookup` hook for an IP literal, so the pinned lookup would never see it;
+      // and behind a proxy the proxy resolves the name. Check the destination here in both cases
+      // (the same rule as `fetch` for tenant destinations behind a proxy).
+      if ((r.pinned && isIP(host)) || (p && ctx.scope?.origin === 'tenant'))
+        await assertPublicDestination(host, {
+          allow: [...(ctx.pin?.allow ?? []), ...net().config.privateAllow],
+          ...(ctx.pin?.lookup ? { lookup: ctx.pin.lookup } : {}),
+        });
       if (!p) {
-        return await connectWithin(
+        const direct = await connectWithin(
           () =>
             netConnect({
               host,
@@ -498,6 +507,7 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
             }),
           limits.connectTimeoutMs,
         );
+        return direct.pause();
       }
       const token = proxyToken(r.route, r.scope);
       const proxyCa = p.caBundle ? caList([p.caBundle]) : caList([]);
@@ -631,6 +641,9 @@ function proxyConnect(
           ),
         );
       const rest = buf.subarray(end + 4);
+      // Paused: removing the `data` listener does not stop a flowing stream, so bytes that arrive
+      // before the caller attaches its own reader (or pipes) would be lost.
+      sock.pause();
       if (rest.length > 0) sock.unshift(rest);
       done();
     };
