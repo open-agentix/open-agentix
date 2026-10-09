@@ -55,16 +55,27 @@ export function runHarnessProcess(
     let stderr = '';
     let bytes = 0;
     let buffer = '';
+    // Own process group (POSIX): a stop reaches everything the harness spawned, not just the CLI.
+    const group = process.platform !== 'win32';
     const child = spawn(inv.command, inv.args, {
       cwd: p.cwd,
       env: p.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: group,
     });
+    const signalTree = (sig: NodeJS.Signals) => {
+      try {
+        if (group && child.pid) process.kill(-child.pid, sig);
+        else child.kill(sig);
+      } catch {
+        child.kill(sig);
+      }
+    };
     const stop = (why: HarnessTermination) => {
       if (terminated === 'none') terminated = why;
       if (child.exitCode === null) {
-        child.kill('SIGTERM');
-        setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS).unref();
+        signalTree('SIGTERM');
+        setTimeout(() => signalTree('SIGKILL'), KILL_GRACE_MS).unref();
       }
     };
     const maxTurns = inv.limits?.maxTurns;
@@ -108,6 +119,8 @@ export function runHarnessProcess(
     });
     child.on('close', (code) => {
       if (timer) clearTimeout(timer);
+      // Leftover members of the process group (a harness that forked and left) end with the run.
+      if (group) signalTree('SIGKILL');
       p.signal?.removeEventListener('abort', onAbort);
       feed(buffer);
       const out = parser.finalize(code);

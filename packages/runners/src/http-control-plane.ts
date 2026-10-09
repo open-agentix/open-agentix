@@ -1,14 +1,17 @@
 import {
   OaxError,
   type BudgetVerdict,
+  type HarnessKind,
   type StepCredentials,
   type PolicyDecision,
   type ToolCallRequest,
 } from '@openagentix/core';
-import type {
-  CompleteOptions,
-  WorkerModelRequest,
-  WorkerModelResponse,
+import {
+  ModelTokenResponseSchema,
+  type CompleteOptions,
+  type ModelTokenResponse,
+  type WorkerModelRequest,
+  type WorkerModelResponse,
 } from '@openagentix/providers';
 import type { ModelProxyClient } from './model-proxy.js';
 import {
@@ -156,6 +159,25 @@ export class HttpControlPlane implements ControlPlane, ModelProxyClient {
     opts: CompleteOptions = {},
   ): Promise<WorkerModelResponse> {
     return this.request('POST', `/v1/worker/runs/${runId}/model`, req, opts.signal, true);
+  }
+
+  /**
+   * The model token of a harness step (once per step and session): the credential the harness
+   * child gets instead of any provider key. The answer names the pass-through surface to use.
+   */
+  async issueHarnessModelToken(
+    runId: string,
+    agentId: string,
+    harness: HarnessKind,
+  ): Promise<ModelTokenResponse> {
+    const raw = await this.request<unknown>(
+      'POST',
+      `/v1/worker/runs/${runId}/model-token`,
+      { agentId, harness },
+      undefined,
+      true,
+    );
+    return ModelTokenResponseSchema.parse(raw);
   }
 
   /** Reservation of an in-process model call (orchestrator token only). */

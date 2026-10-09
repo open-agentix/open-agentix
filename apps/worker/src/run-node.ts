@@ -4,6 +4,7 @@ import {
   OaxError,
   StaticSecretResolver,
   type AgentDefinition,
+  type HarnessKind,
   type OaxEvent,
   type StepCredentials,
 } from '@openagentix/core';
@@ -12,7 +13,10 @@ import { ProviderRegistry, type ModelProvider } from '@openagentix/providers';
 import {
   HttpControlPlane,
   ModelProxyProvider,
+  createHarness,
   executePipeline,
+  executeWithHarness,
+  type ExternalHarness,
   type FetchFn,
   type PreparedRun,
   type StepHandover,
@@ -38,6 +42,10 @@ export interface RunNodeOptions {
   inMemoryMcp?: InMemoryTransportFactory;
   /** Providers usable without the control node (unit tests only); default none: all calls are proxied. */
   localProviders?: ModelProvider[];
+  /** Replaces the harness adapter (tests use fakes; the node binary never sets it). */
+  harnessFactory?: (kind: HarnessKind) => ExternalHarness;
+  /** Parent of the temporary work directory of a harness run (default: the OS temp dir). */
+  harnessWorkRoot?: string;
   /** How long to wait for the token file the runner uploads after the container started. */
   tokenWaitMs?: number;
   signal?: AbortSignal;
@@ -155,6 +163,23 @@ export function mergeCredentials(
   });
 }
 
+/**
+ * Harness adapters of a run node. Binaries are part of the node image (pinned and checksummed at
+ * build time) and located by environment variables; nothing is ever downloaded at run time.
+ */
+function harnessFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): (kind: HarnessKind) => ExternalHarness {
+  return (kind) =>
+    createHarness(kind, {
+      ...(env.OAX_CLAUDE_BIN ? { command: env.OAX_CLAUDE_BIN } : {}),
+      opencode: {
+        ...(env.OAX_OPENCODE_BIN ? { command: env.OAX_OPENCODE_BIN } : {}),
+        ...(env.OAX_OPENCODE_SHA256 ? { expectedSha256: env.OAX_OPENCODE_SHA256 } : {}),
+      },
+    });
+}
+
 function stepDefinition(h: StepHandover): AgentDefinition {
   return {
     apiVersion: 'openagentix.io/v1alpha1',
@@ -253,13 +278,34 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
       event,
       policies: [],
     };
-    const result = await executePipeline(run, {
+    const ctx = {
       providers,
       tools,
       control,
       costModel: new CostModel([]),
       ...(opts.signal ? { signal: opts.signal } : {}),
-    });
+    };
+    const kind = handover.agent.runtime?.harness;
+    const result = kind
+      ? await executeWithHarness(
+          run,
+          ctx,
+          (opts.harnessFactory ?? harnessFromEnv(opts.env))(kind),
+          {
+            ...(opts.harnessWorkRoot ? { workRoot: opts.harnessWorkRoot } : {}),
+            // The harness child gets the model token of its step and nothing else (ADR 0009 section 10).
+            modelProxy: async (agent) => {
+              const t = await control.issueHarnessModelToken(env.runId, agent.id, kind);
+              if (t.protocol === 'native')
+                throw new OaxError(
+                  'model_surface_mismatch',
+                  'the control node answered with no harness surface',
+                );
+              return { protocol: t.protocol, baseUrl: t.baseUrl, token: t.token, model: t.model };
+            },
+          },
+        )
+      : await executePipeline(run, ctx);
     const out = result.outputs[0];
     if (result.status !== 'succeeded' || !out) {
       return await report({
