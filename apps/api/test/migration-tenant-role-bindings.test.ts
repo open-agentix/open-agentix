@@ -392,6 +392,43 @@ describe.each(sqlTargets)('migration 0018 on existing data (%s)', (_kind, enable
     }
   });
 
+  it('serialises the other order too: a home change first makes the waiting insert fail closed', async (ctx) => {
+    if (!c.session) return ctx.skip();
+    const user = randomUUID();
+    await c.query(
+      `insert into users (id, email, display_name, source, tenant_id) values ($1, $2, 'R', 'local', $3)`,
+      [user, `${user}@example.org`, root],
+    );
+    const a = await c.session();
+    const b = await c.session();
+    try {
+      await b.query('begin');
+      await b.query(`update users set tenant_id = $1 where id = $2`, [orgB, user]);
+      await a.query('begin');
+      // waits for the user row (FOR SHARE in the trigger); after the move commits, the re-checked
+      // join no longer finds the old home and the binding in the old organisation is refused
+      const insert = a
+        .query(
+          `insert into tenant_role_bindings (id, user_id, tenant_id, role) values ($1, $2, $3, 'viewer')`,
+          [randomUUID(), user, root],
+        )
+        .then(
+          () => 'inserted',
+          (e: { code?: string }) => e.code,
+        );
+      await new Promise((r) => setTimeout(r, 300));
+      await b.query('commit');
+      expect(await insert).toBe('23514');
+      await a.query('rollback');
+      // (the pool has two connections, both held here: read through one of them)
+      const rows = await b.query(`select 1 from tenant_role_bindings where user_id = $1`, [user]);
+      expect(rows.rows).toHaveLength(0);
+    } finally {
+      a.release();
+      b.release();
+    }
+  });
+
   it('is reverted by the down script, which keeps users and global_roles, and can run twice', async () => {
     const before = (await c.query(`select id, global_roles, tenant_id from users order by id`))
       .rows;
