@@ -18,6 +18,8 @@ export interface SecretHit {
   via: string;
 }
 
+// Every repetition before a literal anchor is bounded: an unbounded `[a-z0-9.-]*` in front of `://`
+// made the scan quadratic (64 KiB of `a.a.a.` blocked the event loop for seconds).
 const PATTERNS: [string, RegExp][] = [
   ['private-key', /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/],
   ['github-token', /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/],
@@ -33,10 +35,10 @@ const PATTERNS: [string, RegExp][] = [
   ['stripe-key', /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b/],
   ['jwt', /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/],
   ['authorization-header', /\b(?:Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{20,}/],
-  ['url-credentials', /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:[^\s/@]{3,}@/i],
+  ['url-credentials', /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]{1,256}:[^\s/@]{3,256}@/i],
   [
     'env-secret-assignment',
-    /\b[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Z0-9_]*\s*[=:]\s*["']?[^\s"']{12,}/,
+    /\b[A-Z][A-Z0-9_]{0,63}(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Z0-9_]{0,63}\s{0,8}[=:]\s{0,8}["']?[^\s"']{12,}/,
   ],
   [
     'secret-assignment',

@@ -168,6 +168,14 @@ describe('scanForSecrets', () => {
     ];
     for (const s of ok) expect(hit(s), s).toBe(false);
   });
+
+  it('stays linear on hostile input (no catastrophic backtracking)', () => {
+    for (const t of ['a.'.repeat(32_768), 'A.'.repeat(32_768), 'A_TOKEN'.repeat(9_000)]) {
+      const started = performance.now();
+      scanForSecrets(t, ['my-very-private-value-123456']);
+      expect(performance.now() - started, t.slice(0, 8)).toBeLessThan(1_000);
+    }
+  });
 });
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
