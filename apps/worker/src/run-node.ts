@@ -8,10 +8,10 @@ import {
   type StepCredentials,
 } from '@openagentix/core';
 import { ToolGateway, type InMemoryTransportFactory, type McpServerConfig } from '@openagentix/mcp';
-import { ProviderRegistry, SimulatedProvider, type ModelProvider } from '@openagentix/providers';
+import { ProviderRegistry, type ModelProvider } from '@openagentix/providers';
 import {
   HttpControlPlane,
-  ModelProxyUnavailableProvider,
+  ModelProxyProvider,
   executePipeline,
   type FetchFn,
   type PreparedRun,
@@ -36,7 +36,7 @@ export interface RunNodeOptions {
   sleep?: (ms: number) => Promise<void>;
   /** In-process MCP servers (demo/tests); without them `in-memory` connections cannot be reached. */
   inMemoryMcp?: InMemoryTransportFactory;
-  /** Providers usable without the control node; defaults to the keyless simulated provider. */
+  /** Providers usable without the control node (unit tests only); default none: all calls are proxied. */
   localProviders?: ModelProvider[];
   /** How long to wait for the token file the runner uploads after the container started. */
   tokenWaitMs?: number;
@@ -223,13 +223,22 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
       env: proxyEnv,
       ...(opts.inMemoryMcp ? { inMemory: opts.inMemoryMcp } : {}),
     });
-    const local = opts.localProviders ?? [new SimulatedProvider({ name: 'simulated' })];
+    // Every model call of a node goes through the control node's model proxy (ADR 0009), the
+    // simulated provider included, so tests and demos exercise the real path. `localProviders` is
+    // for unit tests only; the node binary never sets it.
+    const local = opts.localProviders ?? [];
     const providers = ProviderRegistry.of(
       local.some((p) => p.name === handover.agent.provider)
         ? local
-        : // TODO(W1-3b): model calls go through the control node's model proxy; until then every
-          // provider except the keyless simulated one fails closed (no key ever reaches a node).
-          [...local, new ModelProxyUnavailableProvider(handover.agent.provider)],
+        : [
+            ...local,
+            new ModelProxyProvider({
+              name: handover.agent.provider,
+              runId: env.runId,
+              agentId,
+              client: control,
+            }),
+          ],
     );
     const event: OaxEvent = {
       specversion: '1.0',

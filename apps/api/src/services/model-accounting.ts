@@ -4,6 +4,7 @@ import {
   estimateOutputTokensFromBytes,
   outputFloorFromBytes,
   type Budget,
+  type PriceEntry,
 } from '@openagentix/core';
 import type { StepInput } from '@openagentix/runners';
 import { and, asc, eq, inArray, lt, lte, sql } from 'drizzle-orm';
@@ -45,6 +46,16 @@ export interface ModelAccountingOptions {
   graceMs: number;
   /** Call deadline when the caller names none (`OAX_MODEL_PROXY_MAX_CALL_SECONDS`). */
   defaultDeadlineMs: number;
+  /**
+   * Price of a model for the run's scope: the platform table plus the price overrides of the run's
+   * connections (BYOK) and the catalog provider of the connection. Without it the platform table
+   * (`ctx.costModel`) is used as is.
+   */
+  priceFor?: (
+    scope: { tenantId: string; teamId: string | null; agentId: string },
+    provider: string,
+    model: string,
+  ) => Promise<PriceEntry | undefined>;
 }
 
 /** Defaults; the control node binds them from the `OAX_MODEL_PROXY_*` config block (services/index.ts). */
@@ -279,18 +290,54 @@ export class ModelAccountingService {
         'minOutputTokens must be a positive integer',
       );
     }
+    // The price is resolved before the transaction opens (it reads connections; never a second
+    // query path while the tenant lock is held).
+    const price = await this.priceForRun(scope, req.runId, req.agentId);
     const result = await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
       await this.lockTenant(tx, scope.tenantId);
-      return this.reserveLocked(tx, scope, req);
+      return this.reserveLocked(tx, scope, req, price);
     });
     return result;
+  }
+
+  /** Price of the step's model for the run's scope, or `undefined` (unpriced / run unknown). */
+  private async priceForRun(
+    scope: AccountingScope,
+    runId: string,
+    agentId: string,
+  ): Promise<PriceEntry | undefined> {
+    const hook = this.options.priceFor;
+    if (!hook) return undefined;
+    try {
+      const [run] = await this.ctx.db
+        .select({
+          teamId: runs.teamId,
+          versionId: runs.agentVersionId,
+          agentId: runs.agentId,
+        })
+        .from(runs)
+        .where(and(eq(runs.id, runId), eq(runs.tenantId, scope.tenantId)));
+      if (!run) return undefined;
+      const { definition } = await this.agents.definitionOf(run.versionId);
+      const agent = definition.agents.find((a) => a.id === agentId);
+      if (!agent) return undefined;
+      return await hook(
+        { tenantId: scope.tenantId, teamId: run.teamId, agentId: run.agentId },
+        agent.provider,
+        agent.model,
+      );
+    } catch {
+      // The transaction reports the real problem (unknown run, agent not published, ...).
+      return undefined;
+    }
   }
 
   private async reserveLocked(
     tx: Db,
     scope: AccountingScope,
     req: ReserveRequest,
+    resolvedPrice?: PriceEntry,
   ): Promise<Reservation> {
     const [run] = await tx
       .select({
@@ -319,7 +366,7 @@ export class ModelAccountingService {
       );
     }
     const useCase = definition.labels.useCase ?? null;
-    const price = this.ctx.costModel.find(agent.provider, agent.model);
+    const price = resolvedPrice ?? this.ctx.costModel.find(agent.provider, agent.model);
     const rates = price ? ratesOf(price) : null;
     const runBudget = definition.budget as Budget;
     const stepBudget = effectiveBudget(runBudget, agent.budget);
@@ -552,7 +599,10 @@ export class ModelAccountingService {
     // inside it (a second connection while holding the tenant lock, and a deadlock on single
     // connection databases such as PGlite).
     const [row] = await this.ctx.db
-      .select({ runId: modelReservations.runId })
+      .select({
+        runId: modelReservations.runId,
+        agentId: modelReservations.agentId,
+      })
       .from(modelReservations)
       .where(
         and(
@@ -572,10 +622,11 @@ export class ModelAccountingService {
         },
       };
     }
+    const price = row ? await this.priceForRun(scope, row.runId, row.agentId) : undefined;
     const out = await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
       await this.lockTenant(tx, scope.tenantId);
-      return this.closeLocked(tx, scope.tenantId, reservationId, clean, false);
+      return this.closeLocked(tx, scope.tenantId, reservationId, clean, false, price);
     });
     if (out.metric)
       this.ctx.metrics.costMicros.inc({ provider: out.metric.provider }, out.metric.costMicros);
@@ -600,6 +651,7 @@ export class ModelAccountingService {
     reservationId: string,
     req: SettleRequest,
     expire: boolean,
+    resolvedPrice?: PriceEntry,
   ): Promise<{ settlement: Settlement; metric: { provider: string; costMicros: number } | null }> {
     const [r] = await tx
       .select()
@@ -621,7 +673,7 @@ export class ModelAccountingService {
         metric: null,
       };
     }
-    const price = this.ctx.costModel.find(r.provider, r.model);
+    const price = resolvedPrice ?? this.ctx.costModel.find(r.provider, r.model);
     const rates = price ? ratesOf(price) : null;
     const reserved = Number(r.reservedMicros);
     const via = req.via ?? (r.sessionId ? 'proxy' : 'in-process');

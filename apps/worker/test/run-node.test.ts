@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { OaxError, type StepCredentials } from '@openagentix/core';
 import { McpServerConfigSchema, type McpServerConfig } from '@openagentix/mcp';
-import { ModelProxyUnavailableProvider, type FetchFn } from '@openagentix/runners';
+import type { FetchFn } from '@openagentix/runners';
 import { describe, expect, it } from 'vitest';
 import { mergeCredentials, parseNodeEnv, runNode } from '../src/run-node.js';
 
@@ -136,6 +136,27 @@ function control(over: Partial<Record<string, () => Response>> = {}) {
         });
       case 'GET /v1/worker/runs/:id/status':
         return Response.json({ cancelled: false });
+      case 'POST /v1/worker/runs/:id/model':
+        return Response.json({
+          callId: 'call-1',
+          response: {
+            text: '{"ok":true}',
+            toolCalls: [],
+            usage: { inputTokens: 7, outputTokens: 3 },
+            stopReason: 'end_turn',
+            model: 'sim-1',
+          },
+          usage: {
+            inputTokens: 7,
+            outputTokens: 3,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            source: 'provider',
+          },
+          costMicros: 5,
+          priced: true,
+          remaining: {},
+        });
       case 'GET /v1/worker/runs/:id/budget':
         return Response.json({ breaches: [] });
       case 'POST /v1/worker/runs/:id/gate':
@@ -171,9 +192,18 @@ describe('runNode', () => {
     // every call used the same step-scoped token; the node never called `complete`
     expect(new Set(calls.map((c) => c.auth))).toEqual(new Set(['Bearer oaxrt.a.b']));
     expect(calls.some((c) => c.path.endsWith('/complete'))).toBe(false);
-    // it recorded its own model_call and output steps (the control node attributes costs)
+    // the model call went through the proxy (the control node recorded and priced it); the node
+    // reports its output step only and never a model_call of its own
     const steps = calls.filter((c) => c.path.endsWith('/steps')).map((c) => c.body!.kind);
-    expect(steps).toEqual(expect.arrayContaining(['model_call', 'output']));
+    expect(steps).toContain('output');
+    expect(steps).not.toContain('model_call');
+    const model = calls.filter((c) => c.path.endsWith('/model'));
+    expect(model).toHaveLength(1);
+    expect(model[0]).toMatchObject({ method: 'POST', auth: 'Bearer oaxrt.a.b' });
+    expect(model[0]!.body).toMatchObject({ agentId: 'action', request: { model: 'sim-1' } });
+    // the published simulation script is never sent by the node
+    expect(JSON.stringify(model[0]!.body)).not.toContain('simulation');
+    expect(res!.usage).toMatchObject({ tokensIn: 7, tokensOut: 3, costMicros: 5 });
   });
 
   it('waits for the token file the runner uploads after the start', async () => {
@@ -244,14 +274,47 @@ describe('runNode', () => {
     }
   });
 
-  it('has no model access beyond the keyless simulated provider (W1-3b)', async () => {
+  it('sends every provider, a real one included, through the model proxy (no key on the node)', async () => {
     const c = control();
     c.handover.agent.provider = 'anthropic';
+    expect(await runNode(base(c.fetchImpl))).toBe(0);
+    expect(c.calls.filter((x) => x.path.endsWith('/model'))).toHaveLength(1);
+    const [res] = results(c.calls);
+    expect(res!.failure).toBeUndefined();
+  });
+
+  it('fails the step with the proxy refusal code and records nothing itself', async () => {
+    const c = control({
+      'POST /v1/worker/runs/:id/model': () =>
+        Response.json(
+          {
+            error: {
+              code: 'control_budget_cost',
+              message: 'the cost budget cannot cover the call',
+            },
+          },
+          { status: 403 },
+        ),
+    });
     expect(await runNode(base(c.fetchImpl))).toBe(0); // the failure report was accepted
     const [res] = results(c.calls);
-    expect(res!.failure).toMatchObject({ status: 'failed', code: 'provider_error' });
-    expect(res!.failure).toMatchObject({ message: expect.stringContaining('W1-3b') });
+    expect(res!.failure).toMatchObject({ status: 'failed', code: 'control_budget_cost' });
     expect(res!.content).toBe('');
+    const steps = c.calls.filter((x) => x.path.endsWith('/steps')).map((x) => x.body!.kind);
+    expect(steps).not.toContain('model_call');
+  });
+
+  it('maps a classification refusal of the proxy to a policy block', async () => {
+    const c = control({
+      'POST /v1/worker/runs/:id/model': () =>
+        Response.json({ error: { code: 'classification_denied', message: 'no' } }, { status: 403 }),
+    });
+    expect(await runNode(base(c.fetchImpl))).toBe(0);
+    const [res] = results(c.calls);
+    expect(res!.failure).toMatchObject({
+      status: 'blocked_by_policy',
+      code: 'classification_denied',
+    });
   });
 
   it('turns a step that blocks on policy into a failure with the same status', async () => {
@@ -316,10 +379,6 @@ describe('runNode', () => {
         }),
       ),
     ).toBe(2);
-  });
-
-  it('only fails the provider placeholder, which is what a node gets for real providers', async () => {
-    await expect(new ModelProxyUnavailableProvider('x').complete()).rejects.toThrow();
   });
 });
 

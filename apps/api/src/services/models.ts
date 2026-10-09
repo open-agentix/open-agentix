@@ -12,7 +12,7 @@ import {
   type ProviderConfig,
   type ProviderKind,
 } from '@openagentix/providers';
-import { CostModel, type TenantActor } from '@openagentix/core';
+import { CostModel, type PriceEntry, type TenantActor } from '@openagentix/core';
 import type { AppContext } from '../context.js';
 import { notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
@@ -216,6 +216,35 @@ export class ModelsService {
     return extra.length
       ? new CostModel([...this.ctx.costModel.entries(), ...extra], false)
       : this.ctx.costModel;
+  }
+
+  /**
+   * Price of a model for a run's scope, looked up like the executor always did: under the provider
+   * (connection) name, then under the connection's catalog provider, then under the adapter kind.
+   * Includes the price overrides of the run's connections.
+   */
+  async priceFor(
+    scope: RunScope,
+    provider: string,
+    model: string,
+  ): Promise<PriceEntry | undefined> {
+    const costs = await this.costModelFor(scope);
+    const keys = [provider];
+    try {
+      const registry = await this.registryFor(scope);
+      if (registry.has(provider)) {
+        const p = registry.get(provider);
+        if (p.catalogProvider) keys.push(p.catalogProvider);
+        keys.push(p.kind);
+      }
+    } catch {
+      // a broken connection only loses the fallback keys
+    }
+    for (const key of keys) {
+      const entry = costs.find(key, model);
+      if (entry) return entry;
+    }
+    return undefined;
   }
 
   /** Catalog provider id a connection maps to (for proposals and price lookups). */

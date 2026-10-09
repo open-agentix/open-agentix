@@ -2,6 +2,7 @@ import {
   ControlAgent,
   OaxError,
   effectiveBudget,
+  estimateInputUpperBound,
   limitsFromBudget,
   newRunMetrics,
   recordModelCall,
@@ -30,6 +31,7 @@ import {
   type AgentOutput,
   type PreparedRun,
   type RunResult,
+  type ModelReservationGrant,
   type RunnerContext,
   type StepInput,
 } from './types.js';
@@ -50,6 +52,35 @@ export function buildUserPrompt(run: PreparedRun, previous: AgentOutput | null):
   if (previous)
     text += `\n\nOutput of the previous agent "${previous.agentId}":\n${previous.content}`;
   return text;
+}
+
+/** Output bound of a reserved call when the step names none (same default as the model proxy). */
+const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+/** Smallest output a reservation may shrink to before the call is refused (proxy default). */
+const MIN_OUTPUT_TOKENS = 256;
+
+/**
+ * Refusals of the control node for a model call (reservation or proxy) keep their code in the run's
+ * failure (ADR 0009 section 2.5); anything else is a plain `provider_error`.
+ */
+function modelRefusal(e: unknown): Pick<RunResult, 'status' | 'error'> | null {
+  const code = (e as { code?: unknown } | null)?.code;
+  if (typeof code !== 'string') return null;
+  const message = (e as Error).message;
+  if (['classification_denied', 'egress_denied', 'security_override'].includes(code))
+    return { status: 'blocked_by_policy', error: { code, message } };
+  if (
+    code.startsWith('control_budget_') ||
+    [
+      'model_unpriced',
+      'model_rate_limited',
+      'model_not_allowed',
+      'model_proxy_unavailable',
+      'run_node_session_revoked',
+    ].includes(code)
+  )
+    return { status: 'failed', error: { code, message } };
+  return null;
 }
 
 function costOf(
@@ -256,14 +287,28 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
         agentSteps++;
         const started = now();
         let res: ChatResponse;
+        let reservation: ModelReservationGrant | undefined;
         try {
+          // Every model call of the platform is reserved on the control node first, so that
+          // concurrent calls cannot overspend a budget. Metered providers (the proxy of a run
+          // node) reserve on the control node themselves; control planes without a ledger skip it.
+          if (!provider.metered && ctx.control.reserveModelCall) {
+            const maxOutput = agent.maxTokensPerCall ?? DEFAULT_MAX_OUTPUT_TOKENS;
+            reservation = await ctx.control.reserveModelCall(run.runId, {
+              agentId,
+              inputTokens: estimateInputUpperBound({ system, messages, tools: toolSpecs }),
+              maxOutputTokens: maxOutput,
+              minOutputTokens: Math.min(MIN_OUTPUT_TOKENS, maxOutput),
+            });
+          }
+          const maxTokens = reservation?.maxOutputTokens ?? agent.maxTokensPerCall;
           res = await provider.complete(
             {
               model: agent.model,
               system,
               messages,
               tools: toolSpecs,
-              ...(agent.maxTokensPerCall ? { maxTokens: agent.maxTokensPerCall } : {}),
+              ...(maxTokens ? { maxTokens } : {}),
               ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
               hints: {
                 ...(agent.simulation ? { simulation: agent.simulation.responses } : {}),
@@ -287,6 +332,11 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
             provider: provider.name,
             model: agent.model,
             durationMs: now() - started,
+            // An aborted call may have been billed: its reservation stays and expires at the
+            // reserved amount. A call that failed on its own gives the headroom back at once.
+            ...(reservation && !signal?.aborted
+              ? { reservationId: reservation.reservationId }
+              : {}),
           });
           if (signal?.aborted) {
             const cancelled = ctx.signal?.aborted ?? false;
@@ -302,29 +352,35 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
                   },
             );
           }
-          throw new RunAborted({
-            status: 'failed',
-            error: { code: 'provider_error', message: (e as Error).message },
-          });
+          throw new RunAborted(
+            modelRefusal(e) ?? {
+              status: 'failed',
+              error: { code: 'provider_error', message: (e as Error).message },
+            },
+          );
         }
-        const cost = costOf(ctx.costModel, provider, agent.model, res);
+        // A metered provider measured the call on the control node and already recorded it; its
+        // numbers feed the local control decisions only (ADR 0009 section 5).
+        const cost = res.metered?.costMicros ?? costOf(ctx.costModel, provider, agent.model, res);
         recordModelCall(metrics, res.usage.inputTokens + res.usage.outputTokens, cost);
         tokensIn += res.usage.inputTokens;
         tokensOut += res.usage.outputTokens;
-        await step({
-          kind: 'model_call',
-          agentId,
-          name: `${provider.name}/${agent.model}`,
-          status: 'ok',
-          input: { messages: messages.length, tools: toolSpecs.map((t) => t.name) },
-          output: { text: res.text, toolCalls: res.toolCalls, stopReason: res.stopReason },
-          tokensIn: res.usage.inputTokens,
-          tokensOut: res.usage.outputTokens,
-          costMicros: cost,
-          durationMs: now() - started,
-          provider: provider.name,
-          model: agent.model,
-        });
+        if (!(provider.metered && res.metered))
+          await step({
+            kind: 'model_call',
+            agentId,
+            name: `${provider.name}/${agent.model}`,
+            status: 'ok',
+            input: { messages: messages.length, tools: toolSpecs.map((t) => t.name) },
+            output: { text: res.text, toolCalls: res.toolCalls, stopReason: res.stopReason },
+            tokensIn: res.usage.inputTokens,
+            tokensOut: res.usage.outputTokens,
+            costMicros: cost,
+            durationMs: now() - started,
+            provider: provider.name,
+            model: agent.model,
+            ...(reservation ? { reservationId: reservation.reservationId } : {}),
+          });
         messages.push({
           role: 'assistant',
           content: res.text,

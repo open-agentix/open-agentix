@@ -59,6 +59,7 @@ const ALSO_SSE: Record<string, string> = {
 const NO_NOT_FOUND = new Set([
   'post /v1/worker/runs/{id}/model',
   'post /v1/worker/runs/{id}/model-token',
+  'post /v1/worker/runs/{id}/model-reservations',
 ]);
 
 const REDIRECTS: Record<string, string> = {

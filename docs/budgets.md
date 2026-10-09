@@ -66,10 +66,15 @@ the reserved amount once its deadline plus 60 seconds has passed. The ledger rec
 came from (`usage_source`: `provider`, `estimated`, `floor`, `reservation`), the cache token
 breakdown, the reservation and the path (`via`).
 
-With the model proxy (W1-3b-3 and later) every model call goes through this service and the
-overshoot described above no longer applies to model calls (it still applies to priced tool calls).
-The service itself is available now; until the executor and the proxy call it, the checks above
-remain after-the-fact.
+Every model call goes through this service (W1-3b-3, W1-3b-4): calls of run nodes through the model
+proxy, calls of in-process steps through `ControlPlane.reserveModelCall` (`POST
+/v1/worker/runs/{id}/model-reservations`) followed by a `model_call` step with the `reservationId`,
+which the control node settles from the usage with the catalog price (including the price overrides
+of the run's connections). The overshoot described above therefore no longer applies to model calls
+(it still applies to priced tool calls), and a call is refused **before** it is made when its worst
+case does not fit. The output bound of a reserved call is the step's `maxTokensPerCall`, else 4096
+tokens, shrunk to what the tightest budget can pay (down to 256). The local CLI has no ledger and
+keeps the after-the-fact checks.
 
 ## Alerts
 

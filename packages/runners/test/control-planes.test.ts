@@ -172,3 +172,68 @@ describe('HttpControlPlane run node protocol', () => {
     expect(err.message).toContain('HTTP 409');
   });
 });
+
+describe('HttpControlPlane model proxy calls (ADR 0009)', () => {
+  const mk = (reply: () => Response, seen: { url: string; body?: string; auth?: string }[] = []) =>
+    new HttpControlPlane({
+      baseUrl: 'http://api:8080/',
+      runToken: 'oaxrt.a.b',
+      fetchImpl: async (url, init) => {
+        seen.push({
+          url,
+          ...(init?.body ? { body: String(init.body) } : {}),
+          auth: String((init?.headers as Record<string, string>).authorization),
+        });
+        return reply();
+      },
+    });
+  const req = {
+    agentId: 'a',
+    request: { model: 'm', messages: [{ role: 'user' as const, content: 'x' }] },
+  };
+
+  it('posts model calls to the native endpoint with the run token', async () => {
+    const seen: { url: string; body?: string; auth?: string }[] = [];
+    const out = { callId: 'c' };
+    const cp = mk(() => Response.json(out), seen);
+    await expect(cp.modelCall('r1', req)).resolves.toEqual(out);
+    expect(seen[0]).toMatchObject({
+      url: 'http://api:8080/v1/worker/runs/r1/model',
+      auth: 'Bearer oaxrt.a.b',
+    });
+    expect(JSON.parse(seen[0]!.body!)).toEqual(req);
+  });
+
+  it('posts reservations to the reservation endpoint', async () => {
+    const seen: { url: string; body?: string }[] = [];
+    const grant = {
+      reservationId: 'x',
+      maxOutputTokens: 5,
+      reservedMicros: 1,
+      priced: true,
+      remaining: {},
+    };
+    const cp = mk(() => Response.json(grant), seen);
+    await expect(
+      cp.reserveModelCall('r1', { agentId: 'a', inputTokens: 10, maxOutputTokens: 5 }),
+    ).resolves.toEqual(grant);
+    expect(seen[0]!.url).toBe('http://api:8080/v1/worker/runs/r1/model-reservations');
+  });
+
+  it('surfaces the stable code of a refusal, but only a well-formed one', async () => {
+    const refuse = (body: unknown) => mk(() => new Response(JSON.stringify(body), { status: 403 }));
+    await expect(
+      refuse({ error: { code: 'control_budget_cost', message: 'no' } }).modelCall('r', req),
+    ).rejects.toMatchObject({ code: 'control_budget_cost', message: 'no' });
+    await expect(
+      refuse({ error: { code: 'Not A Code!', message: 'x' } }).modelCall('r', req),
+    ).rejects.toMatchObject({ code: 'control_plane_error' });
+    await expect(
+      mk(() => new Response('<html>', { status: 502 })).reserveModelCall('r', {
+        agentId: 'a',
+        inputTokens: 1,
+        maxOutputTokens: 1,
+      }),
+    ).rejects.toMatchObject({ code: 'control_plane_error' });
+  });
+});

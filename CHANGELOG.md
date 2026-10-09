@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Run node and executor on the model proxy (W1-3b-4)**: `oax run-node` sends every model call of
+  its step through the control node's model proxy (`ModelProxyProvider`, a metered provider, the
+  simulated provider included; `ModelProxyUnavailableProvider` is gone), the executor records no
+  cost or `model_call` step for metered providers, and refusals of the proxy keep their code in the
+  run's failure. In-process steps now reserve their worst case before each call
+  (`ControlPlane.reserveModelCall`, new `POST /v1/worker/runs/{id}/model-reservations` for
+  orchestrator tokens) and the control node settles the reservation from the usage (`reservationId`
+  on the `model_call` step), so run, step and monthly budgets hold across concurrent calls. The
+  dispatcher takes the cost and tokens of an isolated step from the run's ledger counters, so
+  isolated steps count against `maxCostUsd`, `maxTokens` and the monthly budgets. Reservation and
+  settlement use the run's prices including BYOK connection overrides and the connection's catalog
+  provider. ADR 0009 amendment W1-3b-4.
+
 - **Model proxy: native endpoint and model token (W1-3b-3, opt-in `OAX_MODEL_PROXY_ENABLED`)**: the
   control node serves `POST /v1/worker/runs/{id}/model-token` (a step-scoped, session-bound,
   once-per-step model token `oaxmt.`, stored as `run_node_sessions.model_token_jti`) and
@@ -187,6 +200,12 @@ All notable changes to this project are documented here. The format follows
   with W1-3b-3 and W1-3b-4, so the budgets documented in `docs/budgets.md` still check after a call until then.
 
 ### Changed
+
+- A model call is refused before it is made when its worst case does not fit a run, step or monthly
+  budget (it used to be checked only after the call); an in-process step without `maxTokensPerCall`
+  is capped at 4096 output tokens when the control plane reserves. A run node can no longer report
+  `model_call` steps (`400 step_kind_refused`); the proxy records them. **Breaking for custom
+  workers** that post `model_call` steps from a node token.
 
 - **UI navigation**: the governance group (policies, audit trail, users & teams, API tokens) is now
   labelled "Governance" in English (was "Govern") and German (was "Steuern"); the key

@@ -731,3 +731,56 @@ they differ from the text above, this section wins.
     aggregation settles the reservation and reports an error; `oax_model_proxy_*` labels use the
     provider family, not the connection name (the older `oax_cost_micro_usd_total` still labels by
     provider name).
+
+### W1-3b-4: run node and executor switch (2026-10-09)
+
+Decisions taken while switching the run node and the executor to the proxy and the accounting
+service. Where they differ from the text above, this section wins.
+
+1. **Run node.** `oax run-node` builds a `ModelProxyProvider` (`metered = true`, `clearance
+   restricted`: the proxy decides the classification) for every provider of its step, the simulated
+   provider included; the placeholder `ModelProxyUnavailableProvider` is deleted. A disabled proxy
+   still ends the step with `model_proxy_unavailable`. The node uses the native endpoint with the
+   step's run token (the model token is for harness children, W1-3b-7), sends only the wire fields
+   (`hints.simulation` is never sent) and reads the stable error code of the model envelope, so a
+   refusal of the proxy fails the step with that code (`control_budget_*`, `model_unpriced`,
+   `model_not_allowed`, ...; `classification_denied`, `egress_denied` and `security_override` as
+   `blocked_by_policy`).
+2. **Executor.** A provider with `metered = true` is authoritative: no local cost, no `model_call`
+   step, no reservation request. The response carries `metered { callId, costMicros, priced,
+   remaining }`; the cost feeds the node's local control decisions only.
+3. **Reservations for in-process steps.** Before each call the executor asks
+   `ControlPlane.reserveModelCall(runId, { agentId, inputTokens (upper bound), maxOutputTokens,
+   minOutputTokens })`, passes the granted output bound as `maxTokens`, and sends the `model_call`
+   step with `reservationId`. The control node then settles the reservation: it computes the cost
+   from the usage (the executor's own cost number is ignored), writes step, ledger line (`via =
+   'in-process'`) and audit entry, and closes the reservation. A call that failed on its own is
+   released at zero (the `error` step carries the `reservationId`); a call aborted by cancellation
+   or timeout keeps its reservation, which expires and is charged at the reserved amount. The
+   output bound defaults to `agent.maxTokensPerCall`, else 4096 (the proxy's default); an in-process
+   step without `maxTokensPerCall` is therefore capped at 4096 output tokens when the control plane
+   reserves. The local CLI control plane has no ledger and calls the model unreserved, as before.
+   Route: `POST /v1/worker/runs/{id}/model-reservations`, orchestrator token only (a node token is
+   `403`), model envelope, available whether or not `OAX_MODEL_PROXY_ENABLED` is set (the
+   accounting applies to every model call).
+4. **Reservation ownership.** A trusted `model_call`/`error` step with a `reservationId` only settles
+   an **active reservation of the same run** (otherwise `404`); a second report for a closed
+   reservation is refused, so a call cannot be counted twice. The field is dropped from steps
+   reported by run nodes.
+5. **Node steps.** A step of kind `model_call` reported by a run node is `400 step_kind_refused`
+   (earlier it was recorded without cost). The proxy is the only writer of node model calls.
+6. **Authoritative counters.** `NodeDispatcher` reads the run's counters (`ControlPlaneService.
+   runUsage`) before the session is created and after the node ended; the difference is the step's
+   usage that the executor adds to its metrics, so later in-process steps see the true remaining
+   budget. A failed or cancelled node step does not return its usage to the orchestrator (the
+   counters in the database are still right; only the in-memory metrics of the aborted run miss it).
+7. **Pricing (closes known gap 10 of W1-3b-3).** `ModelAccountingService` resolves the price through
+   `ModelsService.priceFor(scope, provider, model)`: the provider (connection) name, then the
+   connection's catalog provider, then the adapter kind, with the price overrides of the run's
+   connections. BYOK prices therefore reach reservation and settlement, and in-process runs keep
+   the prices they had. The lookup happens before the accounting transaction opens.
+8. **Behaviour change for budgets.** Monthly, run and step limits now stop a call **before** it is
+   made when its worst case does not fit, so a run can be refused with a budget code while the
+   remaining headroom would have covered the actual cost. Size small budgets with the output bound
+   in mind (`maxTokensPerCall`).
+

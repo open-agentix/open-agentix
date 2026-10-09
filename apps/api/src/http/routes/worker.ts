@@ -30,6 +30,8 @@ import {
   RunIdParams,
   RunResultBody,
   StepBody,
+  ModelReservationBody,
+  ModelReservationSchema,
   StepCredentialsRequestBody,
   StepCredentialsSchema,
   StepHandoverQuery,
@@ -368,7 +370,7 @@ function sseSink(reply: FastifyReply, callId: string): StreamSink {
  */
 function registerModelRoutes(app: ZApp, deps: Deps): void {
   const { ctx, services } = deps;
-  const { modelProxy } = services;
+  const { modelProxy, control } = services;
   const limit = ctx.config.modelProxy.maxBodyBytes;
   void app.register(async (scope) => {
     scope.removeAllContentTypeParsers();
@@ -410,6 +412,33 @@ function registerModelRoutes(app: ZApp, deps: Deps): void {
           );
       },
     ];
+
+    // In-process model calls of the trusted orchestrator reserve their cost here (ADR 0009 section
+    // 4.4). Not gated by the proxy flag: the accounting applies to every model call.
+    typed.post(
+      '/v1/worker/runs/:id/model-reservations',
+      {
+        config: { access: 'run-token' },
+        bodyLimit: 4096,
+        errorHandler: modelErrorHandler,
+        onRequest: [gates[1]!],
+        schema: {
+          tags,
+          summary: 'Orchestrator: reserve the worst-case cost of an in-process model call',
+          security: sec,
+          params: RunIdParams,
+          body: ModelReservationBody,
+          response: { 200: ModelReservationSchema, ...refusals },
+        },
+      },
+      async (req, reply) => {
+        const bearer = bearerOf(req);
+        if (!bearer) throw new ModelProxyError('unauthenticated', 'valid run token required');
+        reply.header('cache-control', 'no-store');
+        await control.authorizeOrchestrator(bearer, req.params.id);
+        return control.reserveModelCall(req.params.id, req.body);
+      },
+    );
 
     typed.post(
       '/v1/worker/runs/:id/model-token',

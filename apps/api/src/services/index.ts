@@ -45,15 +45,7 @@ export function createServices(ctx: AppContext): Services {
   const ingest = new IngestService(ctx, audit, runs);
   const guidelines = new GuidelinesService(ctx, audit);
   const runNodes = new RunNodesService(ctx, audit, agents, catalog);
-  const control = new ControlPlaneService(
-    ctx,
-    audit,
-    agents,
-    catalog,
-    budgets,
-    runNodes,
-    guidelines,
-  );
+  const models = new ModelsService(ctx, catalog, audit);
   const mp = ctx.config.modelProxy;
   const modelAccounting = new ModelAccountingService(
     ctx,
@@ -66,11 +58,21 @@ export function createServices(ctx: AppContext): Services {
       maxConcurrentPerTenant: mp.maxConcurrentPerTenant,
       graceMs: mp.graceSeconds * 1000,
       defaultDeadlineMs: mp.maxCallSeconds * 1000,
+      priceFor: (scope, provider, model) => models.priceFor(scope, provider, model),
     },
+  );
+  const control = new ControlPlaneService(
+    ctx,
+    audit,
+    agents,
+    catalog,
+    budgets,
+    runNodes,
+    guidelines,
+    modelAccounting,
   );
   const costs = new CostsService(ctx);
   const tenants = new TenantsService(ctx, audit, identity);
-  const models = new ModelsService(ctx, catalog, audit);
   const modelProxy = new ModelProxyService(ctx, audit, agents, models, modelAccounting, runNodes);
   const agentCheck = new AgentCheckService(ctx, audit, catalog, models, budgets);
   return {

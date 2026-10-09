@@ -198,7 +198,7 @@ The runner's own create options are hardened and double-checked, but a compromis
 contained by it. For anything but evaluation use rootless Podman or a body-filtering proxy, and pin
 the proxy image by digest.
 
-## Model proxy (control node side, W1-3b-3)
+## Model proxy (W1-3b-3, W1-3b-4)
 
 With `OAX_MODEL_PROXY_ENABLED=true` the control node serves two routes for run nodes
 ([ADR 0009](adr/0009-model-proxy.md); settings in [configuration.md](configuration.md)):
@@ -215,6 +215,16 @@ With `OAX_MODEL_PROXY_ENABLED=true` the control node serves two routes for run n
   temperature, hints.context}`), the answer a `WorkerModelResponse` (`callId`, `response`, measured
   `usage`, `costMicros`, `priced`, `remaining`). With `Accept: text/event-stream` the answer is a
   stream of `start`, `delta`, then `done` (the same response object) or `error` events.
+
+**Run node side (W1-3b-4).** `oax run-node` sends every model call of its step, `simulated`
+included, through this endpoint with its step-scoped run token (`ModelProxyProvider`, a *metered*
+provider); it never holds a provider key and does not compute cost or post `model_call` steps (the
+control node refuses them with `400 step_kind_refused`). A refusal of the proxy ends the step with
+the proxy's code. The orchestrator takes the cost and tokens of an isolated step from the run's
+ledger counters (what the proxy recorded while the node ran), never from the node's report, so
+isolated steps count against `maxCostUsd`, `maxTokens` and the monthly budgets like any other step.
+In-process steps reserve through `POST /v1/worker/runs/{id}/model-reservations` (orchestrator token
+only) and are settled by the control node, see [budgets.md](budgets.md).
 
 What the control node decides, in this order: token and binding (run, session, node, step, `jti`,
 session not revoked or expired, run running and cancel flag unset), the model allowlist (the model
@@ -237,15 +247,9 @@ never logged. Audit: `model_token.issued`, `model.denied` (once a minute per ses
 
 ## Not in this version
 
-- **Model access from the run node (W1-3b-4).** The control node side is available (see "Model proxy"
-  below), but the run node and the step executor are not switched over yet: until then a node
-  still has no model access except the keyless `simulated` provider (every other provider fails the
-  step with `model_proxy_unavailable`, `packages/runners/src/model-proxy.ts`). Cost and token numbers
-  of a node are **not recorded**: the control node drops them from node step reports and the
-  orchestrator ignores them in the node's result; only bounded step and tool-call counters are used.
-  Isolated steps therefore do not count against `maxCostUsd`/`maxTokens` until the node calls the
-  proxy. The node enforces `maxSteps`, `maxToolCalls` and the timeout from the **remaining** budget
-  handed over with the step.
+- **Harnesses and the pass-through surfaces (W1-3b-6, W1-3b-7).** A run node reaches models through
+  the native proxy endpoint only; the Anthropic and OpenAI protocol surfaces for Claude Code and
+  OpenCode inside a node follow.
 
 ### Known follow-ups
 
