@@ -4,14 +4,17 @@ import {
   parseSecretRefPatterns,
   placeNode,
   slugsCollide,
+  subtreePrefix,
   type Principal,
 } from '@openagentix/core';
-import { count, eq, sql } from 'drizzle-orm';
+import { count, eq, like, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
+import { TenantAccess } from './tenant-access.js';
 import { TenantTree } from './tenant-tree.js';
+import { TenantViews } from './tenant-views.js';
 import type { AuditService } from './audit.js';
 import type { IdentityService, TenantRow } from './identity.js';
 
@@ -29,6 +32,9 @@ function pgCode(e: unknown): string | undefined {
 export class TenantsService {
   /** Structural tree queries (ancestors, descendants, slug paths); no permission checks. */
   readonly tree: TenantTree;
+  /** Read models for the console: acting context, visible tree, search. */
+  readonly views: TenantViews;
+  private readonly access: TenantAccess;
 
   constructor(
     private readonly ctx: AppContext,
@@ -36,22 +42,56 @@ export class TenantsService {
     private readonly identity: IdentityService,
   ) {
     this.tree = new TenantTree(ctx);
+    this.views = new TenantViews(ctx);
+    this.access = new TenantAccess(ctx);
   }
 
   private assertOperator(p: Principal): void {
     if (!p.platformAdmin) throw forbidden('platform operator access required');
   }
 
-  /** Platform operators see every tenant, everybody else only their own. */
+  /**
+   * The tenants the principal may see and act in ({@link TenantAccess.reach}): platform operators
+   * every tenant, everybody else only their own until bindings can inherit (ADR 0014).
+   */
   async list(p: Principal): Promise<TenantRow[]> {
-    const rows = await this.ctx.db.select().from(tenants).orderBy(tenants.slug);
-    return p.platformAdmin ? rows : rows.filter((t) => t.id === p.tenantId);
+    const reach = await this.access.reach(p);
+    if (!reach) return [];
+    const scope =
+      reach.kind === 'all'
+        ? undefined
+        : reach.kind === 'subtree'
+          ? like(tenants.path, subtreePrefix(reach.home.path))
+          : eq(tenants.id, reach.home.id);
+    return this.ctx.db.select().from(tenants).where(scope).orderBy(tenants.slug);
   }
 
+  /** A node inside the principal's reach; any other node is a plain 404. */
   async get(p: Principal, id: string): Promise<TenantRow> {
     const [row] = await this.ctx.db.select().from(tenants).where(eq(tenants.id, id));
-    if (!row || (!p.platformAdmin && row.id !== p.tenantId)) throw notFound('tenant');
+    if (!row || !TenantAccess.allows(await this.access.reach(p), row)) throw notFound('tenant');
     return row;
+  }
+
+  /**
+   * Slug path of a tenant for the `X-OAX-Acting-Tenant` header of every authenticated response.
+   * Cached for 30 s (the placement of a node is fixed today; moves, W13-11, may show the old path
+   * for that long in this informational header only).
+   */
+  async actingSlugPath(tenantId: string): Promise<string | undefined> {
+    const key = `tenant-slug-path:${tenantId}`;
+    const hit = await this.ctx.cache.get<string>(key);
+    if (hit) return hit;
+    const node = await this.tree.node(tenantId);
+    if (!node) return undefined;
+    const slugPath = (await this.tree.slugPaths([node])).get(node.id)!;
+    await this.ctx.cache.set(key, slugPath, 30_000);
+    return slugPath;
+  }
+
+  /** `acme/security/blue` for every row, one lookup for all ancestors. */
+  slugPaths(rows: TenantRow[]): Promise<Map<string, string>> {
+    return this.tree.slugPaths(rows);
   }
 
   /** Creates an organisation (root tenant) and, optionally, its first local administrator. */

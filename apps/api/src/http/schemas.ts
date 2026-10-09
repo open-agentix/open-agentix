@@ -566,6 +566,11 @@ export const LoginResponse = z.object({ token: z.string(), expiresAt: Iso, user:
 export const TenantSchema = z.object({
   id: Id,
   slug: z.string(),
+  slugPath: z
+    .string()
+    .describe('slugs from the organisation root down to this tenant, e.g. `acme/security`'),
+  parentId: Id.nullable().describe('parent tenant; null for an organisation (root)'),
+  depth: z.number().int().describe('0 for an organisation, 1 for its children, ...'),
   name: z.string(),
   monthlyBudgetUsd: z.number().nullable(),
   secretRefs: z
@@ -595,13 +600,106 @@ export const TenantPatchBody = z.object({
     .optional()
     .describe('secret reference globs (`*` wildcard only); an empty list allows no secret'),
 });
+export const TenantRefSchema = z.object({ id: Id, slug: z.string(), name: z.string() });
+export const ActingTenantSchema = z.object({
+  id: Id,
+  slug: z.string(),
+  slugPath: z.string(),
+  name: z.string(),
+  path: z
+    .array(TenantRefSchema)
+    .describe(
+      'breadcrumb, root first, ending with the acting tenant itself; ancestors by name only',
+    ),
+});
 export const MeSchema = z.object({
   user: UserSchema,
-  tenant: TenantSchema.pick({ id: true, slug: true, name: true }),
+  tenant: TenantSchema.pick({ id: true, slug: true, name: true }).describe(
+    'the tenant the request acts in (same as `actingTenant`; kept for compatibility)',
+  ),
+  actingTenant: ActingTenantSchema,
+  homeTenant: TenantRefSchema.extend({ slugPath: z.string() }).describe(
+    'the tenant the user belongs to, regardless of `X-OAX-Tenant`',
+  ),
   platformAdmin: z.boolean(),
   kind: z.enum(['user', 'token']),
   permissions: z.array(z.string()),
-  bindings: z.array(z.object({ role: z.string(), teamId: Id.nullable() })),
+  bindings: z.array(
+    z.object({
+      role: z.string(),
+      teamId: Id.nullable(),
+      tenantId: Id.describe(
+        'the node the role is bound on (the home tenant until per-node bindings)',
+      ),
+      tenantSlugPath: z.string(),
+      useCase: z.string().nullable().describe('use case restriction; null = the whole node'),
+      expiresAt: Iso.nullable(),
+    }),
+  ),
+  visibleTenantCount: z
+    .number()
+    .int()
+    .describe('number of tenants the caller can act in (`X-OAX-Tenant`), at least 1'),
+  installationMode: z
+    .enum(['single', 'multi'])
+    .describe('`multi` when the caller can act in more than one tenant, else `single`'),
+});
+
+export const TenantTreeQuery = z.object({
+  root: z.string().min(1).max(2048).optional().describe('start node: id or slug path'),
+  depth: z.coerce.number().int().min(0).max(32).optional().describe('levels below the start node'),
+  include: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(',').map((x) => x.trim()) : []))
+    .pipe(z.array(z.enum(['counts'])))
+    .describe('`counts` adds the per-node counts the caller may read'),
+  limit: z.coerce.number().int().min(1).max(5000).default(1000),
+});
+export const TenantTreeCountsSchema = z.object({
+  agents: z.number().int().nullable(),
+  agentsSubtree: z.number().int().nullable(),
+  runs30d: z.number().int().nullable(),
+  pendingApprovals: z.number().int().nullable(),
+  spendMonthUsd: z.number().nullable(),
+  spendMonthSubtreeUsd: z.number().nullable(),
+  capUsd: z.number().nullable(),
+  capSource: z.enum(['tenant']).nullable(),
+});
+export const TenantTreeNodeSchema = z.object({
+  id: Id,
+  parentId: Id.nullable(),
+  slug: z.string(),
+  slugPath: z.string(),
+  name: z.string(),
+  depth: z.number().int(),
+  hasChildren: z.boolean(),
+  visible: z
+    .boolean()
+    .describe('false for an ancestor shown as a path stub: name and slug only, no counts or roles'),
+  status: z.enum(['active', 'blocked']),
+  myRoles: z.array(z.string()),
+  inheritedRoles: z.array(z.string()),
+  counts: TenantTreeCountsSchema.nullable().describe(
+    'null unless `include=counts`; single fields are null when the caller may not read them',
+  ),
+});
+export const TenantTreeSchema = z.object({
+  items: z.array(TenantTreeNodeSchema),
+  truncated: z.boolean().describe('more nodes matched than `limit`; the shallowest come first'),
+});
+export const TenantSearchQuery = z.object({
+  q: z.string().trim().min(1).max(100),
+  limit: z.coerce.number().int().min(1).max(20).default(20),
+});
+export const TenantSearchSchema = z.object({
+  items: z.array(
+    TenantRefSchema.extend({
+      slugPath: z.string(),
+      depth: z.number().int(),
+      parentId: Id.nullable(),
+    }),
+  ),
 });
 
 export const SettingsSchema = z.object({

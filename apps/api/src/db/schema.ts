@@ -374,6 +374,7 @@ export const approvals = pgTable(
   (t) => [
     index('approvals_status_idx').on(t.status, t.requestedAt.desc(), t.id.desc()),
     index('approvals_run_idx').on(t.runId),
+    index('approvals_tenant_status_idx').on(t.tenantId, t.status),
   ],
 );
 

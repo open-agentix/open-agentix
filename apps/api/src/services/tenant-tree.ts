@@ -86,4 +86,30 @@ export class TenantTree {
     }
     return current;
   }
+
+  /**
+   * Slug paths (`acme/security/blue`) of the given nodes with one lookup for all ancestors that
+   * are not among the nodes themselves (no query per node).
+   */
+  async slugPaths(nodes: Pick<TenantRow, 'id' | 'slug' | 'path'>[]): Promise<Map<string, string>> {
+    const slugs = new Map(nodes.map((n) => [n.id, n.slug]));
+    const missing = new Set<string>();
+    for (const n of nodes)
+      for (const id of ancestorIds(n.path)) if (!slugs.has(id)) missing.add(id);
+    if (missing.size > 0) {
+      const found = await this.ctx.db
+        .select({ id: tenants.id, slug: tenants.slug })
+        .from(tenants)
+        .where(inArray(tenants.id, [...missing]));
+      for (const r of found) slugs.set(r.id, r.slug);
+    }
+    return new Map(
+      nodes.map((n) => {
+        const parts = [...ancestorIds(n.path), n.id].map((id) => slugs.get(id));
+        if (parts.some((s) => s === undefined))
+          throw new Error(`tenant ${n.id} has an ancestor that does not exist`);
+        return [n.id, parts.join('/')];
+      }),
+    );
+  }
 }

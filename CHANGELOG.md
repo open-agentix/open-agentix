@@ -18,6 +18,22 @@ All notable changes to this project are documented here. The format follows
   Security tenant only, whatever tenant the caller acts in; `GET /v1/demo/scenarios` and the `202`
   answer of `POST /v1/demo/scenarios/{id}/run` carry that `tenant`, and the dashboard names it and
   offers a switch (or explains that the account cannot open it). `docs/demo.md` updated.
+- **API: acting tenant in `/v1/me`, `X-OAX-Tenant` by slug path and the tenant tree (UX
+  slices A2 and A3, #156 and #157)**: `GET /v1/me` adds `actingTenant` (with the breadcrumb `path`),
+  `homeTenant`, `bindings[].tenantId/tenantSlugPath/useCase/expiresAt`, `visibleTenantCount` and
+  `installationMode` (`single | multi`, derived from what the caller can act in). `X-OAX-Tenant`
+  accepts an id, a slug or a slug path; platform admins act everywhere, everybody else (tenant
+  admins included) in the own node only until role bindings can inherit down the tree (ADR 0014,
+  opt-in per binding); every other node is the same `404`, without a lookup that could time other
+  slugs. Every authenticated response carries `X-OAX-Acting-Tenant: <slug path>`.
+  `GET /v1/tenants/tree?root=&depth=&include=counts&limit=` returns the visible tree (path stubs
+  for ancestors, the caller's roles per node, counts of agents, runs of 30 days, pending
+  approvals, spend and cap only where the caller may read them, capped with `truncated`),
+  `GET /v1/tenants/search?q=` finds nodes by name or slug, and `GET /v1/tenants` now returns the
+  caller's reach with `parentId`, `depth` and `slugPath` (additive). Migration
+  `0017_approvals_tenant_status_idx` (additive, down script and snapshot included);
+  `openapi.yaml` and the UI client types are regenerated, the console comes with later slices.
+  See `docs/tenancy.md`.
 - **API: disable and enable agents (UX slice A7, #161)**: `POST /v1/agents/{id}/disable` and
   `/enable` (permission `agents:publish` on the agent, optional `reason` up to 500 characters with
   control, invisible and bidi characters removed, idempotent,

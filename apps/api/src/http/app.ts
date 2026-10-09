@@ -14,7 +14,7 @@ import {
   type Permission,
   type Principal,
 } from '@openagentix/core';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import {
   jsonSchemaTransform,
   jsonSchemaTransformObject,
@@ -139,7 +139,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   await app.register(cors, {
     origin: ctx.config.corsOrigins.length ? ctx.config.corsOrigins : false,
     credentials: false,
-    exposedHeaders: ['etag', 'x-request-id'],
+    exposedHeaders: ['etag', 'x-request-id', 'x-oax-acting-tenant'],
   });
   await app.register(compress, { threshold: 1024, encodings: ['br', 'gzip'] });
   await app.register(etag, { weak: true });
@@ -192,15 +192,29 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     transformObject: (doc) => decorateOpenApi(jsonSchemaTransformObject(doc)),
   });
 
-  /** Platform operators may act inside another tenant with `X-OAX-Tenant`; everybody else gets 404. */
-  const actingIn = async (req: FastifyRequest, principal: Principal): Promise<Principal> => {
+  /**
+   * `X-OAX-Tenant` selects the node the request acts in: any node the caller can reach
+   * (`TenantAccess`: platform operators every node, everybody else the home node until bindings
+   * inherit, ADR 0014); everything else is 404. The node actually used is reported
+   * back in `X-OAX-Acting-Tenant` (its slug path) so the console can detect a mismatch.
+   */
+  const actingIn = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    principal: Principal,
+  ): Promise<Principal> => {
     const tenant = req.headers['x-oax-tenant'];
-    if (typeof tenant !== 'string' || tenant === '') return principal;
-    return deps.services.identity.actingIn(principal, tenant);
+    const acting =
+      typeof tenant !== 'string' || tenant === ''
+        ? principal
+        : await deps.services.identity.actingIn(principal, tenant);
+    const slugPath = await deps.services.tenants.actingSlugPath(acting.tenantId);
+    if (slugPath) void reply.header('x-oax-acting-tenant', slugPath);
+    return acting;
   };
 
   // Authentication + route-level RBAC. Resource-level (team) checks happen in the services.
-  app.addHook('onRequest', async (req) => {
+  app.addHook('onRequest', async (req, reply) => {
     const access = req.routeOptions.config?.access;
     if (!access || access === 'public' || access === 'webhook') return;
     const passthrough = (req.routeOptions.url ?? '').startsWith(MODEL_PROXY_PREFIX);
@@ -215,7 +229,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
         ctx.now().getTime(),
       );
       req.principal = await deps.services.identity.principalForUser(claims.userId, ['runs:read']);
-      req.principal = await actingIn(req, req.principal);
+      req.principal = await actingIn(req, reply, req.principal);
       if (
         access !== 'authenticated' &&
         access !== 'run-token' &&
@@ -251,7 +265,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       return;
     }
     if (!token) throw new HttpError(401, 'unauthenticated', 'authentication required');
-    req.principal = await actingIn(req, await deps.services.identity.authenticate(token));
+    req.principal = await actingIn(req, reply, await deps.services.identity.authenticate(token));
     if (access !== 'authenticated' && !hasPermission(req.principal, access))
       throw forbidden(`missing permission ${access}`);
   });

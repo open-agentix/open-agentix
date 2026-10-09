@@ -31,12 +31,63 @@ upgrade, every user holding the global `admin` role). Operators can
 
 - create and rename tenants (`POST /v1/tenants`, `PATCH /v1/tenants/{id}`), optionally creating the
   first tenant administrator in the same call,
-- act inside another tenant with the header `X-OAX-Tenant: <slug or id>` (everybody else gets 404),
+- act inside any node of the tenant tree with the header `X-OAX-Tenant: <id | slug | slug path>`
+  (see [Acting in the tree](#acting-in-the-tree)),
 - read costs and audit entries across tenants with `?allTenants=true`,
 - create `platform` scoped connections, policies (stricter-only for everybody) and global guidelines,
 - sign audit checkpoints and verify the whole chain.
 
 Tenant administrators are ordinary `admin` users of their tenant without the operator flag.
+
+## Acting in the tree
+
+Every request acts in exactly one node. `X-OAX-Tenant: <id | slug | slug path>` (for example
+`acme/security/blue`) selects it; without the header the request acts in the user's home tenant.
+The response always names the node that was used in `X-OAX-Acting-Tenant: <slug path>`, so the
+console can detect a mismatch between the tenant it believes it acts in and the one the API used.
+
+| Caller | May name (reach) |
+| --- | --- |
+| platform operator | every node of every organisation |
+| every other user, tenant admins included | the home node only |
+
+Any other node (a child, a sibling, an ancestor, a cousin, another organisation, a node that does
+not exist, a malformed value) answers the same `404 not_found`, so neither existence nor slugs can
+be probed. For a caller limited to its home node the value is compared with that node only (id,
+slug, slug path); no other node is looked up, so the response time does not depend on which other
+slugs exist.
+
+Why a tenant admin does not reach its children yet: [ADR 0014](adr/0014-tenant-tree-role-inheritance.md)
+makes inheritance down the tree **opt-in per binding** (`inherit = true`, default `false`), and
+today's roles (`users.global_roles`, team and agent bindings) become non-inheriting bindings on the
+home node. Reaching below the home node therefore arrives with the bindings table and the acting
+node of ADR 0014 (slices S1 and S2, reads only until S5). A platform operator acting in another node
+keeps the roles of its home tenant there (`homeTenantId` on the principal).
+
+- `GET /v1/me` reports `actingTenant` (with the breadcrumb `path`, root first; ancestors by name and
+  slug only), `homeTenant`, the bindings anchored at their node, `visibleTenantCount` and
+  `installationMode` (`multi` when the caller can act in more than one tenant, else `single`; it is
+  derived from the caller's reach, so it never reveals whether other organisations exist).
+- `GET /v1/tenants` lists exactly the nodes of the reach, with `parentId`, `depth` and `slugPath`.
+- `GET /v1/tenants/tree?root=&depth=&include=counts&limit=` returns the visible tree, parents before
+  children, siblings by slug, shallowest nodes first when `limit` (default 1000, at most 5000)
+  truncates (`truncated: true`). The ancestors of the caller's node appear as path stubs
+  (`visible: false`: id, slug, name, no counts, no roles); siblings and other organisations never
+  do. Each node carries the caller's `myRoles` (bound on the node) and `inheritedRoles` (bound on an
+  ancestor). `include=counts` adds agents (own and subtree), runs of the last 30 days, pending
+  approvals, spend of the month (own and subtree) and the node's monthly cap, each only when the
+  caller holds the matching read permission on the whole node (`agents:read`, `runs:read`,
+  `costs:read`; a team or agent scoped role does not count, an API token scope does restrict).
+  Subtree sums are sums over the nodes the caller can see: for everybody but a platform operator
+  `agentsSubtree` equals the own count and `hasChildren` is `false`.
+- `GET /v1/tenants/search?q=` finds nodes of the reach by name or slug (at most 20).
+- Queries: one for the nodes, one aggregate per metric (grouped by tenant, rolled up along the
+  materialised path in memory), no query per node. Migration `0017` adds
+  `approvals(tenant_id, status)`.
+
+Not yet: roles are not bound per node (nobody but a platform operator reaches below the home node), `status` is
+always `active` (blocking comes with budget caps, W13-4), and the display colour and use case of a
+node need storage that arrives with W13-2 and W13-6.
 
 ## Audit
 

@@ -57,9 +57,22 @@ export const adminUser: User = {
 };
 
 const tenant = { id: tenantId, slug: 'acme', name: 'Acme' };
+const actingTenant = { ...tenant, slugPath: 'acme', path: [tenant] };
+const homeTenant = { ...tenant, slugPath: 'acme' };
+const binding = (role: string) => ({
+  role,
+  teamId: null,
+  tenantId,
+  tenantSlugPath: 'acme',
+  useCase: null,
+  expiresAt: null,
+});
 
 export const tenantRow = {
   ...tenant,
+  slugPath: 'acme',
+  parentId: null,
+  depth: 0,
   monthlyBudgetUsd: null,
   secretRefs: [],
   createdAt: new Date(Date.now() - 86_400_000 * 90).toISOString(),
@@ -68,10 +81,14 @@ export const tenantRow = {
 export const meAdmin: Me = {
   user: adminUser,
   tenant,
+  actingTenant,
+  homeTenant,
   platformAdmin: false,
   kind: 'user',
   permissions: [...PERMISSIONS],
-  bindings: [{ role: 'admin', teamId: null }],
+  bindings: [binding('admin')],
+  visibleTenantCount: 1,
+  installationMode: 'single',
 };
 
 export const meViewer: Me = {
@@ -83,10 +100,14 @@ export const meViewer: Me = {
     teams: [],
   },
   tenant,
+  actingTenant,
+  homeTenant,
   platformAdmin: false,
   kind: 'user',
   permissions: ['agents:read', 'runs:read', 'events:read', 'costs:read'],
-  bindings: [{ role: 'viewer', teamId: null }],
+  bindings: [binding('viewer')],
+  visibleTenantCount: 1,
+  installationMode: 'single',
 };
 
 export const settings: Settings = {

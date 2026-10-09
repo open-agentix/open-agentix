@@ -189,9 +189,12 @@ export const tokenDto = (t: TokenInfo) => ({
   createdAt: iso(t.createdAt),
 });
 
-export const tenantDto = (t: TenantRow) => ({
+export const tenantDto = (t: TenantRow, slugPath: string) => ({
   id: t.id,
   slug: t.slug,
+  slugPath,
+  parentId: t.parentId,
+  depth: t.depth,
   name: t.name,
   monthlyBudgetUsd: t.monthlyBudgetMicros === null ? null : Number(t.monthlyBudgetMicros) / 1e6,
   secretRefs: t.secretRefs,

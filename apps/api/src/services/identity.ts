@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   OaxError,
   effectivePermissions,
+  homeTenantOf,
   isRole,
   type Permission,
   type Principal,
@@ -25,11 +26,12 @@ import {
   oidcStates,
   teamMembers,
   teams,
-  tenants,
   users,
 } from '../db/schema.js';
+import type { tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
+import { TenantAccess } from './tenant-access.js';
 
 export type UserRow = typeof users.$inferSelect;
 export type TeamRow = typeof teams.$inferSelect;
@@ -78,11 +80,13 @@ const unauthenticated = (msg = 'authentication required') =>
 /** Users, teams, sessions, API tokens, local/LDAP/OIDC login and principal resolution. */
 export class IdentityService {
   private oidc: OidcClient | null;
+  private readonly access: TenantAccess;
 
   constructor(
     private readonly ctx: AppContext,
     private readonly audit: AuditService,
   ) {
+    this.access = new TenantAccess(ctx);
     this.oidc =
       ctx.oidcClient ?? (ctx.config.auth.oidc ? openidClient(ctx.config.auth.oidc) : null);
   }
@@ -232,19 +236,18 @@ export class IdentityService {
   }
 
   /**
-   * A platform operator acting inside another tenant (`X-OAX-Tenant: <slug or id>`). Everybody
-   * else asking for a different tenant gets 404, indistinguishable from an unknown tenant.
+   * Acting inside another node of the tenant tree (`X-OAX-Tenant: <id | slug | slug path>`,
+   * ADR 0013 7.4 with ADR 0014): platform operators may act in every node, everybody else (tenant
+   * admins included) only in their own node until bindings can inherit (ADR 0014 S2). A node
+   * outside that reach (child, sibling, ancestor, another organisation) answers 404,
+   * indistinguishable from an unknown one.
+   * The roles stay those of the home tenant; the principal remembers it as `homeTenantId`.
    */
   async actingIn(principal: Principal, tenant: string): Promise<Principal> {
-    const [row] = await this.ctx.db
-      .select()
-      .from(tenants)
-      .where(/^[0-9a-f-]{36}$/i.test(tenant) ? eq(tenants.id, tenant) : eq(tenants.slug, tenant));
-    if (!principal.platformAdmin || !row) {
-      if (row && row.id === principal.tenantId) return principal;
-      throw notFound('tenant');
-    }
-    return { ...principal, tenantId: row.id };
+    const row = await this.access.resolveVisible(principal, tenant);
+    if (!row) throw notFound('tenant');
+    if (row.id === principal.tenantId) return principal;
+    return { ...principal, tenantId: row.id, homeTenantId: homeTenantOf(principal) };
   }
 
   /** Resolves a bearer token to a principal; cached for min(auth cache TTL, token lifetime). */
