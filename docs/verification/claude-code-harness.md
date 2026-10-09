@@ -97,3 +97,16 @@ Answer (sanitized): (none)
   already removes the built-in tools, so the check is a second line of defence.
 - The harness needs its own network access to the Anthropic API; it is not usable in air-gapped
   mode (see `docs/airgapped.md`): in air-gapped mode the harness refuses to start unless `api.anthropic.com` (or `anthropicUrl`) is on `OAX_AIRGAPPED_ALLOW`.
+
+## Proxy mode (not verified with a real CLI yet)
+
+Through the model proxy (`agents[].runtime.harness`, ADR 0009 amendment W1-3b-7) the adapter sets
+`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
+`ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL`, `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`,
+`DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING`. The tests cover the adapter with a fake CLI that
+performs the HTTP call; the variable names are taken from the CLI documentation and have **not**
+been checked against a pinned binary. To verify: run the pinned CLI in a run node against a control node
+with `OAX_HARNESSES_ENABLED=claude-code` and check (a) the proxy receives `POST /v1/messages` with the
+model token, (b) no request carries another model id (`count_tokens` and `GET models/{id}` answer 404, see
+W1-3b-6, and must not break the run), (c) the ledger lines have `via = 'proxy'`.
+

@@ -11,6 +11,48 @@ cost tracking and the control agent apply exactly as for native runs.
 | `opencode` | Implemented against a documented command-line contract (`opencode run --format json`), tested with a fake CLI; real-run verification pending: [verification](verification/opencode-harness.md) |
 | `hermes`, `openclaw` | Documented stubs: same `ExternalHarness` interface, `buildInvocation`/`run` throw `NotImplementedError` |
 
+## Through the model proxy (run nodes)
+
+Setting `agents[].runtime.harness: claude-code | opencode` on a step runs it in a run node
+(`runner: container` or `kubernetes-job`) with the harness as the executor, and the harness reaches
+its model **only through the control node's pass-through endpoints** ([ADR 0009](adr/0009-model-proxy.md)
+section 10 and amendment W1-3b-7). The node never sees a provider key or an OAuth token.
+
+```yaml
+agents:
+  - id: fix
+    provider: claude          # a model connection on the control node
+    model: claude-sonnet-4-5  # the only model the proxy lets through
+    runtime: { runner: container, harness: claude-code }
+    tools:
+      - { server: git, tool: read_file }
+```
+
+1. The node asks `POST /v1/worker/runs/{id}/model-token` with `{ agentId, harness }` (once per step and
+   session). The control node checks that the step was published for this harness, that the operator
+   enabled it (`OAX_HARNESSES_ENABLED`) and that the provider speaks the harness's protocol (Claude
+   Code: Anthropic only; OpenCode: Anthropic or OpenAI), then answers with the surface URL and the
+   model token.
+2. Claude Code runs with `ANTHROPIC_BASE_URL=<control>/v1/model-proxy/anthropic`,
+   `ANTHROPIC_AUTH_TOKEN=<model token>` and every model variable set to the step's model. OpenCode gets
+   a generated config with a single provider `oax-proxy` (`@ai-sdk/anthropic` or
+   `@ai-sdk/openai-compatible`, `baseURL = <surface>/v1`, `apiKey = {env:OAX_OPENCODE_API_KEY}` = the
+   model token). The prompt goes on stdin, the policy gate is the only tool source, built-in tools are
+   off, permissions are deny-by-default (same as the direct mode below).
+3. Cost and tokens are measured by the proxy (ledger `via = 'proxy'`). No `model_call` step is written
+   by the node; the harness's own report is stored in the `output` step (`harness.reported`) for
+   comparison. A failed run keeps the report in an `error` step.
+4. Limits: `budget.maxSteps` (turns), `budget.maxCostUsd` (secondary; the proxy's reservations are the
+   real limit), `budget.timeoutSeconds` (default 30 minutes when unset), cancellation, 16 MiB of output.
+   The harness runs in its own process group that is killed as a whole.
+
+The run-node image has to contain the pinned binary; the node finds it through `OAX_CLAUDE_BIN` or
+`OAX_OPENCODE_BIN` (+ `OAX_OPENCODE_SHA256`). Images are tracked separately (PLAT-05); without the binary
+the step fails with `harness_spawn_failed`. Real-run verification with the pinned versions is pending.
+
+The sections below describe the **direct modes** of `oax run --harness` (CLI and orchestrator demos),
+which keep using a host login, a token file or a model connection.
+
 ## How a Claude Code run works
 
 `executeWithHarness(run, ctx, harness)` (`packages/runners/src/harness-runner.ts`):

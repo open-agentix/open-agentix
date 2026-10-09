@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Harness adapters through the model proxy (W1-3b-7, PLAT-04)**: `agents[].runtime.harness:
+  claude-code | opencode` runs a step in a run node with the harness as executor. The harness reaches
+  its model only through `/v1/model-proxy/anthropic|openai` with the step's model token and never
+  holds a provider key or OAuth token. `POST /v1/worker/runs/{id}/model-token` accepts `harness` and
+  answers with the pass-through surface. New `OAX_HARNESSES_ENABLED` (default empty, requires the model
+  proxy). Cost is measured by the proxy; the harness report is stored in the `output` step. Publish
+  checks: isolating runner, no `simulation`, enabled harness. Hardening: `assertProxyInvocation`
+  guard, default 30-minute time limit, process-group kill. See ADR 0009 amendment W1-3b-7.
+- Run node environment variables `OAX_CLAUDE_BIN`, `OAX_OPENCODE_BIN`, `OAX_OPENCODE_SHA256`
+  (the images with pinned binaries are PLAT-05).
+
 ### Breaking
 
 - **Model proxy cutover (W1-3b-4)**: isolated run node steps now call models only through the
