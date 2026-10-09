@@ -1,6 +1,13 @@
 import type { HostLookup } from '../ssrf.js';
 import { OaxError } from '@openagentix/core';
-import { ProviderError, createGuardedFetch, isPreSendFailure, type FetchLike } from '../http.js';
+import { findOaxError } from '../outbound.js';
+import {
+  ProviderError,
+  createGuardedFetch,
+  isPreSendFailure,
+  type FetchLike,
+  type GuardedFetchOptions,
+} from '../http.js';
 import {
   StreamGuard,
   createUpstreamStream,
@@ -21,6 +28,7 @@ export interface HttpTransportOptions {
   /** Endpoint origin(s) the transport may talk to (the configured base URL). */
   baseUrl: string;
   proxyUrl?: string | undefined;
+  outbound?: GuardedFetchOptions['outbound'];
   /** Injected fetch (tests); defaults to the proxy-aware global fetch behind the guarded fetch. */
   fetchImpl?: FetchLike | undefined;
   limits?: Partial<StreamLimits> | undefined;
@@ -132,6 +140,7 @@ export async function openSseStream(
     proxyUrl: opts.proxyUrl,
     fetchImpl: opts.fetchImpl,
     blockPrivateDestinations: opts.blockPrivateDestinations,
+    outbound: opts.outbound,
   });
   const guard = new StreamGuard(limits, req.call.signal);
   const maxRetries = opts.maxRetries ?? 2;
@@ -154,7 +163,9 @@ export async function openSseStream(
       );
     } catch (e) {
       if (guard.cause) return fail(causeError(guard));
-      if (e instanceof OaxError && e.code === 'egress_denied') return fail(e);
+      // Policy and configuration errors (also behind undici's "fetch failed") are final.
+      const policy = findOaxError(e);
+      if (policy) return fail(policy);
       if (attempt < maxRetries) {
         await sleep((opts.backoffMs ?? 250) * 2 ** attempt, guard.signal);
         continue;

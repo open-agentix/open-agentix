@@ -25,6 +25,11 @@ export interface RouteScope {
   proxyUrlGrandfathered?: boolean;
   /** Classification of the data of the run: capped by proxies that inspect traffic. */
   classification?: Classification;
+  /**
+   * Compatibility switch for platform-configured destinations that are not yet described by the
+   * network configuration: permits plain `http://` for TLS-only purposes. Ignored for tenants.
+   */
+  allowPlainHttp?: boolean;
 }
 
 export type DenyCode =
@@ -192,7 +197,7 @@ export function resolveRoute(
     target.scheme === 'http' ||
     target.scheme === 'ws' ||
     (target.scheme === 'ldap' && purpose === 'identity');
-  if (plain && tlsOnly && !loopback && !privateOk)
+  if (plain && tlsOnly && !loopback && !privateOk && !(origin !== 'tenant' && scope.allowPlainHttp))
     return deny(
       'plain_http_refused',
       `${purpose} traffic to ${where} must use TLS`,

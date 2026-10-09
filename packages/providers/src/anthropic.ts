@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { Classification } from '@openagentix/core';
-import { createGuardedFetch, type FetchLike } from './http.js';
+import { createGuardedFetch, type FetchLike, type GuardedFetchOptions } from './http.js';
 import type {
   ChatRequest,
   ChatResponse,
@@ -25,6 +25,7 @@ export interface AnthropicOptions {
   baseUrl?: string | undefined;
   clearance?: Classification;
   proxyUrl?: string | undefined;
+  outbound?: GuardedFetchOptions['outbound'];
   timeoutMs?: number | undefined;
   maxRetries?: number | undefined;
   /** Default max output tokens when the agent does not set one. */
@@ -112,6 +113,7 @@ export class AnthropicProvider implements ModelProvider {
         fetch: createGuardedFetch({
           allowedOrigins: [baseURL],
           proxyUrl: opts.proxyUrl,
+          outbound: opts.outbound,
           fetchImpl: opts.fetchImpl,
         }) as unknown as typeof fetch,
       });

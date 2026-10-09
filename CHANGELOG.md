@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Outbound dispatcher factory with DNS pinning (W10-1-2 first slice, ADR 0011 amendment 3)**:
+  `createOutboundDispatcher` in `@openagentix/providers` asks `resolveRoute` for every request and builds
+  the undici dispatcher: direct with a pinned DNS lookup, or through the selected HTTP(S) proxy
+  (CONNECT, `Proxy-Authorization` from the secret reference, proxy CA bundle); trust bundles
+  (`system+extra` / `extra-only`) and client certificates come from the network configuration.
+  Deny and veto results are `egress_denied` (with the resolver code), redirects are never followed,
+  connect/header/body timeouts and a response size limit always apply, and every decision is exposed
+  to `onRoute` without secrets. `createGuardedFetch` (OpenAI-compatible, Ollama, Anthropic, stream
+  transports) and the Bedrock client now use the factory; providers, the registry and the stream
+  factory accept an optional `outbound` (dispatcher, purpose, scope). A boundary test and ESLint
+  rules fail when a new direct `fetch(`, `undici` or `node:http(s)` client appears outside the
+  factory (exceptions are listed). New `RouteScope.allowPlainHttp` (platform only) keeps in-cluster
+  `http://` model servers working until they are described by the network configuration.
 - **Outbound network configuration and route resolver (W10-1-1, ADR 0011)**:
   `OAX_NETWORK_CONFIG_FILE` (YAML/JSON) or `OAX_NETWORK_CONFIG` (inline JSON) defines named proxies,
   trust bundles, client certificates, ordered routes and the proxies tenants may select. The pure
@@ -57,6 +70,29 @@ All notable changes to this project are documented here. The format follows
   grandchild that keeps stdout open (`exit` is handled, the process group is always signalled).
   Model tokens carry a `surface` claim (`native` | `harness`) plus the harness kind: the native
   `/model` route refuses a harness token and the pass-through surfaces refuse a native one.
+
+- Hardening of the dispatcher factory (security review of PR #133): a legacy `proxyUrl` of a platform
+  connection is no longer pinned (a private proxy host works again); only tenant-chosen proxies are.
+  Node agents (Bedrock) behind a proxy use a dedicated CONNECT agent: the proxy hop gets its own CA
+  and never the client certificate, the destination gets the trust bundles and the client
+  certificate, also in `extra-only` mode. `rejectUnauthorized: true` is set on every TLS option set
+  and the factory refuses to run with `NODE_TLS_REJECT_UNAUTHORIZED=0`. `proxyUrlGrandfathered`
+  comes from the connection metadata only, never from "a proxyUrl is set". Policy and configuration
+  errors (`egress_denied`, `network_secret_unavailable`, `client_certificate_unknown`,
+  `network_config_invalid`, `tls_insecure`), also behind undici's `fetch failed`, are never retried
+  or wrapped into a retryable provider error. Tenant destinations behind a proxy are resolved once
+  and checked before sending. The dispatcher cache is bounded (LRU, 64) and keyed by a digest of
+  proxy credentials; invalid percent-encoding in proxy credentials fails with
+  `network_config_invalid`; the size limit has its own code `response_too_large`; plain `http://`
+  Bedrock endpoints now also go through the proxy.
+
+### Changed
+
+- Outbound routing of existing installs (dispatcher factory): loopback destinations are always
+  direct (never sent to `HTTP(S)_PROXY`), cloud metadata addresses are denied, and an invalid
+  `HTTPS_PROXY`/`HTTP_PROXY` value now fails with `network_config_invalid` instead of being ignored.
+- Clients without their own network configuration share one factory per proxy environment.
+- The response size limit error code is `response_too_large` (was `egress_denied`).
 
 ### Breaking
 

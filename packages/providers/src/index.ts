@@ -1,6 +1,7 @@
 export * from './types.js';
 export * from './proxy.js';
 export * from './http.js';
+export * from './outbound.js';
 export * from './openai.js';
 export * from './ollama.js';
 export * from './anthropic.js';

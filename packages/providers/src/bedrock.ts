@@ -7,14 +7,12 @@ import {
   type Message,
 } from '@aws-sdk/client-bedrock-runtime';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
-import { Agent as HttpAgent } from 'node:http';
-import { Agent as HttpsAgent } from 'node:https';
 import { Transform, type Readable } from 'node:stream';
-import type { Classification } from '@openagentix/core';
-import { HttpsProxyAgent } from 'https-proxy-agent';
+import type { Classification, NetworkPurpose, RouteScope } from '@openagentix/core';
 import { ProviderError } from './http.js';
-import { proxyFor, type Env } from './proxy.js';
-import { assertPublicDestination, createPinnedLookup, type HostLookup } from './ssrf.js';
+import { sharedOutboundDispatcher, type OutboundDispatcher } from './outbound.js';
+import type { Env } from './proxy.js';
+import { assertPublicDestination, type HostLookup } from './ssrf.js';
 import type {
   ChatRequest,
   ChatResponse,
@@ -41,6 +39,9 @@ export interface BedrockOptions {
   endpoint?: string | undefined;
   /** HTTPS proxy for environments without direct egress. */
   proxyUrl?: string | undefined;
+  /** Outbound dispatcher factory and scope (ADR 0011); default: legacy proxy environment. */
+  outbound?:
+    { dispatcher: OutboundDispatcher; purpose?: NetworkPurpose; scope?: RouteScope } | undefined;
   clearance?: Classification;
   maxAttempts?: number | undefined;
   /** Explicit credentials (BYOK); without them the AWS default provider chain applies. */
@@ -117,6 +118,7 @@ export function createBedrockClient(
     | 'region'
     | 'endpoint'
     | 'proxyUrl'
+    | 'outbound'
     | 'maxAttempts'
     | 'credentials'
     | 'blockPrivateDestinations'
@@ -124,10 +126,21 @@ export function createBedrockClient(
   >,
   env: Env = process.env,
 ): BedrockRuntimeClient {
-  // The AWS SDK ignores HTTPS_PROXY; resolve it explicitly (NO_PROXY honoured, e.g. for VPC endpoints).
+  // The AWS SDK ignores HTTPS_PROXY: routing, proxy and DNS pinning come from the outbound
+  // dispatcher factory (NO_PROXY honoured, e.g. for VPC endpoints). Behind a proxy the proxy
+  // resolves the name (pre-request check only); otherwise the connect step pins the address.
   const target = opts.endpoint ?? `https://bedrock-runtime.${opts.region}.amazonaws.com`;
-  const proxy = proxyFor(target, env, opts.proxyUrl);
   const guard = opts.blockPrivateDestinations;
+  const dispatcher = opts.outbound?.dispatcher ?? sharedOutboundDispatcher(env);
+  const agents = dispatcher.nodeAgents(target, {
+    purpose: opts.outbound?.purpose ?? 'model',
+    scope: {
+      ...opts.outbound?.scope,
+      ...(opts.proxyUrl && !opts.outbound?.scope?.proxyUrl ? { proxyUrl: opts.proxyUrl } : {}),
+    },
+    ...(guard ? { pin: guard } : {}),
+  });
+  const proxied = agents.route.decision === 'proxy';
   return new BedrockRuntimeClient({
     region: opts.region,
     ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
@@ -137,20 +150,19 @@ export function createBedrockClient(
       ? {
           requestHandler: new LimitedNodeHttpHandler(
             {
-              // Behind a proxy the proxy resolves the name (pre-request check only); otherwise the
-              // connect step validates and pins the resolved address.
-              ...(proxy
-                ? { httpsAgent: new HttpsProxyAgent(proxy) }
-                : {
-                    httpsAgent: new HttpsAgent({ lookup: createPinnedLookup(guard) as never }),
-                    httpAgent: new HttpAgent({ lookup: createPinnedLookup(guard) as never }),
-                  }),
+              httpsAgent: agents.httpsAgent,
+              ...(agents.httpAgent ? { httpAgent: agents.httpAgent } : {}),
             },
             opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
           ),
         }
-      : proxy
-        ? { requestHandler: new NodeHttpHandler({ httpsAgent: new HttpsProxyAgent(proxy) }) }
+      : proxied
+        ? {
+            requestHandler: new NodeHttpHandler({
+              httpsAgent: agents.httpsAgent,
+              ...(agents.httpAgent ? { httpAgent: agents.httpAgent } : {}),
+            }),
+          }
         : {}),
   });
 }
