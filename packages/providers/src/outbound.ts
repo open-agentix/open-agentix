@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ClientRequest } from 'node:http';
-import { rootCertificates, type ConnectionOptions } from 'node:tls';
+import { connect as netConnect, type Socket } from 'node:net';
+import { connect as tlsConnect, rootCertificates, type ConnectionOptions } from 'node:tls';
 import { Agent as HttpAgent } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
 import {
@@ -131,6 +132,14 @@ export interface OutboundDispatcher {
   fetch(url: string | URL, init: RequestInit | undefined, ctx: OutboundContext): Promise<Response>;
   /** The same routing for Node http(s) agents (AWS SDK). */
   nodeAgents(url: string | URL, ctx: OutboundContext): NodeAgents;
+  /**
+   * A raw TCP stream to `host:port` for a protocol the caller speaks itself (the Git relay, ADR 0010
+   * Amendment 1 A1.5): direct to the checked and pinned address, or through the selected proxy
+   * with `CONNECT`. The route decision, the air-gapped allowlist and the pinning rules are the
+   * same as for `plan`; TLS (if any) stays end to end between the caller and the destination.
+   * Throws `egress_denied` on a deny result.
+   */
+  dial(target: { host: string; port: number }, ctx: OutboundContext): Promise<Socket>;
   /** The effective network (for diagnostics). */
   readonly network: CompiledNetwork;
   /** Closes every cached dispatcher (config reload, shutdown). */
@@ -474,6 +483,50 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
       });
       return limitBody(res, limits.maxResponseBytes);
     },
+    async dial(target, ctx) {
+      const host = target.host.replace(/^\[|\]$/g, '');
+      const url = new URL(`https://${host.includes(':') ? `[${host}]` : host}:${target.port}/`);
+      const r = resolve(url, ctx);
+      const p = r.route.proxy;
+      if (!p) {
+        return await connectWithin(
+          () =>
+            netConnect({
+              host,
+              port: target.port,
+              ...(r.pinned ? { lookup: pinLookup(ctx) } : {}),
+            }),
+          limits.connectTimeoutMs,
+        );
+      }
+      const token = proxyToken(r.route, r.scope);
+      const proxyCa = p.caBundle ? caList([p.caBundle]) : caList([]);
+      const sock = await connectWithin(
+        () =>
+          p.scheme === 'https'
+            ? tlsConnect({
+                host: p.host,
+                port: p.port,
+                servername: p.host,
+                ...(proxyCa ? { ca: proxyCa } : {}),
+                rejectUnauthorized: true,
+                ...(pinProxy(r.scope) ? { lookup: pinLookup(ctx) } : {}),
+              })
+            : netConnect({
+                host: p.host,
+                port: p.port,
+                ...(pinProxy(r.scope) ? { lookup: pinLookup(ctx) } : {}),
+              }),
+        limits.connectTimeoutMs,
+      );
+      try {
+        await proxyConnect(sock, `${url.hostname}:${target.port}`, token, limits.connectTimeoutMs);
+      } catch (e) {
+        sock.destroy();
+        throw e;
+      }
+      return sock;
+    },
     nodeAgents(url, ctx) {
       const r = resolve(url, ctx);
       const p = r.route.proxy;
@@ -510,6 +563,86 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
       await Promise.all(all.map((d) => d.close().catch(() => undefined)));
     },
   };
+}
+
+/** Resolves with the socket once it is connected (or secure-connected); rejects on error/timeout. */
+function connectWithin(make: () => Socket, timeoutMs: number): Promise<Socket> {
+  return new Promise((resolveSocket, reject) => {
+    const sock = make();
+    const timer = setTimeout(() => {
+      sock.destroy();
+      reject(new OaxError('connect_timeout', 'the connection timed out'));
+    }, timeoutMs);
+    const fail = (e: Error) => {
+      clearTimeout(timer);
+      sock.destroy();
+      reject(e instanceof OaxError ? e : new OaxError('connect_failed', 'the connection failed'));
+    };
+    sock.once('error', fail);
+    sock.once(
+      (sock as { encrypted?: boolean }).encrypted !== undefined || 'getProtocol' in sock
+        ? 'secureConnect'
+        : 'connect',
+      () => {
+        clearTimeout(timer);
+        sock.off('error', fail);
+        resolveSocket(sock);
+      },
+    );
+  });
+}
+
+/** HTTP CONNECT handshake on an open proxy socket; leaves the socket positioned after the head. */
+function proxyConnect(
+  sock: Socket,
+  authority: string,
+  token: string | undefined,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolveDone, reject) => {
+    let buf = Buffer.alloc(0);
+    const timer = setTimeout(
+      () => done(new OaxError('connect_timeout', 'proxy handshake timed out')),
+      timeoutMs,
+    );
+    const done = (e?: OaxError) => {
+      clearTimeout(timer);
+      sock.off('data', onData);
+      sock.off('error', onError);
+      sock.off('close', onClose);
+      if (e) reject(e);
+      else resolveDone();
+    };
+    const onError = () => done(new OaxError('connect_failed', 'the proxy connection failed'));
+    const onClose = onError;
+    const onData = (chunk: Buffer) => {
+      buf = Buffer.concat([buf, chunk]);
+      const end = buf.indexOf('\r\n\r\n');
+      if (end < 0) {
+        if (buf.length > 8192) done(new OaxError('connect_failed', 'the proxy answer is too long'));
+        return;
+      }
+      const status = /^HTTP\/1\.[01] (\d{3})/.exec(buf.subarray(0, end).toString('latin1'));
+      if (!status || status[1] !== '200')
+        return done(
+          new OaxError(
+            'proxy_connect_refused',
+            `the proxy refused the tunnel (${status?.[1] ?? '?'})`,
+          ),
+        );
+      const rest = buf.subarray(end + 4);
+      if (rest.length > 0) sock.unshift(rest);
+      done();
+    };
+    sock.on('data', onData);
+    sock.once('error', onError);
+    sock.once('close', onClose);
+    sock.write(
+      `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n${
+        token ? `Proxy-Authorization: ${token}\r\n` : ''
+      }\r\n`,
+    );
+  });
 }
 
 const shared = new Map<string, OutboundDispatcher>();
