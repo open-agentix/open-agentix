@@ -551,6 +551,11 @@ Found while implementing the run node and the container runner; sections 1 to 4 
 - **Egress.** A harness node has no egress grant by default; declared hosts need
   `OAX_HARNESS_EGRESS_ALLOWED=true` (publish and runner check, `harness_egress_denied`).
 - **Resources.** The runner applies per-class sizes: `OAX_CONTAINER_HARNESS_MEMORY_MB` and
-  `OAX_CONTAINER_HARNESS_TMP_MB` for harness nodes, `OAX_CONTAINER_TMP_MB` for the others; the
-  operator maximum still caps memory. The threat model is otherwise unchanged (read-only root,
+  `OAX_CONTAINER_HARNESS_TMP_MB` for harness nodes, `OAX_CONTAINER_MEMORY_MB` (512) and
+  `OAX_CONTAINER_TMP_MB` for the others; the operator maximum `OAX_CONTAINER_MAX_MEMORY_MB` is a
+  ceiling only and does not raise the default of ordinary nodes; `/tmp` may be at most half of the memory. The threat model is otherwise unchanged (read-only root,
   `CapDrop ALL`, `noexec` tmpfs). Details: ADR 0009, amendment DOG-1.
+- **Images are exclusive (review fix).** A harness step may not set a toolbox; a step without a
+  harness may not run on a harness image (publish check, and a runner check that allows it only if the
+  operator also configured that image as default or toolbox image). The harness image carries no
+  `org.opencontainers.image.source` label and may only be pushed to a private package.

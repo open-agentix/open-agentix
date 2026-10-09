@@ -117,6 +117,22 @@ on an `internal` Docker network that contained only a fake control node.
 | write outside `/tmp` | `Read-only file system` |
 | `git init` and `git --version` in `/tmp` | works offline |
 
+### Automated smoke test (review fixes, 2026-10-09)
+
+`scripts/test-harness-image.sh <image>` repeats these checks automatically in throwaway containers
+with the runner hardening (read-only root, `cap-drop ALL`, `no-new-privileges`, 512 MiB, 128 PIDs,
+`/tmp` and `/run/oax` tmpfs `noexec,nosuid,nodev`). Result on LXC 110 (Docker 29.8.2): 17 checks, all
+passed, among them `claude --version` = `2.1.295 (Claude Code)` and `claude --help` **with `noexec`
+`/tmp`** (Claude Code starts; `noexec` is therefore kept), no setuid/setgid **files** (48 setgid
+directories from the Node base image under `/usr/local` and `/home/node` are listed as info, they have
+no effect), uid/gid 10001, writable paths for that uid on a writable root: only `/tmp` and `/var/tmp`,
+and on an `--internal` network with a **fake** egress proxy: `CONNECT` without grant answered `407`,
+with the fake grant `200`, `example.com` does not resolve and `1.1.1.1:443` is not reachable. The
+fake proxy proves the network path (no DNS, no route, only the proxy neighbour); the grant logic of
+the real egress proxy is covered by its unit tests and was **not** re-verified end to end here.
+Not covered: a real Bash tool call of Claude Code under `noexec /tmp` (the adapter starts it with
+`--tools ""`, so no shell is spawned; a future step with tools needs its own check).
+
 Variable names and request shape of the **pinned CLI** against the proxy surface, with exactly the
 invocation and environment of the adapter (`stream-json`, `--tools ""`, `--strict-mcp-config`,
 `--permission-mode dontAsk`, `--restricted`, `--max-turns`):

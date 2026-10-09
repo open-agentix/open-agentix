@@ -219,10 +219,11 @@ The `container` runner is implemented and opt-in (see [runners.md](runners.md)).
 | `OAX_CONTAINER_IMAGE` | – | Run node image, `name@sha256:<digest>` only. |
 | `OAX_CONTAINER_TOOLBOX_IMAGES` | `{}` | JSON map toolbox name -> digest-pinned image. |
 | `OAX_CONTAINER_HARNESS_IMAGES` | `{}` | JSON map harness (`claude-code`, `opencode`) -> digest-pinned image; a harness step runs only on its harness image (`harness_image_unknown` otherwise). See [runners](runners.md#harness-images-dog-1). |
-| `OAX_CONTAINER_TMP_MB` | `64` | `/tmp` tmpfs size (MiB) of an ordinary run node. |
+| `OAX_CONTAINER_MEMORY_MB` | `512` | Memory (MiB) of an ordinary run node, clamped to `OAX_CONTAINER_MAX_MEMORY_MB`. The max is the ceiling, not the default. |
+| `OAX_CONTAINER_TMP_MB` | `64` | `/tmp` tmpfs size (MiB) of an ordinary run node; at most half of the node memory. |
 | `OAX_CONTAINER_HARNESS_MEMORY_MB` | `2048` | Memory (MiB) of a harness step's node, clamped to `OAX_CONTAINER_MAX_MEMORY_MB`. |
-| `OAX_CONTAINER_HARNESS_TMP_MB` | `256` | `/tmp` tmpfs size (MiB) of a harness step's node (repository checkout, test scratch). Must be smaller than the node memory. |
-| `OAX_HARNESS_EGRESS_ALLOWED` | `false` | Allow harness steps to declare egress hosts. Default: a harness step reaches the control node only (refused at publish and at node start). |
+| `OAX_CONTAINER_HARNESS_TMP_MB` | `256` | `/tmp` tmpfs size (MiB) of a harness step's node (repository checkout, test scratch). At most half of the node memory. |
+| `OAX_HARNESS_EGRESS_ALLOWED` | `false` | Allow harness steps to declare egress hosts. Default: a harness step reaches the control node only (refused at publish and at node start). **Exfiltration risk** when `true`: see [runners](runners.md). |
 | `OAX_CONTAINER_NETWORK` | – | Pre-created network with `internal: true` (verified before every start). |
 | `OAX_CONTAINER_EGRESS_PROXY_URL` / `OAX_CONTAINER_EGRESS_GRANT_SECRET` | – | URL nodes use for the separate egress proxy service and the HMAC key (>= 32 chars) that signs per-node grants; set both or neither (neither = no step egress). |
 | `OAX_CONTAINER_EGRESS_ALLOW` | – | Operator ceiling for step egress (`host`, `host:port`, `*.suffix`, IP, CIDR no wider than /8); steps can only narrow it; empty = no step egress. Checked at publish, at node start and by the proxy. |

@@ -123,9 +123,10 @@ Opt-in: nothing isolating runs by default. Enable it with `OAX_RUNNERS_ENABLED=i
 | `OAX_CONTAINER_IMAGE` | required. Run node image **pinned by digest** (`name@sha256:<64 hex>`); tags are refused. Build target `run-node` of the repository `Dockerfile`. |
 | `OAX_CONTAINER_TOOLBOX_IMAGES` | JSON map toolbox name -> digest-pinned image. A step with an unknown toolbox fails closed (`toolbox_image_unknown`). Toolbox build, signing and verification are W2-1. |
 | `OAX_CONTAINER_HARNESS_IMAGES` | JSON map harness (`claude-code`, `opencode`) -> digest-pinned image. A step with `runtime.harness` runs **only** on the image of its harness; an unknown harness fails closed (`harness_image_unknown`), a tag is refused at start. See Harness images below. |
-| `OAX_CONTAINER_TMP_MB` | size of `/tmp` (tmpfs, default 64) of an ordinary node. |
-| `OAX_CONTAINER_HARNESS_MEMORY_MB`, `OAX_CONTAINER_HARNESS_TMP_MB` | memory (default 2048, clamped to `OAX_CONTAINER_MAX_MEMORY_MB`) and `/tmp` size (default 256) of a **harness step's** node: Claude Code plus a repository checkout do not fit into 512 MiB / 64 MiB. tmpfs pages count against the memory limit, so startup refuses a `/tmp` that is not smaller than the node memory. |
-| `OAX_HARNESS_EGRESS_ALLOWED` | default `false`. A harness step must publish with `runtime.egress: []` ("control node only"); publish refuses declared hosts, the runner refuses them again at start (`harness_egress_denied`). `true` lifts both checks. |
+| `OAX_CONTAINER_MEMORY_MB` | default memory (MiB, default 512) of an **ordinary** node, clamped to `OAX_CONTAINER_MAX_MEMORY_MB`. It is deliberately separate from the ceiling: raising `OAX_CONTAINER_MAX_MEMORY_MB` to 2048 for harness steps does not give ordinary nodes 2048 MiB. |
+| `OAX_CONTAINER_TMP_MB` | size of `/tmp` (tmpfs, default 64) of an ordinary node; at most half of the node memory. |
+| `OAX_CONTAINER_HARNESS_MEMORY_MB`, `OAX_CONTAINER_HARNESS_TMP_MB` | memory (default 2048, clamped to `OAX_CONTAINER_MAX_MEMORY_MB`) and `/tmp` size (default 256) of a **harness step's** node: Claude Code plus a repository checkout do not fit into 512 MiB / 64 MiB. tmpfs pages count against the memory limit, so startup refuses a `/tmp` larger than **half** of the node memory (a `/tmp` of 2047 MiB in a 2048 MiB node would only fail late with an OOM kill). Every integer setting has an upper bound (2^31 - 1, memory values 1 TiB): larger values are typos and are refused. |
+| `OAX_HARNESS_EGRESS_ALLOWED` | default `false`. A harness step must publish with `runtime.egress: []` ("control node only"); publish refuses declared hosts, the runner refuses them again at start (`harness_egress_denied`). `true` lifts both checks. **Warning: exfiltration risk.** A harness node holds a model token and processes untrusted content (repository files, tool output). Every egress host you allow is a path by which a prompt-injected agent can send that content out; leave this `false` unless a reviewed step needs a specific host, and then keep `OAX_CONTAINER_EGRESS_ALLOW` as narrow as possible (never wildcards or CIDRs). |
 | `OAX_CONTAINER_NETWORK` | required. A pre-created network with `internal: true`; the runner inspects it before every start and refuses anything else (`network_not_internal`). |
 | `OAX_NODE_CONTROL_URL` | required. Base URL of the control node **as seen from the node** (on the internal network), not the public URL. |
 | `OAX_CONTAINER_INSTANCE_ID` | installation id (default `default`); containers are labelled with it and the orphan reaper only touches its own installation's containers. Set a distinct value per installation on a shared engine. |
@@ -149,10 +150,31 @@ A harness step needs the harness binary inside the node. The Dockerfile target
 - **Hardening unchanged.** Numeric non-root user `10001`, no capabilities, read-only root file system
   (Claude Code writes only below `HOME=/tmp`), no `managed-settings.json`, no `/etc/claude-code`, no
   `CLAUDE_CONFIG_DIR`. `git` (pinned by Alpine package version, `GIT_VERSION`) is included for offline use
-  such as diffs. Reproducibility: pin the base image as well, `--build-arg NODE_IMAGE=node:22-alpine@sha256:...`
-  (the Alpine package pin fails the build when the base moves, which is intended).
-- **Licence.** The Claude Code binary is proprietary (Anthropic). Keep the pushed image in a
-  **private** registry package; it is not a project release artifact.
+  such as diffs. The build script pins the base image by digest (`NODE_IMAGE=node:22-alpine@sha256:...`,
+  resolved from the registry at build time, or `OAX_NODE_IMAGE=...` to give one). The Alpine package pin
+  fails the build when the base moves; the error then lists the git versions available and the
+  `--build-arg GIT_VERSION=...` to use (and the Dockerfile default to update).
+- **Trust anchor.** The SHA-512 values come from the metadata of the npm registry
+  (`dist.integrity`). That proves the tarball equals what the registry served when the digest was
+  recorded; it is **not** a signature by Anthropic and there is no provenance attestation to verify. A
+  compromised registry entry at recording time would be pinned as is. Mitigation: compare the digest with
+  a second source before changing it, review the version bump in a PR and keep the image private.
+- **Licence and visibility.** The Claude Code binary is proprietary (Anthropic). The image must be in a
+  **private** registry package and is not a project release artifact. The image carries **no**
+  `org.opencontainers.image.source` label on purpose: GHCR links a package to the repository named in
+  that label and a linked package follows the (public) visibility of the repository.
+  `scripts/build-harness-image.sh` refuses to push when it cannot read the package visibility with
+  `gh api` (needs `GH_TOKEN` with `read:packages`) or when the existing package is not private, and
+  after the push it re-reads the visibility and aborts loudly (exit 1) if the package is not private; a
+  newly created package must be set to private in the package settings before it is used by anyone else.
+- **Smoke test.** `scripts/test-harness-image.sh <image>` builds nothing; it inspects the image in
+  hardened throwaway containers (read-only root, `cap-drop ALL`, `no-new-privileges`, `noexec` tmpfs): pinned
+  `claude --version`, no managed settings, no package manager, no setuid/setgid files, uid 10001, minimal
+  writable paths, no source label, and on an internal network with a fake egress proxy: `407` without a
+  grant, no DNS and no route to the outside. CI runs it for the target; the build script runs it before
+  every push. Multi-platform: the script builds for the host platform only; both SHA-512 build args exist, a
+  multi-arch push (`docker buildx build --platform linux/amd64,linux/arm64`) yields an image index
+  and the smoke test would have to run per platform.
 - **Digest rule.** `OAX_CONTAINER_HARNESS_IMAGES` accepts only `name@sha256:<manifest digest>`. A locally
   built image has no repository digest until it is pushed, so the flow is: build, push, take the digest
   of the push, configure it, make sure the engine host has pulled it (the runner never pulls).
@@ -160,8 +182,19 @@ A harness step needs the harness binary inside the node. The Dockerfile target
   of the known harness kinds are accepted (the allowlist), and the image of a harness step must be the one
   configured for that harness: another allowed image is refused (`image_not_allowed`).
 - **Limits.** Harness steps get `OAX_CONTAINER_HARNESS_MEMORY_MB` (2048) and `OAX_CONTAINER_HARNESS_TMP_MB`
-  (256); the operator maximum `OAX_CONTAINER_MAX_MEMORY_MB` still caps the memory, so raise it (for example 2048)
-  on installations that run harness steps.
+  (256); the operator maximum `OAX_CONTAINER_MAX_MEMORY_MB` is the **ceiling** that caps them, so raise it (for
+  example to 2048) on installations that run harness steps. The ceiling does not change what ordinary nodes get:
+  they receive `OAX_CONTAINER_MEMORY_MB` (512).
+- **Images are exclusive.** A harness step must not set a `toolbox` (it runs on the image of its harness; the
+  pipeline-level `runtime.toolbox` is ignored for it) and an ordinary step must not run on a harness image: publish refuses
+  a step without a harness whose toolbox or default image is a harness image, and the runner refuses to start
+  an ordinary step on a harness image unless the operator also configured it as the default or a toolbox image.
+- **Engine requirements.** "No DNS on the internal network" (the node cannot resolve outside names) holds for
+  Docker Engine **26 or newer**; older engines forward DNS queries of internal networks. Podman: with
+  Netavark/aardvark-dns an `internal` network forwards no queries either, but the behaviour depends on the
+  version, `dns_enabled` of the network and the host's resolver setup; verify with the smoke test
+  (`scripts/test-harness-image.sh`, network part) on your engine before enabling harness steps. Even where a
+  name resolved, the network has no route out, so the control for the data path is the internal network, not DNS.
 - **Egress.** The node network is `internal`; a harness step has no egress grant, so it reaches the
   control node only (verified from inside a node, [verification](verification/claude-code-harness.md#run-node-image-dog-1)).
 
