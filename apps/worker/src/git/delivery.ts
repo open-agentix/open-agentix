@@ -253,6 +253,15 @@ export class PullRequestDelivery {
         throw new GitError('pr_limit_reached', 'too many open pull requests');
       const title = sanitizeTitle(`fix: ${input.issue.title}`);
       const message = `${title}\n\nProposed by the openagentix bug-fix agent (run ${run8}).\n`;
+      // The pull request text is checked BEFORE anything is pushed, so a refusal leaves no branch.
+      const body = this.body(t, input, run8);
+      const hits = scanForSecrets(`${title}\n${body}`, known);
+      if (hits.length > 0)
+        throw new GitError(
+          'secret_detected',
+          'the pull request text contains credential-like content',
+          { hits: hits.map((h) => ({ pattern: h.pattern, digest: h.digest, via: h.via })) },
+        );
       const rep = await ws.session.applyAndPushBranch({
         sha: ws.commit,
         patch: input.patch.patch,
@@ -298,14 +307,6 @@ export class PullRequestDelivery {
         patchSha256: rep.patchSha256,
         sentBytes: rep.sentBytes,
       });
-      const body = this.body(t, input, run8);
-      const hits = scanForSecrets(`${title}\n${body}`, known);
-      if (hits.length > 0)
-        throw new GitError(
-          'secret_detected',
-          'the pull request text contains credential-like content',
-          { hits: hits.map((h) => ({ pattern: h.pattern, digest: h.digest, via: h.via })) },
-        );
       const pr = await ext.openDraftPullRequest({ head: branch, base: t.baseBranch, title, body });
       result.pullRequest = { number: pr.number, url: pr.url, draft: true };
       await this.audit(runId, t.name, {

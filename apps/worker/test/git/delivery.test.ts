@@ -353,7 +353,7 @@ describe('PullRequestDelivery.deliver', () => {
     });
   });
 
-  it('a credential-like summary blocks the pull request text (branch pushed, no PR opened)', async () => {
+  it('a credential-like summary is refused before the push (no branch, no PR)', async () => {
     const d = delivery();
     const ws = await prep(d);
     await expect(
@@ -366,6 +366,22 @@ describe('PullRequestDelivery.deliver', () => {
       ),
     ).rejects.toMatchObject({ code: 'secret_detected' });
     expect(srv.posted).toHaveLength(0);
+    expect(() => git(srv.bare, 'rev-parse', 'refs/heads/oax/bug-fix/issue-30-12345678')).toThrow();
+    expect(audits.find((a) => a.action === 'pull_request.pushed')).toBeUndefined();
+    expect(audits.at(-1)).toMatchObject({ action: 'pull_request.refused', code: 'secret_detected' });
+  });
+
+  it('a known secret in the summary is refused in a dry run as well', async () => {
+    const secret = 'internal-service-passphrase-4471';
+    const d = delivery({ dryRun: true, knownSecrets: async () => [secret] });
+    const ws = await prep(d);
+    await expect(
+      d.deliver(
+        ws,
+        input(goodPatch(), { issue: { number: 32, title: 'T' }, summary: `see ${secret}` }),
+      ),
+    ).rejects.toMatchObject({ code: 'secret_detected' });
+    expect(JSON.stringify(audits)).not.toContain(secret);
   });
 
   it('maps a host failure at pull request creation to a fixed code', async () => {
