@@ -11,7 +11,7 @@ All notable changes to this project are documented here. The format follows
 - **Kubernetes Job runner wired into the worker (RM-24)**: `apps/worker` now starts the
   `kubernetes-job` runner when `OAX_RUNNERS_ENABLED` lists it and `OAX_K8S_JOB_ENABLED=true`
   (off by default, no cluster client otherwise), next to or instead of the container runner, with a
-  per-runner control URL. Fail closed: the process refuses to start outside a cluster or with an
+  per-runner control URL slot (both runners read `OAX_NODE_CONTROL_URL` for now). Fail closed: the process refuses to start outside a cluster or with an
   incomplete configuration. New settings `OAX_K8S_IMAGE`, `OAX_K8S_TOOLBOX_IMAGES`,
   `OAX_K8S_CONTROL_PLANE_POD_SELECTOR`/`_NAMESPACE_SELECTOR`/`_CIDRS`/`_PORTS`, `OAX_K8S_DNS_EGRESS`,
   `OAX_K8S_AUTOMOUNT_SA_TOKEN`, `OAX_K8S_DEFAULT_DENY_POLICY`; an enabled runner now requires an

@@ -15,8 +15,10 @@ refuses an enabled runner without `OAX_K8S_IMAGE` (digest-pinned, allowlisted), 
 acknowledgement; the worker refuses to start when it is not running in a cluster (in-cluster
 ServiceAccount client) or the runner rejects its configuration. Isolated steps whose effective
 runner is `kubernetes-job` are dispatched like `container` steps (session, step-scoped token,
-`runnode.*` audit entries, revoke before stop); it can run next to the container runner, each with
-its own control URL. Harness steps (`runtime.harness`) are not supported on this runner yet
+`runnode.*` audit entries, revoke before stop); it can run next to the container runner. Both read
+the same `OAX_NODE_CONTROL_URL` today (the worker keeps a per-runner slot, but there is no separate
+setting yet), so with both enabled that URL must be `https://` and reachable from containers and
+Pods alike. Harness steps (`runtime.harness`) are not supported on this runner yet
 (`harness_image_unknown`). Step credentials are never part of the Job: the node pulls them from the
 credential broker; the Secret holds only the run token.
 

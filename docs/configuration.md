@@ -237,7 +237,7 @@ The `container` runner is implemented and opt-in (see [runners.md](runners.md)).
 | `OAX_K8S_CONTROL_PLANE_CIDRS` / `OAX_K8S_CONTROL_PLANE_PORTS` | – / `443` | Comma lists: control node CIDRs (no broader than `/24` IPv4 or `/64` IPv6, never inside IMDS/link-local/loopback; denied ranges inside are excluded) and TCP ports (at least one) a run Pod may reach. |
 | `OAX_K8S_DNS_EGRESS` | `true` | Allow DNS to kube-dns (needed to resolve the control node). |
 | `OAX_K8S_AUTOMOUNT_SA_TOKEN` | `false` | Mount the ServiceAccount API token into run Pods (a step never needs it). |
-| `OAX_K8S_DEFAULT_DENY_POLICY` | `default-deny-all` | Name of the namespace-wide default-deny NetworkPolicy that must exist; a step does not start without it. |
+| `OAX_K8S_DEFAULT_DENY_POLICY` | `default-deny-all` | Name of the namespace-wide default-deny NetworkPolicy that must exist; a step does not start without it. The worker Role grants `get` on this name only (`resourceNames` in `docs/examples/kubernetes-job-runner-rbac.yaml`), so change both together. |
 | `OAX_K8S_NAMESPACE` | `openagentix-runs` | Namespace for run Jobs. |
 | `OAX_K8S_SERVICE_ACCOUNT` | `openagentix-run-node` | ServiceAccount of run Jobs (annotate for IRSA on EKS); must differ from the worker's. |
 | `OAX_K8S_WORKER_SERVICE_ACCOUNT` / `OAX_K8S_WORKER_NAMESPACE` | `openagentix-worker` / – | Worker identity the runner refuses to reuse for step Pods. |
