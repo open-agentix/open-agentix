@@ -372,6 +372,10 @@ describe('login hint', () => {
     await renderApp('/login', { signedIn: false });
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByText(/public demo/i)).not.toBeInTheDocument();
+    // Neither the shared demo password nor the account list reach a normal sign-in page.
+    expect(document.body.textContent).not.toContain('demo-password-2026');
+    expect(document.body.textContent).not.toMatch(/@example\.org/);
+    expect(screen.queryByRole('button', { name: /^Fill in/ })).not.toBeInTheDocument();
   });
 
   it('shows the shared fake credentials, fills them in and starts the tour after sign-in', async () => {
