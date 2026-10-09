@@ -25,6 +25,8 @@ export const ALLOWED: Record<string, string> = {
     'egress guard: patches net.Socket, creates no connection',
   'packages/mcp/src/gate-http.ts': 'HTTP server (node:http createServer)',
   'apps/worker/src/http.ts': 'HTTP server (node:http createServer)',
+  'apps/worker/src/git/relay.ts':
+    'loopback CONNECT relay server for the git child; upstream connections use dispatcher.dial',
   'packages/runners/src/kube-client.ts': 'Kubernetes API of the cluster, fixed in-cluster endpoint',
   'packages/runners/src/container-hijack.ts': 'container engine socket (local)',
   'packages/runners/src/container-engine.ts': 'container engine socket (local)',
