@@ -15,7 +15,9 @@ All notable changes to this project are documented here. The format follows
   server configuration and attaches the node-computed patch to the step result; `PullRequestDelivery`
   turns it into a pushed `oax/bug-fix/*` branch and a draft pull request from operator targets
   (`OAX_PR_TARGETS`, `OAX_PR_DRY_RUN`), with open-PR limit before the node starts, test-green
-  requirement, secret scan with the exact tokens in use and `pull_request.*` audit entries; example
+  requirement (consistent full-suite claims), fail-closed secret scan with the exact tokens in use
+  before the push, neutralized mentions/issue references/closing keywords in the pull request text
+  and `pull_request.*` audit entries; example
   agent `examples/agents/bug-fix-agent.md` and `docs/bug-fix-agent.md`.
 - **Git delivery in the worker (DOG-3a/3b, ADR 0010 Amendment 2)**: `apps/worker/src/git/` with a
   hardened minimal Git engine over https (child process with allowlisted environment, forced `-c`
