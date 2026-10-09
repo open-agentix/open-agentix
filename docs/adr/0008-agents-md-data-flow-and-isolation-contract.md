@@ -648,3 +648,28 @@ the run node) is the only supported use. Details: [workspace tools](../workspace
   secret scrubber (a changed byte would only break its digest); the worker scans it. Delivery
   requires `lastTestRun.passed` **and** `testedFinalTree` (the stricter rule of Amendment 2).
 
+
+## Amendment 6 (input hardening, 2026-10-09): what is cleaned before the model sees it
+
+Untrusted text (issue and event text, tool results, the previous agent's output) was already
+treated as data by the system prompt and the policy gate. Two deterministic stages now run on it
+before it enters a model context or a stored step output. Details and limits:
+[input hardening](../security-input-hardening.md).
+
+- **Choke points.** `ToolGateway.call` guards every tool result and the message of every failed
+  call (all runners, run nodes and the harness gate go through it), `ToolGateway.exposedTools`
+  guards tool descriptions and input schemas, and the executors guard the finished first prompt.
+  The model proxy is not changed: text a harness generates inside its own process is out of scope
+  (follow-up #170).
+- **Invisible Unicode** (zero-width, bidi, tag block, variation selector supplement, runs of
+  variation selectors, control codes, other invisible format characters and fillers) is removed;
+  ZWJ and ZWNJ survive only between non-ASCII letters, marks or emoji, a single variation selector
+  only after a visible character.
+- **Secrets** (values the process knows to be in use, plus the token shapes shared with the
+  pull-request scan) are replaced by `[redacted:<kind>]`. The credential broker's values and the
+  node's run token are registered with the guard, so they cannot re-enter the context through a
+  tool result.
+- **Audit.** A `control` step `input_guard` with counts and class or kind names only. A run node may
+  report exactly this one control step; the control node reduces it to the same shape.
+- **Settings.** `OAX_STRIP_INVISIBLE_UNICODE` and `OAX_REDACT_MODEL_CONTEXT`, on by default, off only
+  for diagnostics; an unrecognised value keeps the stage on.

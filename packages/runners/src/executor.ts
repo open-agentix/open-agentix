@@ -1,6 +1,7 @@
 import {
   ControlAgent,
   OaxError,
+  mergeGuardReports,
   effectiveBudget,
   estimateInputUpperBound,
   limitsFromBudget,
@@ -18,8 +19,9 @@ import {
   type RunMetrics,
   type ToolCallRequest,
 } from '@openagentix/core';
-import type { ExposedTool } from '@openagentix/mcp';
+import type { ExposedTool, GuardedToolError } from '@openagentix/mcp';
 import type { ChatMessage, ChatResponse, ModelProvider, ToolSpec } from '@openagentix/providers';
+import { recordGuardReport } from './context-guard-audit.js';
 import {
   HandoverFailure,
   StepFlow,
@@ -165,6 +167,7 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
   let tokensIn = 0;
   let tokensOut = 0;
   const step = (s: StepInput) => ctx.control.recordStep(run.runId, s);
+  const guard = ctx.guard ?? ctx.tools.guard;
 
   const enforce = async (agentId: string): Promise<void> => {
     if (await ctx.control.isCancelled(run.runId)) {
@@ -279,14 +282,13 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
         inputSchema: t.inputSchema,
       }));
       const agentBudget = effectiveBudget(def.budget, agent.budget);
-      const messages: ChatMessage[] = [
-        {
-          role: 'user',
-          content: start.explicit
-            ? buildHandoverPrompt(start.value)
-            : buildUserPrompt(run, previous),
-        },
-      ];
+      // Event data, handed-over input and the previous output are untrusted text: the guard runs
+      // on the finished prompt, the one place all of them meet.
+      const prompt = guard.text(
+        start.explicit ? buildHandoverPrompt(start.value) : buildUserPrompt(run, previous),
+      );
+      await recordGuardReport(step, agentId, 'input', prompt.report);
+      const messages: ChatMessage[] = [{ role: 'user', content: prompt.text }];
       const system = buildSystemPrompt(agent);
       let agentSteps = 0;
       let finalText: string | null = null;
@@ -529,8 +531,15 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
             )
             .catch((e: unknown) => e as Error);
           if (res2 instanceof Error || res2.status !== 'ok') {
-            const message =
+            const rawMessage =
               res2 instanceof Error ? res2.message : `tool call not executed (${res2.status})`;
+            const guarded = guard.text(rawMessage);
+            const message = guarded.text;
+            // The gateway already guarded the message of a failed call; its report counts here.
+            const fromGateway =
+              res2 instanceof Error ? (res2 as GuardedToolError).guard : undefined;
+            if (fromGateway) mergeGuardReports(guarded.report, fromGateway);
+            await recordGuardReport(step, agentId, 'tool_error', guarded.report, call.tool);
             recordStepResult(metrics, false);
             await step({
               kind: 'tool_call',
@@ -549,6 +558,7 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
               isError: true,
             });
           } else {
+            await recordGuardReport(step, agentId, 'tool_result', res2.guard, call.tool);
             const toolCost = ctx.costModel.toolCall(provider.name, agent.model);
             metrics.costMicros += toolCost;
             recordStepResult(metrics, !res2.result.isError);

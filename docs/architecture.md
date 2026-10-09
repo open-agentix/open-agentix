@@ -89,4 +89,6 @@ approvals, cost ledger by team/agent/month.
 - Resource-level team scoping in services (`hasPermission(principal, perm, teamId)`).
 - Run tokens bind a worker to one leased run; they are verified before the body is parsed.
 - Secrets: references only, redacted from logs (pino redact), audit payloads and prompts.
+- Model context: invisible steering Unicode is removed and secret values are replaced in prompts
+  and tool results at the tool gateway, audited as `input_guard` ([input hardening](security-input-hardening.md)).
 - Containers: non-root, read-only root fs, no capabilities; no run-time downloads.

@@ -1,8 +1,13 @@
 import {
+  ContextGuard,
   OaxError,
   classifyTool,
   evaluateToolCall,
   findGrant,
+  isGuardReportEmpty,
+  mergeGuardReports,
+  type SecretResolver,
+  type GuardReport,
   type PolicyContext,
   type PolicyDecision,
   type ToolAccess,
@@ -39,8 +44,17 @@ export interface ExposedTool {
   access?: ToolAccess | undefined;
 }
 
+/** A failed tool call: the message is guarded, `guard` says what was removed (counts only). */
+export type GuardedToolError = OaxError & { guard?: GuardReport };
+
 export type GatewayCallResult =
-  | { status: 'ok'; decision: PolicyDecision; result: ToolResult }
+  | {
+      status: 'ok';
+      decision: PolicyDecision;
+      result: ToolResult;
+      /** Set when the guard removed or replaced something in the result (counts only). */
+      guard?: GuardReport;
+    }
   | { status: 'denied'; decision: PolicyDecision }
   | { status: 'approval_required'; decision: PolicyDecision };
 
@@ -54,16 +68,36 @@ export class ToolGateway {
   constructor(
     private readonly configs: readonly McpServerConfig[],
     private readonly deps: ConnectDeps,
+    /**
+     * Guards every tool result before the caller sees it (invisible Unicode removed, secret values
+     * replaced). This is the one place all tool results pass, for inline runs, run nodes and
+     * harness steps alike. On by default; secrets resolved for the servers are registered here.
+     */
+    readonly guard: ContextGuard = new ContextGuard(),
   ) {}
+
+  /** Wraps a resolver so that every value it hands out is known to the guard. */
+  private recording(resolver: SecretResolver): SecretResolver {
+    return {
+      resolve: async (ref) => {
+        const value = await resolver.resolve(ref);
+        this.guard.addSecret(value);
+        return value;
+      },
+    };
+  }
 
   private async connection(server: string): Promise<McpConnection> {
     const existing = this.connections.get(server);
     if (existing) return existing;
     const cfg = this.configs.find((c) => c.name === server);
     if (!cfg) throw new OaxError('mcp_unknown_server', `MCP server "${server}" is not configured`);
-    const deps = this.deps.secretsFor
-      ? { ...this.deps, secrets: this.deps.secretsFor(cfg.name) }
-      : this.deps;
+    const deps = {
+      ...this.deps,
+      secrets: this.recording(
+        this.deps.secretsFor ? this.deps.secretsFor(cfg.name) : this.deps.secrets,
+      ),
+    };
     const conn = await McpConnection.connect(cfg, deps);
     this.connections.set(server, conn);
     return conn;
@@ -82,8 +116,10 @@ export class ToolGateway {
           modelName: modelToolName(server, t.name),
           server,
           tool: t.name,
-          description: t.description ?? '',
-          inputSchema: t.inputSchema,
+          // Descriptions and schemas come from the server and enter the model context as tool
+          // specs (natively and through the harness gate): guarded like a tool result.
+          description: this.guard.text(t.description ?? '').text,
+          inputSchema: this.guard.value(t.inputSchema).value,
           access: classifyTool(
             Object.hasOwn(declared, t.name) ? declared[t.name]!.access : undefined,
             t.annotations,
@@ -107,9 +143,38 @@ export class ToolGateway {
     if (decision.effect === 'deny') return { status: 'denied', decision };
     if (decision.effect === 'require_approval' && !opts.approved)
       return { status: 'approval_required', decision };
-    const conn = await this.connection(call.server);
-    const result = await conn.callTool(call.tool, call.args, opts.signal);
-    return { status: 'ok', decision, result };
+    let raw: ToolResult;
+    try {
+      const conn = await this.connection(call.server);
+      raw = await conn.callTool(call.tool, call.args, opts.signal);
+    } catch (e) {
+      // The message of a failed call carries server text (a JSON-RPC error, a crash message) and
+      // reaches the model like a result: the executor shows it, the harness gate returns it.
+      throw this.guardedError(e);
+    }
+    const text = this.guard.text(raw.text);
+    if (raw.structured === undefined && isGuardReportEmpty(text.report))
+      return { status: 'ok', decision, result: raw };
+    const structured = raw.structured === undefined ? undefined : this.guard.value(raw.structured);
+    const report = text.report;
+    if (structured) mergeGuardReports(report, structured.report);
+    const result: ToolResult = { ...raw, text: text.text };
+    if (structured) result.structured = structured.value;
+    return isGuardReportEmpty(report)
+      ? { status: 'ok', decision, result }
+      : { status: 'ok', decision, result, guard: report };
+  }
+
+  /** The error of a failed call with its message guarded; content-bearing details are dropped. */
+  private guardedError(e: unknown): GuardedToolError {
+    const message = e instanceof Error ? e.message : String(e);
+    const guarded = this.guard.text(message);
+    const out: GuardedToolError = new OaxError(
+      e instanceof OaxError ? e.code : 'tool_failed',
+      guarded.text,
+    );
+    if (!isGuardReportEmpty(guarded.report)) out.guard = guarded.report;
+    return out;
   }
 
   async close(): Promise<void> {

@@ -163,6 +163,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **Invisible-Unicode filter for model input** (ADR 0008 Amendment 6): zero-width, bidi, tag-block,
+  variation-selector runs, control and other invisible format characters are removed from prompts,
+  tool results, tool error messages and tool descriptions/schemas before they enter the model
+  context or a stored step output. Choke points: `ToolGateway.call`, `ToolGateway.exposedTools` and
+  the executors. ZWJ/ZWNJ are kept only between non-ASCII letters or emoji. Audited as an `input_guard` control step with
+  counts and class names only (a run node may report exactly that step). On by default;
+  `OAX_STRIP_INVISIBLE_UNICODE=false` switches it off for diagnostics. Docs:
+  `docs/security-input-hardening.md`.
+- **Secret redaction for model input** (ADR 0008 Amendment 6): known secret values (resolved secret
+  references, brokered credentials, run, gate and model tokens; also inside larger base64 blobs) and
+  common token shapes are replaced
+  by `[redacted:<kind>]` in prompts and in every tool result before it enters the model context or a
+  stored step output; the counts are part of the `input_guard` audit entry. On by default;
+  `OAX_REDACT_MODEL_CONTEXT=false` switches it off for diagnostics. The token patterns moved from
+  `apps/worker` to `@openagentix/core` (`SECRET_PATTERNS`); `scanForSecrets` is unchanged.
 - Network configuration refuses plain `http://` proxies in production (`proxy_plain_http`), proxy
   URLs with credentials (use `authSecret` references), any key that would disable TLS verification
   and `NODE_TLS_REJECT_UNAUTHORIZED=0` (`tls_insecure`). Cloud metadata addresses and names are
@@ -250,6 +265,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Secret scan: linear JWT pattern.** The JWT token shape restarted at every `eyJ` inside a run
+  of base64url characters (128 KiB of `eyJ-` took about 9 s); it is shared by the pull-request
+  secret scan and the model-context guard and is now linear.
 - **UI**: a run or agent link that no longer resolves shows a friendly page instead of the raw
   "not found" error. In the demo build it says the demo is reset daily and links back to the list
   (UI-NF-01).

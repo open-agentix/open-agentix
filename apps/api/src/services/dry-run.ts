@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { HttpError } from '../errors.js';
 import {
+  ContextGuard,
   CostModel,
   expandProfiles,
   loadAgentDefinition,
@@ -29,6 +30,8 @@ import {
  */
 export function dryRunToolGateway(): ToolGateway {
   const gateway = {
+    // Prompts of a dry run are guarded like those of a real run.
+    guard: new ContextGuard(),
     async exposedTools(agent: {
       tools: { server: string; tool: string }[];
     }): Promise<ExposedTool[]> {

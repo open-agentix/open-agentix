@@ -1,5 +1,6 @@
 import type {
   AgentDefinition,
+  ContextGuard,
   AgentSpec,
   ControlLimits,
   CostModel,
@@ -143,6 +144,11 @@ export interface RunnerContext {
   tools: ToolGateway;
   control: ControlPlane;
   costModel: CostModel;
+  /**
+   * Guard for text that enters the model context (invisible Unicode removed, secrets replaced).
+   * Defaults to the tool gateway's guard, which is on unless an operator turned it off.
+   */
+  guard?: ContextGuard;
   signal?: AbortSignal;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;

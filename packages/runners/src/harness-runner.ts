@@ -19,6 +19,7 @@ import {
   type ToolCallRequest,
 } from '@openagentix/core';
 import { serveGateHttp, type GatewayCallResult, type PolicyGate } from '@openagentix/mcp';
+import { recordGuardReport } from './context-guard-audit.js';
 import { buildUserPrompt } from './executor.js';
 import { HandoverFailure, StepFlow, buildHandoverPrompt } from './handover-flow.js';
 import type { ExternalHarness, HarnessResult, ModelProxyEndpoint } from './harness.js';
@@ -70,6 +71,7 @@ export async function executeWithHarness(
   });
   const step = (s: Parameters<typeof ctx.control.recordStep>[1]) =>
     ctx.control.recordStep(run.runId, s);
+  const guard = ctx.guard ?? ctx.tools.guard;
   const fail = (
     code: string,
     message: string,
@@ -225,6 +227,7 @@ export async function executeWithHarness(
 
     const onCall = async (call: ToolCallRequest, res: GatewayCallResult) => {
       if (res.status !== 'ok') return;
+      await recordGuardReport(step, agentId, 'tool_result', res.guard, call.tool);
       const toolCost = ctx.costModel.toolCall(agent.provider, agent.model);
       metrics.costMicros += toolCost;
       recordStepResult(metrics, !res.result.isError);
@@ -245,16 +248,24 @@ export async function executeWithHarness(
 
     const handle = await serveGateHttp({ gateway: ctx.tools, gate, tools: exposed, onCall });
     tokens.push(handle.token);
+    guard.addSecret(handle.token);
     const workDir = await mkdtemp(join(options.workRoot ?? tmpdir(), 'oax-harness-'));
     let res: HarnessResult;
     const started = now();
     try {
       const endpoint = options.modelProxy ? await options.modelProxy(scoped) : undefined;
-      if (endpoint) tokens.push(endpoint.token);
+      if (endpoint) {
+        tokens.push(endpoint.token);
+        guard.addSecret(endpoint.token);
+      }
+      const prompt = guard.text(
+        start.explicit ? buildHandoverPrompt(start.value) : buildUserPrompt(run, previous),
+      );
+      await recordGuardReport(step, agentId, 'input', prompt.report);
       const invocation = harness.buildInvocation(
         def,
         scoped,
-        start.explicit ? buildHandoverPrompt(start.value) : buildUserPrompt(run, previous),
+        prompt.text,
         { serverName: GATE_SERVER, url: handle.url, runToken: handle.token },
         exposed,
         endpoint,
