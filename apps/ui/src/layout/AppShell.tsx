@@ -6,6 +6,7 @@ import { approvalsQuery } from '../api/queries';
 import { logout, meQuery, useCan, versionQuery } from '../auth/auth';
 import { session } from '../auth/session';
 import { Icon } from '../components/Icon';
+import { TenantBadge } from '../components/Tenant';
 import { useI18n } from '../i18n/i18n';
 import { TourLauncher } from '../features/tour/TourHost';
 import { PreferencesControls } from './PreferencesControls';
@@ -68,12 +69,14 @@ export function AppShell() {
           <Logo />
           <span>open-agentix</span>
         </Link>
+        <TenantBadge placement="top" />
       </header>
       <aside id="sidebar" className="sidebar">
         <Link to="/" className="brand brand-side">
           <Logo />
           <span>open-agentix</span>
         </Link>
+        <TenantBadge placement="side" />
         <nav aria-label={t('nav.main')} className="nav">
           {NAV.map((group) => {
             const items = group.items.filter((i) => !i.perm || can(i.perm));

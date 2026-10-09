@@ -1,9 +1,16 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { agentsQuery, approvalsQuery, runsQuery, useAgentNames } from '../../api/queries';
+import {
+  agentsQuery,
+  approvalsQuery,
+  runsQuery,
+  useAgentNames,
+  useTeamNames,
+} from '../../api/queries';
 import { RUN_STATUSES, type Run, type RunStatus } from '../../api/types';
 import { useCan } from '../../auth/auth';
-import { VirtualTable, type Column } from '../../components/VirtualTable';
+import { ResponsiveList, type ListColumn } from '../../components/ResponsiveList';
+import { ScopeChip, useActiveTenant } from '../../components/Tenant';
 import {
   EmptyState,
   ErrorState,
@@ -28,12 +35,14 @@ export function RunsPage() {
   const runs = useInfiniteQuery(runsQuery(search));
   const agents = useQuery({ ...agentsQuery, enabled: can('agents:read') });
   const agentNames = useAgentNames(can('agents:read'));
+  const teamNames = useTeamNames();
+  const tenant = useActiveTenant();
   const approvals = useQuery(approvalsQuery('pending'));
   const rows = runs.data?.pages.flatMap((p) => p.items) ?? [];
   const setFilter = (patch: { status?: RunStatus | undefined; agentId?: string | undefined }) =>
     void navigate({ search: (s) => ({ ...s, ...patch }), replace: true });
 
-  const columns: Column<Run>[] = [
+  const columns: ListColumn<Run>[] = [
     {
       key: 'run',
       header: t('runs.run'),
@@ -42,37 +51,70 @@ export function RunsPage() {
           #{shortId(r.id)}
         </Link>
       ),
+      mobileLine: 1,
+    },
+    {
+      key: 'status',
+      header: t('runs.status'),
+      cell: (r) => <StatusBadge status={r.status} />,
+      mobileLine: 1,
     },
     {
       key: 'agent',
       header: t('runs.agent'),
-      cell: (r) => agentNames.get(r.agentId) ?? shortId(r.agentId),
+      cell: (r) => agentNames.get(r.agentId) ?? r.agentName ?? shortId(r.agentId),
+      mobileLine: 2,
     },
-    { key: 'status', header: t('runs.status'), cell: (r) => <StatusBadge status={r.status} /> },
+    {
+      key: 'tenant',
+      header: t('tenancy.tenant'),
+      cell: () => (tenant ? <ScopeChip tenant={tenant} compact /> : null),
+      mobileOnly: true,
+      mobileLine: 2,
+    },
+    {
+      key: 'team',
+      header: t('tenancy.ownerTeam'),
+      cell: (r) =>
+        r.teamId
+          ? (teamNames.get(r.teamId) ?? t('tenancy.teamFallback', { id: shortId(r.teamId) }))
+          : t('common.global'),
+      mobileOnly: true,
+      mobileLine: 2,
+    },
     {
       key: 'started',
       header: t('runs.created'),
       cell: (r) => <time dateTime={r.createdAt}>{fmt.relative(r.createdAt)}</time>,
+      mobileLine: 3,
     },
     {
       key: 'steps',
       header: t('runs.steps'),
       cell: (r) => fmt.number(r.steps),
-      className: 'num hide-sm',
+      className: 'num',
+      mobileLine: 3,
     },
     {
       key: 'tokens',
       header: t('runs.tokens'),
       cell: (r) => fmt.number(r.tokensIn + r.tokensOut),
-      className: 'num hide-sm',
+      className: 'num',
+      mobileLine: 3,
     },
-    { key: 'cost', header: t('runs.cost'), cell: (r) => fmt.usd(r.costUsd), className: 'num' },
+    {
+      key: 'cost',
+      header: t('runs.cost'),
+      cell: (r) => fmt.usd(r.costUsd),
+      className: 'num',
+      mobileLine: 3,
+    },
   ];
 
   const pending = approvals.data?.items ?? [];
   return (
     <div className="page">
-      <PageHeader title={t('runs.title')} description={t('runs.subtitle')} />
+      <PageHeader title={t('runs.title')} description={t('runs.subtitle')} scope />
       {pending.length ? (
         <Section
           title={t('runs.pendingApprovals', { count: pending.length })}
@@ -128,7 +170,7 @@ export function RunsPage() {
             {t('runs.emptyText')}
           </EmptyState>
         ) : (
-          <VirtualTable
+          <ResponsiveList
             caption={t('runs.title')}
             columns={columns}
             rows={rows}

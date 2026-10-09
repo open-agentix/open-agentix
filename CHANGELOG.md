@@ -16,6 +16,13 @@ All notable changes to this project are documented here. The format follows
   `RunsService.enqueue` and `IngestService.ingestEvent` accept an optional fixed id; behaviour is
   unchanged without it). **Demo behaviour change:** the sign-in users now live in `security`,
   `contractor@` in `platform`. Docs: `docs/demo.md`.
+- **UI: tenancy context and mobile card rows (UX slices U1, U2 of `docs/ux/multi-tenant-ux.md`)**:
+  new `tenancy.*` i18n namespace (EN and DE) for the tenant glossary; the active tenant from
+  `GET /v1/me` is shown as a tile plus name in the top bar (phones) and the sidebar header
+  (desktop), and a Scope chip appears under the title of the agents, runs, events, connections,
+  costs and audit pages. Tenant tile colours are deterministic (12 tokens, contrast >= 4.5:1 in
+  both themes). On phones (<= 600 px) the agents, runs, audit, events and costs lists render
+  three-line card rows (name, status, tenant chip, team, last change) instead of hiding columns.
 - **Kubernetes Job runner wired into the worker (RM-24)**: `apps/worker` now starts the
   `kubernetes-job` runner when `OAX_RUNNERS_ENABLED` lists it and `OAX_K8S_JOB_ENABLED=true`
   (off by default, no cluster client otherwise), next to or instead of the container runner, with a
@@ -202,6 +209,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **UI**: German glossary follows the multi-tenant UX design: "Use Case" (was "Anwendungsfall") and
+  "Owner-Team" (was "Verantwortliches Team"). The browser tab title now reads
+  `Page · Tenant · open-agentix`.
 - Outbound routing of existing installs (dispatcher factory): loopback destinations are always
   direct (never sent to `HTTP(S)_PROXY`), cloud metadata addresses are denied, and an invalid
   `HTTPS_PROXY`/`HTTP_PROXY` value now fails with `network_config_invalid` instead of being ignored.
@@ -240,6 +250,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **UI**: a run or agent link that no longer resolves shows a friendly page instead of the raw
+  "not found" error. In the demo build it says the demo is reset daily and links back to the list
+  (UI-NF-01).
+- **UI**: the owner team name on the agents list (and agent detail, runs, costs) is readable
+  without `users:read`: `GET /v1/teams` only needs a signed-in user, the console asked for the
+  permission needlessly. Without a name it falls back to "Team <id>" instead of "–".
 - In-process model errors release their reservation only for failures that provably did no work
   (egress refusal, DNS or refused connection, 4xx other than 408, 409 and 429); everything else
   expires at the reserved amount like the proxy does.
