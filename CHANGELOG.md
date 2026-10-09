@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **API: agent summary fields and list filters (UX slice A1, #155)**: `GET /v1/agents`,
+  `GET /v1/agents/{id}`, `POST /v1/agents` and `PUT /v1/agents/{id}/draft` return `tenant`
+  (`id, slug, slugPath, name`), `useCase`, `ownerTeam` (`id, slug, name`, readable with
+  `agents:read`), `status` (`draft`, `published`, `changed`), `lastRun` (`id, status, createdAt`,
+  only runs the caller may read), `monthSpendUsd` and `budget` (the monthly tenant, use case or team
+  budget closest to its limit; both `null` without `costs:read`). The list accepts the filters
+  `teamId`, `useCase` (prefix per `/` segment), `status` and an extended `q` (name, description,
+  use case) that narrow within the caller's visibility; paging is unchanged. The fields are
+  additive; the `agents.use_case` column and two indexes arrive with migration
+  `0015_agent_summary_fields` (down script included). Gaps: no `disabled` status (#161), no `sort`,
+  `changed` is a byte-wise comparison of draft and latest version. See `docs/ux/multi-tenant-ux.md`.
 - **UI: tenancy context and mobile card rows (UX slices U1, U2 of `docs/ux/multi-tenant-ux.md`)**:
   new `tenancy.*` i18n namespace (EN and DE) for the tenant glossary; the active tenant from
   `GET /v1/me` is shown as a tile plus name in the top bar (phones) and the sidebar header

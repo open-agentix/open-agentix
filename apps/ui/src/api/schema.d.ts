@@ -746,14 +746,23 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List agents */
+        /**
+         * List agents
+         * @description Agents the caller may read, newest first. Filters narrow that set and combine with AND. Each item carries tenant, use case, owner team, status, last run, month spend and budget.
+         */
         get: {
             parameters: {
                 query?: {
                     limit?: number;
                     cursor?: string;
-                    /** @description filter by name (substring) */
+                    /** @description case-insensitive substring of name, description or use case */
                     q?: string;
+                    /** @description only agents owned by this team */
+                    teamId?: string;
+                    /** @description use case or any sub-use case (prefix match per "/" segment) */
+                    useCase?: string;
+                    /** @description lifecycle status */
+                    status?: "draft" | "published" | "changed";
                 };
                 header?: never;
                 path?: never;
@@ -780,6 +789,50 @@ export interface paths {
                                 draftUpdatedAt: string;
                                 /** @description ISO 8601 timestamp */
                                 createdAt: string;
+                                /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                                tenant: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                    slugPath: string;
+                                    name: string;
+                                };
+                                /** @description labels.useCase of the latest published version, of the draft while unpublished */
+                                useCase: string | null;
+                                /** @description owner team; readable with agents:read, like GET /v1/teams */
+                                ownerTeam: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    name: string;
+                                } | null;
+                                /**
+                                 * @description draft: never published; published: draft equals latest version; changed: it differs
+                                 * @enum {string}
+                                 */
+                                status: "draft" | "published" | "changed";
+                                /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
+                                lastRun: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    /** @enum {string} */
+                                    status: "queued" | "running" | "awaiting_approval" | "succeeded" | "failed" | "cancelled" | "blocked_by_policy";
+                                    /** @description ISO 8601 timestamp */
+                                    createdAt: string;
+                                } | null;
+                                /** @description spend of this agent in the current UTC month; null without costs:read */
+                                monthSpendUsd: number | null;
+                                /** @description monthly budget closest to its limit among the scopes that apply; null without costs:read or limit */
+                                budget: {
+                                    limitUsd: number;
+                                    /** @description spend of the whole budget scope this month, not of the agent */
+                                    spentUsd: number;
+                                    percentUsed: number;
+                                    /** @enum {string} */
+                                    source: "tenant" | "use_case" | "team";
+                                    sourceName: string;
+                                } | null;
                             }[];
                             nextCursor: string | null;
                         };
@@ -840,6 +893,50 @@ export interface paths {
                             draftUpdatedAt: string;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
+                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            tenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
+                            /** @description labels.useCase of the latest published version, of the draft while unpublished */
+                            useCase: string | null;
+                            /** @description owner team; readable with agents:read, like GET /v1/teams */
+                            ownerTeam: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                name: string;
+                            } | null;
+                            /**
+                             * @description draft: never published; published: draft equals latest version; changed: it differs
+                             * @enum {string}
+                             */
+                            status: "draft" | "published" | "changed";
+                            /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
+                            lastRun: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "queued" | "running" | "awaiting_approval" | "succeeded" | "failed" | "cancelled" | "blocked_by_policy";
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            } | null;
+                            /** @description spend of this agent in the current UTC month; null without costs:read */
+                            monthSpendUsd: number | null;
+                            /** @description monthly budget closest to its limit among the scopes that apply; null without costs:read or limit */
+                            budget: {
+                                limitUsd: number;
+                                /** @description spend of the whole budget scope this month, not of the agent */
+                                spentUsd: number;
+                                percentUsed: number;
+                                /** @enum {string} */
+                                source: "tenant" | "use_case" | "team";
+                                sourceName: string;
+                            } | null;
                             draftSource: string;
                         };
                     };
@@ -1010,6 +1107,50 @@ export interface paths {
                             draftUpdatedAt: string;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
+                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            tenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
+                            /** @description labels.useCase of the latest published version, of the draft while unpublished */
+                            useCase: string | null;
+                            /** @description owner team; readable with agents:read, like GET /v1/teams */
+                            ownerTeam: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                name: string;
+                            } | null;
+                            /**
+                             * @description draft: never published; published: draft equals latest version; changed: it differs
+                             * @enum {string}
+                             */
+                            status: "draft" | "published" | "changed";
+                            /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
+                            lastRun: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "queued" | "running" | "awaiting_approval" | "succeeded" | "failed" | "cancelled" | "blocked_by_policy";
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            } | null;
+                            /** @description spend of this agent in the current UTC month; null without costs:read */
+                            monthSpendUsd: number | null;
+                            /** @description monthly budget closest to its limit among the scopes that apply; null without costs:read or limit */
+                            budget: {
+                                limitUsd: number;
+                                /** @description spend of the whole budget scope this month, not of the agent */
+                                spentUsd: number;
+                                percentUsed: number;
+                                /** @enum {string} */
+                                source: "tenant" | "use_case" | "team";
+                                sourceName: string;
+                            } | null;
                             draftSource: string;
                         };
                     };
@@ -1095,6 +1236,50 @@ export interface paths {
                             draftUpdatedAt: string;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
+                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            tenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
+                            /** @description labels.useCase of the latest published version, of the draft while unpublished */
+                            useCase: string | null;
+                            /** @description owner team; readable with agents:read, like GET /v1/teams */
+                            ownerTeam: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                name: string;
+                            } | null;
+                            /**
+                             * @description draft: never published; published: draft equals latest version; changed: it differs
+                             * @enum {string}
+                             */
+                            status: "draft" | "published" | "changed";
+                            /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
+                            lastRun: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "queued" | "running" | "awaiting_approval" | "succeeded" | "failed" | "cancelled" | "blocked_by_policy";
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            } | null;
+                            /** @description spend of this agent in the current UTC month; null without costs:read */
+                            monthSpendUsd: number | null;
+                            /** @description monthly budget closest to its limit among the scopes that apply; null without costs:read or limit */
+                            budget: {
+                                limitUsd: number;
+                                /** @description spend of the whole budget scope this month, not of the agent */
+                                spentUsd: number;
+                                percentUsed: number;
+                                /** @enum {string} */
+                                source: "tenant" | "use_case" | "team";
+                                sourceName: string;
+                            } | null;
                             draftSource: string;
                         };
                     };
@@ -6383,6 +6568,8 @@ export interface paths {
                         durationMs?: number;
                         provider?: string;
                         model?: string;
+                        /** Format: uuid */
+                        reservationId?: string;
                     };
                 };
             };
@@ -6905,6 +7092,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/worker/runs/{id}/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Run node: the workspace seed of its own step (ustar archive; once per step and session)
+         * @description Returns the archive prepared by the worker (`application/x-tar`) with its SHA-256 in `x-oax-seed-sha256`. The node verifies the digest and unpacks the archive with its own checks. A second request is refused with 409; the bytes are deleted when the session ends.
+         */
+        get: {
+            parameters: {
+                query: {
+                    agentId: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/worker/runs/{id}/handover/result": {
         parameters: {
             query?: never;
@@ -6931,6 +7200,28 @@ export interface paths {
                         format: string;
                         content: string;
                         json?: unknown;
+                        /** @description the patch the node computed from its workspace (steps with a pull-request output) */
+                        patch?: {
+                            patch: string;
+                            patchSha256: string;
+                            changedFiles: {
+                                path: string;
+                                /** @enum {string} */
+                                status: "added" | "modified" | "deleted";
+                                additions: number;
+                                deletions: number;
+                            }[];
+                            lastTestRun: {
+                                passed: boolean;
+                                exitCode: number | null;
+                                timedOut: boolean;
+                                durationMs: number;
+                                file: string | null;
+                            } | null;
+                            fullSuitePassed: boolean;
+                            treeMatchesLastRun: boolean;
+                            testedFinalTree: boolean;
+                        };
                         /** @description set instead of an output when the step did not succeed */
                         failure?: {
                             /** @enum {string} */
@@ -7519,6 +7810,191 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/worker/runs/{id}/model-reservations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Orchestrator: reserve the worst-case cost of an in-process model call */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        agentId: string;
+                        inputTokens: number;
+                        maxOutputTokens: number;
+                        minOutputTokens?: number;
+                        cacheWrite?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            reservationId: string;
+                            maxOutputTokens: number;
+                            reservedMicros: number;
+                            priced: boolean;
+                            deadlineMs?: number;
+                            remaining: {
+                                costMicros?: number;
+                                tokens?: number;
+                                modelCalls?: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/worker/runs/{id}/model-token": {
         parameters: {
             query?: never;
@@ -7542,6 +8018,8 @@ export interface paths {
                 content: {
                     "application/json": {
                         agentId: string;
+                        /** @enum {string} */
+                        harness?: "claude-code" | "opencode";
                     };
                 };
             };
@@ -7945,6 +8423,490 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-proxy/anthropic/v1/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Model proxy, Anthropic Messages protocol (JSON, or SSE with `stream: true`) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Request body of the protocol (a strict allowlist is applied, ADR 0009 section 6.2) */
+            requestBody: {
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description The protocol response (JSON), or Server-Sent Events of the protocol with `stream: true`; `x-oax-call-id` (and `x-oax-cost-micros` for JSON) identify the metered call */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                        "text/event-stream": string;
+                    };
+                };
+                /** @description Request refused: `model_request_invalid`, `model_parameter_refused`, `model_surface_mismatch` */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Missing, malformed or expired model token (a run token is not accepted) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not allowed: model, session, classification, egress, security override or budget (`control_budget_*`) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Request body over `OAX_MODEL_PROXY_MAX_BODY_BYTES` */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description `model_unpriced`: a cost limit applies and the model has no price */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Rate or concurrency limit; `Retry-After` is set */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Upstream provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Model proxy disabled or settlement unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Upstream exceeded the call deadline */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-proxy/openai/v1/chat/completions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Model proxy, OpenAI Chat Completions protocol (JSON, or SSE with `stream: true`) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Request body of the protocol (a strict allowlist is applied, ADR 0009 section 6.2) */
+            requestBody: {
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description The protocol response (JSON), or Server-Sent Events of the protocol with `stream: true`; `x-oax-call-id` (and `x-oax-cost-micros` for JSON) identify the metered call */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                        "text/event-stream": string;
+                    };
+                };
+                /** @description Request refused: `model_request_invalid`, `model_parameter_refused`, `model_surface_mismatch` */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Missing, malformed or expired model token (a run token is not accepted) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not allowed: model, session, classification, egress, security override or budget (`control_budget_*`) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Request body over `OAX_MODEL_PROXY_MAX_BODY_BYTES` */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description `model_unpriced`: a cost limit applies and the model has no price */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Rate or concurrency limit; `Retry-After` is set */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Upstream provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Model proxy disabled or settlement unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Upstream exceeded the call deadline */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-proxy/anthropic/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Model proxy: lists exactly the model of the token's step */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The protocol model list (exactly the model of the token's step) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Request refused: `model_request_invalid`, `model_parameter_refused`, `model_surface_mismatch` */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Missing, malformed or expired model token (a run token is not accepted) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not allowed: model, session, classification, egress, security override or budget (`control_budget_*`) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Request body over `OAX_MODEL_PROXY_MAX_BODY_BYTES` */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description `model_unpriced`: a cost limit applies and the model has no price */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Rate or concurrency limit; `Retry-After` is set */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Upstream provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Model proxy disabled or settlement unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Upstream exceeded the call deadline */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/model-proxy/openai/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Model proxy: lists exactly the model of the token's step */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The protocol model list (exactly the model of the token's step) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Request refused: `model_request_invalid`, `model_parameter_refused`, `model_surface_mismatch` */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Missing, malformed or expired model token (a run token is not accepted) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not allowed: model, session, classification, egress, security override or budget (`control_budget_*`) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Request body over `OAX_MODEL_PROXY_MAX_BODY_BYTES` */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description `model_unpriced`: a cost limit applies and the model has no price */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Rate or concurrency limit; `Retry-After` is set */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Upstream provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Model proxy disabled or settlement unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Upstream exceeded the call deadline */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;

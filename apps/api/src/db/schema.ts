@@ -177,11 +177,18 @@ export const agents = pgTable(
     draftUpdatedAt: ts('draft_updated_at').notNull().defaultNow(),
     latestVersionId: uuid('latest_version_id'),
     latestVersion: text('latest_version'),
+    /**
+     * `labels.useCase` of the latest published version, or of the draft while the agent was never
+     * published. Denormalised so that the agent list can filter and page by it (UX slice A1).
+     */
+    useCase: text('use_case'),
     createdBy: uuid('created_by'),
     createdAt: created(),
   },
   (t) => [
     index('agents_team_created_idx').on(t.teamId, t.createdAt.desc(), t.id.desc()),
+    index('agents_tenant_created_idx').on(t.tenantId, t.createdAt.desc(), t.id.desc()),
+    index('agents_tenant_use_case_idx').on(t.tenantId, t.useCase.op('text_pattern_ops')),
     uniqueIndex('agents_tenant_name_uq').on(t.tenantId, t.name),
   ],
 );

@@ -12,12 +12,13 @@ import {
   type Principal,
   type ValidationResult,
 } from '@openagentix/core';
-import { and, desc, eq, ilike, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import { agentVersions, agents, teams } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import { decodeTimeCursor, encodeTimeCursor, page } from '../pagination.js';
+import { statusFilter, textFilter, useCaseFilter, type AgentStatus } from './agent-filters.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 
@@ -43,6 +44,19 @@ const summary = (v: AgentVersionRow): VersionSummary => ({
 });
 
 const IMMUTABLE_TTL = 3_600_000;
+
+/** Filters of {@link AgentsService.list}; all of them narrow the principal's visible agents. */
+export interface AgentListQuery {
+  limit: number;
+  cursor?: string | undefined;
+  q?: string | undefined;
+  teamId?: string | undefined;
+  useCase?: string | undefined;
+  status?: AgentStatus | undefined;
+}
+
+/** The use case an agent is attributed to (cost attribution and budgets use the same label). */
+const useCaseOf = (def: AgentDefinition): string | null => def.labels.useCase ?? null;
 
 /** Agent registry: drafts, validation, immutable published versions. */
 export class AgentsService {
@@ -128,6 +142,7 @@ export class AgentsService {
         name: def.name,
         teamId,
         description: def.description ?? null,
+        useCase: useCaseOf(def),
         draftSource: source,
         createdBy: principal.userId,
       })
@@ -167,15 +182,24 @@ export class AgentsService {
     return row;
   }
 
-  async list(principal: Principal, limit: number, cursor?: string, q?: string) {
-    const c = decodeTimeCursor(cursor);
+  /**
+   * Agents visible to the principal (own tenant only, team and agent-scoped bindings applied),
+   * newest first, keyset-paged. Every filter is ANDed with the visibility scope: a filter value
+   * can only narrow the result, never reach an agent the principal cannot read.
+   */
+  async list(principal: Principal, query: AgentListQuery) {
+    const c = decodeTimeCursor(query.cursor);
     const teamsVisible = visibleTeams(principal, 'agents:read');
     const agentsVisible = visibleAgents(principal, 'agents:read');
     if (Array.isArray(teamsVisible) && teamsVisible.length === 0 && agentsVisible.length === 0)
       return { items: [], nextCursor: null };
     const rows = await this.ctx.db
-      .select()
+      .select({ agent: agents })
       .from(agents)
+      .leftJoin(
+        agentVersions,
+        and(eq(agentVersions.id, agents.latestVersionId), eq(agentVersions.agentId, agents.id)),
+      )
       .where(
         and(
           eq(agents.tenantId, principal.tenantId),
@@ -185,15 +209,22 @@ export class AgentsService {
                 teamsVisible.length ? inArray(agents.teamId, teamsVisible) : undefined,
                 agentsVisible.length ? inArray(agents.id, agentsVisible) : undefined,
               ),
-          q ? ilike(agents.name, `%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`) : undefined,
+          query.q ? textFilter(query.q) : undefined,
+          query.teamId ? eq(agents.teamId, query.teamId) : undefined,
+          query.useCase ? useCaseFilter(query.useCase) : undefined,
+          query.status ? statusFilter(query.status) : undefined,
           c
             ? or(lt(agents.createdAt, c.t), and(eq(agents.createdAt, c.t), lt(agents.id, c.id)))
             : undefined,
         ),
       )
       .orderBy(desc(agents.createdAt), desc(agents.id))
-      .limit(limit + 1);
-    return page(rows, limit, (r) => encodeTimeCursor(r.createdAt, r.id));
+      .limit(query.limit + 1);
+    return page(
+      rows.map((r) => r.agent),
+      query.limit,
+      (r) => encodeTimeCursor(r.createdAt, r.id),
+    );
   }
 
   async updateDraft(principal: Principal, id: string, source: string): Promise<AgentRow> {
@@ -208,6 +239,8 @@ export class AgentsService {
         draftSource: source,
         draftUpdatedAt: this.ctx.now(),
         description: def.description ?? null,
+        // The published version keeps defining the use case until a newer one is published.
+        ...(agent.latestVersionId ? {} : { useCase: useCaseOf(def) }),
       })
       .where(eq(agents.id, id))
       .returning();
@@ -383,7 +416,7 @@ export class AgentsService {
         .returning();
       await tx
         .update(agents)
-        .set({ latestVersionId: v!.id, latestVersion: v!.version })
+        .set({ latestVersionId: v!.id, latestVersion: v!.version, useCase: useCaseOf(def) })
         .where(eq(agents.id, id));
       return v!;
     });
