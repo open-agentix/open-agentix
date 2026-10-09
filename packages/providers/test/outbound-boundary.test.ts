@@ -25,6 +25,8 @@ export const ALLOWED: Record<string, string> = {
     'egress guard: patches net.Socket, creates no connection',
   'packages/mcp/src/gate-http.ts': 'HTTP server (node:http createServer)',
   'apps/worker/src/http.ts': 'HTTP server (node:http createServer)',
+  'apps/worker/src/git/relay.ts':
+    'loopback CONNECT relay server for the git child; upstream connections use dispatcher.dial',
   'packages/runners/src/kube-client.ts': 'Kubernetes API of the cluster, fixed in-cluster endpoint',
   'packages/runners/src/container-hijack.ts': 'container engine socket (local)',
   'packages/runners/src/container-engine.ts': 'container engine socket (local)',
@@ -136,5 +138,16 @@ describe('outbound boundary', () => {
         `${rel} no longer needs its exception`,
       ).toBe(true);
     }
+  });
+
+  it('keeps the git relay exception to a loopback server (no client socket of its own)', () => {
+    const text = readFileSync(path.join(root, 'apps/worker/src/git/relay.ts'), 'utf8');
+    const imports = [...text.matchAll(/import\s+([^;]*?)\s+from\s+'(?:node:)?(net|tls)'/g)];
+    expect(imports.map((m) => m[2])).toEqual(['net']);
+    expect(imports[0]?.[1]?.replace(/\s+/g, ' ')).toBe(
+      '{ createServer, type Server, type Socket }',
+    );
+    expect(text).not.toMatch(/\.connect\(|createConnection|new Socket\(/);
+    expect(text).toMatch(/dispatcher\s*\.dial\(/);
   });
 });

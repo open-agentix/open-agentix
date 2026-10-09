@@ -1,6 +1,6 @@
 # Dogfooding phase 1: a bug-fix agent that opens draft pull requests
 
-- Status: Proposed (design for plan item DOG-0; implementation DOG-1 to DOG-5)
+- Status: Proposed (design for plan item DOG-0; implementation DOG-1 to DOG-5; DOG-3a/3b implemented, see ADR 0010 Amendment 2)
 - Date: 2026-10-09
 - Builds on: [showcase agents](showcase-agents.md) (bug-fix agent, safety levels L0 to L2),
   [ADR 0008](adr/0008-agents-md-data-flow-and-isolation-contract.md) (run nodes, credential broker),

@@ -762,3 +762,53 @@ interface GitHostExtension {
 
 The implementation plan (wave 9 tables) is updated in the same change; the GitHub issues follow
 when the amendment is accepted.
+
+### Amendment 2 (2026-10-09): agent output delivery in the worker (DOG-3a/3b)
+
+The PR-back credential rules of A1.2 and A1.10 extend from the sync's PR-back to **agent output
+delivery**: a pipeline step with a `pull-request` output is delivered by the trusted worker, never
+by a run node or a model (dogfooding plan D5, `docs/dogfooding-phase-1.md`). The first slice lives
+in `apps/worker/src/git/` and implements the subset below; the consumer (`pull-request` output
+delivery, operator targets from `OAX_PR_TARGETS`, DOG-3c) and the seed endpoint (DOG-4) follow.
+
+- **Engine subset (A1.3, A1.5), HTTPS only.** `GitEngine`/`GitSession`: `lsRemote`, `fetchCommit`
+  (depth 1, by commit id), `snapshot`/`exportSeed` (tree read with `ls-tree` and `cat-file`, no
+  checkout; links, gitlinks, LFS pointers, oversized and unsafe-path files are left out and
+  listed), `applyAndPushBranch`. Environment allowlist, throwaway `HOME`, forced `-c` options
+  (`core.hooksPath=/dev/null`, `protocol.allow=never` plus https, `safe.bareRepository=explicit`,
+  `transfer.fsckObjects`, `http.followRedirects=false`, `http.sslVerify=true`, ...), process group
+  kill on timeout, output caps, global concurrency limit, version check. The credential travels
+  only as `http.<origin>/.extraheader` in `GIT_CONFIG_*` of the one child; tests search argv,
+  environment, files, audit entries and errors for the value.
+- **Relay (A1.5).** The `git` child gets `http.proxy=http://127.0.0.1:<port>` and a loopback relay
+  that accepts exactly one `CONNECT host:port`, dials it through the new
+  `OutboundDispatcher.dial()` (route decision, air-gapped allowlist, DNS pinning, operator proxy
+  with its credentials) and counts bytes against the transfer limits. TLS stays end to end; the
+  trust bundle of the route is written to a 0600 file as `http.sslCAInfo`. `dial()` is the raw
+  stream dialer that A1.11 announced for W10-1-2.
+- **Patch application.** The worker re-validates the node's patch (`checkPatch`: digest, strict
+  line parser with hunk counts, allowlisted paths, no renames, copies, mode changes, special
+  modes, binary patches), applies it with `git apply --check` and `git apply --cached` in a
+  **temporary index** (a variation of "temporary worktree": no working tree exists, so no filter,
+  attribute or hook can run), verifies with `diff-tree` that the result differs from the base by
+  exactly the declared files and regular modes, commits with `commit-tree` and pushes
+  `<commit>:refs/heads/<branch>` as a **new ref only** (existing branch: `branch_exists`, the
+  host also checks the old value; no force, no tags, no deletion).
+- **Exfiltration tripwire.** Patch, commit message, pull request title and body are scanned for
+  credential-shaped text (patterns, one level of base64/hex/reversal, exact known secrets) before
+  delivery; a hit blocks it (`secret_detected`; the audit entry carries pattern names and
+  digests only). The test-code exfiltration channel of `docs/workspace-tools.md` stays a residual
+  risk that the human review of the draft closes.
+- **GitHub extension slice (A1.8).** `GitHubExtension` has exactly two operations on exactly one
+  configured repository: `countOpenPullRequests(headPrefix)` and `openDraftPullRequest`. `draft`
+  is a constant, base and head prefix come from the target, the open limit is queried before every
+  creation, title and body are capped and scanned, answers are reduced to
+  `{ number, url, state, draft }`. It has its own credential reference. No endpoint for
+  completing, reviewing, labelling or dispatching exists in the code, and a test greps the sources.
+  Labels (`POST .../issues/{n}/labels`) are deliberately not part of this slice.
+- **Audit.** `git.clone`, `git.apply`, `git.push`, `git.refused` and `git.pr_open` entries carry
+  commit ids, digests, counts and codes, never content, URLs with credentials or host text.
+- **Limits that remain.** Behind an HTTP proxy the proxy resolves the destination name (ADR 0011
+  amendment 3). A delta bomb inside a blob is bounded by the byte cap, the wall clock and
+  `GIT_ALLOC_LIMIT`, not by the tmpfs quota (the worker checks the repository size after the
+  fetch). SSH is not part of this slice.

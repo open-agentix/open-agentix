@@ -48,6 +48,7 @@ export default tseslint.config(
       'apps/api/src/auth/oidc.ts',
       'apps/api/src/services/ingest.ts',
       'apps/worker/src/http.ts',
+      'apps/worker/src/git/relay.ts',
     ],
     rules: {
       'no-restricted-globals': [
