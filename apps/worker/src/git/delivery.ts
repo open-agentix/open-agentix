@@ -387,7 +387,9 @@ export class PullRequestDelivery {
       '',
       `Issue: ${t.url}/issues/${input.issue.number}`,
       `Tests (reported by the run node, please re-run): ${run?.passed ? 'full suite passed' : 'not passed'}`,
-      `Files changed: ${input.patch.changedFiles.length}`,
+      // counted from the patch itself (the worker validates exactly these file headers before the
+      // push), not from the node's changedFiles claim
+      `Files changed: ${(input.patch.patch.match(/^diff --git /gm) ?? []).length}`,
       `Run: ${run8}`,
       `Model: ${input.model.replace(/[^A-Za-z0-9._:/-]/g, '').slice(0, 64)}`,
       `Cost at list price (measured by the model proxy): $${cost}`,

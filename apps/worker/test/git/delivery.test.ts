@@ -424,6 +424,26 @@ describe('PullRequestDelivery.deliver', () => {
     expect(posted.body).toContain(`Issue: ${srv.url}/issues/33`);
   });
 
+  it('states the changed file count of the patch, not the node claim', async () => {
+    const d = delivery();
+    const ws = await prep(d);
+    const p = goodPatch();
+    const claimed = Array.from({ length: 5 }, (_, i) => ({
+      path: `src/f${i}.js`,
+      status: 'modified' as const,
+      additions: 1,
+      deletions: 1,
+    }));
+    await d.deliver(
+      ws,
+      input(p, {
+        issue: { number: 34, title: 'T' },
+        patch: attachment(p, { changedFiles: claimed }),
+      }),
+    );
+    expect(String((srv.posted.at(-1) as { body: string }).body)).toContain('Files changed: 1\n');
+  });
+
   it('maps a host failure at pull request creation to a fixed code', async () => {
     const d = delivery();
     const ws = await prep(d);
