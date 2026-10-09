@@ -9,6 +9,7 @@ import {
   parsePullRequestTarget,
   parsePullRequestTargets,
   loadPullRequestTargets,
+  neutralizeReferences,
   quoteSummary,
   readIssue,
   type DeliveryAuditEvent,
@@ -368,7 +369,10 @@ describe('PullRequestDelivery.deliver', () => {
     expect(srv.posted).toHaveLength(0);
     expect(() => git(srv.bare, 'rev-parse', 'refs/heads/oax/bug-fix/issue-30-12345678')).toThrow();
     expect(audits.find((a) => a.action === 'pull_request.pushed')).toBeUndefined();
-    expect(audits.at(-1)).toMatchObject({ action: 'pull_request.refused', code: 'secret_detected' });
+    expect(audits.at(-1)).toMatchObject({
+      action: 'pull_request.refused',
+      code: 'secret_detected',
+    });
   });
 
   it('a known secret in the summary is refused in a dry run as well', async () => {
@@ -382,6 +386,27 @@ describe('PullRequestDelivery.deliver', () => {
       ),
     ).rejects.toMatchObject({ code: 'secret_detected' });
     expect(JSON.stringify(audits)).not.toContain(secret);
+  });
+
+  it('an issue title or summary cannot close or reference other issues on merge', async () => {
+    const d = delivery();
+    const ws = await prep(d);
+    const res = await d.deliver(
+      ws,
+      input(goodPatch(), {
+        issue: { number: 33, title: 'Fixes #1 and closes other/repo#2' },
+        summary: 'Resolves #3.\nFixed https://github.com/other/repo/issues/4 cc @admin',
+      }),
+    );
+    const posted = srv.posted.at(-1) as { title: string; body: string };
+    const subject = git(srv.bare, 'log', '-1', '--format=%s', res.commit);
+    const closing = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+(?:\S*#\d|https:\/\/)/i;
+    for (const text of [posted.title, posted.body, subject]) {
+      expect(text).not.toMatch(closing);
+      expect(text).not.toMatch(/#\d/);
+      expect(text).not.toMatch(/@[a-z]/);
+    }
+    expect(posted.body).toContain(`Issue: ${srv.url}/issues/33`);
   });
 
   it('maps a host failure at pull request creation to a fixed code', async () => {
@@ -420,6 +445,20 @@ describe('readIssue and quoteSummary', () => {
     { issue: { number: 10_000_000_000, title: 'x' } },
   ])('refuses %j', (v) => {
     expect(() => readIssue(v)).toThrowError(expect.objectContaining({ code: 'issue_invalid' }));
+  });
+
+  it('neutralizes mentions, issue references and closing keywords', () => {
+    const z = '\u200b';
+    expect(
+      neutralizeReferences('Fixes #12, closes o/r#3, Resolved GH-4 and fixed https://x/issues/5'),
+    ).toBe(
+      `F${z}ixes #${z}12, c${z}loses o/r#${z}3, R${z}esolved GH${z}-4 and f${z}ixed https://x/issues/5`,
+    );
+    // words that only contain a keyword stay as they are
+    expect(neutralizeReferences('prefix fixture closet unresolved #a')).toBe(
+      'prefix fixture closet unresolved #a',
+    );
+    expect(quoteSummary('FIXES: #1')).toBe(`> F${z}IXES: #${z}1`);
   });
 
   it('quotes the model text: capped, no mentions, no HTML, no control characters', () => {
