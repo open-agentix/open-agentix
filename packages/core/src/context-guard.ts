@@ -177,7 +177,9 @@ export class ContextGuard {
       if (seen.has(v)) return '[Circular]';
       seen.add(v);
       if (Array.isArray(v)) return v.map(walk);
-      return Object.fromEntries(Object.entries(v).map(([k, val]) => [walk(k) as string, walk(val)]));
+      return Object.fromEntries(
+        Object.entries(v).map(([k, val]) => [walk(k) as string, walk(val)]),
+      );
     };
     return { value: walk(input) as T, report };
   }

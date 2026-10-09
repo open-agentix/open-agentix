@@ -536,7 +536,8 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
             const guarded = guard.text(rawMessage);
             const message = guarded.text;
             // The gateway already guarded the message of a failed call; its report counts here.
-            const fromGateway = res2 instanceof Error ? (res2 as GuardedToolError).guard : undefined;
+            const fromGateway =
+              res2 instanceof Error ? (res2 as GuardedToolError).guard : undefined;
             if (fromGateway) mergeGuardReports(guarded.report, fromGateway);
             await recordGuardReport(step, agentId, 'tool_error', guarded.report, call.tool);
             recordStepResult(metrics, false);

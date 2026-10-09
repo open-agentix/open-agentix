@@ -26,13 +26,7 @@
  */
 
 export type InvisibleClass =
-  | 'zero_width'
-  | 'joiner'
-  | 'bidi'
-  | 'tag'
-  | 'variation'
-  | 'control'
-  | 'format';
+  'zero_width' | 'joiner' | 'bidi' | 'tag' | 'variation' | 'control' | 'format';
 
 /** Every class name a report can contain (the audit accepts these only). */
 export const INVISIBLE_CLASSES: readonly InvisibleClass[] = [
@@ -73,9 +67,7 @@ function classOf(cp: number): InvisibleClass {
 }
 
 function isVariationSelector(cp: number | undefined): boolean {
-  return (
-    cp !== undefined && ((cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0xe0100 && cp <= 0xe01ef))
-  );
+  return cp !== undefined && ((cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0xe0100 && cp <= 0xe01ef));
 }
 
 /** U+FE00-U+FE0F directly after a visible character (not after another selector or at the start). */
