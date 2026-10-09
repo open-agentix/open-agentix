@@ -120,14 +120,21 @@ FROM runtime AS run-node-claude-code
 ARG VERSION=0.0.0-dev
 ARG CLAUDE_CODE_VERSION=2.1.295
 ARG GIT_VERSION=2.54.0-r0
+# No `org.opencontainers.image.source` label on purpose: GHCR links a package to the repository named
+# there, and a linked package inherits the (public) visibility of the repository. This image contains
+# the proprietary Claude Code binary and must stay in a private package (scripts/build-harness-image.sh
+# verifies that after the push).
 LABEL org.opencontainers.image.title="open-agentix-run-node-claude-code" \
-      org.opencontainers.image.source="https://github.com/open-agentix/open-agentix" \
       org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-Anthropic-Claude-Code" \
       org.opencontainers.image.version="${VERSION}" \
       io.openagentix.harness="claude-code" \
       io.openagentix.claude-code.version="${CLAUDE_CODE_VERSION}"
 USER root
-RUN apk add --no-cache git="${GIT_VERSION}" \
+RUN apk add --no-cache git="${GIT_VERSION}" || { \
+      echo "ERROR: git=${GIT_VERSION} is not available in the Alpine repositories of this base image." >&2; \
+      echo "Alpine drops old package revisions. Available now: $(apk list git 2>/dev/null | tr '\n' ' ')" >&2; \
+      echo "Fix: rebuild with --build-arg GIT_VERSION=<one of the versions above> (and update the default here)." >&2; \
+      exit 1; } \
  && rm -rf /sbin/apk /etc/apk /var/cache/apk /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 COPY --from=claude-code-bin /out/claude /opt/claude-code/bin/claude
 COPY --from=claude-code-bin /out/LICENSE.md /opt/claude-code/LICENSE.md

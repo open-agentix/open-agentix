@@ -96,6 +96,7 @@ jobs:
           - { target: worker, file: Dockerfile }
           - { target: ui, file: apps/ui/Dockerfile }
           - { target: worker-claude, file: Dockerfile }
+          - { target: run-node-claude-code, file: Dockerfile }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate the demo compose files
@@ -110,7 +111,14 @@ jobs:
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           push: false
+          # the harness image is loaded into the local daemon for the smoke test below
+          load: ${{ matrix.target == 'run-node-claude-code' }}
           tags: ghcr.io/open-agentix/open-agentix-${{ matrix.target }}:ci
           build-args: VERSION=0.0.0-ci
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+      # Never pushed from CI: the image holds the proprietary Claude Code binary (private package only,
+      # see scripts/build-harness-image.sh). The smoke test inspects it in a hardened throwaway container.
+      - name: Smoke-test the harness image
+        if: matrix.target == 'run-node-claude-code'
+        run: scripts/test-harness-image.sh ghcr.io/open-agentix/open-agentix-run-node-claude-code:ci
