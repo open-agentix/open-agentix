@@ -1,10 +1,10 @@
 # ADR 0013: Hierarchical tenants and setup modes
 
-- Status: Proposed (owner decisions of 2026-10-09 on all eight original open questions are
-  incorporated, see "Owner decisions"; the ADR is accepted after review of this amendment)
+- Status: Accepted (accepted by the owner 2026-10-09; the owner decisions of 2026-10-09 on all eight
+  original open questions are incorporated, see "Owner decisions")
 - Date: 2026-10-09 (amended 2026-10-09 with the owner decisions)
-- Plan items: W13-1 to W13-16 (section 15; to be added to the
-  [implementation plan](../IMPLEMENTATION-PLAN.md) as wave 13)
+- Plan items: W13-1 to W13-16 (section 15; wave 13 of the
+  [implementation plan](../IMPLEMENTATION-PLAN.md))
 - Builds on: [ADR 0002](0002-audit-hash-chain.md) (audit hash chain),
   [ADR 0003](0003-policy-engine-audit-and-control-agents.md) (policies, stricter wins),
   [ADR 0007](0007-tenants-as-isolation-boundary.md) (tenants as the isolation boundary),
