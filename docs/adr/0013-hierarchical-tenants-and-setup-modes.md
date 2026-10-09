@@ -1,10 +1,10 @@
 # ADR 0013: Hierarchical tenants and setup modes
 
-- Status: Proposed (owner decisions of 2026-10-09 on all eight original open questions are
-  incorporated, see "Owner decisions"; the ADR is accepted after review of this amendment)
+- Status: Accepted (accepted by the owner 2026-10-09; the owner decisions of 2026-10-09 on all eight
+  original open questions are incorporated, see "Owner decisions")
 - Date: 2026-10-09 (amended 2026-10-09 with the owner decisions)
-- Plan items: W13-1 to W13-16 (section 15; to be added to the
-  [implementation plan](../IMPLEMENTATION-PLAN.md) as wave 13)
+- Plan items: W13-1 to W13-16 (section 15; wave 13 of the
+  [implementation plan](../IMPLEMENTATION-PLAN.md))
 - Builds on: [ADR 0002](0002-audit-hash-chain.md) (audit hash chain),
   [ADR 0003](0003-policy-engine-audit-and-control-agents.md) (policies, stricter wins),
   [ADR 0007](0007-tenants-as-isolation-boundary.md) (tenants as the isolation boundary),
@@ -133,9 +133,10 @@ of ADR 0012; it shifts if those land later):
 - **Depth: default structure 2 levels, more at any time (owner decision 4).** The wizard and the
   console offer a structure of **2 levels below the root** by default (organisation -> department
   -> team), and the console tree opens these two levels. **Any number of further levels can be
-  added at any time** with "add sub-tenant" on any node; there is no configurable small depth limit
+  added at any time** with "add sub-tenant" on any node; there is no small depth limit in the product
   and no setting has to be changed first. The only bound is a **technical safety maximum of 32
-  levels below the root** (database check `depth <= 32`; creating or moving a node beyond it is
+  levels below the root**, which an operator may only lower with `OAX_TENANT_MAX_DEPTH` (1 to 32,
+  default 32), never raise (database check `depth <= 32`; creating or moving a node beyond it is
   `422 tenant_depth_exceeded`). Why 32 and why a maximum at all:
   - **Lock set**: every reservation takes one advisory lock per capped node of the chain
     (section 5.1), at most 33 plus the tree lock. That stays well inside PostgreSQL's default lock
@@ -670,7 +671,7 @@ involved, the move is a **two-party request** and has stricter rules.
 | Condition | Code |
 | --- | --- |
 | target parent inside the moved subtree (cycle) | `422 move_cycle` |
-| resulting depth above the technical maximum, or target root above `OAX_TENANT_MAX_NODES_PER_ROOT` | `422 tenant_depth_exceeded`, `422 tenant_node_limit` |
+| resulting depth above the technical maximum, or target root above `OAX_TENANT_MAX_NODES_PER_ROOT` | `422 tenant_depth_exceeded`, `422 tenant_node_limit_exceeded` |
 | active runs, active reservations or runs waiting for approval in the subtree (unless `drain: true`, which stops admission for the subtree and waits up to the lock timeout) | `409 subtree_busy` |
 | stored data in a region the target chain does not allow (stored data cannot be clamped) | `422 move_region_conflict` |
 | data classified above the target chain's `maxClassification` | `422 move_classification_conflict` |

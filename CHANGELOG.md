@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Tenant tree data model (W13-1 first slice, ADR 0013)**: migration `0013_tenant_hierarchy.sql`
+  (PostgreSQL and PGlite) adds `parent_id`, `root_id`, a materialized `path` with prefix index and
+  `depth` (technical maximum 32) to `tenants`; slugs stay globally unique (`tenants_slug_unique` is kept, the
+  slug is the secret namespace until W13-7) with an additional sibling index, every existing tenant becomes a root and nothing is nested automatically. A guard
+  trigger refuses inconsistent placements and cycles and freezes the placement until moves exist; a
+  down script is documented. New `placeNode` and path helpers in `@openagentix/core`, a `TenantTree`
+  repository (ancestors, descendants, subtree by one index lookup, slug paths) and
+  `TenantsService.createChild` with `OAX_TENANT_MAX_DEPTH` (default 32) and
+  `OAX_TENANT_MAX_NODES_PER_ROOT` (default 1000). No API change and no behaviour change for flat
+  installs; sub-tenants are not creatable over HTTP yet. Tenant creation (slug check, node limit,
+  insert, audit entry) runs in one transaction under advisory locks, so parallel creations cannot
+  duplicate a slug or exceed the node limit. The down script runs in a transaction; data-only
+  restores need `pg_restore --disable-triggers` (see `docs/tenancy.md`). CI runs the PostgreSQL
+  tests against a service container and checks that schema, snapshots and migrations are in sync.
+  ADR 0013 is accepted.
 - **Code quality reviewer example agent (NEW-51)**: `examples/agents/code-quality-reviewer.md`
   reviews a PR diff or repository path against the code quality guidelines (rule catalogue `QG-*` with
   severities, structured findings with `file:line`, Definition of done) and drafts a PR comment;

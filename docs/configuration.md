@@ -72,6 +72,8 @@ Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
 | `OAX_BOOTSTRAP_ADMIN_PASSWORD` | – (*secret*, >= 12 chars) | Password of the bootstrap admin. |
 | `OAX_SESSION_TTL_SECONDS` | `28800` | Lifetime of session tokens from login. |
 | `OAX_TOKEN_MAX_TTL_DAYS` | `365` | Upper bound for API token lifetimes. |
+| `OAX_TENANT_MAX_DEPTH` | `32` | Levels allowed below an organisation (root = 0), 1 to 32. 32 is the technical safety maximum of the tenant tree (ADR 0013); lower it only to forbid deep trees. |
+| `OAX_TENANT_MAX_NODES_PER_ROOT` | `1000` | Guard against runaway automation: tenants (nodes) per organisation. |
 | `OAX_RATE_LIMIT_MAX` | `600` | Requests per minute per token/IP. |
 | `OAX_RATE_LIMIT_LOGIN_MAX` | `10` | Login attempts per minute per IP. |
 | `OAX_RATE_LIMIT_PLAN_MAX` | `30` | Agent plan checks and drafts (`POST /v1/plans/*`) per minute per token/IP. |

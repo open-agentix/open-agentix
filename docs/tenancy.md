@@ -54,3 +54,19 @@ Merkle proofs are on the roadmap.
   (planned) or create local users per tenant.
 - The isolation tests live in `apps/api/test/tenancy.test.ts`; every new route with an id parameter
   must be added to its probe list.
+
+## Backup and restore with the tenant tree
+
+Migration 0013 adds the trigger `tenants_tree_guard_trg`, which checks every placement against the
+parent row (and freezes the placement until moves exist). Consequences for restores:
+
+- A **full dump** (`pg_dump` of schema and data, restored into an empty database) is fine: the
+  trigger is created after the data is loaded by `pg_restore`.
+- A **data-only restore into an already migrated schema** inserts the tenant rows in dump order,
+  so a child can arrive before its parent and the guard rejects it. Restore with
+  `pg_restore --data-only --disable-triggers` (superuser) or load the data in one session with
+  `SET session_replication_role = replica`. The foreign keys and the `tenants_tree_check`
+  constraint still validate the data afterwards.
+- To revert the migration run `psql -1 -f apps/api/drizzle/down/0013_tenant_hierarchy.down.sql`
+  (the script already wraps itself in a transaction; it refuses while nested tenants exist).
+
