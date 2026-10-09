@@ -1,11 +1,11 @@
 import { sql } from 'drizzle-orm';
 import {
-  type AnyPgColumn,
   bigint,
   bigserial,
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -40,12 +40,10 @@ export const tenants = pgTable(
   'tenants',
   {
     id: uuid('id').primaryKey(),
-    slug: text('slug').notNull(),
+    slug: text('slug').notNull().unique(),
     name: text('name').notNull(),
-    parentId: uuid('parent_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
-    rootId: uuid('root_id')
-      .notNull()
-      .references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
+    parentId: uuid('parent_id'),
+    rootId: uuid('root_id').notNull(),
     path: text('path').notNull(),
     depth: smallint('depth').notNull().default(0),
     monthlyBudgetMicros: micros('monthly_budget_micros'),
@@ -57,15 +55,37 @@ export const tenants = pgTable(
     createdAt: created(),
   },
   (t) => [
-    // Slugs are unique among siblings; root slugs stay globally unique.
+    // Slugs are unique among siblings. The global `tenants_slug_unique` stays until secret names
+    // are node-aware (W13-7): the slug is the secret namespace and resolves X-OAX-Tenant.
     uniqueIndex('tenants_parent_slug_uq').on(
-      sql`coalesce(${t.parentId}, ${NO_PARENT_ID}::uuid)`,
+      sql`coalesce(${t.parentId}, '${sql.raw(NO_PARENT_ID)}'::uuid)`,
       t.slug,
     ),
     index('tenants_path_idx').using('btree', t.path.op('text_pattern_ops')),
     index('tenants_parent_idx').on(t.parentId),
     index('tenants_root_idx').on(t.rootId),
-    check('tenants_tree_check', sql`${t.depth} >= 0 and ${t.depth} <= 32`),
+    // Names match migration 0013 so that `db:generate` sees no difference.
+    foreignKey({
+      name: 'tenants_parent_id_fk',
+      columns: [t.parentId],
+      foreignColumns: [t.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'tenants_root_id_fk',
+      columns: [t.rootId],
+      foreignColumns: [t.id],
+    }).onDelete('restrict'),
+    check(
+      'tenants_tree_check',
+      sql`${t.depth} >= 0 AND ${t.depth} <= 32
+	AND (${t.parentId} IS NULL) = (${t.depth} = 0)
+	AND (${t.parentId} IS NULL) = (${t.rootId} = ${t.id})
+	AND ${t.parentId} IS DISTINCT FROM ${t.id}
+	AND ${t.path} ~ '^(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})+/$'
+	AND char_length(${t.path}) = 37 * (${t.depth} + 1) + 1
+	AND ${t.path} LIKE '%/' || ${t.id}::text || '/'
+	AND ${t.path} LIKE '/' || ${t.rootId}::text || '/%'`,
+    ),
   ],
 );
 

@@ -23,7 +23,8 @@ ALTER TABLE "tenants" ADD CONSTRAINT "tenants_tree_check" CHECK (
 	AND "path" LIKE '%/' || "id"::text || '/'
 	AND "path" LIKE '/' || "root_id"::text || '/%'
 );--> statement-breakpoint
-ALTER TABLE "tenants" DROP CONSTRAINT IF EXISTS "tenants_slug_unique";--> statement-breakpoint
+-- "tenants_slug_unique" (global UNIQUE(slug)) is deliberately kept: the slug is the secret namespace
+-- until W13-7. The sibling index below is the additional, per-parent rule.
 DROP INDEX IF EXISTS "tenants_parent_slug_uq";--> statement-breakpoint
 CREATE UNIQUE INDEX "tenants_parent_slug_uq" ON "tenants" USING btree ((coalesce("parent_id", '00000000-0000-0000-0000-000000000000'::uuid)), "slug");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "tenants_path_idx" ON "tenants" USING btree ("path" text_pattern_ops);--> statement-breakpoint

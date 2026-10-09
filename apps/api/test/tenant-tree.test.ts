@@ -11,6 +11,8 @@ import { migrate as migratePg } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MIGRATIONS_FOLDER } from '../src/db/client.js';
+import { tenants as tenantsTable } from '../src/db/schema.js';
+import { eq } from 'drizzle-orm';
 import { DEFAULT_TENANT_ID } from '../src/db/schema.js';
 import { testNode, type TestNode } from './helpers.js';
 
@@ -30,8 +32,12 @@ const failure = (p: Promise<unknown>) =>
 interface Sql {
   query<T = Record<string, unknown>>(q: string, params?: unknown[]): Promise<{ rows: T[] }>;
   exec(q: string): Promise<unknown>;
+  /** Runs a multi-statement script on one connection; a failure inside BEGIN/COMMIT rolls back. */
+  script(q: string): Promise<unknown>;
   migrate(folder: string): Promise<void>;
   close(): Promise<void>;
+  /** Connection string for a control node on this database (memory:// for PGlite). */
+  url: string;
 }
 
 const PG_URL = process.env.OAX_TEST_DATABASE_URL;
@@ -41,6 +47,12 @@ async function openPglite(): Promise<Sql> {
   return {
     query: (q, params) => c.query(q, params) as never,
     exec: (q) => c.exec(q),
+    script: (q) =>
+      c.exec(q).catch(async (e: unknown) => {
+        await c.exec('rollback');
+        throw e;
+      }),
+    url: 'memory://',
     migrate: (folder) => migrate(drizzle(c) as never, { migrationsFolder: folder }),
     close: () => c.close(),
   };
@@ -57,10 +69,32 @@ async function openPostgres(): Promise<Sql> {
   return {
     query: (q, params) => pool.query(q, params) as never,
     exec: (q) => pool.query(q),
+    url: url.toString(),
+    script: async (q) => {
+      const c = await pool.connect();
+      try {
+        return await c.query(q);
+      } catch (e) {
+        await c.query('rollback');
+        throw e;
+      } finally {
+        c.release();
+      }
+    },
     migrate: (folder) => migratePg(drizzlePg(pool) as never, { migrationsFolder: folder }),
     close: async () => {
       await pool.end();
-      await admin.query(`drop database ${name} with (force)`);
+      // No `with (force)`: terminating a connection that is still closing surfaces as an uncaught
+      // error of the application pool. Wait until the server has seen every client leave instead.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await admin.query(`drop database ${name}`);
+          break;
+        } catch (e) {
+          if ((e as { code?: string }).code !== '55006' || attempt >= 50) throw e;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
       await admin.end();
     },
   };
@@ -122,6 +156,39 @@ describe.each(targets)('migration 0013 on existing flat data (%s)', (_kind, enab
     expect(after.find((t) => t.id === DEFAULT_TENANT_ID)!.slug).toBe('default');
   });
 
+  it('matches the drizzle snapshot of schema.ts (columns, indexes, constraints)', async () => {
+    const snap = JSON.parse(
+      readFileSync(join(MIGRATIONS_FOLDER, 'meta/0007_snapshot.json'), 'utf8'),
+    ).tables['public.tenants'] as {
+      columns: Record<string, { name: string; notNull: boolean }>;
+      indexes: Record<string, unknown>;
+      foreignKeys: Record<string, unknown>;
+      checkConstraints: Record<string, unknown>;
+      uniqueConstraints: Record<string, unknown>;
+    };
+    const names = async (q: string) =>
+      (await client.query<{ n: string }>(q)).rows.map((r) => r.n).sort();
+    const cols = (
+      await client.query<{ n: string; nn: boolean }>(
+        `select column_name n, is_nullable = 'NO' nn from information_schema.columns where table_name = 'tenants'`,
+      )
+    ).rows;
+    expect(cols.map((c) => c.n).sort()).toEqual(Object.keys(snap.columns).sort());
+    for (const c of cols) expect(c.nn, c.n).toBe(snap.columns[c.n]!.notNull);
+    expect(
+      await names(
+        `select indexname n from pg_indexes where tablename = 'tenants' and indexname not like '%_pkey' and indexname not like '%_unique'`,
+      ),
+    ).toEqual(Object.keys(snap.indexes).sort());
+    const con = (t: string) =>
+      names(
+        `select conname n from pg_constraint where conrelid = 'tenants'::regclass and contype = '${t}'`,
+      );
+    expect(await con('f')).toEqual(Object.keys(snap.foreignKeys).sort());
+    expect(await con('c')).toEqual(Object.keys(snap.checkConstraints).sort());
+    expect(await con('u')).toEqual(Object.keys(snap.uniqueConstraints).sort());
+  });
+
   it('is idempotent: running the statements again changes nothing', async () => {
     const before = await tenants();
     for (const stmt of UP) await client.query(stmt);
@@ -129,7 +196,7 @@ describe.each(targets)('migration 0013 on existing flat data (%s)', (_kind, enab
     expect(await tenants()).toEqual(before);
   });
 
-  it('keeps root slugs globally unique but allows a slug under different parents', async () => {
+  it('keeps slugs globally unique (secret namespace) in addition to the sibling index', async () => {
     const dupId = randomUUID();
     expect(
       await failure(
@@ -154,12 +221,16 @@ describe.each(targets)('migration 0013 on existing flat data (%s)', (_kind, enab
     const c1 = randomUUID();
     await place(c1, A, 'sales');
     expect(await failure(place(randomUUID(), A, 'sales'))).toMatch(/unique|duplicate/);
-    await place(randomUUID(), B, 'sales'); // same slug below another parent is fine at database level
-    await place(randomUUID(), c1, 'sales');
+    // Global UNIQUE(slug) stays until secrets are node-aware (W13-7): no repeats below other
+    // parents, nor between a root and a child.
+    expect(await failure(place(randomUUID(), B, 'sales'))).toMatch(/tenants_slug_unique/);
+    expect(await failure(place(randomUUID(), c1, 'sales'))).toMatch(/tenants_slug_unique/);
+    expect(await failure(place(randomUUID(), B, 'acme'))).toMatch(/tenants_slug_unique/);
+    await place(randomUUID(), B, 'other');
     const sub = (
       await client.query('select id from tenants where path like $1 order by depth', [`/${A}/%`])
     ).rows;
-    expect(sub).toHaveLength(3); // A, sales, sales/sales; not B's subtree
+    expect(sub).toHaveLength(2); // A and sales; not B's subtree
   });
 
   it('rejects inconsistent placements (path, depth, root, cycle, parent)', async () => {
@@ -231,12 +302,12 @@ describe.each(targets)('migration 0013 on existing flat data (%s)', (_kind, enab
     expect(
       await failure(client.query('delete from tenants where id = $1', [child.parent_id])),
     ).toMatch(/foreign key|tenants_parent_id_fk/);
-    expect(await failure(client.exec(DOWN))).toMatch(/nested tenants exist/);
+    expect(await failure(client.script(DOWN))).toMatch(/nested tenants exist/);
   });
 
   it('can be reverted without nested tenants and re-applied', async () => {
     for (let d = 32; d >= 1; d--) await client.query('delete from tenants where depth = $1', [d]);
-    await client.exec(DOWN);
+    await client.script(DOWN);
     const cols = (
       await client.query<{ column_name: string }>(
         `select column_name from information_schema.columns where table_name = 'tenants'`,
@@ -382,5 +453,131 @@ describe('tenant tree service', () => {
     expect(v.statusCode).toBe(200);
     expect(v.json().valid).toBe(true);
     expect(v.json().checkedEntries).toBeGreaterThan(5);
+  });
+});
+
+describe.each(targets)('tenant tree: races, acting in, deletion (%s)', (_kind, enabled, open) => {
+  if (!enabled()) {
+    it.skip('needs OAX_TEST_DATABASE_URL', () => undefined);
+    return;
+  }
+  let n: TestNode;
+  let db: Sql;
+  const operator = (): Principal => ({
+    kind: 'user',
+    userId: randomUUID(),
+    tenantId: DEFAULT_TENANT_ID,
+    displayName: 'op',
+    platformAdmin: true,
+    bindings: [],
+  });
+
+  beforeAll(async () => {
+    db = await open();
+    n = await testNode({
+      OAX_DATABASE_URL: db.url,
+      OAX_TENANT_MAX_NODES_PER_ROOT: '6',
+    });
+  });
+  afterAll(async () => {
+    await n.close();
+    await db.close();
+  });
+
+  const settle = <T>(ps: Promise<T>[]) => Promise.allSettled(ps);
+  const statusOf = (r: PromiseSettledResult<unknown>) =>
+    r.status === 'rejected' ? (r.reason as { statusCode?: number }).statusCode : 0;
+
+  it('lets exactly one of several parallel creations with the same slug under different parents win', async () => {
+    const t = n.services.tenants;
+    const a = await t.create(operator(), { slug: 'race-a', name: 'A' });
+    const b = await t.create(operator(), { slug: 'race-b', name: 'B' });
+    const results = await settle([
+      t.createChild(operator(), a.id, { slug: 'shared', name: '1' }),
+      t.createChild(operator(), b.id, { slug: 'shared', name: '2' }),
+      t.createChild(operator(), a.id, { slug: 'shared', name: '3' }),
+      t.createChild(operator(), b.id, { slug: 'shared', name: '4' }),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    for (const r of results.filter((x) => x.status === 'rejected')) expect(statusOf(r)).toBe(409);
+    const rows = await n.ctx.db.select().from(tenantsTable).where(eq(tenantsTable.slug, 'shared'));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('lets exactly one of a root and a child with the same slug win', async () => {
+    const t = n.services.tenants;
+    const org = await t.create(operator(), { slug: 'race-c', name: 'C' });
+    const results = await settle([
+      t.create(operator(), { slug: 'dupe-name', name: 'root' }),
+      t.createChild(operator(), org.id, { slug: 'dupe-name', name: 'child' }),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.map(statusOf).sort()).toEqual([0, 409]);
+  });
+
+  it('refuses parallel creations of slugs that overlap in secret names', async () => {
+    const t = n.services.tenants;
+    const results = await settle([
+      t.create(operator(), { slug: 'ovl.corp-x', name: '1' }),
+      t.create(operator(), { slug: 'ovl-corp.x', name: '2' }),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+  });
+
+  it('never exceeds the node limit under parallel creation', async () => {
+    const t = n.services.tenants;
+    const org = await t.create(operator(), { slug: 'race-limit', name: 'L' });
+    const results = await settle(
+      Array.from({ length: 12 }, (_, i) =>
+        t.createChild(operator(), org.id, { slug: `lim-${'abcdefghijkl'[i]}-q`, name: 'n' }),
+      ),
+    );
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(5); // root + 5 = 6
+    for (const r of results.filter((x) => x.status === 'rejected'))
+      expect(r).toMatchObject({ reason: { code: 'tenant_node_limit_exceeded' } });
+    expect(await t.tree.sizeOf(org.id)).toBe(6);
+  });
+
+  it('rolls back the tenant when the audit append fails', async () => {
+    const t = n.services.tenants;
+    const org = await t.create(operator(), { slug: 'race-rollback', name: 'R' });
+    const orig = n.services.audit.append.bind(n.services.audit);
+    n.services.audit.append = () => Promise.reject(new Error('audit down'));
+    try {
+      await expect(
+        t.createChild(operator(), org.id, { slug: 'rolled-back', name: 'x' }),
+      ).rejects.toThrow('audit down');
+    } finally {
+      n.services.audit.append = orig;
+    }
+    expect(await t.tree.resolveSlugPath('race-rollback/rolled-back')).toBeUndefined();
+  });
+
+  it('acts inside a child by slug or id; others still get 404', async () => {
+    const t = n.services.tenants;
+    const idn = n.services.identity;
+    const org = await t.create(operator(), { slug: 'act-org', name: 'Act' });
+    const child = await t.createChild(operator(), org.id, { slug: 'act-child', name: 'Child' });
+    const op = operator();
+    expect((await idn.actingIn(op, 'act-child')).tenantId).toBe(child.id);
+    expect((await idn.actingIn(op, child.id)).tenantId).toBe(child.id);
+    const rootUser: Principal = { ...op, tenantId: org.id, platformAdmin: false };
+    await expect(idn.actingIn(rootUser, 'act-child')).rejects.toMatchObject({ statusCode: 404 });
+    expect(await idn.actingIn(rootUser, 'act-org')).toBe(rootUser);
+    const childUser: Principal = { ...op, tenantId: child.id, platformAdmin: false };
+    await expect(idn.actingIn(childUser, 'act-org')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('restricts deleting a root while it has descendants', async () => {
+    const t = n.services.tenants;
+    const org = await t.create(operator(), { slug: 'del-org', name: 'Del' });
+    const child = await t.createChild(operator(), org.id, { slug: 'del-child', name: 'Child' });
+    await expect(
+      n.ctx.db.delete(tenantsTable).where(eq(tenantsTable.id, org.id)),
+    ).rejects.toBeTruthy();
+    expect(await t.tree.node(org.id)).toBeDefined();
+    await n.ctx.db.delete(tenantsTable).where(eq(tenantsTable.id, child.id));
+    await n.ctx.db.delete(tenantsTable).where(eq(tenantsTable.id, org.id));
+    expect(await t.tree.node(org.id)).toBeUndefined();
   });
 });
