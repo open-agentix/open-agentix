@@ -1,0 +1,35 @@
+{
+  "name": "@openagentix/workspace",
+  "version": "0.1.0",
+  "description": "oax-workspace: confined workspace tools (read, search, edit, run tests, diff) as an MCP server for harness steps in a run node, with a node-computed patch",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "oax-workspace": "./dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@openagentix/core": "workspace:*",
+    "@openagentix/events": "workspace:*",
+    "@openagentix/mcp": "workspace:*",
+    "@openagentix/providers": "workspace:*",
+    "@openagentix/runners": "workspace:*"
+  }
+}

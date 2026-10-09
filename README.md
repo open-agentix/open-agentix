@@ -134,6 +134,7 @@ flowchart LR
 | `packages/providers` | LLM adapters behind one interface (Anthropic, Bedrock, OpenAI, Azure OpenAI, OpenRouter, vLLM, Ollama, OpenAI-compatible, simulated) and the model catalog |
 | `packages/events` | webhook (HMAC, replay protection), Kafka, cron, mail-in; CloudEvents 1.0 envelope |
 | `packages/mcp` | MCP client gateway with allowlists, timeouts, size limits; policy gate as MCP proxy |
+| `packages/workspace` | Confined workspace tools (read, search, edit, run tests, diff) and node-computed patch for harness steps |
 | `packages/runners` | runner contract, step executor, `oax` CLI, remote runner and external harness stubs |
 | `apps/api` | Fastify 5 control node, PostgreSQL via Drizzle, OpenAPI 3.1 ([`openapi.yaml`](openapi.yaml)) |
 | `apps/worker` | Postgres `SKIP LOCKED` queue, cron scheduler, Kafka consumers |

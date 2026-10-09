@@ -16,6 +16,7 @@ COPY packages/providers/package.json packages/providers/
 COPY packages/events/package.json packages/events/
 COPY packages/mcp/package.json packages/mcp/
 COPY packages/runners/package.json packages/runners/
+COPY packages/workspace/package.json packages/workspace/
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
 

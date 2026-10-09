@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Workspace tools for harness steps (DOG-2, ADR 0008 Amendment 2)**: new package
+  `@openagentix/workspace` with the MCP server `workspace` (`list_files`, `read_file`, `search`,
+  `diff`, `edit_file`, `write_file`, `run_tests`; stdio binary `oax-workspace`). Path-confined without
+  following symbolic links, forbidden `.git`/`.github`/CI/secret-like paths, size, output, call and
+  time limits, a fixed test command without shell and with a scrubbed environment, process-group
+  kill and a memory watchdog. The node computes the final patch itself
+  (`{ patch, patchSha256, changedFiles, lastTestRun, testedFinalTree }`, refused as a whole for
+  changes outside `src/` and `test/`, links, mode changes, binary files); `workspaceToolGrants()`
+  gives the matching gate grants. Docs: `docs/workspace-tools.md`. Seed endpoint, image and output
+  delivery are separate tasks (DOG-1, DOG-3c).
 - **Tenant tree data model (W13-1 first slice, ADR 0013)**: migration `0013_tenant_hierarchy.sql`
   (PostgreSQL and PGlite) adds `parent_id`, `root_id`, a materialized `path` with prefix index and
   `depth` (technical maximum 32) to `tenants`; slugs stay globally unique (`tenants_slug_unique` is kept, the

@@ -541,3 +541,50 @@ Found while implementing the run node and the container runner; sections 1 to 4 
   5 because 0005 to 0008 are not used yet.
 - **Model calls (3.4)** are **not** part of W1-3a: until W1-3b, a run node can only use the keyless
   `simulated` provider; every other provider fails the step with `model_proxy_unavailable`.
+
+## Amendment 2 (DOG-2, 2026-10-09): workspace tools for harness steps
+
+A harness step (Claude Code, `--tools ""`) has no filesystem tools of its own. The only way it can
+read or change the checkout of its run node is the **workspace tool contract** below: an MCP server
+named `workspace` (`@openagentix/workspace`, `oax-workspace` on stdio, or in-process) that the node
+starts in the checkout, listed as a normal connection of the step. Every call is therefore decided
+by the policy gate and recorded (`policy_decision`, `tool_call`, audit chain) like any other tool
+call. Details and limits: [workspace tools](../workspace-tools.md).
+
+- **Tools and classes** (declared in the connection, section 1.3): `list_files`, `read_file`,
+  `search`, `diff` are `read`; `edit_file`, `write_file`, `run_tests` are `write` (they change the
+  tree or execute code). The agent has `access: write`; the write is confined to the node's
+  workspace.
+- **Two walls per rule.** The grant (`workspaceToolGrants()`) lists every argument, constrains write
+  paths to `^(src|test)/[A-Za-z0-9._/-]{1,200}$` with `deny: ["\\.\\.", "^\\."]`, caps calls per
+  tool, and refuses unknown arguments. The server repeats every rule (paths, sizes, counts), so a
+  grant that is too wide, or a call that bypasses the gate, still cannot leave the workspace.
+- **Confinement.** Paths are relative and normalised (no `..`, absolute, backslash, control
+  characters); each component is checked with `lstat` and symbolic links are refused everywhere (read,
+  write, list, search); files are opened with `O_NOFOLLOW`/`O_NONBLOCK` and re-checked with
+  `realpath`; writes go through an exclusive temp file and `rename`. Never accessible, at any
+  depth: `.git`, `.github`, other CI configuration, and secret-like files (`.env*`, keys, tokens,
+  `.npmrc`, credentials).
+- **Limits** (operator configuration, defaults): read 256 KiB per file and 64 KiB per call, write
+  64 KiB, tool output 64 KiB, 500 list entries, 200 search matches, 5 MiB seed, 80 tool calls and
+  20 minutes as a second wall behind the gate and the platform timeout. Binary and non-UTF-8 files
+  are refused.
+- **`run_tests`.** The command is fixed by the connection (`command`, `args`, no shell, no model
+  input); the model may add only one file argument matching an operator pattern (never starting
+  with `-`). Scrubbed environment (`PATH`, throwaway `HOME`/`TMPDIR`, fixed extras: no `OAX_*`,
+  `ANTHROPIC_*`, proxy or token variables), own process group killed at the end, timeout, memory
+  watchdog on the group, output cap, a maximum number of runs. Network denial is the node's (no
+  egress grant, internal network), not an in-process promise.
+- **Patch computed by the node.** At the end the node (not the model) calls `finalize()`: it walks
+  the tree, compares it with the baseline taken from the seed and builds the unified diff itself
+  (no `git` binary, so a planted `.git/config` has no effect). The result
+  `{ patch, patchSha256, changedFiles, lastTestRun, testedFinalTree }` goes into the step output.
+  The whole patch is refused (`ok: false`, with a code) if anything outside the writable area
+  changed, if a symbolic link or special file appears, on mode changes, binary files, more than 20
+  files or a patch above 64 KiB. `testedFinalTree` is true only if the last passing test run saw
+  exactly the tree the patch describes.
+- **Tool output is data.** Results are JSON values; file contents, search hits and test output are
+  strings inside them, never instructions; the tool descriptions say so, and a hostile file cannot
+  change any state (policy denials end the run after three, ADR 0003).
+- **Not part of this amendment**: the seed endpoint, unpacking the seed, passing `patch` through
+  the step output and the image that carries the server (DOG-1, DOG-3c, DOG-4).
