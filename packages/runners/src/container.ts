@@ -33,69 +33,105 @@ import type {
 /** `name@sha256:<64 hex>`; a tag alone can be moved, so tags are never accepted. */
 export const IMAGE_DIGEST = /^[a-z0-9][a-z0-9._/:-]{0,200}@sha256:[a-f0-9]{64}$/;
 
-export const ContainerRunnerConfigSchema = z.strictObject({
-  engine: z.enum(['docker', 'podman']).default('docker'),
-  /**
-   * `unix:///run/user/1000/podman/podman.sock` (rootless Podman) or `http://socket-proxy:2375`
-   * (a Docker socket proxy). There is deliberately no default: the Docker daemon's own socket is
-   * refused unless `allowRawSocket` is set.
-   */
-  engineUrl: z.string().min(1),
-  allowRawSocket: z.boolean().default(false),
-  /** Default run node image, pinned by digest. */
-  image: z.string().regex(IMAGE_DIGEST, 'image must be pinned by digest (name@sha256:...)'),
-  /** Toolbox name (`git+node`) -> image pinned by digest. Unknown toolboxes are refused. */
-  toolboxImages: z
-    .record(z.string(), z.string().regex(IMAGE_DIGEST, 'image must be pinned by digest'))
-    .default({}),
-  /**
-   * Harness (`claude-code`, ...) -> image pinned by digest (DOG-1). A step with `runtime.harness`
-   * runs ONLY on the image of its harness; an unknown harness fails closed (`harness_image_unknown`).
-   * The keys are the allowlist: only kinds of `HARNESS_KINDS` are accepted.
-   */
-  harnessImages: z
-    .partialRecord(
-      z.enum(HARNESS_KINDS),
-      z.string().regex(IMAGE_DIGEST, 'image must be pinned by digest'),
-    )
-    .default({}),
-  /** Memory (MiB) of a harness step's node; clamped to `maxMemoryMb`. Claude Code needs about 1 GiB. */
-  harnessMemoryMb: z.number().int().min(256).default(2048),
-  /** `/tmp` tmpfs (MiB) of a harness step's node: the repository checkout and test scratch space. */
-  harnessTmpMb: z.number().int().positive().default(256),
-  /**
-   * A harness step normally reaches only the control node. Declared egress hosts are refused for it
-   * unless the operator opts in (`OAX_HARNESS_EGRESS_ALLOWED`).
-   */
-  harnessEgressAllowed: z.boolean().default(false),
-  /** Pre-created network with `internal: true`; its only neighbours are the control node and the proxy. */
-  network: z.string().min(1),
-  /**
-   * URL nodes use for the egress proxy (a separate service, reachable from the internal network).
-   * Without it no step can declare egress.
-   */
-  egressProxyUrl: z.string().url().optional(),
-  /** HMAC key shared with the egress proxy; signs each node's grant. Required with the URL. */
-  egressGrantSecret: z.string().min(32).optional(),
-  /** Operator upper bound for step egress (same grammar as `runtime.egress`); empty = none. */
-  egressAllow: z.array(z.string()).default([]),
-  command: z.array(z.string().min(1)).min(1).default(['node', 'dist/run-node-cli.js']),
-  workingDir: z.string().default('/app/apps/worker'),
-  /** Upper bounds; a step's limits are clamped to them. */
-  maxCpus: z.number().positive().default(1),
-  maxMemoryMb: z.number().int().min(64).default(512),
-  maxPids: z.number().int().positive().default(256),
-  /** Identifies this installation on a shared engine; set a distinct value per installation. */
-  instanceId: z
-    .string()
-    .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
-    .default('default'),
-  /** Numeric non-root user and group of the node process. */
-  uid: z.number().int().min(1000).max(65534).default(10001),
-  /** `/tmp` tmpfs (MiB) of an ordinary node; harness steps use `harnessTmpMb`. */
-  tmpMb: z.number().int().positive().default(64),
-  stopGraceSeconds: z.number().int().nonnegative().default(5),
-});
+/** Upper bound for MiB values (1 TiB): anything larger is a typo, not a limit. */
+const MAX_MIB = 1_048_576;
+
+export const ContainerRunnerConfigSchema = z
+  .strictObject({
+    engine: z.enum(['docker', 'podman']).default('docker'),
+    /**
+     * `unix:///run/user/1000/podman/podman.sock` (rootless Podman) or `http://socket-proxy:2375`
+     * (a Docker socket proxy). There is deliberately no default: the Docker daemon's own socket is
+     * refused unless `allowRawSocket` is set.
+     */
+    engineUrl: z.string().min(1),
+    allowRawSocket: z.boolean().default(false),
+    /** Default run node image, pinned by digest. */
+    image: z.string().regex(IMAGE_DIGEST, 'image must be pinned by digest (name@sha256:...)'),
+    /** Toolbox name (`git+node`) -> image pinned by digest. Unknown toolboxes are refused. */
+    toolboxImages: z
+      .record(z.string(), z.string().regex(IMAGE_DIGEST, 'image must be pinned by digest'))
+      .default({}),
+    /**
+     * Harness (`claude-code`, ...) -> image pinned by digest (DOG-1). A step with `runtime.harness`
+     * runs ONLY on the image of its harness; an unknown harness fails closed (`harness_image_unknown`).
+     * The keys are the allowlist: only kinds of `HARNESS_KINDS` are accepted.
+     */
+    harnessImages: z
+      .partialRecord(
+        z.enum(HARNESS_KINDS),
+        z.string().regex(IMAGE_DIGEST, 'image must be pinned by digest'),
+      )
+      .default({}),
+    /** Memory (MiB) of a harness step's node; clamped to `maxMemoryMb`. Claude Code needs about 1 GiB. */
+    harnessMemoryMb: z.number().int().min(256).max(MAX_MIB).default(2048),
+    /**
+     * `/tmp` tmpfs (MiB) of a harness step's node: the repository checkout and test scratch space.
+     * tmpfs pages count against the container memory, so it may be at most half of it.
+     */
+    harnessTmpMb: z.number().int().positive().max(MAX_MIB).default(256),
+    /**
+     * A harness step normally reaches only the control node. Declared egress hosts are refused for it
+     * unless the operator opts in (`OAX_HARNESS_EGRESS_ALLOWED`).
+     */
+    harnessEgressAllowed: z.boolean().default(false),
+    /** Pre-created network with `internal: true`; its only neighbours are the control node and the proxy. */
+    network: z.string().min(1),
+    /**
+     * URL nodes use for the egress proxy (a separate service, reachable from the internal network).
+     * Without it no step can declare egress.
+     */
+    egressProxyUrl: z.string().url().optional(),
+    /** HMAC key shared with the egress proxy; signs each node's grant. Required with the URL. */
+    egressGrantSecret: z.string().min(32).optional(),
+    /** Operator upper bound for step egress (same grammar as `runtime.egress`); empty = none. */
+    egressAllow: z.array(z.string()).default([]),
+    command: z.array(z.string().min(1)).min(1).default(['node', 'dist/run-node-cli.js']),
+    workingDir: z.string().default('/app/apps/worker'),
+    /** Upper bounds; a step's limits are clamped to them. */
+    maxCpus: z.number().positive().default(1),
+    maxMemoryMb: z.number().int().min(64).max(MAX_MIB).default(512),
+    /**
+     * Default memory (MiB) of an ordinary node. Distinct from the ceiling `maxMemoryMb`: raising the
+     * ceiling for harness steps must not give every ordinary node more memory. Clamped to the ceiling.
+     */
+    memoryMb: z.number().int().min(64).max(MAX_MIB).default(512),
+    maxPids: z.number().int().positive().default(256),
+    /** Identifies this installation on a shared engine; set a distinct value per installation. */
+    instanceId: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
+      .default('default'),
+    /** Numeric non-root user and group of the node process. */
+    uid: z.number().int().min(1000).max(65534).default(10001),
+    /** `/tmp` tmpfs (MiB) of an ordinary node; harness steps use `harnessTmpMb`. */
+    tmpMb: z.number().int().positive().max(MAX_MIB).default(64),
+    stopGraceSeconds: z.number().int().nonnegative().default(5),
+  })
+  .superRefine((c, ctx) => {
+    // tmpfs pages count against the container's memory: a /tmp that cannot fit would only fail late
+    // (OOM kill while writing). Require a sane margin: at most half of the memory.
+    const checks: [string, string, number, number][] = [
+      ['tmpMb', 'OAX_CONTAINER_TMP_MB', c.tmpMb, Math.min(c.memoryMb, c.maxMemoryMb)],
+      ...(Object.keys(c.harnessImages).length > 0
+        ? ([
+            [
+              'harnessTmpMb',
+              'OAX_CONTAINER_HARNESS_TMP_MB',
+              c.harnessTmpMb,
+              Math.min(c.harnessMemoryMb, c.maxMemoryMb),
+            ],
+          ] as [string, string, number, number][])
+        : []),
+    ];
+    for (const [field, env, tmp, memory] of checks)
+      if (tmp * 2 > memory)
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `${env} (${tmp}) must be at most half of the node memory (${memory} MiB, see OAX_CONTAINER_MEMORY_MB / OAX_CONTAINER_HARNESS_MEMORY_MB / OAX_CONTAINER_MAX_MEMORY_MB)`,
+        });
+  });
 export type ContainerRunnerConfig = z.infer<typeof ContainerRunnerConfigSchema>;
 export type ContainerRunnerConfigInput = z.input<typeof ContainerRunnerConfigSchema>;
 
@@ -262,6 +298,15 @@ export class ContainerRunner implements IsolatingRunner {
     );
   }
 
+  /**
+   * Limits the worker hands to ordinary steps: the default memory (never the ceiling), clamped to
+   * the ceiling. CPU and pids use their maximum as before.
+   */
+  defaultLimits(): { cpus: number; memoryMb: number; pids: number } {
+    const c = this.config;
+    return { cpus: c.maxCpus, memoryMb: Math.min(c.memoryMb, c.maxMemoryMb), pids: c.maxPids };
+  }
+
   /** Images a node may run: the default image and the configured toolbox images. */
   allowedImages(): Set<string> {
     return new Set([
@@ -313,6 +358,19 @@ export class ContainerRunner implements IsolatingRunner {
     } catch {
       throw new OaxError('run_node_invalid', 'control URL is not an http(s) URL');
     }
+    // The harness image carries a proprietary binary and the harness's runtime settings: an ordinary
+    // step may only receive it when it is also the default or a toolbox image (operator's choice).
+    const harnessImages = Object.values(c.harnessImages);
+    if (
+      !spec.harness &&
+      harnessImages.includes(spec.image) &&
+      spec.image !== c.image &&
+      !Object.values(c.toolboxImages).includes(spec.image)
+    )
+      throw new OaxError(
+        'image_not_allowed',
+        'a step without a harness must not run on a harness image',
+      );
     if (spec.harness) {
       if (spec.image !== c.harnessImages[spec.harness])
         throw new OaxError(

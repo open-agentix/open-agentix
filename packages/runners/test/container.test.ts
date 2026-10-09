@@ -573,3 +573,71 @@ describe('harness images and limits (DOG-1)', () => {
     await h2.stop('step_end');
   });
 });
+
+describe('memory classes and image separation (DOG-1 review)', () => {
+  const HARNESS_IMG = `ghcr.io/open-agentix/open-agentix-run-node-claude-code@sha256:${'c'.repeat(64)}`;
+
+  it('keeps ordinary nodes at the default memory when the ceiling is raised', () => {
+    const r = runner(fakeEngine(), {
+      harnessImages: { 'claude-code': HARNESS_IMG },
+      maxMemoryMb: 2048,
+    });
+    // the limits the worker hands to ordinary steps come from the default, not the ceiling
+    expect(r.defaultLimits()).toMatchObject({ memoryMb: 512 });
+    const body = r.buildCreateBody(spec({ limits: { ...spec().limits, ...r.defaultLimits() } }));
+    expect(body.HostConfig.Memory).toBe(512 * 1024 * 1024);
+    // an operator default above the ceiling is clamped to it
+    expect(
+      runner(fakeEngine(), { memoryMb: 1024, maxMemoryMb: 768 }).defaultLimits().memoryMb,
+    ).toBe(768);
+  });
+
+  it('requires /tmp to be at most half of the node memory, harness included', () => {
+    expect(
+      () => new ContainerRunner({ ...baseConfig, memoryMb: 2048, maxMemoryMb: 2048, tmpMb: 2047 }),
+    ).toThrow(/at most half/);
+    expect(
+      () => new ContainerRunner({ ...baseConfig, memoryMb: 2048, maxMemoryMb: 2048, tmpMb: 1024 }),
+    ).not.toThrow();
+    const harness = { harnessImages: { 'claude-code': HARNESS_IMG } };
+    expect(
+      () =>
+        new ContainerRunner({ ...baseConfig, ...harness, maxMemoryMb: 4096, harnessTmpMb: 2047 }),
+    ).toThrow(/OAX_CONTAINER_HARNESS_TMP_MB/);
+    // the harness /tmp is only checked when a harness image is configured
+    expect(
+      () => new ContainerRunner({ ...baseConfig, maxMemoryMb: 4096, harnessTmpMb: 2047 }),
+    ).not.toThrow();
+    // upper bound against typos
+    expect(() => new ContainerRunner({ ...baseConfig, maxMemoryMb: 2 ** 40 })).toThrow();
+  });
+
+  it('refuses a digest with uppercase letters or whitespace', () => {
+    for (const bad of [
+      `ghcr.io/o/r@sha256:${'A'.repeat(64)}`,
+      `ghcr.io/o/r@sha256:${'a'.repeat(64)}\n`,
+      ` ghcr.io/o/r@sha256:${'a'.repeat(64)}`,
+      `ghcr.io/o/r@sha256:${'a'.repeat(64)} `,
+      `ghcr.io/o/r@sha256: ${'a'.repeat(63)}`,
+      `ghcr.io/o/r@sha256:${'a'.repeat(63)}F`,
+    ]) {
+      expect(() => new ContainerRunner({ ...baseConfig, image: bad }), bad).toThrow();
+      expect(
+        () => new ContainerRunner({ ...baseConfig, harnessImages: { 'claude-code': bad } }),
+        bad,
+      ).toThrow();
+    }
+  });
+
+  it('refuses an ordinary step on a harness image unless it is also the default or a toolbox image', async () => {
+    const r = runner(fakeEngine(), { harnessImages: { 'claude-code': HARNESS_IMG } });
+    expect(await code(r.startNode(spec({ image: HARNESS_IMG })))).toBe('image_not_allowed');
+    // the operator reused the image as toolbox image: then it is allowed (explicit choice)
+    const shared = runner(fakeEngine(), {
+      harnessImages: { 'claude-code': HARNESS_IMG },
+      toolboxImages: { trivy: HARNESS_IMG },
+    });
+    const h = await shared.startNode(spec({ image: HARNESS_IMG }));
+    await h.stop('step_end');
+  });
+});

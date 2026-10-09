@@ -27,7 +27,8 @@ import { loadDatabaseConfig, type DatabaseConfig } from './db/settings.js';
 const bool = z
   .enum(['true', 'false', '1', '0', 'yes', 'no'])
   .transform((v) => v === 'true' || v === '1' || v === 'yes');
-const int = (def: number) => z.coerce.number().int().nonnegative().default(def);
+// Upper bound: a value this large is a typo or an overflow, never a real limit (2^31 - 1).
+const int = (def: number) => z.coerce.number().int().nonnegative().max(2_147_483_647).default(def);
 const json = <T extends z.ZodTypeAny>(schema: T) =>
   z
     .string()
@@ -160,7 +161,9 @@ export const EnvSchema = z.object({
   OAX_CONTAINER_TOOLBOX_IMAGES: json(z.record(z.string(), z.string())).optional(),
   /** Harness -> digest-pinned image, e.g. `{"claude-code":"ghcr.io/...@sha256:..."}` (DOG-1). */
   OAX_CONTAINER_HARNESS_IMAGES: json(z.record(z.string(), z.string())).optional(),
-  /** `/tmp` tmpfs size (MiB) of an ordinary run node. */
+  /** Memory (MiB) of an ordinary run node; clamped to OAX_CONTAINER_MAX_MEMORY_MB (the ceiling, not the default). */
+  OAX_CONTAINER_MEMORY_MB: int(512),
+  /** `/tmp` tmpfs size (MiB) of an ordinary run node; at most half of the node memory. */
   OAX_CONTAINER_TMP_MB: int(64),
   /** Memory (MiB, clamped to OAX_CONTAINER_MAX_MEMORY_MB) and `/tmp` size (MiB) of a harness step's node. */
   OAX_CONTAINER_HARNESS_MEMORY_MB: int(2048),
@@ -609,6 +612,7 @@ function containerConfig(e: z.infer<typeof EnvSchema>): Config['runners']['conta
     image: need(e.OAX_CONTAINER_IMAGE, 'OAX_CONTAINER_IMAGE'),
     toolboxImages: e.OAX_CONTAINER_TOOLBOX_IMAGES ?? {},
     harnessImages: e.OAX_CONTAINER_HARNESS_IMAGES ?? {},
+    memoryMb: e.OAX_CONTAINER_MEMORY_MB,
     tmpMb: e.OAX_CONTAINER_TMP_MB,
     harnessMemoryMb: e.OAX_CONTAINER_HARNESS_MEMORY_MB,
     harnessTmpMb: e.OAX_CONTAINER_HARNESS_TMP_MB,
@@ -628,28 +632,6 @@ function containerConfig(e: z.infer<typeof EnvSchema>): Config['runners']['conta
     maxMemoryMb: e.OAX_CONTAINER_MAX_MEMORY_MB,
     maxPids: e.OAX_CONTAINER_MAX_PIDS,
   });
-  if (parsed.success) {
-    const c = parsed.data;
-    // tmpfs pages count against the container's memory: a /tmp that cannot fit would only fail late.
-    const checks: [string, number, number][] = [
-      ['OAX_CONTAINER_TMP_MB', c.tmpMb, c.maxMemoryMb],
-      ...(Object.keys(c.harnessImages).length > 0
-        ? ([
-            [
-              'OAX_CONTAINER_HARNESS_TMP_MB',
-              c.harnessTmpMb,
-              Math.min(c.harnessMemoryMb, c.maxMemoryMb),
-            ],
-          ] as [string, number, number][])
-        : []),
-    ];
-    for (const [name, tmp, memory] of checks)
-      if (tmp >= memory)
-        throw new OaxError(
-          'config_invalid',
-          `invalid configuration: ${name} (${tmp}) must be smaller than the node memory (${memory} MiB, see OAX_CONTAINER_MAX_MEMORY_MB)`,
-        );
-  }
   if (!parsed.success)
     throw new OaxError(
       'config_invalid',

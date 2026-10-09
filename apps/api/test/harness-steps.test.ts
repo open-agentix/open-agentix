@@ -6,6 +6,8 @@ import { testNode, type TestNode } from './helpers.js';
 import {
   BASE_ENV,
   HARNESS_ENV,
+  HARNESS_IMAGE,
+  IMAGE,
   ask,
   getModelToken,
   postModel,
@@ -256,6 +258,82 @@ ${pipelineRuntime}agents:
     expect((await publishOn(n, narrowed)).body).not.toContain('OAX_HARNESS_EGRESS_ALLOWED');
   });
 
+  it('publishes a harness step with egress when the operator allowed it and the ceiling covers it', async () => {
+    const node = await testNode(
+      {
+        ...ENV,
+        OAX_HARNESS_EGRESS_ALLOWED: 'true',
+        OAX_CONTAINER_EGRESS_ALLOW: 'jira.example.com',
+      },
+      { secrets, hostLookup: publicLookup },
+    );
+    try {
+      const res = await publishOn(
+        node,
+        source(
+          'egress-allowed',
+          '{ runner: container, harness: claude-code, egress: [jira.example.com] }',
+          'runtime:\n  runner: container\n  egress: [jira.example.com]\n',
+        ),
+      );
+      expect(res.statusCode).toBe(201);
+    } finally {
+      await node.close();
+    }
+  });
+
+  it('refuses a harness step that also sets a toolbox', async () => {
+    const node = await testNode(
+      { ...ENV, OAX_CONTAINER_TOOLBOX_IMAGES: JSON.stringify({ 'git+node': IMAGE }) },
+      { secrets, hostLookup: publicLookup },
+    );
+    try {
+      const res = await publishOn(
+        node,
+        source('harness-toolbox', '{ runner: container, harness: claude-code }').replace(
+          '    runtime:',
+          '    toolbox: git+node\n    runtime:',
+        ),
+      );
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('must not set a toolbox');
+    } finally {
+      await node.close();
+    }
+  });
+
+  it('refuses an ordinary step whose toolbox or default image is a harness image', async () => {
+    const viaToolbox = await testNode(
+      { ...ENV, OAX_CONTAINER_TOOLBOX_IMAGES: JSON.stringify({ 'git+node': HARNESS_IMAGE }) },
+      { secrets, hostLookup: publicLookup },
+    );
+    const viaDefault = await testNode(
+      { ...ENV, OAX_CONTAINER_IMAGE: HARNESS_IMAGE },
+      { secrets, hostLookup: publicLookup },
+    );
+    try {
+      const t = await publishOn(
+        viaToolbox,
+        source('plain-toolbox', '{ runner: container }').replace(
+          '    runtime:',
+          '    toolbox: git+node\n    runtime:',
+        ),
+      );
+      expect(t.statusCode).toBe(400);
+      expect(t.body).toContain('would run on a harness image');
+      const d = await publishOn(viaDefault, source('plain-default', '{ runner: container }'));
+      expect(d.statusCode).toBe(400);
+      expect(d.body).toContain('would run on a harness image');
+      // an ordinary step on the regular images still publishes
+      expect((await publishOn(n, source('plain-ok', '{ runner: container }'))).statusCode).toBe(
+        201,
+      );
+    } finally {
+      await viaToolbox.close();
+      await viaDefault.close();
+    }
+  });
+
   it('refuses a harness without a configured image on the container runner', async () => {
     const { OAX_CONTAINER_HARNESS_IMAGES: _drop, ...noImages } = ENV;
     const node = await testNode(noImages, { secrets, hostLookup: publicLookup });
@@ -319,7 +397,40 @@ describe('configuration', () => {
         OAX_CONTAINER_HARNESS_TMP_MB: '2048',
         OAX_CONTAINER_MAX_MEMORY_MB: '4096',
       }),
-    ).toThrow(/must be smaller than the node memory/);
+    ).toThrow(/must be at most half of the node memory/);
+  });
+  it('keeps the memory of ordinary nodes apart from the ceiling and bounds /tmp to half of it', () => {
+    // raising the ceiling for harness steps does not raise the default of ordinary nodes
+    const high = loadConfig({ ...container, OAX_CONTAINER_MAX_MEMORY_MB: '2048' });
+    expect(high.runners.container.config).toMatchObject({ memoryMb: 512, maxMemoryMb: 2048 });
+    expect(
+      loadConfig({
+        ...container,
+        OAX_CONTAINER_MEMORY_MB: '1024',
+        OAX_CONTAINER_MAX_MEMORY_MB: '2048',
+      }).runners.container.config,
+    ).toMatchObject({ memoryMb: 1024 });
+    // tmp 2047 of 2048 would be accepted by a plain "<" check; the margin rule refuses it
+    expect(() =>
+      loadConfig({
+        ...container,
+        OAX_CONTAINER_MEMORY_MB: '2048',
+        OAX_CONTAINER_MAX_MEMORY_MB: '2048',
+        OAX_CONTAINER_TMP_MB: '2047',
+      }),
+    ).toThrow(/OAX_CONTAINER_TMP_MB \(2047\) must be at most half/);
+    expect(() =>
+      loadConfig({
+        ...container,
+        OAX_CONTAINER_MEMORY_MB: '2048',
+        OAX_CONTAINER_MAX_MEMORY_MB: '2048',
+        OAX_CONTAINER_TMP_MB: '1024',
+      }),
+    ).not.toThrow();
+    // a value beyond the upper bound is a typo, not a limit
+    expect(() =>
+      loadConfig({ ...container, OAX_CONTAINER_MAX_MEMORY_MB: '99999999999' }),
+    ).toThrow();
   });
   it('defaults to no harness and needs the model proxy for any', () => {
     expect(loadConfig(base).harnesses.enabled).toEqual([]);

@@ -7,6 +7,8 @@ import type { LightMyRequestResponse } from 'fastify';
 import { testSecrets, type TestNode } from './helpers.js';
 
 export const IMAGE = `ghcr.io/open-agentix/open-agentix-worker@sha256:${'a'.repeat(64)}`;
+/** Image of the harness steps: distinct from the default image (an ordinary step must not receive it). */
+export const HARNESS_IMAGE = `ghcr.io/open-agentix/open-agentix-run-node-claude-code@sha256:${'c'.repeat(64)}`;
 
 /** Secret values that must never appear in a response, a log line or an audit payload. */
 export const PLATFORM_OPENAI_KEY = 'sk-platform-OPENAI-KEY-1234567890';
@@ -440,7 +442,10 @@ export const HARNESS_ENV = {
   OAX_CONTAINER_RUNNER_ENABLED: 'true',
   OAX_CONTAINER_ENGINE_URL: 'http://socket-proxy:2375',
   OAX_CONTAINER_IMAGE: IMAGE,
-  OAX_CONTAINER_HARNESS_IMAGES: JSON.stringify({ 'claude-code': IMAGE, opencode: IMAGE }),
+  OAX_CONTAINER_HARNESS_IMAGES: JSON.stringify({
+    'claude-code': HARNESS_IMAGE,
+    opencode: HARNESS_IMAGE,
+  }),
   OAX_CONTAINER_NETWORK: 'oax-nodes',
   OAX_NODE_CONTROL_URL: 'http://api:8080',
   OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',

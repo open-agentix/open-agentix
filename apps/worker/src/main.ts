@@ -33,11 +33,8 @@ const worker = new Worker(ctx, {
         isolation: {
           runners: { container: containerRunner },
           controlUrl: container.nodeControlUrl,
-          limits: {
-            cpus: container.config.maxCpus,
-            memoryMb: container.config.maxMemoryMb,
-            pids: container.config.maxPids,
-          },
+          // Ordinary nodes get the default memory, not the ceiling (OAX_CONTAINER_MEMORY_MB).
+          limits: containerRunner.defaultLimits(),
         },
       }
     : {}),

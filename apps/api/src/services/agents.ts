@@ -250,7 +250,28 @@ export class AgentsService {
           path: `agents.${i}.runtime.harness`,
           message: `harness "${h}" is not enabled (OAX_HARNESSES_ENABLED=${this.ctx.config.harnesses.enabled.join(',')})`,
         });
-      if (!h) return;
+      if (!h) {
+        // A normal step never runs on a harness image (it carries a proprietary binary and the
+        // harness's settings): neither its toolbox nor the default image may be one.
+        const cfg = runners.container.config;
+        const isContainer = (a.runtime?.runner ?? def.runtime.runner) === 'container';
+        if (cfg && isContainer) {
+          const harnessImages = Object.values(cfg.harnessImages);
+          const toolbox = a.toolbox ?? def.runtime.toolbox;
+          const image = toolbox ? cfg.toolboxImages[toolbox] : cfg.image;
+          if (image && harnessImages.includes(image))
+            issues.push({
+              path: `agents.${i}.${a.toolbox ? 'toolbox' : 'runtime.runner'}`,
+              message: `step "${a.id}" has no harness but would run on a harness image; harness images are reserved for steps with runtime.harness`,
+            });
+        }
+        return;
+      }
+      if (a.toolbox)
+        issues.push({
+          path: `agents.${i}.toolbox`,
+          message: `harness step "${a.id}" must not set a toolbox: it runs on the image of its harness`,
+        });
       // "Control node only": a harness step holds a model token and runs untrusted tool output, so it
       // publishes without egress hosts unless the operator opened that explicitly (DOG-1).
       const egress = a.runtime?.egress ?? def.runtime.egress;
