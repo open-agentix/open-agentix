@@ -5,7 +5,7 @@ import { ApiError, api, call } from '../../api/client';
 import { approvalsQuery, runQuery, runStepsQuery, useAgentNames } from '../../api/queries';
 import { isTerminal, type Run } from '../../api/types';
 import { useCan } from '../../auth/auth';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { ConfirmTenantAction } from '../../components/ConfirmTenantAction';
 import { Icon } from '../../components/Icon';
 import { ItemNotFound } from '../../components/ItemNotFound';
 import { useToast } from '../../components/toast';
@@ -212,7 +212,7 @@ export function RunDetailPage() {
           </Section>
         </div>
       </div>
-      <ConfirmDialog
+      <ConfirmTenantAction
         open={cancelling}
         onClose={() => setCancelling(false)}
         title={t('runs.cancelTitle')}
@@ -221,7 +221,7 @@ export function RunDetailPage() {
         onConfirm={() => cancel.mutateAsync()}
       >
         <p>{t('runs.cancelText')}</p>
-      </ConfirmDialog>
+      </ConfirmTenantAction>
     </div>
   );
 }

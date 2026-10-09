@@ -88,6 +88,9 @@ export const handlers = [
     json<ResponseOf<'/v1/version', 'get'>>({ name: 'openagentix', version: '0.1.0' }),
   ),
   http.get(api('/v1/me'), () => json(f.meAdmin)),
+  http.get(api('/v1/tenants'), () =>
+    json<ResponseOf<'/v1/tenants', 'get'>>({ items: [f.tenantRow] }),
+  ),
   http.get(api('/v1/settings'), () => json(f.settings)),
   http.post(api('/v1/auth/logout'), () => new HttpResponse(null, { status: 200 })),
   http.get(api('/v1/agents'), agentsList([f.agent, f.draftOnlyAgent])),

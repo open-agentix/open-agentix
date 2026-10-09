@@ -1,15 +1,29 @@
 import { queryOptions, useQuery, type QueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type { Permission } from '../../../../packages/core/src/rbac';
-import { api, call } from '../api/client';
+import { api, ApiError, call } from '../api/client';
 import type { BodyOf } from '../api/types';
+import { activeTenant } from '../lib/activeTenant';
 import { session } from './session';
 
 export type { Permission };
 
 export const meQuery = queryOptions({
   queryKey: ['me'],
-  queryFn: () => call(api.GET('/v1/me')),
+  queryFn: async () => {
+    const chosen = activeTenant.header();
+    try {
+      return await call(api.GET('/v1/me'));
+    } catch (e) {
+      // The remembered tenant is stale (removed, access gone): the API answered 404 for it and the
+      // client dropped the choice; load the home tenant instead of showing an error page.
+      if (chosen && e instanceof ApiError && (e.status === 404 || e.status === 403)) {
+        activeTenant.clear('stale');
+        return call(api.GET('/v1/me'));
+      }
+      throw e;
+    }
+  },
   staleTime: 5 * 60_000,
 });
 

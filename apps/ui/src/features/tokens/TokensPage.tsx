@@ -4,7 +4,7 @@ import { api, call } from '../../api/client';
 import { tokensQuery } from '../../api/queries';
 import type { ApiToken, CreatedApiToken, TokenScope } from '../../api/types';
 import { useCan } from '../../auth/auth';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { ConfirmTenantAction } from '../../components/ConfirmTenantAction';
 import { Icon } from '../../components/Icon';
 import { useToast } from '../../components/toast';
 import {
@@ -135,7 +135,7 @@ export function TokensPage() {
         )}
       </Section>
       <CreateTokenDialog open={creating} onClose={() => setCreating(false)} />
-      <ConfirmDialog
+      <ConfirmTenantAction
         open={!!revoking}
         onClose={() => setRevoking(null)}
         title={t('tokens.revokeTitle', { name: revoking?.name ?? '' })}
@@ -144,7 +144,7 @@ export function TokensPage() {
         onConfirm={() => (revoking ? revoke(revoking) : undefined)}
       >
         <p>{t('tokens.revokeText')}</p>
-      </ConfirmDialog>
+      </ConfirmTenantAction>
     </div>
   );
 }

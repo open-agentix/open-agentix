@@ -6,7 +6,9 @@ import { approvalsQuery } from '../api/queries';
 import { logout, meQuery, useCan, versionQuery } from '../auth/auth';
 import { session } from '../auth/session';
 import { Icon } from '../components/Icon';
-import { TenantBadge } from '../components/Tenant';
+import { TenantBadge } from '../features/tenancy/TenantBadge';
+import { TenantBreadcrumb } from '../features/tenancy/TenantBreadcrumb';
+import { useTenantSync } from '../features/tenancy/useTenantSync';
 import { useI18n } from '../i18n/i18n';
 import { TourLauncher } from '../features/tour/TourHost';
 import { PreferencesControls } from './PreferencesControls';
@@ -18,6 +20,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  useTenantSync();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { data: me } = useQuery(meQuery);
   const { data: apiVersion } = useQuery(versionQuery);
@@ -142,6 +145,7 @@ export function AppShell() {
       </aside>
       <div className="scrim" aria-hidden="true" onClick={() => setOpen(false)} />
       <main id="main" className="main" tabIndex={-1}>
+        <TenantBreadcrumb />
         <Outlet />
       </main>
     </div>
