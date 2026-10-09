@@ -198,6 +198,8 @@ export const EnvSchema = z.object({
   OAX_MODEL_PROXY_CAPTURE: z.enum(['metadata', 'off']).default('metadata'),
   /** Private destinations tenant-controlled endpoints may reach (hosts, suffixes, CIDRs). */
   OAX_MODEL_PROXY_PRIVATE_ALLOW: z.string().default(''),
+  /** `anthropic-beta` values a pass-through client may pass on (default: none). */
+  OAX_MODEL_PROXY_ANTHROPIC_BETAS: z.string().default(''),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
   OTEL_SERVICE_NAME: z.string().optional(),
 
@@ -322,6 +324,8 @@ export interface Config {
     capture: 'metadata' | 'off';
     /** Operator allowlist of private destinations for tenant-controlled endpoints. */
     privateAllow: string[];
+    /** `anthropic-beta` values the Anthropic pass-through surface forwards (allowlist). */
+    anthropicBetas: string[];
   };
   airgap: {
     enabled: boolean;
@@ -503,6 +507,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       maxResponseBytes: e.OAX_MODEL_PROXY_MAX_RESPONSE_BYTES,
       capture: e.OAX_MODEL_PROXY_CAPTURE,
       privateAllow: list(e.OAX_MODEL_PROXY_PRIVATE_ALLOW),
+      anthropicBetas: list(e.OAX_MODEL_PROXY_ANTHROPIC_BETAS).filter((b) =>
+        /^[a-z0-9._-]{1,64}$/.test(b),
+      ),
     },
     airgap: {
       enabled: e.OAX_AIRGAPPED,

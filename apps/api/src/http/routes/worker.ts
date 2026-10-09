@@ -6,17 +6,15 @@ import {
   WorkerModelResponseSchema,
   type ModelErrorCode,
 } from '@openagentix/providers';
-import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
-import {
-  hasZodFastifySchemaValidationErrors,
-  type ZodTypeProvider,
-} from 'fastify-type-provider-zod';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { Deps } from '../app.js';
 import { bearerOf } from '../app.js';
-import { OaxError } from '@openagentix/core';
 import { HttpError } from '../../errors.js';
-import { StrictJsonError, parseStrictJson } from '../../services/model-proxy-json.js';
-import { ModelProxyError, toModelProxyError, type StreamSink } from '../../services/model-proxy.js';
+import { parseStrictJson } from '../../services/model-proxy-json.js';
+import { ModelProxyError, type StreamSink } from '../../services/model-proxy.js';
+import { modelErrorHandler, modelRateKey } from './model-errors.js';
+import { registerPassthroughRoutes } from './model-passthrough.js';
 import {
   ApprovalCreatedSchema,
   ApprovalParams,
@@ -42,65 +40,8 @@ import type { ZApp } from '../zapp.js';
 
 const sec = [{ runToken: [] }];
 const tags = ['worker'];
-/**
- * Rate limit bucket of a model route, evaluated before authentication: the peer address only.
- * (A token-derived key would let anyone mint unlimited buckets with invalid tokens, and the
- * claims of all model tokens start with the same bytes.)
- */
-export const modelRateKey = (req: Pick<FastifyRequest, 'ip'>): string => req.ip;
+export { modelRateKey };
 const modelSec: Record<string, string[]>[] = [{ runToken: [] }, { modelToken: [] }];
-
-/** Parameter names are echoed in refusals; anything else is cut so an error never reflects input. */
-const safeName = (k: unknown): string =>
-  String(k)
-    .replace(/[^\w.-]/g, '')
-    .slice(0, 64);
-
-/** Error handler of the model routes: every failure uses the model envelope and stable codes. */
-function modelErrorHandler(err: FastifyError | Error, req: FastifyRequest, reply: FastifyReply) {
-  let out: ModelProxyError;
-  const fe = err as FastifyError;
-  if (hasZodFastifySchemaValidationErrors(err)) {
-    const unknown = err.validation.find((v) => v.keyword === 'unrecognized_keys');
-    const keys = (unknown?.params as { keys?: unknown } | undefined)?.keys;
-    out = unknown
-      ? new ModelProxyError(
-          'model_parameter_refused',
-          `parameter not allowed: ${(Array.isArray(keys) ? keys : []).map(safeName).join(', ') || 'unknown'}`,
-        )
-      : new ModelProxyError(
-          'model_request_invalid',
-          `request validation failed: ${[...new Set(err.validation.map((v) => v.instancePath || '/'))].slice(0, 5).join(', ')}`,
-        );
-  } else if (fe.statusCode === 429 && !(err instanceof ModelProxyError)) {
-    // @fastify/rate-limit: keep its Retry-After header, answer in the model envelope
-    out = new ModelProxyError('model_rate_limited', 'too many requests', undefined);
-    const retry = reply.getHeader('retry-after');
-    if (retry !== undefined) void reply.header('retry-after', String(retry));
-  } else if (fe.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || fe.statusCode === 413) {
-    out = new ModelProxyError('model_request_too_large', 'request body is too large');
-  } else if (err instanceof StrictJsonError) {
-    out = new ModelProxyError(
-      err.reason === 'forbidden_key' ? 'model_parameter_refused' : 'model_request_invalid',
-      err.message,
-    );
-  } else if (
-    !(err instanceof ModelProxyError) &&
-    !(err instanceof OaxError) &&
-    typeof fe.statusCode === 'number' &&
-    fe.statusCode >= 400 &&
-    fe.statusCode < 500
-  ) {
-    out = new ModelProxyError('model_request_invalid', 'the request could not be read');
-  } else {
-    out = toModelProxyError(err);
-    if (out.code === 'model_proxy_unavailable' && !(err instanceof ModelProxyError))
-      req.log.error({ err: { name: err.name, code: fe.code } }, 'model route failed');
-  }
-  if (out.retryAfterSeconds) void reply.header('retry-after', String(out.retryAfterSeconds));
-  void reply.header('cache-control', 'no-store');
-  return reply.status(out.status).send(out.envelope());
-}
 
 /** Worker node contract: every call carries the signed run token of exactly one run. */
 export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
@@ -512,5 +453,7 @@ function registerModelRoutes(app: ZApp, deps: Deps): void {
         return modelProxy.call(auth, req.body, gone.signal);
       },
     );
+
+    registerPassthroughRoutes(typed, deps, { bodyLimit: limit, gates });
   });
 }

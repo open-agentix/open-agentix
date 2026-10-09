@@ -10330,6 +10330,340 @@ paths:
                 required:
                   - error
                 additionalProperties: false
+  /v1/model-proxy/anthropic/v1/messages:
+    post:
+      summary: "Model proxy, Anthropic Messages protocol (JSON, or SSE with `stream: true`)"
+      tags:
+        - model-proxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+              additionalProperties: {}
+              description: Request body of the protocol (a strict allowlist is applied, ADR 0009 section 6.2)
+        description: Request body of the protocol (a strict allowlist is applied, ADR 0009 section 6.2)
+      security:
+        - modelToken: []
+      responses:
+        "200":
+          description: "The protocol response (JSON), or Server-Sent Events of the protocol with `stream: true`; `x-oax-call-id` (and `x-oax-cost-micros` for JSON) identify the metered call"
+          content:
+            application/json:
+              schema:
+                type: object
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: "Request refused: `model_request_invalid`, `model_parameter_refused`, `model_surface_mismatch`"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "401":
+          description: Missing, malformed or expired model token (a run token is not accepted)
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "403":
+          description: "Not allowed: model, session, classification, egress, security override or budget (`control_budget_*`)"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "413":
+          description: Request body over `OAX_MODEL_PROXY_MAX_BODY_BYTES`
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "422":
+          description: "`model_unpriced`: a cost limit applies and the model has no price"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "429":
+          description: Rate or concurrency limit; `Retry-After` is set
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "502":
+          description: Upstream provider error
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "503":
+          description: Model proxy disabled or settlement unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "504":
+          description: Upstream exceeded the call deadline
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+  /v1/model-proxy/openai/v1/chat/completions:
+    post:
+      summary: "Model proxy, OpenAI Chat Completions protocol (JSON, or SSE with `stream: true`)"
+      tags:
+        - model-proxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+              additionalProperties: {}
+              description: Request body of the protocol (a strict allowlist is applied, ADR 0009 section 6.2)
+        description: Request body of the protocol (a strict allowlist is applied, ADR 0009 section 6.2)
+      security:
+        - modelToken: []
+      responses:
+        "200":
+          description: "The protocol response (JSON), or Server-Sent Events of the protocol with `stream: true`; `x-oax-call-id` (and `x-oax-cost-micros` for JSON) identify the metered call"
+          content:
+            application/json:
+              schema:
+                type: object
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: "Request refused: `model_request_invalid`, `model_parameter_refused`, `model_surface_mismatch`"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "401":
+          description: Missing, malformed or expired model token (a run token is not accepted)
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "403":
+          description: "Not allowed: model, session, classification, egress, security override or budget (`control_budget_*`)"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "413":
+          description: Request body over `OAX_MODEL_PROXY_MAX_BODY_BYTES`
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "422":
+          description: "`model_unpriced`: a cost limit applies and the model has no price"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "429":
+          description: Rate or concurrency limit; `Retry-After` is set
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "502":
+          description: Upstream provider error
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "503":
+          description: Model proxy disabled or settlement unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "504":
+          description: Upstream exceeded the call deadline
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+  /v1/model-proxy/anthropic/v1/models:
+    get:
+      summary: "Model proxy: lists exactly the model of the token's step"
+      tags:
+        - model-proxy
+      security:
+        - modelToken: []
+      responses:
+        "200":
+          description: The protocol model list (exactly the model of the token's step)
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: "Request refused: `model_request_invalid`, `model_parameter_refused`, `model_surface_mismatch`"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "401":
+          description: Missing, malformed or expired model token (a run token is not accepted)
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "403":
+          description: "Not allowed: model, session, classification, egress, security override or budget (`control_budget_*`)"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "413":
+          description: Request body over `OAX_MODEL_PROXY_MAX_BODY_BYTES`
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "422":
+          description: "`model_unpriced`: a cost limit applies and the model has no price"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "429":
+          description: Rate or concurrency limit; `Retry-After` is set
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "502":
+          description: Upstream provider error
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "503":
+          description: Model proxy disabled or settlement unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "504":
+          description: Upstream exceeded the call deadline
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+  /v1/model-proxy/openai/v1/models:
+    get:
+      summary: "Model proxy: lists exactly the model of the token's step"
+      tags:
+        - model-proxy
+      security:
+        - modelToken: []
+      responses:
+        "200":
+          description: The protocol model list (exactly the model of the token's step)
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: "Request refused: `model_request_invalid`, `model_parameter_refused`, `model_surface_mismatch`"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "401":
+          description: Missing, malformed or expired model token (a run token is not accepted)
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "403":
+          description: "Not allowed: model, session, classification, egress, security override or budget (`control_budget_*`)"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "413":
+          description: Request body over `OAX_MODEL_PROXY_MAX_BODY_BYTES`
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "422":
+          description: "`model_unpriced`: a cost limit applies and the model has no price"
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "429":
+          description: Rate or concurrency limit; `Retry-After` is set
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "502":
+          description: Upstream provider error
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "503":
+          description: Model proxy disabled or settlement unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
+        "504":
+          description: Upstream exceeded the call deadline
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.'
 servers:
   - url: http://localhost:8080
     description: local development

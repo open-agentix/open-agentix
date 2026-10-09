@@ -62,6 +62,26 @@ const NO_NOT_FOUND = new Set([
   'post /v1/worker/runs/{id}/model-reservations',
 ]);
 
+/** Error body of the pass-through surfaces: Anthropic `{ type, error }` or OpenAI `{ error }`. */
+const PROTOCOL_ERROR = {
+  type: 'object',
+  description:
+    'Anthropic: `{ "type": "error", "error": { "type", "message", "code" } }`; OpenAI: `{ "error": { "message", "type", "code" } }`. `code` is the platform code of ADR 0009 section 2.5.',
+};
+const PROTOCOL_ERRORS: Record<string, string> = {
+  '400':
+    'Request refused: `model_request_invalid`, `model_parameter_refused`, `model_surface_mismatch`',
+  '401': 'Missing, malformed or expired model token (a run token is not accepted)',
+  '403':
+    'Not allowed: model, session, classification, egress, security override or budget (`control_budget_*`)',
+  '413': 'Request body over `OAX_MODEL_PROXY_MAX_BODY_BYTES`',
+  '422': '`model_unpriced`: a cost limit applies and the model has no price',
+  '429': 'Rate or concurrency limit; `Retry-After` is set',
+  '502': 'Upstream provider error',
+  '503': 'Model proxy disabled or settlement unavailable',
+  '504': 'Upstream exceeded the call deadline',
+};
+
 const REDIRECTS: Record<string, string> = {
   'get /v1/auth/oidc/login': 'Redirect to the identity provider (authorization code + PKCE)',
   'get /v1/auth/oidc/callback':
@@ -116,6 +136,24 @@ export function decorateOpenApi<T>(input: T): T {
       }
       if (path.includes('{') && !NO_NOT_FOUND.has(key))
         op.responses['404'] ??= errorResponse('Not found');
+      if (path.startsWith('/v1/model-proxy/')) {
+        // Pass-through surfaces answer in the protocol's own shapes and error envelopes.
+        const envelope = {
+          content: { 'application/json': { schema: PROTOCOL_ERROR } },
+        };
+        op.responses['200'] = {
+          description:
+            method === 'post'
+              ? 'The protocol response (JSON), or Server-Sent Events of the protocol with `stream: true`; `x-oax-call-id` (and `x-oax-cost-micros` for JSON) identify the metered call'
+              : "The protocol model list (exactly the model of the token's step)",
+          content: {
+            'application/json': { schema: { type: 'object' } },
+            ...(method === 'post' ? { 'text/event-stream': { schema: { type: 'string' } } } : {}),
+          },
+        };
+        for (const [status, description] of Object.entries(PROTOCOL_ERRORS))
+          op.responses[status] = { description, ...envelope };
+      }
       const sse = ALSO_SSE[key];
       const ok = op.responses['200'] as { content?: Record<string, unknown> } | undefined;
       if (sse && ok)
