@@ -29,6 +29,30 @@ describe('i18n', () => {
     expect(keys(de).sort()).toEqual(keys(en).sort());
   });
 
+  it('uses the technical terms Input / Output for token counts in both languages', () => {
+    for (const lang of ['en', 'de'] as const) {
+      expect(translate(lang, 'steps.tokens', { in: '265', out: '36' })).toBe(
+        '265 Input / 36 Output',
+      );
+    }
+    expect(en.costs.tokensIn).toBe('Input tokens');
+    expect(en.costs.tokensOut).toBe('Output tokens');
+    expect(de.costs.tokensIn).toBe('Input-Tokens');
+    expect(de.costs.tokensOut).toBe('Output-Tokens');
+  });
+
+  it('keeps the German translation free of over-translated terms and formal address', () => {
+    const text = JSON.stringify(de);
+    expect(text).not.toMatch(/\b(rein|raus)\b/);
+    expect(text).not.toMatch(
+      /\b(Läufe|Lauf|Testlauf|Richtlinien?|Mandanten?|Werkzeuge?|Geheimnisse?)\b/,
+    );
+    expect(text).not.toMatch(/\b(Eingabe|Ausgaben?|Betreiben)\b/);
+    expect(text).not.toMatch(/\b(Sie|Ihr|Ihre|Ihnen)\b/);
+    expect(de.nav.groups.operate).toBe('Betrieb');
+    expect(en.nav.groups.operate).toBe('Operations');
+  });
+
   it('translates with variables and plurals', async () => {
     await loadLocale('de');
     expect(translate('en', 'dashboard.greeting', { name: 'Ada' })).toBe('Hello Ada');

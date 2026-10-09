@@ -45,7 +45,7 @@
     "succeeded": "Erfolgreich",
     "failed": "Fehlgeschlagen",
     "cancelled": "Abgebrochen",
-    "blocked_by_policy": "Durch Richtlinie blockiert"
+    "blocked_by_policy": "Durch Policy blockiert"
   },
   "classification": {
     "public": "Öffentlich",
@@ -72,7 +72,7 @@
     "groups": {
       "overview": "Überblick",
       "build": "Bauen",
-      "operate": "Betreiben",
+      "operate": "Betrieb",
       "govern": "Governance"
     },
     "dashboard": "Dashboard",
@@ -81,9 +81,9 @@
     "agents": "Agenten",
     "connections": "Verbindungen",
     "events": "Ereignisse & Quellen",
-    "runs": "Läufe",
+    "runs": "Runs",
     "costs": "Kosten",
-    "policies": "Richtlinien",
+    "policies": "Policies",
     "audit": "Audit-Trail",
     "users": "Benutzer & Teams",
     "tokens": "API-Tokens",
@@ -116,7 +116,7 @@
     "title": "Dashboard",
     "greeting": "Hallo {name}",
     "subtitle": "Was deine Agenten heute getan haben, was es gekostet hat und was dich braucht.",
-    "runsToday": "Läufe heute",
+    "runsToday": "Runs heute",
     "active": { "one": "{count} noch aktiv", "other": "{count} noch aktiv" },
     "succeeded": "Erfolgreich",
     "failed": "Fehlgeschlagen oder blockiert",
@@ -124,16 +124,16 @@
     "budgetUsage": "Budgetverbrauch diesen Monat",
     "ofBudget": "von {budget} Team-Budgets",
     "noBudget": "Kein Team-Budget gesetzt",
-    "recentRuns": "Letzte Läufe",
-    "noRuns": "Noch keine Läufe",
-    "noRunsText": "Läufe erscheinen hier, sobald ein Ereignis einen Agenten startet oder du einen Testlauf startest.",
+    "recentRuns": "Letzte Runs",
+    "noRuns": "Noch keine Runs",
+    "noRunsText": "Runs erscheinen hier, sobald ein Ereignis einen Agenten startet oder du einen Test-Run startest.",
     "attention": "Braucht deine Aufmerksamkeit",
     "pendingApprovals": {
       "one": "{count} Tool-Aufruf wartet auf Freigabe",
       "other": "{count} Tool-Aufrufe warten auf Freigabe"
     },
     "nothingPending": "Gerade wartet nichts auf dich.",
-    "activePolicies": { "one": "{count} aktive Richtlinie", "other": "{count} aktive Richtlinien" },
+    "activePolicies": { "one": "{count} aktive Policy", "other": "{count} aktive Policies" },
     "workers": "Worker & Provider",
     "available": "Verfügbar",
     "planned": "Geplant",
@@ -146,7 +146,7 @@
       "started": "Szenario gestartet",
       "live": "Echtes Modell: {model}. Verbleibendes Budget heute: {remaining}.",
       "simulated": "Simuliertes Modell (kein Netzwerk, keine Kosten).",
-      "limit": "Bis zu {runs} Läufe pro {minutes} Minuten und Besucher."
+      "limit": "Bis zu {runs} Runs pro {minutes} Minuten und Besucher."
     }
   },
   "agents": {
@@ -187,7 +187,7 @@
       "editor": "agents.md",
       "versions": "Versionen",
       "diff": "Vergleichen",
-      "test": "Testlauf"
+      "test": "Test-Run"
     },
     "overview": {
       "draftTitle": "Noch nicht veröffentlicht",
@@ -210,7 +210,7 @@
       "providers": "Provider",
       "agent": "Agent „{id}“",
       "provider": "Provider / Modell",
-      "outputs": "Ausgaben",
+      "outputs": "Outputs",
       "tools": "Erlaubte Tools",
       "tool": "Tool",
       "args": "Eingeschränkte Argumente",
@@ -219,7 +219,7 @@
       "approvalNone": "Nein",
       "access": "Zugriff des Schritts",
       "accessValues": {
-        "read-only": "Schreibgeschützt (keine Schreib-Werkzeuge)",
+        "read-only": "Schreibgeschützt (keine Schreib-Tools)",
         "write": "Schreiben"
       },
       "via": "(aus Profil {profile})",
@@ -257,16 +257,16 @@
       "removedLine": "entfernt:"
     },
     "test": {
-      "title": "Testlauf mit Beispielereignis",
+      "title": "Test-Run mit Beispielereignis",
       "needsVersion": "Erst veröffentlichen",
-      "needsVersionText": "Testläufe führen eine veröffentlichte Version aus.",
+      "needsVersionText": "Test-Runs führen eine veröffentlichte Version aus.",
       "simulated": "Diese Version nutzt den simulierten Provider: deterministisch, kostenlos und ohne ausgehende Aufrufe.",
-      "realProvider": "Diese Version ruft einen echten Provider auf ({providers}). Der Lauf kostet Geld. Für kostenlose Tests den Provider „simulated“ verwenden.",
+      "realProvider": "Diese Version ruft einen echten Provider auf ({providers}). Der Run kostet Geld. Für kostenlose Tests den Provider „simulated“ verwenden.",
       "version": "Version",
       "event": "Beispielereignis (JSON)",
       "eventHint": "Wird in ein manuelles CloudEvent verpackt; ein vollständiges CloudEvent geht auch.",
       "invalidJson": "Das ist kein gültiges JSON.",
-      "start": "Testlauf starten"
+      "start": "Test-Run starten"
     }
   },
   "wizard": {
@@ -346,7 +346,7 @@
       "classification": "Sensibelste beteiligte Daten",
       "classificationHint": "Entscheidet, welche Provider und Tools die Daten sehen dürfen.",
       "provider": "Modell-Provider",
-      "budget": "Max. Kosten pro Lauf (USD)",
+      "budget": "Max. Kosten pro Run (USD)",
       "whoApproves": "Wer freigeben muss",
       "publishers": "Ein Agent Engineer prüft den Entwurf und veröffentlicht ihn (Rollen: {roles}).",
       "toolApprovers": "Als freigabepflichtig markierte Schritte warten zur Laufzeit auf einen Menschen (Rollen: {roles}).",
@@ -376,14 +376,14 @@
     "ingestUrl": "Ingest-URL",
     "copyUrl": "Ingest-URL kopieren",
     "topic": "Topic",
-    "secretRefs": "HMAC-Geheimnis (Referenz)",
+    "secretRefs": "HMAC-Secret (Referenz)",
     "noSecret": "keines – unsignierte Anfragen werden abgelehnt",
     "scheme": "Signaturverfahren {scheme}",
     "routesTo": "Leitet weiter an",
     "matchingTriggers": "alle Agenten mit passendem Auslöser",
     "enabledToggle": "Ereignisse für {name} annehmen",
     "howToSign": "Wie signiere ich eine Anfrage?",
-    "signText": "Berechne einen HMAC-SHA256 über den unveränderten Body mit dem Geheimnis, auf das die Referenz zeigt, und sende ihn als x-oax-signature. Das Geheimnis selbst erscheint nie in der Oberfläche.",
+    "signText": "Berechne einen HMAC-SHA256 über den unveränderten Body mit dem Secret, auf das die Referenz zeigt, und sende ihn als x-oax-signature. Das Secret selbst erscheint nie in der Oberfläche.",
     "type": "Typ",
     "subject": "Betreff",
     "received": "Empfangen",
@@ -394,7 +394,7 @@
       "nameHint": "Kleingeschriebener Slug; Agenten verweisen in ihren Auslösern darauf, z. B. „jira“.",
       "kind": "Art",
       "scheme": "Signaturverfahren",
-      "secretRef": "Referenz auf das Geheimnis",
+      "secretRef": "Referenz auf das Secret",
       "secretRefHint": "Name der Umgebungsvariable oder des Kubernetes-Secrets – nie der Wert selbst.",
       "agent": "Weiterleiten an"
     }
@@ -417,14 +417,14 @@
     }
   },
   "runs": {
-    "title": "Läufe",
-    "subtitle": "Jede Ausführung eines Agenten, Schritt für Schritt – richtliniengeprüft, auditiert und kostenerfasst.",
-    "detailTitle": "Lauf {id}",
-    "empty": "Noch keine Läufe",
-    "emptyText": "Läufe erscheinen, wenn ein Ereignis einen Agenten startet oder jemand einen Testlauf startet.",
+    "title": "Runs",
+    "subtitle": "Jede Ausführung eines Agenten, Schritt für Schritt – policy-geprüft, auditiert und kostenerfasst.",
+    "detailTitle": "Run {id}",
+    "empty": "Noch keine Runs",
+    "emptyText": "Runs erscheinen, wenn ein Ereignis einen Agenten startet oder jemand einen Test-Run startet.",
     "filterStatus": "Status",
     "filterAgent": "Agent",
-    "run": "Lauf",
+    "run": "Run",
     "agent": "Agent",
     "status": "Status",
     "created": "Erstellt",
@@ -436,22 +436,22 @@
     "pendingApprovals": { "one": "{count} Freigabe offen", "other": "{count} Freigaben offen" },
     "waitingForYou": "Wartet auf eine Entscheidung",
     "triggeredBy": "ausgelöst von {who}, {when}",
-    "cancel": "Lauf abbrechen",
-    "cancelTitle": "Diesen Lauf abbrechen?",
+    "cancel": "Run abbrechen",
+    "cancelTitle": "Diesen Run abbrechen?",
     "cancelText": "Der Worker stoppt vor dem nächsten Schritt. Bereits ausgeführte Tool-Aufrufe werden nicht rückgängig gemacht.",
-    "cancelled": "Lauf abgebrochen.",
+    "cancelled": "Run abgebrochen.",
     "timeline": "Schritte",
-    "noSteps": "Noch keine Schritte – der Lauf wartet auf einen Worker.",
+    "noSteps": "Noch keine Schritte – der Run wartet auf einen Worker.",
     "details": "Details",
     "version": "Version",
     "event": "Ereignis",
     "started": "Gestartet",
     "finished": "Beendet",
     "attempts": "Versuche",
-    "auditTrail": "Audit-Trail dieses Laufs",
-    "outputs": "Ausgaben",
-    "noOutputs": "Dieser Lauf hat keine Ausgabe erzeugt.",
-    "outputsPending": "Ausgaben erscheinen, wenn der Lauf fertig ist.",
+    "auditTrail": "Audit-Trail dieses Runs",
+    "outputs": "Outputs",
+    "noOutputs": "Dieser Run hat keinen Output erzeugt.",
+    "outputsPending": "Outputs erscheinen, wenn der Run fertig ist.",
     "stream": {
       "live": "Live",
       "reconnecting": "Verbinde neu …",
@@ -460,11 +460,11 @@
     "handover": {
       "skipped": "Schritt übersprungen, Bedingung ist falsch: {detail}",
       "conditionError": "Bedingung konnte nicht ausgewertet werden: {detail}",
-      "invalid": "Die {direction} passt nicht zum Schema ({count} Verstöße). Werte werden nie protokolliert.",
-      "missing": "Die {direction} braucht die Ausgabe eines Schritts, der nicht lief.",
-      "retry": "Die Ausgabe war ungültig; der Agent wird noch einmal gefragt.",
-      "input": "Eingabe",
-      "output": "Ausgabe"
+      "invalid": "Der {direction} passt nicht zum Schema ({count} Verstöße). Werte werden nie protokolliert.",
+      "missing": "Der {direction} braucht den Output eines Schritts, der nicht lief.",
+      "retry": "Der Output war ungültig; der Agent wird noch einmal gefragt.",
+      "input": "Input",
+      "output": "Output"
     }
   },
   "steps": {
@@ -474,7 +474,7 @@
       "policy_decision": "Audit-Gate",
       "approval": "Freigabe",
       "control": "Kontroll-Agent",
-      "output": "Ausgabe",
+      "output": "Output",
       "condition": "Bedingung",
       "handover": "Übergabe",
       "error": "Fehler"
@@ -490,9 +490,9 @@
     },
     "effects": { "allow": "Erlaubt", "deny": "Abgelehnt", "require_approval": "Braucht Freigabe" },
     "gate": "Audit-Gate: {effect}",
-    "tokens": "{in} rein / {out} raus",
-    "input": "Eingabe",
-    "output": "Ausgabe"
+    "tokens": "{in} Input / {out} Output",
+    "input": "Input",
+    "output": "Output"
   },
   "approvals": {
     "approve": "Freigeben",
@@ -509,11 +509,11 @@
     "title": "Verbindungen",
     "subtitle": "MCP-Server und APIs, die Agenten nutzen dürfen – bereitgestellt von Integratoren.",
     "new": "Neue Verbindung",
-    "secretsNotice": "Geheimnisse werden nur per Name referenziert (envSecrets, headerSecrets, apiKeySecret) und hier nie angezeigt oder gespeichert.",
+    "secretsNotice": "Secrets werden nur per Name referenziert (envSecrets, headerSecrets, apiKeySecret) und hier nie angezeigt oder gespeichert.",
     "empty": "Noch keine Verbindungen",
     "emptyText": "Füge einen MCP-Server hinzu, damit Agenten seine Tools nutzen können.",
-    "kinds": { "mcp": "MCP-Server", "model": "Modell-Anbieter" },
-    "secretRefs": "Referenzen auf Geheimnisse",
+    "kinds": { "mcp": "MCP-Server", "model": "Modell-Provider" },
+    "secretRefs": "Referenzen auf Secrets",
     "config": "Konfiguration",
     "configHint": "JSON. Verwende envSecrets / headerSecrets mit Namen statt Werten.",
     "updated": "geändert {when}",
@@ -525,7 +525,7 @@
     "deleteTitle": "{name} löschen?",
     "deleteText": "Agenten, die diese Verbindung nutzen, scheitern bei ihren Tool-Aufrufen, bis sie wieder angelegt ist.",
     "kind": "Typ",
-    "provider": "Anbieter",
+    "provider": "Provider",
     "providers": {
       "anthropic": "Claude API (Anthropic)",
       "bedrock": "AWS Bedrock",
@@ -538,51 +538,51 @@
       "openai-compatible": "Anderer OpenAI-kompatibler Server"
     },
     "scope": "Wer darf es nutzen",
-    "scopeHint": "Plattform-Verbindungen stehen jedem Mandanten zur Verfügung und werden vom Plattformbetreiber verwaltet.",
-    "scopes": { "platform": "Plattform", "tenant": "Mandant", "team": "Team", "agent": "Agent" },
+    "scopeHint": "Plattform-Verbindungen stehen jedem Tenant zur Verfügung und werden vom Plattformbetreiber verwaltet.",
+    "scopes": { "platform": "Plattform", "tenant": "Tenant", "team": "Team", "agent": "Agent" },
     "profiles": {
-      "title": "Werkzeugzugriff und Profile",
-      "hint": "Stufe jedes Werkzeug als Lesen oder Schreiben ein (nicht deklarierte Werkzeuge gelten als Schreiben) und fasse sie zu benannten Profilen wie read oder write zusammen. Agenten erhalten ein Profil (zum Beispiel jira:read); schreibgeschützte Schritte bekommen nie ein Schreib-Werkzeug.",
+      "title": "Tool-Zugriff und Profile",
+      "hint": "Stufe jedes Tool als Lesen oder Schreiben ein (nicht deklarierte Tools gelten als Schreiben) und fasse sie zu benannten Profilen wie read oder write zusammen. Agenten erhalten ein Profil (zum Beispiel jira:read); schreibgeschützte Schritte bekommen nie ein Schreib-Tool.",
       "summary": {
-        "one": "{count} Werkzeug eingestuft, Profile",
-        "other": "{count} Werkzeuge eingestuft, Profile"
+        "one": "{count} Tool eingestuft, Profile",
+        "other": "{count} Tools eingestuft, Profile"
       },
-      "tools": "Eingestufte Werkzeuge",
-      "tool": "Werkzeug",
+      "tools": "Eingestufte Tools",
+      "tool": "Tool",
       "access": "Zugriff",
       "read": "Lesen",
       "write": "Schreiben",
       "accessOf": "Zugriff von {tool}",
-      "newTool": "Name des neuen Werkzeugs",
-      "addTool": "Werkzeug hinzufügen",
-      "removeTool": "Werkzeug {tool} entfernen",
+      "newTool": "Name des neuen Tools",
+      "addTool": "Tool hinzufügen",
+      "removeTool": "Tool {tool} entfernen",
       "newProfile": "Name des neuen Profils",
       "addProfile": "Profil hinzufügen",
       "removeProfile": "Profil {profile} entfernen",
       "problems": "Diese Profileinträge werden abgelehnt: {items}"
     },
     "modelsCount": { "one": "{count} Modell mit Preis", "other": "{count} Modelle mit Preisen" },
-    "proposeHint": "Bring your own key: Der Schlüssel wird per Geheimnisname referenziert. Preise werden aus dem eingefrorenen Modellkatalog vorgeschlagen und lassen sich pro Modell überschreiben.",
+    "proposeHint": "Bring your own key: Der Schlüssel wird per Secret-Name referenziert. Preise werden aus dem eingefrorenen Modellkatalog vorgeschlagen und lassen sich pro Modell überschreiben.",
     "propose": "Modelle und Preise vorschlagen",
     "proposals": "Vorgeschlagene Modelle",
     "model": "Modell",
-    "inputPrice": "Eingabe je 1 Mio. Token",
-    "outputPrice": "Ausgabe je 1 Mio. Token",
+    "inputPrice": "Input je 1 Mio. Tokens",
+    "outputPrice": "Output je 1 Mio. Tokens",
     "addModel": "Hinzufügen",
     "invalidJson": "Die Konfiguration ist kein gültiges JSON.",
-    "inlineSecret": "Sieht nach einem geheimen Wert aus bei {paths}. Bitte Geheimnisse per Name referenzieren."
+    "inlineSecret": "Sieht nach einem geheimen Wert aus bei {paths}. Bitte Secrets per Name referenzieren."
   },
   "policies": {
-    "title": "Richtlinien",
-    "subtitle": "Leitplanken, die vor jedem Tool-Aufruf und während der Läufe geprüft werden.",
-    "new": "Neue Richtlinie",
+    "title": "Policies",
+    "subtitle": "Leitplanken, die vor jedem Tool-Aufruf und während der Runs geprüft werden.",
+    "new": "Neue Policy",
     "gateTitle": "Audit-Gate (pro Agent)",
-    "gateText": "Vor jedem Tool-Aufruf prüft die deterministische Policy-Engine die Allowlist und Argumentregeln aus der agents.md sowie diese Richtlinien. Verstöße werden blockiert und protokolliert.",
+    "gateText": "Vor jedem Tool-Aufruf prüft die deterministische Policy-Engine die Allowlist und Argumentregeln aus der agents.md sowie diese Policies. Verstöße werden blockiert und protokolliert.",
     "controlTitle": "Kontroll-Agent (global)",
-    "controlText": "Überwacht laufende Agenten auf Budgets, Raten, Datenklassifizierung und verbotene Aktionen; kann einen Lauf pausieren oder stoppen.",
-    "bundles": "Richtlinienpakete",
-    "empty": "Noch keine Richtlinien",
-    "emptyText": "Lege eine Richtlinie an, um Tools oder Argumentmuster für alle Agenten zu verbieten.",
+    "controlText": "Überwacht laufende Agenten auf Budgets, Raten, Datenklassifizierung und verbotene Aktionen; kann einen Run pausieren oder stoppen.",
+    "bundles": "Policy-Pakete",
+    "empty": "Noch keine Policies",
+    "emptyText": "Lege eine Policy an, um Tools oder Argumentmuster für alle Agenten zu verbieten.",
     "revision": "Revision {n}, {when}",
     "forbiddenTools": "Verbotene Tools",
     "forbiddenArgs": "Verbotene Argumentmuster",
@@ -596,14 +596,14 @@
     "globHint": "Ein Glob pro Zeile über server/tool, z. B. */delete_* oder shell/*",
     "patternHint": "Ein regulärer Ausdruck pro Zeile, optional „Muster | Grund“.",
     "invalidPattern": "Ungültiger regulärer Ausdruck: {patterns}",
-    "saved": "Richtlinie {name} gespeichert.",
+    "saved": "Policy {name} gespeichert.",
     "budgets": "Budgets",
-    "budgetsText": "Budgets pro Lauf stehen in der agents.md; Monatsbudgets werden pro Team gesetzt. Läufe stoppen hart, wenn ein Budget erreicht ist.",
+    "budgetsText": "Budgets pro Run stehen in der agents.md; Monatsbudgets werden pro Team gesetzt. Runs stoppen hart, wenn ein Budget erreicht ist.",
     "noBudget": "kein Monatsbudget",
     "toCosts": "Kosten und Budgetwarnungen",
     "tester": {
       "title": "Audit-Gate ausprobieren",
-      "text": "Prüft einen gedachten Tool-Aufruf gegen den Entwurf eines Agenten und die aktiven Richtlinien – ausgeführt wird nichts.",
+      "text": "Prüft einen gedachten Tool-Aufruf gegen den Entwurf eines Agenten und die aktiven Policies – ausgeführt wird nichts.",
       "agent": "Agent",
       "chooseAgent": "Agent wählen",
       "specId": "Agenten-ID in der Datei",
@@ -626,14 +626,14 @@
       "other": "Manipulation erkannt: {count} Probleme"
     },
     "export": "Als NDJSON exportieren",
-    "filterRun": "Lauf-ID",
+    "filterRun": "Run-ID",
     "filterAction": "Aktion",
     "empty": "Keine Audit-Einträge",
     "time": "Zeit",
     "action": "Aktion",
     "actor": "Akteur",
     "target": "Ziel",
-    "run": "Lauf",
+    "run": "Run",
     "hash": "Hash",
     "prevHash": "Vorheriger Hash",
     "payloadDigest": "Digest des Inhalts",
@@ -643,7 +643,7 @@
   },
   "costs": {
     "title": "Kosten",
-    "subtitle": "Tokens und Kosten pro Lauf, Agent, Team und Monat.",
+    "subtitle": "Tokens und Kosten pro Run, Agent, Team und Monat.",
     "period": "Zeitraum",
     "periods": { "month": "Dieser Monat", "30d": "Letzte 30 Tage", "all": "Gesamter Zeitraum" },
     "total": "Gesamtkosten",
@@ -655,27 +655,27 @@
       "month": "Monat",
       "model": "Modell",
       "provider": "Provider",
-      "run": "Lauf",
-      "tenant": "Mandant",
+      "run": "Run",
+      "tenant": "Tenant",
       "use_case": "Anwendungsfall"
     },
     "tableCaption": "Kosten nach {group}",
-    "tokensIn": "Tokens rein",
-    "tokensOut": "Tokens raus",
+    "tokensIn": "Input-Tokens",
+    "tokensOut": "Output-Tokens",
     "cost": "Kosten",
     "share": "Anteil",
     "unassigned": "Nicht zugeordnet",
     "empty": "Keine Kosten in diesem Zeitraum",
-    "emptyText": "Kosten werden pro Schritt erfasst, sobald Läufe ein Modell aufrufen.",
+    "emptyText": "Kosten werden pro Schritt erfasst, sobald Runs ein Modell aufrufen.",
     "budgets": "Team-Budgets diesen Monat",
     "budgetOf": "Budgetverbrauch von {team}",
     "exceeded": "Budget überschritten",
     "nearLimit": "Über 80 %",
     "onTrack": "Im Rahmen",
     "monthlyBudgets": "Monatsbudgets",
-    "monthlyBudgetsText": "Läufe stoppen hart, sobald ein Budget erreicht ist, auch mitten im Lauf. Alarme gibt es bei 50, 80 und 100 %.",
-    "tenantBudget": "Gesamter Mandant",
-    "stopped": "Läufe gestoppt",
+    "monthlyBudgetsText": "Runs stoppen hart, sobald ein Budget erreicht ist, auch mitten im Run. Alarme gibt es bei 50, 80 und 100 %.",
+    "tenantBudget": "Gesamter Tenant",
+    "stopped": "Runs gestoppt",
     "alertAt": "Alarm bei {percent} %",
     "useCase": "Anwendungsfall",
     "monthlyLimit": "Monatslimit (USD)",
@@ -755,7 +755,7 @@
     "providers": "Modell-Provider",
     "providersText": "Konfigurierte Provider und die höchste Datenklassifizierung, die jeder erhalten darf.",
     "runners": "Runner (Worker Nodes)",
-    "runnersText": "Wo Läufe ausgeführt werden. Container- und Kubernetes-Worker folgen in v0.2, Lambda- und CI-Runner in v0.3.",
+    "runnersText": "Wo Runs ausgeführt werden. Container- und Kubernetes-Worker folgen in v0.2, Lambda- und CI-Runner in v0.3.",
     "auth": "Anmeldeverfahren",
     "authLocal": "Lokale Konten",
     "authLdap": "LDAP / Active Directory",
@@ -790,15 +790,15 @@
     "steps": {
       "welcome": {
         "title": "Willkommen in der open-agentix-Demo",
-        "body": "Du bist als fiktiver Demo-Admin angemeldet. Alle Daten sind erfunden und schreibgeschützt, Läufe nutzen einen simulierten Provider, und nichts, was du eingibst, erreicht ein Modell. Die Demo wird nachts zurückgesetzt."
+        "body": "Du bist als fiktiver Demo-Admin angemeldet. Alle Daten sind erfunden und schreibgeschützt, Runs nutzen einen simulierten Provider, und nichts, was du eingibst, erreicht ein Modell. Die Demo wird nachts zurückgesetzt."
       },
       "scenario": {
         "title": "Szenario ausprobieren",
         "body": "Diese Karte startet eines von wenigen festen Szenarien: Ein CVE-Triage-Agent arbeitet einen Scanner-Fund ab. Schließe die Tour und klicke jederzeit auf \"Szenario starten\"; Prompts kannst du nicht eingeben."
       },
       "runs": {
-        "title": "Einen Lauf beobachten",
-        "body": "Jeder Lauf zeigt seine Schritte, die Richtlinien-Entscheidung zu jedem Tool-Aufruf, Freigaben, die auf einen Menschen warten, und die Kosten je Schritt. Öffne einen Lauf für den vollen Ablauf."
+        "title": "Einen Run beobachten",
+        "body": "Jeder Run zeigt seine Schritte, die Policy-Entscheidung zu jedem Tool-Aufruf, Freigaben, die auf einen Menschen warten, und die Kosten je Schritt. Öffne einen Run für den vollen Ablauf."
       },
       "audit": {
         "title": "Ein manipulationssicheres Audit-Protokoll",
@@ -806,15 +806,15 @@
       },
       "costs": {
         "title": "Zurechenbare Kosten",
-        "body": "Ausgaben werden je Agent, je Anwendungsfall und je Mandant erfasst, mit Budgets und Export. Die Demo-Preise sind beispielhaft; der simulierte Provider kostet nichts."
+        "body": "Kosten werden je Agent, je Anwendungsfall und je Tenant erfasst, mit Budgets und Export. Die Demo-Preise sind beispielhaft; der simulierte Provider kostet nichts."
       },
       "agents": {
-        "title": "Agenten, Mandanten und Rollen",
-        "body": "Agenten gehören zu Teams innerhalb von Mandanten. Rollen gibt es je Mandant, je Team oder sogar je einzelnem Agenten, sodass ein Externer nur einen Agenten sieht und sonst nichts."
+        "title": "Agenten, Tenants und Rollen",
+        "body": "Agenten gehören zu Teams innerhalb von Tenants. Rollen gibt es je Tenant, je Team oder sogar je einzelnem Agenten, sodass ein Externer nur einen Agenten sieht und sonst nichts."
       },
       "connections": {
-        "title": "Verbindungen, Tool-Profile und Richtlinien",
-        "body": "MCP-Verbindungen legen fest, welche Tools es gibt, Tool-Profile wählen die wenigen aus, die ein Agent nutzen darf, und Richtlinien entscheiden jeden Aufruf. Standard ist minimale Berechtigung: Was nicht erlaubt ist, wird abgelehnt."
+        "title": "Verbindungen, Tool-Profile und Policies",
+        "body": "MCP-Verbindungen legen fest, welche Tools es gibt, Tool-Profile wählen die wenigen aus, die ein Agent nutzen darf, und Policies entscheiden jeden Aufruf. Standard ist minimale Berechtigung: Was nicht erlaubt ist, wird abgelehnt."
       },
       "links": {
         "title": "Wie geht es weiter?",
@@ -850,7 +850,7 @@
     "findings": "Befunde",
     "summary": "{error} Fehler, {warning} Warnungen, {info} Hinweise",
     "noFindings": "Keine Befunde. Der Plan hält die Regeln für geringste Rechte ein.",
-    "advisory": "Die Prüfungen sind Hinweise. Ein Agent-Engineer prüft jeden Entwurf weiterhin, bevor er veröffentlicht wird.",
+    "advisory": "Die Prüfungen sind Hinweise. Ein Agent Engineer prüft jeden Entwurf weiterhin, bevor er veröffentlicht wird.",
     "col": {
       "severity": "Schwere",
       "code": "Code",
@@ -868,11 +868,11 @@
       "model": "Modell"
     },
     "draft": "Entwurf agents.md",
-    "draftNote": "Nur ein Entwurf. Gespeichert wird er erst, wenn Sie den Agenten im Editor anlegen.",
+    "draftNote": "Nur ein Entwurf. Gespeichert wird er erst, wenn du den Agenten im Editor anlegst.",
     "draftText": "Erzeugter Text",
     "copyDraft": "Entwurf kopieren",
     "openEditor": "Im Editor für neue Agenten öffnen",
     "noDraft": "Es wurde kein Entwurf erzeugt",
-    "noDraftText": "Der Plan hat Fehler-Befunde. Beheben Sie sie und erzeugen Sie den Entwurf erneut."
+    "noDraftText": "Der Plan hat Fehler-Befunde. Behebe sie und erzeuge den Entwurf erneut."
   }
 }

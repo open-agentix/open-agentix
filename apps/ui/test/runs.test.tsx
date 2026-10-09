@@ -167,7 +167,7 @@ describe('run detail', () => {
       await screen.findByText('Audit gate: Denied: tool not in allowlist'),
     ).toBeInTheDocument();
     expect(screen.getByText('Model call')).toBeInTheDocument();
-    expect(screen.getAllByText('1,200 in / 300 out').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1,200 Input / 300 Output').length).toBeGreaterThan(0);
     expect(screen.getByText('850 ms')).toBeInTheDocument();
     const toolStep = screen.getByText('tickets/get_ticket').closest('li')!;
     await user.click(within(toolStep).getByText('Input'));
