@@ -23,6 +23,7 @@ import {
   runsQuery,
   runStepsQuery,
   teamsQuery,
+  tenantTreeQuery,
   tokensQuery,
   usersQuery,
 } from './api/queries';
@@ -100,6 +101,13 @@ const dashboardRoute = createRoute({
     () => import('./features/dashboard/DashboardPage'),
     'DashboardPage',
   ),
+});
+
+const tenantsRoute = createRoute({
+  ...child('/tenants'),
+  validateSearch: (s: Record<string, unknown>): { q?: string } => ({ q: text(s.q, 200) }),
+  loader: ({ context }) => void context.queryClient.prefetchQuery(tenantTreeQuery),
+  component: lazyRouteComponent(() => import('./features/tenancy/TenantsPage'), 'TenantsPage'),
 });
 
 const agentsRoute = createRoute({
@@ -259,6 +267,7 @@ export const routeTree = rootRoute.addChildren([
   callbackRoute,
   appRoute.addChildren([
     dashboardRoute,
+    tenantsRoute,
     agentsRoute,
     agentNewRoute,
     agentDetailRoute,

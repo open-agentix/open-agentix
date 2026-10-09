@@ -12,6 +12,7 @@ import type {
   IngestedEvent,
   Me,
   Policy,
+  ResponseOf,
   Run,
   RunStep,
   Settings,
@@ -506,3 +507,156 @@ export const budgets: BudgetOverview = {
   ],
   teams: [],
 };
+
+// ---- tenant tree (GET /v1/tenants/tree) ------------------------------------------------------
+
+export type TreeNode = ResponseOf<'/v1/tenants/tree', 'get'>['items'][number];
+export type TreeCounts = NonNullable<TreeNode['counts']>;
+
+export const treeIds = {
+  org: 'c0000000-0000-4000-8000-000000000001',
+  sec: 'c0000000-0000-4000-8000-000000000002',
+  plat: 'c0000000-0000-4000-8000-000000000003',
+  prod: 'c0000000-0000-4000-8000-000000000004',
+  eu: 'c0000000-0000-4000-8000-000000000005',
+};
+
+export const fullCounts: TreeCounts = {
+  agents: 1,
+  agentsSubtree: 6,
+  runs30d: 12,
+  pendingApprovals: 0,
+  spendMonthUsd: 118,
+  spendMonthSubtreeUsd: 240,
+  capUsd: 300,
+  capSource: 'tenant',
+};
+
+export function treeNode(
+  over: Partial<TreeNode> & Pick<TreeNode, 'id' | 'slug' | 'name'>,
+): TreeNode {
+  return {
+    parentId: null,
+    slugPath: over.slug,
+    depth: 0,
+    hasChildren: false,
+    visible: true,
+    status: 'active',
+    myRoles: [],
+    inheritedRoles: [],
+    counts: { ...fullCounts },
+    ...over,
+  };
+}
+
+/** What a platform operator sees: the demo-like four tenants (org, security > product, platform). */
+export const platformTree: TreeNode[] = [
+  treeNode({
+    id: treeIds.org,
+    slug: 'example-org',
+    name: 'Example Org',
+    hasChildren: true,
+    myRoles: ['admin'],
+  }),
+  treeNode({
+    id: treeIds.plat,
+    slug: 'platform',
+    name: 'Platform',
+    parentId: treeIds.org,
+    slugPath: 'example-org/platform',
+    depth: 1,
+    inheritedRoles: ['admin'],
+    counts: {
+      ...fullCounts,
+      agents: 2,
+      agentsSubtree: 2,
+      runs30d: 6,
+      spendMonthUsd: 22,
+      spendMonthSubtreeUsd: 22,
+      capUsd: null,
+      capSource: null,
+    },
+  }),
+  treeNode({
+    id: treeIds.sec,
+    slug: 'security',
+    name: 'Security',
+    parentId: treeIds.org,
+    slugPath: 'example-org/security',
+    depth: 1,
+    hasChildren: true,
+    inheritedRoles: ['admin'],
+    counts: {
+      ...fullCounts,
+      agents: 3,
+      agentsSubtree: 5,
+      runs30d: 40,
+      pendingApprovals: 4,
+      spendMonthUsd: 63,
+      spendMonthSubtreeUsd: 70,
+      capUsd: 120,
+    },
+  }),
+  treeNode({
+    id: treeIds.prod,
+    slug: 'product',
+    name: 'Product',
+    parentId: treeIds.sec,
+    slugPath: 'example-org/security/product',
+    depth: 2,
+    inheritedRoles: ['viewer'],
+    counts: {
+      ...fullCounts,
+      agents: 2,
+      agentsSubtree: 2,
+      runs30d: 6,
+      spendMonthUsd: 7,
+      spendMonthSubtreeUsd: 7,
+      capUsd: null,
+      capSource: null,
+    },
+  }),
+];
+
+/** What a tenant admin of `security` sees: its ancestors as path stubs, then its own node. */
+export const stubbedTree: TreeNode[] = [
+  treeNode({
+    id: treeIds.org,
+    slug: 'example-org',
+    name: 'Example Org',
+    hasChildren: true,
+    visible: false,
+    counts: null,
+  }),
+  treeNode({
+    id: treeIds.eu,
+    slug: 'eu',
+    name: 'EU',
+    parentId: treeIds.org,
+    slugPath: 'example-org/eu',
+    depth: 1,
+    hasChildren: true,
+    visible: false,
+    counts: null,
+  }),
+  treeNode({
+    id: treeIds.sec,
+    slug: 'security',
+    name: 'Security',
+    parentId: treeIds.eu,
+    slugPath: 'example-org/eu/security',
+    depth: 2,
+    myRoles: ['admin'],
+    counts: {
+      ...fullCounts,
+      agents: 3,
+      agentsSubtree: 3,
+      runs30d: 40,
+      pendingApprovals: null,
+      spendMonthUsd: null,
+      spendMonthSubtreeUsd: null,
+      capUsd: null,
+      capSource: null,
+    },
+  }),
+];

@@ -624,6 +624,24 @@ inherited), search, row actions gated by permission, side panel with effective v
 available. Tests: keyboard tree navigation, use-case admin sees only attached nodes (fixture),
 blocked badge text.
 
+**U5 as implemented (first version).** Page `/tenants` (lazy, nav entry for `multi` mode, more than
+one visible tenant, or a home tenant below others). Deviations from the slice text:
+
+- Data comes from `GET /v1/tenants/tree?include=counts` only; the tree is loaded whole (the API
+  default limit) and expanded on the client ("lazy children" waits for a node-level request), two
+  levels open; search filters the loaded tree client side (name and slug, matches plus their
+  ancestors, path expanded) instead of calling `/v1/tenants/search`. Expand state is not in the URL;
+  only `?q=` is.
+- Counts show own and, in brackets, subtree only where the API sends a different subtree value; the
+  pending approvals column has no subtree value. A `null` count renders as a dash with the text
+  "Not permitted" (never 0). Cap `null` is shown as "No cap shown" (no cap or not readable: the API
+  does not tell them apart).
+- Row actions: only "Switch to this tenant" (platform admins; everybody else gets the control
+  disabled with the reason, path stubs say they are a path only). Add sub-tenant, Limits, Roles, Move,
+  Convert team and the side panel with effective values wait for their APIs (W13-x, #159).
+- The tree query key starts with `tenants`, so a tenant switch does not reset it (it belongs to the
+  user, like the switcher list); the rest of the cache is reset as before (U4).
+
 **U6 All my tenants.** Segmented control with count; tenant column and group-by tenant appear in
 subtree scope; row actions send the row's tenant; permission-aware empty states 5.5. Tests: toggle
 URL state, row action targets the row's tenant, empty state with "5 agents in your other tenants".

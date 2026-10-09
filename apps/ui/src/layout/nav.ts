@@ -1,10 +1,12 @@
 import type { Permission } from '../auth/auth';
+import type { Me } from '../api/types';
 import type { IconName } from '../components/Icon';
 import type { TKey } from '../i18n/i18n';
 
 export interface NavItem {
   to:
     | '/'
+    | '/tenants'
     | '/agents'
     | '/wizard'
     | '/plans'
@@ -20,6 +22,8 @@ export interface NavItem {
   label: TKey;
   icon: IconName;
   perm?: Permission;
+  /** Extra condition on the principal (e.g. several tenants); the API stays the authority. */
+  when?: (me: Me) => boolean;
 }
 
 export interface NavGroup {
@@ -27,10 +31,22 @@ export interface NavGroup {
   items: NavItem[];
 }
 
+/**
+ * The tenants page is for installations with more than one tenant: `multi` mode, or a tree with
+ * more than one node (a tenant below others sees its ancestors as path stubs).
+ */
+export const hasTenantTree = (me: Me): boolean =>
+  me.installationMode === 'multi' ||
+  me.visibleTenantCount > 1 ||
+  me.homeTenant.slugPath.includes('/');
+
 export const NAV: NavGroup[] = [
   {
     label: 'nav.groups.overview',
-    items: [{ to: '/', label: 'nav.dashboard', icon: 'dashboard' }],
+    items: [
+      { to: '/', label: 'nav.dashboard', icon: 'dashboard' },
+      { to: '/tenants', label: 'nav.tenants', icon: 'tenants', when: hasTenantTree },
+    ],
   },
   {
     label: 'nav.groups.build',

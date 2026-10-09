@@ -91,6 +91,25 @@ export const handlers = [
   http.get(api('/v1/tenants'), () =>
     json<ResponseOf<'/v1/tenants', 'get'>>({ items: [f.tenantRow] }),
   ),
+  http.get(api('/v1/tenants/tree'), () =>
+    json<ResponseOf<'/v1/tenants/tree', 'get'>>({
+      items: [
+        f.treeNode({
+          id: f.tenantRow.id,
+          slug: f.tenantRow.slug,
+          name: f.tenantRow.name,
+          myRoles: ['admin'],
+        }),
+      ],
+      truncated: false,
+    }),
+  ),
+  http.get(api('/v1/tenants/search'), ({ request }) => {
+    const q = new URL(request.url).searchParams.get('q')?.toLowerCase() ?? '';
+    return json<ResponseOf<'/v1/tenants/search', 'get'>>({
+      items: [f.tenantRow].filter((x) => `${x.name} ${x.slug}`.toLowerCase().includes(q)),
+    });
+  }),
   http.get(api('/v1/settings'), () => json(f.settings)),
   http.post(api('/v1/auth/logout'), () => new HttpResponse(null, { status: 200 })),
   http.get(api('/v1/agents'), agentsList([f.agent, f.draftOnlyAgent])),
