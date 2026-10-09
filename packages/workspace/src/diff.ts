@@ -1,3 +1,5 @@
+import { WorkspaceError } from './errors.js';
+
 /** Splits text into lines that keep their terminator, so a missing final newline is a difference. */
 export function splitLines(text: string): string[] {
   return text === '' ? [] : text.split(/(?<=\n)/);
@@ -7,7 +9,13 @@ type Op = { t: ' ' | '-' | '+'; line: string };
 
 const MAX_EDIT_DISTANCE = 1000;
 
-function myers(a: string[], b: string[]): Op[] | null {
+export interface DiffClock {
+  /** Absolute deadline; the diff fails with `timeout` after it. */
+  deadline: number;
+  now: () => number;
+}
+
+function myers(a: string[], b: string[], clock?: DiffClock): Op[] | null {
   const n = a.length;
   const m = b.length;
   if (n + m === 0) return [];
@@ -16,6 +24,8 @@ function myers(a: string[], b: string[]): Op[] | null {
   const v = new Int32Array(2 * lim + 3);
   const trace: Int32Array[] = [];
   for (let d = 0; d <= lim; d += 1) {
+    if (clock && clock.now() > clock.deadline)
+      throw new WorkspaceError('timeout', 'computing the diff took too long');
     trace.push(v.slice());
     for (let k = -d; k <= d; k += 2) {
       let x: number;
@@ -59,7 +69,7 @@ function backtrack(a: string[], b: string[], trace: Int32Array[], off: number, d
 }
 
 /** Line operations from `a` to `b`; falls back to "replace the changed middle" for huge edits. */
-export function diffLines(a: string[], b: string[]): Op[] {
+export function diffLines(a: string[], b: string[], clock?: DiffClock): Op[] {
   let start = 0;
   while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
   let endA = a.length;
@@ -70,7 +80,7 @@ export function diffLines(a: string[], b: string[]): Op[] {
   }
   const midA = a.slice(start, endA);
   const midB = b.slice(start, endB);
-  const mid = myers(midA, midB) ?? [
+  const mid = myers(midA, midB, clock) ?? [
     ...midA.map((line): Op => ({ t: '-', line })),
     ...midB.map((line): Op => ({ t: '+', line })),
   ];
@@ -88,8 +98,13 @@ function renderLine(prefix: string, line: string): string {
 }
 
 /** Unified-diff hunks (3 lines of context) between two texts; empty string when equal. */
-export function unifiedHunks(before: string, after: string, context = 3): string {
-  const ops = diffLines(splitLines(before), splitLines(after));
+export function unifiedHunks(
+  before: string,
+  after: string,
+  context = 3,
+  clock?: DiffClock,
+): string {
+  const ops = diffLines(splitLines(before), splitLines(after), clock);
   const changes: number[] = [];
   ops.forEach((o, i) => {
     if (o.t !== ' ') changes.push(i);

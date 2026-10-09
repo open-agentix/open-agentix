@@ -68,13 +68,29 @@ describe('run_tests', () => {
   });
 
   it('runs in the workspace directory with a throwaway HOME', async () => {
+    const report = join(await tempDir(), 'report.txt');
     const { ws, root } = await openWorkspace(
-      withCommand('console.log(process.cwd() + "|" + process.env.HOME)'),
+      withCommand(
+        `require("fs").writeFileSync(${JSON.stringify(report)}, process.cwd() + "|" + process.env.HOME)`,
+      ),
     );
-    const out = (await ws.runTests()).output.trim().split('|');
+    await ws.runTests();
+    const out = (await readFile(report, 'utf8')).split('|');
     expect(out[0]).toBe(await (await import('node:fs/promises')).realpath(root));
     expect(out[1]).toContain('oax-ws-home-');
     await expect(readFile(out[1]!)).rejects.toThrow(); // removed afterwards
+  });
+
+  it('strips the absolute workspace and home paths from the output', async () => {
+    const { ws, root } = await openWorkspace(
+      withCommand('console.log("cwd=" + process.cwd()); console.log("home=" + process.env.HOME)'),
+    );
+    const r = await ws.runTests();
+    const real = await (await import('node:fs/promises')).realpath(root);
+    expect(r.output).toContain('cwd=<workspace>');
+    expect(r.output).toContain('home=<home>');
+    expect(r.output).not.toContain(real);
+    expect(r.output).not.toContain('oax-ws-home-');
   });
 
   it('kills a test that exceeds the timeout, including its children', async () => {

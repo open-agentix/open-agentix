@@ -21,6 +21,9 @@ export interface WalkLimits {
   maxEntries: number;
   maxBytes: number;
   keepContent: boolean;
+  /** Absolute deadline (ms, same clock as `now`); the walk fails with `timeout` after it. */
+  deadline?: number;
+  now?: () => number;
 }
 
 const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
@@ -53,9 +56,15 @@ async function hashFile(abs: string, keep: boolean): Promise<{ sha256: string; c
 export async function walkTree(root: string, limits: WalkLimits): Promise<TreeSnapshot> {
   const out: TreeSnapshot = new Map();
   let bytes = 0;
+  let dirs = 0;
+  const now = limits.now ?? Date.now;
   const stack: string[] = [''];
   while (stack.length > 0) {
     const dirRel = stack.pop()!;
+    // Directories count like files, so a tree of empty directories cannot exhaust the walk.
+    dirs += 1;
+    if (out.size + dirs > limits.maxEntries)
+      throw new WorkspaceError('tree_too_large', 'the workspace has too many files');
     let names: string[];
     try {
       names = await readdir(join(root, dirRel));
@@ -63,6 +72,8 @@ export async function walkTree(root: string, limits: WalkLimits): Promise<TreeSn
       throw new WorkspaceError('io_error', 'cannot read the workspace tree');
     }
     for (const name of names) {
+      if (limits.deadline !== undefined && now() > limits.deadline)
+        throw new WorkspaceError('timeout', 'walking the workspace took too long');
       const rel = dirRel === '' ? name : `${dirRel}/${name}`;
       const abs = join(root, rel);
       const st = await lstat(abs).catch(() => null);

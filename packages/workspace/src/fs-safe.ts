@@ -74,6 +74,9 @@ export async function readRegularFile(
   try {
     const fstat = await fh.stat();
     if (!fstat.isFile()) throw new WorkspaceError('not_a_file', `"${rel}" is not a regular file`);
+    // A second hard link could be the way into a file outside the workspace.
+    if (fstat.nlink !== 1)
+      throw new WorkspaceError('hardlink_refused', `"${rel}" has more than one hard link`);
     if (fstat.size > max)
       throw new WorkspaceError('file_too_large', `"${rel}" is larger than ${max} bytes`);
     const buf = Buffer.alloc(Math.min(fstat.size, max));
@@ -166,4 +169,17 @@ export async function writeFileAtomic(
     throw new WorkspaceError('io_error', `cannot write "${rel}"`);
   }
   return { created: !stat };
+}
+
+/**
+ * Writes the node-side result file. `O_NOFOLLOW`: a link planted at the path is refused instead of
+ * followed; `O_CREAT` with mode 0600; an existing file is truncated.
+ */
+export async function writeResultFile(path: string, data: string): Promise<void> {
+  const fh = await open(path, C.O_WRONLY | C.O_CREAT | C.O_TRUNC | C.O_NOFOLLOW, 0o600);
+  try {
+    await fh.writeFile(data);
+  } finally {
+    await fh.close();
+  }
 }

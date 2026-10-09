@@ -182,7 +182,7 @@ describe('final patch computed by the node', () => {
   });
 
   it('refuses a workspace that grew beyond the tree limits', async () => {
-    const { ws, root } = await openWorkspace({ maxTreeBytes: 4096, maxTreeEntries: 10 });
+    const { ws, root } = await openWorkspace({ maxTreeBytes: 4096, maxTreeEntries: 20 });
     await writeFile(join(root, 'src', 'fill.txt'), 'x'.repeat(10_000));
     const r = await ws.finalize();
     expect(r.patch).toMatchObject({ ok: false, code: 'tree_too_large' });

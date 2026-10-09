@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { writeResultFile } from './fs-safe.js';
+import { ptraceWarning } from './hardening.js';
 import { Workspace } from './workspace.js';
 import { serveStdio } from './server.js';
 
@@ -18,6 +20,8 @@ async function main(): Promise<void> {
   const configPath = arg('--config');
   if (!configPath)
     throw new Error('usage: oax-workspace --config <file.json> [--result <file.json>]');
+  const warning = await ptraceWarning();
+  if (warning) console.error(`oax-workspace: warning: ${warning}`);
   const ws = await Workspace.open(JSON.parse(await readFile(configPath, 'utf8')));
   const server = await serveStdio(ws);
   const resultPath = arg('--result');
@@ -25,8 +29,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     if (done) return;
     done = true;
-    if (resultPath)
-      await writeFile(resultPath, JSON.stringify(await ws.finalize()), { mode: 0o600 });
+    if (resultPath) await writeResultFile(resultPath, JSON.stringify(await ws.finalize()));
     await server.close().catch(() => undefined);
     process.exit(0);
   };

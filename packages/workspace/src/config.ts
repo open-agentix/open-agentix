@@ -95,6 +95,8 @@ export const WorkspaceConfigSchema = z.strictObject({
     .min(1000)
     .max(24 * 3600_000)
     .default(20 * 60_000),
+  /** Wall-clock cap for walking the tree and computing the patch (fail closed with `timeout`). */
+  maxFinalizeMs: z.number().int().min(100).max(300_000).default(10_000),
   searchTimeoutMs: z.number().int().min(50).max(30_000).default(2000),
   tests: TestCommandSchema.optional(),
 });

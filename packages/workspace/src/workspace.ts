@@ -18,6 +18,10 @@ export interface TestRunRecord {
   memoryExceeded: boolean;
   durationMs: number;
   file: string | null;
+  /** Processes the test left running (detached, double fork, setsid) that were killed. */
+  strayProcessesKilled: number;
+  /** Processes that survived the kill; such a run never counts as passed. */
+  strayProcessesSurvived: number;
   /** Digest of the patch at the time of the run, `null` if no valid patch existed then. */
   patchSha256: string | null;
 }
@@ -26,7 +30,11 @@ export interface FinalResult {
   /** The patch computed by the node from the tree (never from model text). */
   patch: PatchResult;
   lastTestRun: TestRunRecord | null;
-  /** True if the last test run saw exactly the tree the patch describes. */
+  /** The last test run was the full suite (no file argument) and passed. */
+  fullSuitePassed: boolean;
+  /** The tree after the last test run is exactly the tree the patch describes. */
+  treeMatchesLastRun: boolean;
+  /** `fullSuitePassed && treeMatchesLastRun`: the full suite passed on exactly the final tree. */
   testedFinalTree: boolean;
   toolCalls: number;
   denied: number;
@@ -98,6 +106,8 @@ export class Workspace {
       maxEntries: config.maxTreeEntries,
       maxBytes: config.maxSeedBytes,
       keepContent: true,
+      deadline: (opts.now ?? Date.now)() + config.maxFinalizeMs,
+      ...(opts.now ? { now: opts.now } : {}),
     });
     return new Workspace(config, rootReal, baseline, opts.now ?? Date.now);
   }
@@ -113,7 +123,10 @@ export class Workspace {
       try {
         return await fn();
       } catch (e) {
-        if (e instanceof WorkspaceError && /forbidden|not_writable|escape|symlink/.test(e.code))
+        if (
+          e instanceof WorkspaceError &&
+          /forbidden|not_writable|escape|symlink|hardlink|invalid_path|arg_not_allowed/.test(e.code)
+        )
           this.denied += 1;
         throw e;
       }
@@ -370,13 +383,19 @@ export class Workspace {
     // Digest of the tree AFTER the run: a test that writes files is part of what was tested.
     const after = await this.currentPatchDigest();
     const record: TestRunRecord = {
-      passed: out.exitCode === 0 && !out.timedOut && !out.memoryExceeded,
+      passed:
+        out.exitCode === 0 &&
+        !out.timedOut &&
+        !out.memoryExceeded &&
+        out.strayProcessesSurvived === 0,
       exitCode: out.exitCode,
       signal: out.signal,
       timedOut: out.timedOut,
       memoryExceeded: out.memoryExceeded,
       durationMs: out.durationMs,
       file: file ?? null,
+      strayProcessesKilled: out.strayProcessesKilled,
+      strayProcessesSurvived: out.strayProcessesSurvived,
       patchSha256: after,
     };
     this.last = record;
@@ -390,10 +409,13 @@ export class Workspace {
 
   /** The patch of the current tree against the seed. */
   async computePatch(): Promise<PatchResult> {
+    const deadline = this.now() + this.config.maxFinalizeMs;
     const current = await walkTree(this.rootReal, {
       maxEntries: this.config.maxTreeEntries,
       maxBytes: this.config.maxTreeBytes,
       keepContent: false,
+      deadline,
+      now: this.now,
     });
     return computePatch(
       this.baseline,
@@ -404,6 +426,7 @@ export class Workspace {
         maxFiles: this.config.maxPatchFiles,
         maxPatchBytes: this.config.maxPatchBytes,
         maxFileBytes: this.config.maxReadFileBytes,
+        clock: { deadline, now: this.now },
       },
     );
   }
@@ -416,14 +439,15 @@ export class Workspace {
       message: e instanceof WorkspaceError ? e.message : 'cannot compute the patch',
       paths: [],
     }));
+    // A single test file proves nothing about the rest of the suite: only a full run counts.
+    const fullSuitePassed = !!(this.last?.passed && this.last.file === null);
+    const treeMatchesLastRun = !!(patch.ok && this.last?.patchSha256 === patch.patchSha256);
     return {
       patch,
       lastTestRun: this.last,
-      testedFinalTree: !!(
-        patch.ok &&
-        this.last?.passed &&
-        this.last.patchSha256 === patch.patchSha256
-      ),
+      fullSuitePassed,
+      treeMatchesLastRun,
+      testedFinalTree: fullSuitePassed && treeMatchesLastRun,
       toolCalls: this.calls,
       denied: this.denied,
     };

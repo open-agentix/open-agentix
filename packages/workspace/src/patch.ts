@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { unifiedHunks } from './diff.js';
+import { unifiedHunks, type DiffClock } from './diff.js';
+import { WorkspaceError } from './errors.js';
 import { isPatchable } from './paths.js';
 import type { TreeSnapshot } from './tree.js';
 
@@ -18,6 +19,8 @@ export interface PatchLimits {
   maxFiles: number;
   maxPatchBytes: number;
   maxFileBytes: number;
+  /** Wall-clock cap; exceeding it fails the computation with `timeout`. */
+  clock?: DiffClock;
 }
 
 const refuse = (code: string, message: string, paths: string[] = []): PatchResult => ({
@@ -92,6 +95,8 @@ export async function computePatch(
   const changedFiles: ChangedFile[] = [];
   let patch = '';
   for (const { path, status } of changed) {
+    if (limits.clock && limits.clock.now() > limits.clock.deadline)
+      throw new WorkspaceError('timeout', 'computing the patch took too long');
     const before = status === 'added' ? Buffer.alloc(0) : baseline.get(path)!.content!;
     let after: Buffer = Buffer.alloc(0);
     if (status !== 'deleted') {
@@ -103,7 +108,7 @@ export async function computePatch(
     const afterText = decodeText(after);
     if (beforeText === null || afterText === null)
       return refuse('binary_file', `"${path}" is binary or not valid UTF-8`, [path]);
-    const hunks = unifiedHunks(beforeText, afterText);
+    const hunks = unifiedHunks(beforeText, afterText, 3, limits.clock);
     let additions = 0;
     let deletions = 0;
     for (const line of hunks.split('\n')) {
@@ -111,8 +116,12 @@ export async function computePatch(
       else if (line.startsWith('-')) deletions += 1;
     }
     let head = `diff --git a/${path} b/${path}\n`;
-    if (status === 'added') head += 'new file mode 100644\n';
-    if (status === 'deleted') head += 'deleted file mode 100644\n';
+    // The real mode (mode changes are refused above, so before and after agree).
+    const mode = (status === 'deleted' ? baseline.get(path)! : current.get(path)!).exec
+      ? '100755'
+      : '100644';
+    if (status === 'added') head += `new file mode ${mode}\n`;
+    if (status === 'deleted') head += `deleted file mode ${mode}\n`;
     const fromName = status === 'added' ? '/dev/null' : `a/${path}`;
     const toName = status === 'deleted' ? '/dev/null' : `b/${path}`;
     patch += hunks === '' ? head : `${head}--- ${fromName}\n+++ ${toName}\n${hunks}`;

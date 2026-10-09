@@ -178,9 +178,7 @@ describe('workspace tools behind the policy gate', () => {
           new: 'Math.round',
         }),
       ).toContain('"bytes"');
-      expect(await call('workspace__run_tests', { file: 'test/price.test.js' })).toContain(
-        '"passed":true',
-      );
+      expect(await call('workspace__run_tests', {})).toContain('"passed":true');
       expect(await call('workspace__diff', {})).toContain('Math.round');
       await call('workspace__search', { pattern: 'Math' });
     });

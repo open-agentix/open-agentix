@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
 import { Workspace, type WorkspaceConfigInput } from '../src/index.js';
 
 const dirs: string[] = [];
@@ -52,3 +52,38 @@ export const NODE_TESTS: NonNullable<WorkspaceConfigInput['tests']> = {
   filePattern: '^test/[a-z0-9-]+\\.test\\.js$',
   timeoutMs: 20_000,
 };
+
+/**
+ * Test files run in parallel processes, and a test run kills every stray process started during
+ * it (by design). To keep tests that leave strays from killing each other's, all workspace tests
+ * take a cross-process lock (an atomic `mkdir`; a lock of a dead process is broken).
+ */
+const LOCK = join(tmpdir(), 'oax-ws-tests.lock');
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function holderAlive(): Promise<boolean> {
+  try {
+    const pid = Number(await readFile(join(LOCK, 'pid'), 'utf8'));
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+beforeEach(async () => {
+  for (let i = 0; ; i += 1) {
+    try {
+      await mkdir(LOCK);
+      await writeFile(join(LOCK, 'pid'), String(process.pid));
+      return;
+    } catch {
+      if (i > 20 && !(await holderAlive())) await rm(LOCK, { recursive: true, force: true });
+      await sleep(25);
+    }
+  }
+});
+
+afterEach(async () => {
+  await rm(LOCK, { recursive: true, force: true });
+});
