@@ -10,7 +10,7 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Transform, type Readable } from 'node:stream';
 import type { Classification, NetworkPurpose, RouteScope } from '@openagentix/core';
 import { ProviderError } from './http.js';
-import { createOutboundDispatcher, type OutboundDispatcher } from './outbound.js';
+import { sharedOutboundDispatcher, type OutboundDispatcher } from './outbound.js';
 import type { Env } from './proxy.js';
 import { assertPublicDestination, type HostLookup } from './ssrf.js';
 import type {
@@ -131,15 +131,12 @@ export function createBedrockClient(
   // resolves the name (pre-request check only); otherwise the connect step pins the address.
   const target = opts.endpoint ?? `https://bedrock-runtime.${opts.region}.amazonaws.com`;
   const guard = opts.blockPrivateDestinations;
-  const dispatcher =
-    opts.outbound?.dispatcher ?? createOutboundDispatcher({ env, allowPlainHttpForPlatform: true });
+  const dispatcher = opts.outbound?.dispatcher ?? sharedOutboundDispatcher(env);
   const agents = dispatcher.nodeAgents(target, {
     purpose: opts.outbound?.purpose ?? 'model',
     scope: {
       ...opts.outbound?.scope,
-      ...(opts.proxyUrl && !opts.outbound?.scope?.proxyUrl
-        ? { proxyUrl: opts.proxyUrl, proxyUrlGrandfathered: true }
-        : {}),
+      ...(opts.proxyUrl && !opts.outbound?.scope?.proxyUrl ? { proxyUrl: opts.proxyUrl } : {}),
     },
     ...(guard ? { pin: guard } : {}),
   });
@@ -160,7 +157,12 @@ export function createBedrockClient(
           ),
         }
       : proxied
-        ? { requestHandler: new NodeHttpHandler({ httpsAgent: agents.httpsAgent }) }
+        ? {
+            requestHandler: new NodeHttpHandler({
+              httpsAgent: agents.httpsAgent,
+              ...(agents.httpAgent ? { httpAgent: agents.httpAgent } : {}),
+            }),
+          }
         : {}),
   });
 }

@@ -395,3 +395,30 @@ What the first implementation step settled (code in `packages/core/src/network/`
    migration of MCP, OIDC, ingest probe, change gate and the run-node control plane (#100), tenant
    proxy selection (#101), Network page and test endpoint (#102), run-node upstream proxy (#103),
    Helm and docs (#104), abuse tests (#105).
+
+**Review follow-up (PR #133).**
+
+- *Proxy pinning.* The proxy connect step is pinned only for tenant-origin requests (a tenant-chosen
+  `proxyUrl`); proxies named by the operator (configuration, environment, platform `proxyUrl`) may
+  sit in a private network.
+- *Node agents.* Behind a proxy a dedicated CONNECT agent separates the hops: constructor options
+  (proxy CA, `rejectUnauthorized`, pinning) apply to the proxy only; destination trust (incl. the CA of an
+  inspecting proxy) and the client certificate are applied to the tunnelled handshake only.
+- *Verification.* `rejectUnauthorized: true` everywhere and `NODE_TLS_REJECT_UNAUTHORIZED=0` refused
+  by the factory (`tls_insecure`), on creation and on every plan.
+- *Errors.* Any `OaxError` (also as `cause` of undici's `fetch failed`) is final: no retry, no
+  retryable `ProviderError`. The size limit is `response_too_large`. Invalid percent-encoding of
+  proxy credentials is `network_config_invalid`.
+- *Tenant behind a proxy.* The factory resolves the destination once (`assertPublicDestination`)
+  before sending. **Residual risk:** the proxy resolves the name again and may get a different answer
+  (rebinding at the proxy); the node-agent path (Bedrock) relies on the caller's pre-check.
+- *Cache.* Dispatchers are cached in an LRU of 64; the key holds a digest, never proxy credentials.
+- *Fixed (L3).* A plain `http://` Bedrock endpoint behind a proxy used no proxy agent and bypassed
+  it; the same tunnel agent now serves `httpAgent`.
+- *Residual risks (accepted, not fixed here).* (L5) A 3xx answer in an SSE stream is an error that
+  the stream opener retries like a network failure; (L2) an IP-literal destination or proxy is not
+  covered by connect-time pinning (no lookup happens); only the resolver and
+  `assertPublicDestination` pre-checks apply to it.
+- *Boundary.* The boundary test and ESLint also cover dynamic `import()`/`require()` of the client
+  modules, `node:http2`, bare `http`/`https`, and socket clients from `node:net`/`node:tls`
+  (address helpers stay allowed).

@@ -1,9 +1,12 @@
-import { rootCertificates } from 'node:tls';
+import { createHash } from 'node:crypto';
+import type { ClientRequest } from 'node:http';
+import { rootCertificates, type ConnectionOptions } from 'node:tls';
 import { Agent as HttpAgent } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
 import {
   NetworkConfigSchema,
   OaxError,
+  assertTlsVerificationOn,
   compileNetwork,
   legacyProxyFromEnv,
   readConfigFile,
@@ -15,7 +18,7 @@ import {
 } from '@openagentix/core';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { Agent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
-import { createPinnedLookup, type HostLookup } from './ssrf.js';
+import { assertPublicDestination, createPinnedLookup, type HostLookup } from './ssrf.js';
 
 /**
  * The one place where outbound HTTP(S) clients get their connection (ADR 0011, amendment 3).
@@ -30,7 +33,14 @@ import { createPinnedLookup, type HostLookup } from './ssrf.js';
  * destination address cannot be pinned or checked here. Only the pre-request checks of the
  * resolver (name, literal address, metadata veto, air-gapped allowlist) apply for proxied
  * requests. The proxy host itself is pinned (checked at connect time) when it was chosen by a
- * tenant (`proxyUrl`), which is the only case where the proxy address is not operator-trusted.
+ * tenant (`origin: 'tenant'` scope), which is the only case where the proxy address is not
+ * operator-trusted; a proxy named by the operator (configuration, environment, platform
+ * `proxyUrl`) may live in a private network. For tenant requests through a proxy the factory
+ * additionally resolves the destination name once before sending (`assertPublicDestination`);
+ * the proxy's own resolution can still differ from that check (residual risk, ADR 0011).
+ *
+ * Certificate verification is always on: every TLS option set carries `rejectUnauthorized: true`
+ * and the factory refuses to run when `NODE_TLS_REJECT_UNAUTHORIZED=0` is set.
  */
 
 /** Reads a secret by reference name. Synchronous: callers pre-load a snapshot (never a URL). */
@@ -175,14 +185,65 @@ export function proxyAuthorization(raw: string): string {
     : `Basic ${Buffer.from(raw, 'utf8').toString('base64')}`;
 }
 
+/**
+ * Credentials of a proxy URL. An unparsable URL has none (routing refuses it separately); invalid
+ * percent-encoding is an error, never a silently dropped `Proxy-Authorization`.
+ */
 function userinfo(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
+  let u: URL;
   try {
-    const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`);
-    if (!u.username && !u.password) return undefined;
-    return `${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`;
+    u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`);
   } catch {
     return undefined;
+  }
+  if (!u.username && !u.password) return undefined;
+  try {
+    return `${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`;
+  } catch {
+    throw new OaxError(
+      'network_config_invalid',
+      'the proxy credentials contain invalid percent-encoding',
+    );
+  }
+}
+
+/** The OaxError itself or the first one in the `cause` chain (undici: "fetch failed" + cause). */
+export function findOaxError(e: unknown): OaxError | undefined {
+  let cur: unknown = e;
+  for (let i = 0; i < 6 && cur !== undefined && cur !== null; i++) {
+    // ProviderError (code provider_error) is the retry layer's own type, not a policy error
+    if (cur instanceof OaxError && cur.code !== 'provider_error') return cur;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+const sha = (v: string) => createHash('sha256').update(v).digest('hex').slice(0, 32);
+
+const MAX_CACHED_DISPATCHERS = 64;
+
+/** CONNECT tunnel agent: proxy-hop TLS (constructor options) and destination TLS kept apart. */
+class TunnelAgent extends HttpsProxyAgent<string> {
+  constructor(
+    proxyUrl: string,
+    proxyOptions: ConstructorParameters<typeof HttpsProxyAgent<string>>[1],
+    private readonly targetTls: ConnectionOptions,
+  ) {
+    super(proxyUrl, proxyOptions);
+  }
+
+  /**
+   * https-proxy-agent builds the TLS session to the DESTINATION from the request options handed
+   * to `connect`, and the proxy socket from the constructor options. Trust and client certificate
+   * of the destination are therefore injected here, so they neither replace the proxy's trust
+   * nor reach the proxy.
+   */
+  override connect(
+    req: ClientRequest,
+    opts: Parameters<HttpsProxyAgent<string>['connect']>[1],
+  ): ReturnType<HttpsProxyAgent<string>['connect']> {
+    return super.connect(req, { ...opts, ...this.targetTls } as typeof opts);
   }
 }
 
@@ -190,7 +251,7 @@ function limitBody(res: Response, max: number): Response {
   const declared = Number(res.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > max) {
     void res.body?.cancel().catch(() => undefined);
-    throw new OaxError('egress_denied', 'the response is larger than the allowed size');
+    throw new OaxError('response_too_large', 'the response is larger than the allowed size');
   }
   if (!res.body) return res;
   let seen = 0;
@@ -199,7 +260,9 @@ function limitBody(res: Response, max: number): Response {
       transform(chunk, controller) {
         seen += chunk.byteLength;
         if (seen > max)
-          controller.error(new OaxError('egress_denied', 'the response exceeded the allowed size'));
+          controller.error(
+            new OaxError('response_too_large', 'the response exceeded the allowed size'),
+          );
         else controller.enqueue(chunk);
       },
     }),
@@ -213,10 +276,12 @@ function limitBody(res: Response, max: number): Response {
 
 export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDispatcher {
   const env = opts.env ?? process.env;
+  assertTlsVerificationOn(env);
   let netCache: CompiledNetwork | undefined = opts.network;
   const net = (): CompiledNetwork => (netCache ??= legacyNetwork(env));
   const limits = { ...DEFAULTS, ...stripUndefined(opts.limits) };
   const readFile = opts.readFile ?? readConfigFile;
+  /** Insertion order = recency (LRU): hits are re-inserted, the oldest entry is evicted. */
   const dispatchers = new Map<string, Dispatcher>();
   const pems = new Map<string, string>();
 
@@ -251,6 +316,7 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
   };
 
   const resolve = (url: string | URL, ctx: OutboundContext) => {
+    assertTlsVerificationOn(env);
     const n = net();
     const scope = ctx.scope ?? {};
     const route = resolveRoute(
@@ -293,16 +359,26 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
     return raw ? proxyAuthorization(raw) : undefined;
   };
 
-  const build = (r: ReturnType<typeof resolve>, ctx: OutboundContext): Dispatcher => {
-    const { route, scope } = r;
+  /** TLS options for the DESTINATION (trust incl. an inspecting proxy's CA, client certificate). */
+  const targetTls = (route: RouteResolution) => {
     const p = route.proxy;
     const destCa = caList(
       p?.tlsInspection && p.caBundle ? [...route.ca.bundles, p.caBundle] : route.ca.bundles,
     );
-    const common = {
+    return {
       ...(destCa ? { ca: destCa } : {}),
       ...clientCert(route.clientCert),
+      rejectUnauthorized: true as const,
     };
+  };
+
+  /** The proxy connect step is validated when the proxy was not chosen by the operator. */
+  const pinProxy = (scope: RouteScope) => scope.origin === 'tenant';
+
+  const build = (r: ReturnType<typeof resolve>, ctx: OutboundContext): Dispatcher => {
+    const { route, scope } = r;
+    const p = route.proxy;
+    const common = targetTls(route);
     const timeouts = {
       headersTimeout: limits.headersTimeoutMs,
       bodyTimeout: limits.bodyTimeoutMs,
@@ -310,15 +386,15 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
     if (p) {
       const token = proxyToken(route, scope);
       const proxyCa = p.caBundle ? caList([p.caBundle]) : caList([]);
-      const tenantChosen = p.source === 'connection';
       return new ProxyAgent({
         uri: p.url,
         ...(token ? { token } : {}),
         requestTls: { ...common, timeout: limits.connectTimeoutMs },
         proxyTls: {
           ...(proxyCa ? { ca: proxyCa } : {}),
+          rejectUnauthorized: true,
           timeout: limits.connectTimeoutMs,
-          ...(tenantChosen ? { lookup: pinLookup(ctx) } : {}),
+          ...(pinProxy(scope) ? { lookup: pinLookup(ctx) } : {}),
         },
         ...timeouts,
       });
@@ -337,7 +413,9 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
     JSON.stringify([
       r.route.via,
       r.route.proxy?.url,
-      r.route.routeName === 'legacy-proxyUrl' ? r.scope.proxyUrl : null,
+      // userinfo may sit in the URL: only a digest goes into the key
+      r.route.routeName === 'legacy-proxyUrl' && r.scope.proxyUrl ? sha(r.scope.proxyUrl) : null,
+      pinProxy(r.scope),
       r.route.ca.bundles,
       r.route.clientCert ?? null,
       r.pinned,
@@ -348,10 +426,21 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
     const r = resolve(url, ctx);
     const key = keyOf(r, ctx);
     let dispatcher = dispatchers.get(key);
-    if (!dispatcher) {
+    if (dispatcher) {
+      dispatchers.delete(key);
+    } else {
       dispatcher = build(r, ctx);
-      dispatchers.set(key, dispatcher);
+      if (dispatchers.size >= MAX_CACHED_DISPATCHERS) {
+        const oldest = dispatchers.keys().next().value;
+        if (oldest !== undefined) {
+          const evicted = dispatchers.get(oldest);
+          dispatchers.delete(oldest);
+          // graceful: requests in flight finish, then the sockets close
+          void evicted?.close().catch(() => undefined);
+        }
+      }
     }
+    dispatchers.set(key, dispatcher);
     return { route: r.route, audit: r.audit, dispatcher };
   };
 
@@ -364,7 +453,15 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
     },
     plan,
     async fetch(url, init, ctx) {
-      const { dispatcher } = plan(url, ctx);
+      const { dispatcher, route } = plan(url, ctx);
+      // Behind a proxy the proxy resolves the name, so a tenant destination cannot be pinned:
+      // resolve it once here and refuse non-public answers (residual: the proxy may resolve
+      // differently, see ADR 0011 amendment 3).
+      if (route.decision === 'proxy' && ctx.scope?.origin === 'tenant')
+        await assertPublicDestination(new URL(String(url)).hostname, {
+          allow: [...(ctx.pin?.allow ?? []), ...net().config.privateAllow],
+          ...(ctx.pin?.lookup ? { lookup: ctx.pin.lookup } : {}),
+        });
       const signals: AbortSignal[] = [];
       if (init?.signal) signals.push(init.signal);
       if (ctx.timeoutMs) signals.push(AbortSignal.timeout(ctx.timeoutMs));
@@ -380,21 +477,23 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
     nodeAgents(url, ctx) {
       const r = resolve(url, ctx);
       const p = r.route.proxy;
-      const destCa = caList(r.route.ca.bundles);
-      const common = { ...(destCa ? { ca: destCa } : {}), ...clientCert(r.route.clientCert) };
+      const common = targetTls(r.route);
       if (p) {
         const token = proxyToken(r.route, r.scope);
         const proxyCa = p.caBundle ? caList([p.caBundle]) : caList([]);
-        return {
-          route: r.route,
-          audit: r.audit,
-          httpsAgent: new HttpsProxyAgent(p.url, {
-            ...common,
+        // Constructor options are for the PROXY hop only (its trust, no client certificate);
+        // destination trust and client certificate go through `targetTls`.
+        const agent = new TunnelAgent(
+          p.url,
+          {
+            rejectUnauthorized: true,
             ...(token ? { headers: { 'Proxy-Authorization': token } } : {}),
             ...(proxyCa ? { ca: proxyCa } : {}),
-            ...(p.source === 'connection' ? { lookup: pinLookup(ctx) } : {}),
-          }),
-        };
+            ...(pinProxy(r.scope) ? { lookup: pinLookup(ctx) } : {}),
+          },
+          common,
+        );
+        return { route: r.route, audit: r.audit, httpsAgent: agent, httpAgent: agent };
       }
       const lookup = r.pinned ? { lookup: pinLookup(ctx) } : {};
       return {
@@ -411,6 +510,30 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
       await Promise.all(all.map((d) => d.close().catch(() => undefined)));
     },
   };
+}
+
+const shared = new Map<string, OutboundDispatcher>();
+
+/**
+ * One factory per process for callers without their own network configuration (the legacy
+ * proxy environment), instead of one per client. Keyed by the proxy-relevant environment, so a
+ * changed `HTTPS_PROXY` gets a fresh factory.
+ */
+export function sharedOutboundDispatcher(
+  env: Record<string, string | undefined> = process.env,
+): OutboundDispatcher {
+  const names = ['HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'NODE_TLS_REJECT_UNAUTHORIZED'];
+  const key = sha(JSON.stringify(names.map((n) => [env[n], env[n.toLowerCase()]])));
+  let d = shared.get(key);
+  if (!d) {
+    if (shared.size >= 8) {
+      for (const old of shared.values()) void old.close().catch(() => undefined);
+      shared.clear();
+    }
+    d = createOutboundDispatcher({ env, allowPlainHttpForPlatform: true });
+    shared.set(key, d);
+  }
+  return d;
 }
 
 function stripUndefined<T extends object>(o: T | undefined): Partial<T> {

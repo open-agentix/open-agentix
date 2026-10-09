@@ -21,6 +21,8 @@ export const ALLOWED: Record<string, string> = {
   'apps/api/src/auth/oidc.ts': 'OIDC discovery/token via createProxyAwareFetch (#100)',
   'apps/api/src/services/ingest.ts': 'ingest probe via createProxyAwareFetch (#100)',
   // --- not outbound clients to arbitrary destinations ---
+  'packages/providers/src/network-guard.ts':
+    'egress guard: patches net.Socket, creates no connection',
   'packages/mcp/src/gate-http.ts': 'HTTP server (node:http createServer)',
   'apps/worker/src/http.ts': 'HTTP server (node:http createServer)',
   'packages/runners/src/kube-client.ts': 'Kubernetes API of the cluster, fixed in-cluster endpoint',
@@ -29,16 +31,44 @@ export const ALLOWED: Record<string, string> = {
   'packages/runners/src/egress-proxy.ts': 'run-node egress proxy server (upstream proxy: #103)',
 };
 
+const CLIENT_MODULES = '(?:undici|https?|node:https?|node:http2|http2|https-proxy-agent)';
 const FORBIDDEN = [
   /(^|[^.\w$])fetch\(/,
   /\bglobalThis\.fetch\b/,
-  /from 'undici'/,
-  /require\('undici'\)/,
-  /from 'node:https?'/,
-  /from 'https?'/,
-  /from 'https-proxy-agent'/,
+  new RegExp(`from '${CLIENT_MODULES}'`),
+  new RegExp(`require\\(\\s*'${CLIENT_MODULES}'\\s*\\)`),
+  // dynamic import() hides the client from the static import checks
+  new RegExp(`import\\(\\s*['"\`]${CLIENT_MODULES}['"\`]\\s*\\)`),
   /\bcreateProxyAwareFetch\b/,
 ];
+
+/** Names of node:net / node:tls that are address helpers or constants, not socket clients. */
+const SAFE_NET_TLS = new Set(['isIP', 'isIPv4', 'isIPv6', 'rootCertificates', 'TLSSocket', 'type']);
+
+/** True when the file imports a socket client (connect, Socket, default/namespace) from net/tls. */
+export function importsSocketClient(text: string): boolean {
+  const re =
+    /import\s+([^;]*?)\s+from\s+'(?:node:)?(?:net|tls)'|import\(\s*'(?:node:)?(?:net|tls)'\s*\)|require\(\s*'(?:node:)?(?:net|tls)'\s*\)/g;
+  for (const m of text.matchAll(re)) {
+    const clause = m[1];
+    if (clause === undefined) return true; // dynamic import / require
+    if (/^type\s/.test(clause)) continue;
+    const named = /^\{([^}]*)\}$/.exec(clause.trim());
+    if (!named) return true; // default or namespace import
+    const names = (named[1] ?? '')
+      .split(',')
+      .map(
+        (n) =>
+          n
+            .trim()
+            .replace(/^type\s+/, '')
+            .split(/\s+as\s+/)[0] ?? '',
+      )
+      .filter(Boolean);
+    if (names.some((n) => !SAFE_NET_TLS.has(n))) return true;
+  }
+  return false;
+}
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -52,6 +82,28 @@ function* sources(dir: string): Generator<string> {
 }
 
 describe('outbound boundary', () => {
+  it('recognises the client patterns it forbids', () => {
+    const bad = [
+      "const u = await import('undici');",
+      'const h = await import("node:https");',
+      "const h = require('http');",
+      "import http2 from 'node:http2';",
+      "import { connect } from 'node:tls';",
+      "import * as net from 'node:net';",
+      "import net from 'net';",
+      "const { Socket } = await import('node:net');",
+    ];
+    for (const code of bad)
+      expect(FORBIDDEN.some((re) => re.test(code)) || importsSocketClient(code), code).toBe(true);
+    const good = [
+      "import { isIP } from 'node:net';",
+      "import { rootCertificates, type TLSSocket } from 'node:tls';",
+      "import type { Socket } from 'node:net';",
+    ];
+    for (const code of good)
+      expect(FORBIDDEN.some((re) => re.test(code)) || importsSocketClient(code), code).toBe(false);
+  });
+
   it('has no direct fetch/undici/http(s) client outside the factory', () => {
     const offenders: string[] = [];
     for (const area of ['packages', 'apps']) {
@@ -69,6 +121,7 @@ describe('outbound boundary', () => {
           const text = readFileSync(file, 'utf8');
           const hit = FORBIDDEN.find((re) => re.test(text));
           if (hit) offenders.push(`${rel} (${hit})`);
+          else if (importsSocketClient(text)) offenders.push(`${rel} (node:net/node:tls client)`);
         }
       }
     }
@@ -79,7 +132,7 @@ describe('outbound boundary', () => {
     for (const rel of Object.keys(ALLOWED)) {
       const text = readFileSync(path.join(root, rel), 'utf8');
       expect(
-        FORBIDDEN.some((re) => re.test(text)),
+        FORBIDDEN.some((re) => re.test(text)) || importsSocketClient(text),
         `${rel} no longer needs its exception`,
       ).toBe(true);
     }

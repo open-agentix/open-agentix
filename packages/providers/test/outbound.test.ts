@@ -421,7 +421,8 @@ describe('createOutboundDispatcher: proxies, trust and certificates', () => {
       scope: { proxy: 'corp' },
     });
     expect(viaProxy.audit.decision).toBe('proxy');
-    expect(viaProxy.httpAgent).toBeUndefined();
+    // the same tunnel agent serves plain http endpoints, so they cannot bypass the proxy
+    expect(viaProxy.httpAgent).toBe(viaProxy.httpsAgent);
     const direct = createOutboundDispatcher().nodeAgents(
       'https://bedrock-runtime.eu-central-1.amazonaws.com',
       {

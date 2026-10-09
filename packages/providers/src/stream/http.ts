@@ -1,5 +1,6 @@
 import type { HostLookup } from '../ssrf.js';
 import { OaxError } from '@openagentix/core';
+import { findOaxError } from '../outbound.js';
 import {
   ProviderError,
   createGuardedFetch,
@@ -162,7 +163,9 @@ export async function openSseStream(
       );
     } catch (e) {
       if (guard.cause) return fail(causeError(guard));
-      if (e instanceof OaxError && e.code === 'egress_denied') return fail(e);
+      // Policy and configuration errors (also behind undici's "fetch failed") are final.
+      const policy = findOaxError(e);
+      if (policy) return fail(policy);
       if (attempt < maxRetries) {
         await sleep((opts.backoffMs ?? 250) * 2 ** attempt, guard.signal);
         continue;

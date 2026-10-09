@@ -40,6 +40,7 @@ export default tseslint.config(
     ignores: [
       'packages/providers/src/outbound.ts',
       'packages/providers/src/proxy.ts',
+      'packages/providers/src/network-guard.ts',
       'packages/mcp/src/connection.ts',
       'packages/mcp/src/gate-http.ts',
       'packages/events/src/change-gate.ts',
@@ -66,7 +67,32 @@ export default tseslint.config(
               message: 'Use createOutboundDispatcher (ADR 0011).',
             },
             { name: 'https-proxy-agent', message: 'Use createOutboundDispatcher (ADR 0011).' },
+            // bare module names and further clients
+            { name: 'http', message: 'Use createOutboundDispatcher (ADR 0011).' },
+            { name: 'https', message: 'Use createOutboundDispatcher (ADR 0011).' },
+            { name: 'node:http2', message: 'Use createOutboundDispatcher (ADR 0011).' },
+            { name: 'http2', message: 'Use createOutboundDispatcher (ADR 0011).' },
+            // address helpers (isIP, rootCertificates, ...) stay allowed; sockets do not
+            ...['node:net', 'net', 'node:tls', 'tls'].map((name) => ({
+              name,
+              importNames: ['default', 'connect', 'createConnection', 'Socket', 'TLSSocket'],
+              message: 'Use createOutboundDispatcher (ADR 0011).',
+            })),
           ],
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          // import('undici') hides the client from the static import rule
+          selector:
+            'ImportExpression[source.value=/^(undici|https?|node:https?|node:http2|http2|node:net|net|node:tls|tls|https-proxy-agent)$/]',
+          message: 'Use createOutboundDispatcher (ADR 0011).',
+        },
+        {
+          selector:
+            "CallExpression[callee.name='require'][arguments.0.value=/^(undici|https?|node:https?|node:http2|http2|https-proxy-agent)$/]",
+          message: 'Use createOutboundDispatcher (ADR 0011).',
         },
       ],
     },

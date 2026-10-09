@@ -1,5 +1,5 @@
 import { OaxError, getEgressPolicy, type NetworkPurpose, type RouteScope } from '@openagentix/core';
-import { createOutboundDispatcher, type OutboundDispatcher } from './outbound.js';
+import { findOaxError, sharedOutboundDispatcher, type OutboundDispatcher } from './outbound.js';
 import type { Env } from './proxy.js';
 import { assertPublicDestination, type HostLookup } from './ssrf.js';
 
@@ -61,13 +61,8 @@ export interface GuardedFetchOptions {
  */
 export function createGuardedFetch(opts: GuardedFetchOptions): FetchLike {
   const allowed = new Set(opts.allowedOrigins.map((o) => new URL(o).origin));
-  let own: OutboundDispatcher | undefined;
   const dispatcher = (): OutboundDispatcher =>
-    opts.outbound?.dispatcher ??
-    (own ??= createOutboundDispatcher({
-      ...(opts.env ? { env: opts.env } : {}),
-      allowPlainHttpForPlatform: true,
-    }));
+    opts.outbound?.dispatcher ?? sharedOutboundDispatcher(opts.env);
   return async (input, init) => {
     const origin = new URL(input).origin;
     if (!allowed.has(origin)) {
@@ -82,9 +77,7 @@ export function createGuardedFetch(opts: GuardedFetchOptions): FetchLike {
     getEgressPolicy().assert(input, 'http');
     const scope: RouteScope = {
       ...opts.outbound?.scope,
-      ...(opts.proxyUrl && !opts.outbound?.scope?.proxyUrl
-        ? { proxyUrl: opts.proxyUrl, proxyUrlGrandfathered: true }
-        : {}),
+      ...(opts.proxyUrl && !opts.outbound?.scope?.proxyUrl ? { proxyUrl: opts.proxyUrl } : {}),
     };
     return dispatcher().fetch(input, init, {
       purpose: opts.outbound?.purpose ?? 'model',
@@ -163,7 +156,9 @@ export async function postJson<T>(
       if (!retryable) throw lastError;
     } catch (e) {
       if (e instanceof ProviderError && !e.retryable) throw e;
-      if (e instanceof OaxError && e.code === 'egress_denied') throw e;
+      // Policy and configuration errors (also behind undici's "fetch failed") are final.
+      const policy = findOaxError(e);
+      if (policy) throw policy;
       if (opts.signal?.aborted) throw e;
       lastError =
         e instanceof ProviderError
