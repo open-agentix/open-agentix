@@ -174,6 +174,10 @@ All notable changes to this project are documented here. The format follows
   `HTTPS_PROXY`/`HTTP_PROXY` value now fails with `network_config_invalid` instead of being ignored.
 - Clients without their own network configuration share one factory per proxy environment.
 - The response size limit error code is `response_too_large` (was `egress_denied`).
+- UI wording: token counts read "Input / Output" in both languages (German no longer "rein / raus"),
+  the "Operate" navigation group is now "Operations" (German "Betrieb", was "Betreiben"), and the
+  German translation keeps technical terms (Run, Policy, Tenant, Tool, Secret, Input, Output) and
+  uses the informal "du" form throughout.
 
 ### Breaking
 

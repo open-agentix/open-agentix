@@ -72,7 +72,7 @@
     "groups": {
       "overview": "Overview",
       "build": "Build",
-      "operate": "Operate",
+      "operate": "Operations",
       "govern": "Governance"
     },
     "dashboard": "Dashboard",
@@ -483,7 +483,7 @@
     },
     "effects": { "allow": "Allowed", "deny": "Denied", "require_approval": "Needs approval" },
     "gate": "Audit gate: {effect}",
-    "tokens": "{in} in / {out} out",
+    "tokens": "{in} Input / {out} Output",
     "input": "Input",
     "output": "Output"
   },
@@ -653,8 +653,8 @@
       "use_case": "Use case"
     },
     "tableCaption": "Costs by {group}",
-    "tokensIn": "Tokens in",
-    "tokensOut": "Tokens out",
+    "tokensIn": "Input tokens",
+    "tokensOut": "Output tokens",
     "cost": "Cost",
     "share": "Share",
     "unassigned": "Unassigned",
