@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Code quality reviewer example agent (NEW-51)**: `examples/agents/code-quality-reviewer.md`
+  reviews a PR diff or repository path against the code quality guidelines (rule catalogue `QG-*` with
+  severities, structured findings with `file:line`, Definition of done) and drafts a PR comment;
+  read-only tools, one approved comment at most, no merge, 0.20 USD run budget. Guide with showcase
+  setup (S-13) and golden-PR evaluation in `docs/examples-quality-agent.md`; a test validates every
+  file in `examples/agents/`.
 - **Outbound dispatcher factory with DNS pinning (W10-1-2 first slice, ADR 0011 amendment 3)**:
   `createOutboundDispatcher` in `@openagentix/providers` asks `resolveRoute` for every request and builds
   the undici dispatcher: direct with a pinned DNS lookup, or through the selected HTTP(S) proxy
