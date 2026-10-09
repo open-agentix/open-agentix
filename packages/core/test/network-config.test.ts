@@ -238,6 +238,7 @@ describe('compileNetwork and legacy environment', () => {
       'network_config_invalid',
     );
     expect(c({ HTTPS_PROXY: 'socks5://x' })).toBe('network_config_invalid');
+    expect(c({ HTTPS_PROXY: 'garbage url' })).toBe('network_config_invalid');
     expect(c({ NODE_TLS_REJECT_UNAUTHORIZED: '0' })).toBe('tls_insecure');
     expect(() => assertTlsVerificationOn({ NODE_TLS_REJECT_UNAUTHORIZED: '1' })).not.toThrow();
     expect(

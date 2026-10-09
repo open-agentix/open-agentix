@@ -35,7 +35,25 @@ export function normalizeTarget(input: string | URL): NormalizedTarget | null {
   }
   const defaultPort = DEFAULT_PORTS[url.protocol];
   if (defaultPort === undefined) return null;
-  let host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  let host = url.hostname.toLowerCase();
+  // WHATWG URL does not normalise hosts of non-special schemes (ldap, ldaps): `0xa9fea9fe`,
+  // `2852039166` and `0251.0376.0251.0376` stay opaque strings. Parse the host again as an http
+  // URL host so every numeric spelling collapses to the canonical address, and refuse anything
+  // that is not already canonical instead of guessing what the client would connect to.
+  if (url.protocol === 'ldap:' || url.protocol === 'ldaps:') {
+    if (host.includes('%')) return null;
+    let canonical: string;
+    try {
+      canonical = new URL(`http://${host}`).hostname;
+    } catch {
+      return null;
+    }
+    const plain = canonical.replace(/^\[|\]$/g, '');
+    const v4 = /^\d+\.\d+\.\d+\.\d+$/.test(plain);
+    if (v4 && canonical !== host) return null;
+    host = canonical;
+  }
+  host = host.replace(/^\[|\]$/g, '');
   if (host.endsWith('.')) host = host.slice(0, -1);
   if (!host || host.endsWith('.') || host.startsWith('.')) return null;
   const ip = parseIp(host);

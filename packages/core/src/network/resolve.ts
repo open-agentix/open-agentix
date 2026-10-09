@@ -8,7 +8,7 @@ import {
   type NetworkPurpose,
 } from './config.js';
 import { matchesAny, normalizeTarget, type NormalizedTarget } from './hosts.js';
-import { classifyAddress, isMetadataName } from './ip.js';
+import { NEVER_PRIVATE_CLASSES, classifyAddress, isMetadataName } from './ip.js';
 
 /** Who a request is made for and what the caller already decided about its connection. */
 export interface RouteScope {
@@ -30,7 +30,6 @@ export interface RouteScope {
 export type DenyCode =
   | 'invalid_target'
   | 'invalid_purpose'
-  | 'denied_by_route'
   | 'metadata_destination'
   | 'destination_not_public'
   | 'plain_http_refused'
@@ -39,6 +38,8 @@ export type DenyCode =
   | 'proxy_url_not_allowed'
   | 'proxy_url_invalid'
   | 'client_certificate_unknown'
+  | 'client_certificate_not_selectable'
+  | 'proxy_unsupported_scheme'
   | 'classification_exceeds_route'
   | 'egress_denied'
   | 'proxy_not_allowlisted';
@@ -77,7 +78,12 @@ export interface RouteResolution {
   target?: { scheme: string; host: string; port: number };
 }
 
-/** Purposes whose traffic carries secrets or tenant data and must not use plain `http://`. */
+/**
+ * Purposes whose traffic carries secrets or tenant data and must not use plain `http://` (or
+ * plain `ldap://`). `mcp` is deliberately not in the set for platform-configured servers (an
+ * in-cluster MCP server over http is a normal deployment); tenant-supplied MCP servers are
+ * TLS-only (see `tlsOnly` below).
+ */
 const TLS_ONLY_PURPOSES: ReadonlySet<NetworkPurpose> = new Set([
   'model',
   'identity',
@@ -98,6 +104,9 @@ const asResolved = (p: CompiledProxy): ResolvedProxy => {
 function isLocalName(host: string): boolean {
   return host === 'localhost' || host.endsWith('.localhost');
 }
+
+/** Schemes that cannot be tunnelled through an HTTP proxy by this platform. */
+const NON_HTTP_SCHEMES: ReadonlySet<string> = new Set(['ldap', 'ldaps']);
 
 /**
  * Resolves how a request leaves the platform. Pure: no DNS, no network, no clock, no logging.
@@ -153,7 +162,9 @@ export function resolveRoute(
   if (isMetadataName(target.host) || (target.ip && classifyAddress(target.ip) === 'metadata'))
     return deny('metadata_destination', `${where} is a cloud metadata address`, 'default', target);
 
-  const privateOk = matchesAny(net.privateAllow, target);
+  // privateAllow can open private ranges only: never loopback, link-local, unspecified,
+  // multicast or metadata space, whatever the list says (defence in depth next to validation).
+  const privateOk = privateAllowed(net, target);
   const loopback =
     isLocalName(target.host) || (target.ip && classifyAddress(target.ip) === 'loopback');
 
@@ -176,12 +187,12 @@ export function resolveRoute(
   }
 
   // 3. No plain http for traffic that carries keys or tenant data (outside loopback/private-allow).
-  if (
-    (target.scheme === 'http' || target.scheme === 'ws') &&
-    TLS_ONLY_PURPOSES.has(purpose) &&
-    !loopback &&
-    !privateOk
-  )
+  const tlsOnly = TLS_ONLY_PURPOSES.has(purpose) || (purpose === 'mcp' && origin === 'tenant');
+  const plain =
+    target.scheme === 'http' ||
+    target.scheme === 'ws' ||
+    (target.scheme === 'ldap' && purpose === 'identity');
+  if (plain && tlsOnly && !loopback && !privateOk)
     return deny(
       'plain_http_refused',
       `${purpose} traffic to ${where} must use TLS`,
@@ -189,14 +200,37 @@ export function resolveRoute(
       target,
     );
 
-  // First matching route (also used for the client certificate and for the deny veto).
-  const route: CompiledRoute | undefined = net.routes.find(
-    (r) => (r.purposes === null || r.purposes.has(purpose)) && matchesAny(r.patterns, target),
-  );
-  if (route?.via === 'deny')
-    return deny('denied_by_route', `route "${route.name}" denies ${where}`, route.name, target);
+  // Every `deny` route vetoes, wherever it sits in the list: a broader route in front of it must
+  // not shadow it. The first matching other route is used for the proxy and the certificate.
+  const applies = (r: CompiledRoute) =>
+    (r.purposes === null || r.purposes.has(purpose)) && matchesAny(r.patterns, target);
+  const denyRoute = net.routes.find((r) => r.via === 'deny' && applies(r));
+  if (denyRoute)
+    return deny(
+      'egress_denied',
+      `route "${denyRoute.name}" denies ${where}`,
+      denyRoute.name,
+      target,
+    );
+  const route: CompiledRoute | undefined = net.routes.find(applies);
 
-  const certName = scope.clientCertificate ?? route?.clientCertificate;
+  // A tenant may only name a client certificate the operator opened for tenants, and can never
+  // override the certificate of the matching route.
+  if (
+    origin === 'tenant' &&
+    scope.clientCertificate !== undefined &&
+    !net.tenantSelectableCertificates.has(scope.clientCertificate)
+  )
+    return deny(
+      'client_certificate_not_selectable',
+      'the client certificate is not selectable by tenants',
+      route?.name ?? 'default',
+      target,
+    );
+  const certName =
+    origin === 'tenant'
+      ? (route?.clientCertificate ?? scope.clientCertificate)
+      : (scope.clientCertificate ?? route?.clientCertificate);
   if (certName !== undefined && !net.clientCertificates.has(certName))
     return deny(
       'client_certificate_unknown',
@@ -205,8 +239,26 @@ export function resolveRoute(
       target,
     );
 
-  const finish = (proxy: CompiledProxy | null, routeName: string, why: string): RouteResolution => {
+  const finish = (
+    proxyIn: CompiledProxy | null,
+    routeName: string,
+    why: string,
+  ): RouteResolution => {
     reasons.push(why);
+    let proxy = proxyIn;
+    if (proxy && NON_HTTP_SCHEMES.has(target.scheme)) {
+      // LDAP is never tunnelled through an HTTP proxy. The implicit environment route simply does
+      // not apply (existing installs keep working); an explicit proxy choice is refused.
+      if (routeName !== 'legacy-env')
+        return deny(
+          'proxy_unsupported_scheme',
+          `${target.scheme} cannot be sent through an HTTP proxy`,
+          routeName,
+          target,
+        );
+      reasons.push(`${target.scheme} is never sent through an HTTP proxy; going direct`);
+      proxy = null;
+    }
     if (proxy) {
       if (
         proxy.maxClassification &&
@@ -314,6 +366,24 @@ export function resolveRoute(
         'legacy-proxyUrl',
         target,
       );
+    // A tenant-chosen proxy host is a destination the platform connects to: it must be public
+    // (or in privateAllow) and never a metadata address, grandfathered or not.
+    if (origin === 'tenant') {
+      const at = normalizeTarget(p.url);
+      const isMeta =
+        !at || isMetadataName(at.host) || (at.ip && classifyAddress(at.ip) === 'metadata');
+      const nonPublic =
+        !!at &&
+        (isLocalName(at.host) || (!!at.ip && classifyAddress(at.ip) !== 'public')) &&
+        !privateAllowed(net, at);
+      if (isMeta || nonPublic)
+        return deny(
+          'proxy_url_not_allowed',
+          'the proxyUrl host is a metadata or non-public address',
+          'legacy-proxyUrl',
+          target,
+        );
+    }
     return finish(p, 'legacy-proxyUrl', 'legacy connection proxyUrl (deprecated)');
   }
 
@@ -343,6 +413,11 @@ export function resolveRoute(
   }
 
   return finish(null, 'default', 'no route matches; direct');
+}
+
+function privateAllowed(net: CompiledNetwork, target: NormalizedTarget): boolean {
+  if (target.ip && NEVER_PRIVATE_CLASSES.has(classifyAddress(target.ip))) return false;
+  return matchesAny(net.privateAllow, target);
 }
 
 function compileLegacy(raw: string): CompiledProxy | null {

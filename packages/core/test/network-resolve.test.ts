@@ -90,10 +90,10 @@ describe('route matching and precedence', () => {
   });
 
   it('a deny route vetoes everything, also a connection selection', () => {
-    expect(r('https://evil.example')).toMatchObject({ decision: 'deny', code: 'denied_by_route' });
-    expect(r('https://evil.example', 'model', { proxy: 'direct' }).code).toBe('denied_by_route');
+    expect(r('https://evil.example')).toMatchObject({ decision: 'deny', code: 'egress_denied' });
+    expect(r('https://evil.example', 'model', { proxy: 'direct' }).code).toBe('egress_denied');
     expect(r('https://evil.example', 'model', { proxyUrl: 'https://p.example' }).code).toBe(
-      'denied_by_route',
+      'egress_denied',
     );
   });
 
@@ -155,9 +155,10 @@ describe('safety rules', () => {
       'http://2852039166/',
     ])
       expect(r(u, 'probe').code, u).toBe('metadata_destination');
-    expect(
-      r('http://169.254.169.254', 'probe', {}, mk({ privateAllow: ['169.254.0.0/16'] })).code,
-    ).toBe('metadata_destination');
+    // a range covering link-local space is refused at validation; the veto holds regardless
+    expect(() => mk({ privateAllow: ['169.254.0.0/16'] })).toThrow(/link-local/);
+    const patched = { ...net, privateAllow: [parseHostPattern('169.254.0.0/16')] };
+    expect(r('http://169.254.169.254', 'probe', {}, patched).code).toBe('metadata_destination');
   });
 
   it('tenant destinations must be public unless the operator opened the range', () => {

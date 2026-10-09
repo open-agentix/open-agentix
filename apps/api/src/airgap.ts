@@ -66,7 +66,13 @@ export function configuredEndpoints(config: Config, env: Env = process.env): Air
     out.push({ purpose: 'model catalog refresh', url: config.airgap.catalogRefreshUrl });
   for (const url of config.airgap.webhookOutUrls) out.push({ purpose: 'outbound webhook', url });
   for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) {
-    if (env[k]) out.push({ purpose: `${k} proxy`, url: env[k]! });
+    const v = env[k]?.trim();
+    // A bare host:port is read as http://host:port (as the network loader does).
+    if (v)
+      out.push({
+        purpose: `${k} proxy`,
+        url: /^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : `http://${v}`,
+      });
   }
   return out;
 }

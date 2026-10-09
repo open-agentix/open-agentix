@@ -303,7 +303,10 @@ What the first implementation step settled (code in `packages/core/src/network/`
    API**. Hot reload and the Network page remain for later steps.
 2. **Plain `http://` proxies** (open question 5, owner decision): refused in production
    (`NODE_ENV=production`) with `proxy_plain_http`; a warning elsewhere. The implicit legacy
-   environment route is not validated (existing installs keep working) but is reported as a warning.
+   environment route keeps existing installs working but is validated: a value that is not an
+   `http(s)://` URL aborts start-up (`network_config_invalid`), except a bare `host:port`, which is
+   read as `http://host:port` with a warning; plain `http://` is a warning. `socks5://` is not
+   supported.
 3. **Strict schema.** Unknown keys are errors. Keys that look like switches for certificate
    verification (`insecure`, `rejectUnauthorized`, `skipTls`, ...) and prototype keys are refused
    anywhere in the document. Proxy URLs must be bare origins without credentials; credentials come
@@ -323,3 +326,31 @@ What the first implementation step settled (code in `packages/core/src/network/`
 6. **Not yet done** (next items): dispatcher factory with DNS pinning (reusing `packages/providers`
    `ssrf.ts`), migration of all clients to the resolver, tenant proxy selection on connections,
    Network page and tests endpoint, run-node upstream proxy, Helm.
+
+### Amendment 2 (W10-1-1 security review, 2026-10-09): hardening
+
+1. **`privateAllow`** (file and `OAX_NETWORK_PRIVATE_ALLOW`, one validator): IPs and CIDRs only,
+   prefix at least /8 (IPv4 and IPv6), never covering unspecified, loopback, link-local or
+   multicast space. The resolver additionally ignores `privateAllow` for those classes and for
+   metadata addresses (section 6).
+2. **Non-special schemes.** `ldap(s)` hosts are re-parsed as http hosts; non-canonical numeric
+   spellings (hex, decimal, octal, percent-encoded) are rejected, so no spelling escapes the
+   metadata veto or the tenant address checks.
+3. **Client certificates.** `tenantSelectableCertificates` lists the certificates a tenant
+   connection may name (`client_certificate_not_selectable` otherwise); for tenants the matching
+   route's certificate always wins.
+4. **Tenant `proxyUrl`** (also grandfathered): host must be public or inside `privateAllow`, never
+   metadata or loopback (`proxy_url_not_allowed`).
+5. **Order.** All `deny` routes are evaluated first and veto regardless of position; the code is
+   `egress_denied` as in section 1 (the reason names the route).
+6. **Schemes and purposes.** `ldap(s)` is never sent through an HTTP proxy: a route, connection or
+   `proxyUrl` that selects one is refused (`proxy_unsupported_scheme`); the implicit environment
+   route goes direct. Plain `ldap://` is refused for `identity` (outside loopback and
+   `privateAllow`). `mcp` is TLS-only for tenant-supplied servers; platform-configured MCP servers
+   may use `http://` (in-cluster deployments).
+7. **Address classes.** 6to4 (`2002::/16`, by embedded IPv4), Teredo (`2001::/32`), site-local
+   (`fec0::/10`) and local-use NAT64 (`64:ff9b:1::/48`) are classified; `169.254.170.23` (EKS Pod
+   Identity) and `192.0.0.192` (Oracle) are metadata addresses.
+8. **Operations.** Warnings are logged at start-up; the config file must be a regular file and is
+   read through one descriptor with a 1 MiB limit; the digest covers the environment proxies and
+   `NO_PROXY`; allowlist CIDRs reject `/0` and any prefix that is not 1-3 digits.

@@ -8,7 +8,12 @@ import {
   type HostLookup,
   type ModelCatalog,
 } from '@openagentix/providers';
-import { activateAirgap, checkStoredConnections, failClosed } from './airgap.js';
+import {
+  activateAirgap,
+  checkStoredConnections,
+  failClosed,
+  getNetworkSettings,
+} from './airgap.js';
 import { connections } from './db/schema.js';
 import { createCache, type Cache } from './cache.js';
 import type { Config } from './config.js';
@@ -60,6 +65,10 @@ export async function createContext(
   const logger = overrides.logger ?? createLogger(config.logLevel);
   // Air-gapped mode is fail-closed: invalid endpoints abort start-up before anything connects.
   const egress = activateAirgap(config);
+  // Network configuration warnings (plain http proxies, unreachable routes, scheme-less proxy
+  // variables) are not errors, but an operator must be able to see them.
+  for (const warning of getNetworkSettings()?.warnings ?? [])
+    logger.warn({ warning }, 'network configuration warning');
   const db = config.database;
   const database =
     overrides.database ??

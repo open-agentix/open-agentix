@@ -24,9 +24,28 @@ All notable changes to this project are documented here. The format follows
   and `NODE_TLS_REJECT_UNAUTHORIZED=0` (`tls_insecure`). Cloud metadata addresses and names are
   never routable, tenant destinations must be public, loopback never goes through a proxy, and
   proxies that inspect TLS cap the data classification.
+- Hardening of the route resolver (security review): `OAX_NETWORK_PRIVATE_ALLOW` follows the same
+  rules as the file and can no longer open loopback or the internet; `ldap(s)` hosts are
+  canonicalised (`0xa9fea9fe`, `2852039166`, octal spellings) so the metadata and tenant checks
+  apply; tenants may select only `tenantSelectableCertificates` and never override a route's client
+  certificate; tenant `proxyUrl` hosts must be public (metadata and loopback refused, also
+  grandfathered); `deny` routes veto regardless of order; LDAP is never sent through an HTTP proxy;
+  plain `ldap://` is refused for `identity` and `mcp` is TLS-only for tenant destinations; 6to4,
+  Teredo, site-local and local-use NAT64 addresses, `169.254.170.23` and `192.0.0.192` are
+  classified; the config file is read from a regular file only, bounded through one descriptor;
+  network configuration warnings are logged at start-up; the digest covers the environment proxies.
 
 ### Breaking
 
+- **Network start-up checks (W10-1-1)**: the api now aborts start-up (`tls_insecure`) when
+  `NODE_TLS_REJECT_UNAUTHORIZED=0` is set, air-gapped or not; add the CA to a trust bundle or
+  `NODE_EXTRA_CA_CERTS` instead. `HTTPS_PROXY`/`HTTP_PROXY` values that are not an `http://` or
+  `https://` URL abort start-up (`network_config_invalid`); a bare `host:port` is still accepted
+  (read as `http://host:port`, with a warning), `socks5://` and other schemes are refused.
+  `OAX_NETWORK_PRIVATE_ALLOW` and `privateAllow` now accept only IPs and CIDR ranges with a prefix
+  of at least /8 that do not cover loopback, link-local, unspecified or multicast space; the
+  allowlist grammar rejects `/0`, empty and non-numeric prefixes (`10.0.0.0/`); the deny code of a
+  `deny` route is `egress_denied` (was `denied_by_route`).
 - **Model proxy cutover (W1-3b-4)**: isolated run node steps now call models only through the
   model proxy. With `OAX_MODEL_PROXY_ENABLED=false` (the default) they fail with
   `model_proxy_unavailable`, the simulated provider included. Old `oax run-node` images report

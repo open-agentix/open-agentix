@@ -56,9 +56,11 @@ export function parseAllowlist(raw: string | undefined): AllowEntry[] {
     const slash = host.indexOf('/');
     if (slash > 0) {
       const ip = parseIp(host.slice(0, slash));
-      const bits = Number(host.slice(slash + 1));
+      const prefix = host.slice(slash + 1);
+      const bits = Number(prefix);
       const total = ip?.version === 6 ? 128 : 32;
-      if (!ip || !Number.isInteger(bits) || bits < 0 || bits > total) {
+      // Digits only (no "", "-1", "+8", "1e1"), and /0 is a wildcard in disguise.
+      if (!ip || !/^\d{1,3}$/.test(prefix) || bits === 0 || bits > total) {
         throw new OaxError('config_invalid', `OAX_AIRGAPPED_ALLOW: invalid CIDR "${t}"`);
       }
       const shift = BigInt(total - bits);

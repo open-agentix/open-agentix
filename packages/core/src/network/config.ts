@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { canonicalJson, sha256Hex } from '../canonical.js';
@@ -6,7 +6,13 @@ import { CLASSIFICATIONS, type Classification } from '../classification.js';
 import type { AllowEntry, EgressPolicy } from '../egress.js';
 import { OaxError } from '../errors.js';
 import { isWildcardAll, parseHostPattern, parseNoProxy, type HostPattern } from './hosts.js';
-import { parseIp } from './ip.js';
+import {
+  NEVER_PRIVATE_CLASSES,
+  PRIVATE_ALLOW_MIN_BITS,
+  classifyAddress,
+  parseIp,
+  rangeTouchesForbidden,
+} from './ip.js';
 
 /**
  * Network configuration contract (ADR 0011 section 1): named proxies with credentials from secret
@@ -80,6 +86,8 @@ export const NetworkConfigSchema = z.strictObject({
   clientCertificates: z.array(ClientCertSchema).default([]),
   routes: z.array(RouteSchema).default([]),
   tenantSelectable: z.array(Name).default([]),
+  /** Client certificates a tenant connection may name; every other name is refused for tenants. */
+  tenantSelectableCertificates: z.array(Name).default([]),
   tenantDirect: z.boolean().default(false),
   privateAllow: z.array(z.string().min(1)).default([]),
 });
@@ -250,18 +258,47 @@ export function validateNetworkConfig(
     seen.add(n);
   });
 
+  const seenCerts = new Set<string>();
+  cfg.tenantSelectableCertificates.forEach((n, i) => {
+    if (!certs.has(n))
+      err(`tenantSelectableCertificates[${i}]`, `unknown client certificate "${n}"`);
+    if (seenCerts.has(n)) err(`tenantSelectableCertificates[${i}]`, `duplicate "${n}"`);
+    seenCerts.add(n);
+  });
+
   cfg.privateAllow.forEach((t, i) => {
-    try {
-      const p = parseHostPattern(t);
-      const ok =
-        (p.kind === 'cidr' && p.bits > 0) || (p.kind === 'host' && parseIp(p.host) !== null);
-      if (!ok)
-        err(`privateAllow[${i}]`, 'must be an IP or a CIDR range (never a wildcard or a name)');
-    } catch (e) {
-      err(`privateAllow[${i}]`, (e as Error).message);
-    }
+    const issue = privateAllowIssue(t);
+    if (issue) err(`privateAllow[${i}]`, issue);
   });
   return { errors, warnings };
+}
+
+/**
+ * Checks one `privateAllow` entry (file or `OAX_NETWORK_PRIVATE_ALLOW`, same rules). Returns the
+ * problem or `null`. Only IPs and CIDR ranges are accepted (never a name or a wildcard), a range
+ * needs a minimum prefix, and nothing may open loopback, link-local, unspecified or multicast
+ * space or a metadata address (ADR 0011 section 6).
+ */
+export function privateAllowIssue(token: string): string | null {
+  let p: HostPattern;
+  try {
+    p = parseHostPattern(token);
+  } catch (e) {
+    return (e as Error).message;
+  }
+  if (p.kind === 'cidr') {
+    const min = PRIVATE_ALLOW_MIN_BITS[p.version];
+    if (p.bits < min)
+      return `CIDR range is too wide: the prefix must be at least /${min} for IPv${p.version}`;
+    if (rangeTouchesForbidden(p.version, p.base, p.bits))
+      return 'must not cover loopback, link-local, unspecified or multicast addresses';
+    return null;
+  }
+  const ip = p.kind === 'host' ? parseIp(p.host) : null;
+  if (!ip) return 'must be an IP or a CIDR range (never a wildcard or a name)';
+  if (NEVER_PRIVATE_CLASSES.has(classifyAddress(ip)))
+    return 'must not be a loopback, link-local, unspecified, multicast or metadata address';
+  return null;
 }
 
 function fail(code: string, issues: NetworkIssue[]): never {
@@ -332,6 +369,7 @@ export interface CompiledNetwork {
   routes: readonly CompiledRoute[];
   legacy: LegacyProxyEnv;
   tenantSelectable: ReadonlySet<string>;
+  tenantSelectableCertificates: ReadonlySet<string>;
   tenantDirect: boolean;
   privateAllow: readonly HostPattern[];
   trust: { mode: 'system+extra' | 'extra-only'; bundles: readonly string[] };
@@ -378,21 +416,35 @@ export function compileProxyUrl(
 
 type Env = Record<string, string | undefined>;
 
+/** Upper-case name first; an empty or blank value never shadows the lower-case spelling. */
 function envValue(env: Env, name: string): string | undefined {
-  const v = env[name] ?? env[name.toLowerCase()];
-  return v === undefined || v.trim() === '' ? undefined : v.trim();
+  for (const key of [name, name.toLowerCase()]) {
+    const v = env[key]?.trim();
+    if (v) return v;
+  }
+  return undefined;
 }
 
-/** Maps the legacy environment to its implicit route. An unusable proxy URL is refused, not skipped. */
-export function legacyProxyFromEnv(env: Env): LegacyProxyEnv {
+/**
+ * Maps the legacy environment to its implicit route. A bare `host:port` (no scheme, as many
+ * installs write it) is read as `http://host:port` with a warning; any other unusable value
+ * (`socks5://...`, garbage) is refused, not skipped, because ignoring it would send traffic
+ * around the proxy the operator meant to enforce.
+ */
+export function legacyProxyFromEnv(env: Env, warnings: string[] = []): LegacyProxyEnv {
   const make = (key: string, name: string) => {
     const raw = envValue(env, key);
     if (raw === undefined) return undefined;
-    const p = compileProxyUrl(raw, name, 'env');
+    let value = raw;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+      value = `http://${raw}`;
+      warnings.push(`${key} has no scheme; it is read as http://<host>:<port> (add "http://")`);
+    }
+    const p = compileProxyUrl(value, name, 'env');
     if (!p)
       throw new OaxError(
         'network_config_invalid',
-        `${key} is not a valid http:// or https:// proxy URL`,
+        `${key} is not a valid http:// or https:// proxy URL (socks and other schemes are not supported)`,
       );
     return p;
   };
@@ -447,19 +499,38 @@ export function compileNetwork(
     via: r.via,
     ...(r.clientCertificate ? { clientCertificate: r.clientCertificate } : {}),
   }));
+  // The environment extension follows exactly the same rules as the file (no '*', no names).
+  const extra = (opts.privateAllow ?? []).flatMap((t, i) => {
+    const issue = privateAllowIssue(t);
+    return issue ? [{ path: `OAX_NETWORK_PRIVATE_ALLOW[${i}]`, message: issue }] : [];
+  });
+  if (extra.length) fail('network_config_invalid', extra);
   const privateAllow = [...cfg.privateAllow, ...(opts.privateAllow ?? [])].map(parseHostPattern);
+  const legacy = opts.legacy ?? { noProxy: [] };
   return {
     config: cfg,
     proxies,
     routes,
-    legacy: opts.legacy ?? { noProxy: [] },
+    legacy,
     tenantSelectable: new Set(cfg.tenantSelectable),
+    tenantSelectableCertificates: new Set(cfg.tenantSelectableCertificates),
     tenantDirect: cfg.tenantDirect,
     privateAllow,
     trust: { mode: cfg.trust.mode, bundles: cfg.trust.bundles.map((b) => b.name) },
     clientCertificates: new Set(cfg.clientCertificates.map((c) => c.name)),
     egress: opts.egress,
-    digest: sha256Hex(canonicalJson({ cfg, extra: opts.privateAllow ?? [] })),
+    digest: sha256Hex(
+      canonicalJson({
+        cfg,
+        extra: opts.privateAllow ?? [],
+        // Environment routes change routing too, so they are part of the effective configuration.
+        env: {
+          https: legacy.httpsProxy?.url ?? null,
+          http: legacy.httpProxy?.url ?? null,
+          noProxy: legacy.noProxy.map((p) => p.raw),
+        },
+      }),
+    ),
   };
 }
 
@@ -491,10 +562,29 @@ export interface LoadNetworkOptions extends NetworkValidateOptions {
 
 const MAX_FILE_BYTES = 1024 * 1024;
 
-function defaultRead(path: string): string {
-  if (statSync(path).size > MAX_FILE_BYTES) throw new Error('file is larger than 1 MiB');
-  return readFileSync(path, 'utf8');
+/**
+ * Reads a regular file through one descriptor with a hard length limit. The open is non-blocking
+ * (a FIFO cannot hang start-up) and the type is checked on the descriptor, so devices such as
+ * `/dev/zero`, FIFOs, sockets and directories are refused instead of read.
+ */
+export function readConfigFile(path: string): string {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error('not a regular file');
+    const buf = Buffer.alloc(MAX_FILE_BYTES + 1);
+    let len = 0;
+    while (len < buf.length) {
+      const n = readSync(fd, buf, len, buf.length - len, null);
+      if (n === 0) break;
+      len += n;
+    }
+    if (len > MAX_FILE_BYTES) throw new Error('file is larger than 1 MiB');
+    return buf.toString('utf8', 0, len);
+  } finally {
+    closeSync(fd);
+  }
 }
+const defaultRead = readConfigFile;
 
 const csv = (v: string | undefined) => (v ?? '').split(/[,\s]+/).filter(Boolean);
 
@@ -532,7 +622,7 @@ export function loadNetworkSettings(env: Env, opts: LoadNetworkOptions = {}): Ne
     raw = parseText(inline, 'OAX_NETWORK_CONFIG', false);
   }
   const { config, warnings } = parseNetworkConfig(raw, opts);
-  const legacy = legacyProxyFromEnv(env);
+  const legacy = legacyProxyFromEnv(env, warnings);
   for (const p of [legacy.httpsProxy, legacy.httpProxy])
     if (p?.scheme === 'http') warnings.push(`${p.name} proxy ${p.url} uses plain http://`);
   const net = compileNetwork(config, {

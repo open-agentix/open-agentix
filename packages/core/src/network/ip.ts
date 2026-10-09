@@ -90,7 +90,14 @@ const V4_RANGES: ReadonlyArray<[string, number, AddressClass]> = [
   ['240.0.0.0', 4, 'reserved'],
 ];
 
-const V4_METADATA = ['169.254.169.254', '169.254.170.2', '100.100.100.200', '168.63.129.16'];
+const V4_METADATA = [
+  '169.254.169.254',
+  '169.254.170.2',
+  '169.254.170.23', // EKS Pod Identity agent
+  '100.100.100.200',
+  '168.63.129.16',
+  '192.0.0.192', // Oracle Cloud
+];
 const V6_METADATA = ['fd00:ec2::254', 'fd00:ec2::23'];
 
 /** Classifies an address against the ranges that must never be reachable from tenant input. */
@@ -107,7 +114,15 @@ export function classifyAddress(ip: ParsedIp): AddressClass {
   // NAT64 (64:ff9b::/96) and the deprecated IPv4-compatible range embed an IPv4 address.
   if (inV6(v, '64:ff9b::', 96)) return classifyAddress({ version: 4, value: v & 0xffffffffn });
   if (v >> 32n === 0n) return classifyAddress({ version: 4, value: v & 0xffffffffn });
+  // Local-use NAT64 prefix (RFC 8215): translators are site specific, never a public target.
+  if (inV6(v, '64:ff9b:1::', 48)) return 'reserved';
+  // 6to4 (2002::/16) embeds the IPv4 address in bits 16..47: a non-public embedded address wins.
+  if (inV6(v, '2002::', 16))
+    return classifyAddress({ version: 4, value: (v >> 80n) & 0xffffffffn });
+  // Teredo (2001::/32) tunnels to arbitrary relays; deprecated and never a valid target.
+  if (inV6(v, '2001::', 32)) return 'reserved';
   if (inV6(v, 'fc00::', 7)) return 'private';
+  if (inV6(v, 'fec0::', 10)) return 'private'; // deprecated site-local
   if (inV6(v, 'fe80::', 10)) return 'link-local';
   if (inV6(v, 'ff00::', 8)) return 'multicast';
   if (inV6(v, '2001:db8::', 32) || inV6(v, '100::', 64)) return 'reserved';
@@ -126,4 +141,43 @@ const METADATA_NAMES = new Set([
 
 export function isMetadataName(host: string): boolean {
   return METADATA_NAMES.has(host);
+}
+
+/** Address classes that no `privateAllow` entry may ever open (ADR 0011 section 6). */
+export const NEVER_PRIVATE_CLASSES: ReadonlySet<AddressClass> = new Set([
+  'unspecified',
+  'loopback',
+  'link-local',
+  'multicast',
+  'metadata',
+]);
+
+/** Smallest prefix length a `privateAllow` CIDR may have, per IP version. */
+export const PRIVATE_ALLOW_MIN_BITS: Record<4 | 6, number> = { 4: 8, 6: 8 };
+
+const NEVER_PRIVATE_V4: ReadonlyArray<[string, number]> = [
+  ['0.0.0.0', 8],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['224.0.0.0', 4],
+];
+const NEVER_PRIVATE_V6: ReadonlyArray<[string, number]> = [
+  ['::', 8], // :: and ::1
+  ['fe80::', 10],
+  ['ff00::', 8],
+];
+
+/**
+ * True when the range `base/bits` overlaps an unspecified, loopback, link-local or multicast
+ * range. (Metadata addresses are vetoed by the resolver before any allow-list is consulted.)
+ */
+export function rangeTouchesForbidden(version: 4 | 6, base: bigint, bits: number): boolean {
+  const total = version === 4 ? 32 : 128;
+  const list = version === 4 ? NEVER_PRIVATE_V4 : NEVER_PRIVATE_V6;
+  for (const [fb, fbits] of list) {
+    const v = version === 4 ? v4ToBigint(fb) : (v6ToBigint(fb) as bigint);
+    const common = BigInt(total - Math.min(bits, fbits));
+    if (base >> common === v >> common) return true;
+  }
+  return false;
 }
