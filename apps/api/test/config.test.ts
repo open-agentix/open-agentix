@@ -3,6 +3,14 @@ import { loadConfig, mapGroupsToBindings } from '../src/config.js';
 
 const base = { OAX_DATABASE_URL: 'memory://', NODE_ENV: 'test' };
 
+const DIGEST = `sha256:${'b'.repeat(64)}`;
+/** The settings an enabled kubernetes-job runner needs (fail closed without them). */
+const K8S_REQUIRED = {
+  OAX_NODE_CONTROL_URL: 'https://oax-api.oax.svc.cluster.local',
+  OAX_K8S_IMAGE: `ghcr.io/open-agentix/toolbox-trivy@${DIGEST}`,
+  OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR: '{"kubernetes.io/metadata.name":"oax"}',
+};
+
 describe('loadConfig', () => {
   it('applies defaults', () => {
     const c = loadConfig(base);
@@ -97,6 +105,7 @@ describe('runner, toolbox, secrets and worker settings', () => {
   it('parses the v0.2 Kubernetes Job contract behind its feature flag', () => {
     const c = loadConfig({
       ...base,
+      ...K8S_REQUIRED,
       OAX_RUNNERS_ENABLED: 'in-process, kubernetes-job',
       OAX_K8S_JOB_ENABLED: 'true',
       OAX_K8S_NAMESPACE: 'runs',
@@ -142,6 +151,7 @@ describe('runner, toolbox, secrets and worker settings', () => {
   it('fails closed for the kubernetes-job runner without allowlist or signature enforcement', () => {
     const k8s = {
       ...base,
+      ...K8S_REQUIRED,
       OAX_RUNNERS_ENABLED: 'kubernetes-job',
       OAX_K8S_JOB_ENABLED: 'true',
       OAX_TOOLBOX_ALLOWLIST: 'trivy',
@@ -178,5 +188,73 @@ describe('runner, toolbox, secrets and worker settings', () => {
       denyCidrs: ['10.244.0.0/16', '10.96.0.0/12'],
       airgapped: true,
     });
+  });
+
+  it('parses the Kubernetes wiring settings and defaults to the safe values', () => {
+    const c = loadConfig({
+      ...base,
+      ...K8S_REQUIRED,
+      OAX_RUNNERS_ENABLED: 'kubernetes-job',
+      OAX_K8S_JOB_ENABLED: 'true',
+      OAX_TOOLBOX_ALLOWLIST: 'trivy',
+      OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false',
+      OAX_K8S_TOOLBOX_IMAGES: JSON.stringify({
+        trivy: `ghcr.io/open-agentix/toolbox-trivy@${DIGEST}`,
+      }),
+      OAX_K8S_CONTROL_PLANE_POD_SELECTOR: '{"app":"api"}',
+      OAX_K8S_CONTROL_PLANE_CIDRS: '10.96.0.0/12',
+      OAX_K8S_CONTROL_PLANE_PORTS: '8443, 443',
+    });
+    expect(c.runners.kubernetesJob).toMatchObject({
+      nodeControlUrl: 'https://oax-api.oax.svc.cluster.local',
+      automountServiceAccountToken: false,
+      dnsEgress: true,
+      defaultDenyPolicy: 'default-deny-all',
+      controlPlane: {
+        podSelector: { app: 'api' },
+        namespaceSelector: { 'kubernetes.io/metadata.name': 'oax' },
+        cidrs: ['10.96.0.0/12'],
+        ports: [8443, 443],
+      },
+    });
+    // Off by default: nothing is required and nothing is enabled.
+    const off = loadConfig({ ...base });
+    expect(off.runners.kubernetesJob.enabled).toBe(false);
+    expect(off.runners.enabled).not.toContain('kubernetes-job');
+  });
+
+  it('refuses an enabled kubernetes-job runner with a missing or unsafe wiring', () => {
+    const ok = {
+      ...base,
+      ...K8S_REQUIRED,
+      OAX_RUNNERS_ENABLED: 'kubernetes-job',
+      OAX_K8S_JOB_ENABLED: 'true',
+      OAX_TOOLBOX_ALLOWLIST: 'trivy',
+      OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false',
+    };
+    expect(() => loadConfig(ok)).not.toThrow();
+    const without = (k: keyof typeof K8S_REQUIRED) => {
+      const e: Record<string, string | undefined> = { ...ok };
+      delete e[k];
+      return e;
+    };
+    expect(() => loadConfig(without('OAX_NODE_CONTROL_URL'))).toThrow(/OAX_NODE_CONTROL_URL/);
+    expect(() => loadConfig({ ...ok, OAX_NODE_CONTROL_URL: 'http://oax:8080' })).toThrow(/https/);
+    expect(() => loadConfig(without('OAX_K8S_IMAGE'))).toThrow(/OAX_K8S_IMAGE/);
+    expect(() => loadConfig(without('OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR'))).toThrow(
+      /OAX_K8S_CONTROL_PLANE/,
+    );
+    // tag instead of digest, foreign registry, toolbox not on the allowlist
+    expect(() =>
+      loadConfig({ ...ok, OAX_K8S_IMAGE: 'ghcr.io/open-agentix/toolbox-trivy:latest' }),
+    ).toThrow(/digest/);
+    expect(() =>
+      loadConfig({ ...ok, OAX_K8S_IMAGE: `docker.io/evil/toolbox-trivy@${DIGEST}` }),
+    ).toThrow(/registry/);
+    expect(() =>
+      loadConfig({ ...ok, OAX_K8S_IMAGE: `ghcr.io/open-agentix/toolbox-nmap@${DIGEST}` }),
+    ).toThrow(/allowlist/);
+    // an empty selector would match every pod
+    expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_POD_SELECTOR: '{}' })).toThrow();
   });
 });
