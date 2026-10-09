@@ -99,6 +99,18 @@ function costOf(
   return costModel.modelCall(provider.kind, model, res.usage).totalMicros;
 }
 
+/**
+ * True only when a provider failure provably happened before any work started: an egress refusal,
+ * a DNS or connection-refused failure, or a 4xx answer other than 408, 409 and 429 (same rule as
+ * the model proxy).
+ */
+export function noWorkDone(e: unknown): boolean {
+  const err = e as { code?: unknown; preSend?: unknown; status?: unknown } | null;
+  if (err?.code === 'egress_denied' || err?.preSend === true) return true;
+  const st = err?.status;
+  return typeof st === 'number' && st >= 400 && st < 500 && ![408, 409, 429].includes(st);
+}
+
 const defaultSleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     const t = setTimeout(resolve, ms);
@@ -288,6 +300,7 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
         const started = now();
         let res: ChatResponse;
         let reservation: ModelReservationGrant | undefined;
+        let deadlineSignal: AbortSignal | undefined;
         try {
           // Every model call of the platform is reserved on the control node first, so that
           // concurrent calls cannot overspend a budget. Metered providers (the proxy of a run
@@ -302,6 +315,12 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
             });
           }
           const maxTokens = reservation?.maxOutputTokens ?? agent.maxTokensPerCall;
+          // The reservation expires at its deadline: the provider call must not outlive it.
+          if (reservation?.deadlineMs) deadlineSignal = AbortSignal.timeout(reservation.deadlineMs);
+          const callSignal =
+            signal && deadlineSignal
+              ? AbortSignal.any([signal, deadlineSignal])
+              : (signal ?? deadlineSignal);
           res = await provider.complete(
             {
               model: agent.model,
@@ -320,7 +339,7 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
                 },
               },
             },
-            signal ? { signal } : {},
+            callSignal ? { signal: callSignal } : {},
           );
         } catch (e) {
           await step({
@@ -332,9 +351,10 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
             provider: provider.name,
             model: agent.model,
             durationMs: now() - started,
-            // An aborted call may have been billed: its reservation stays and expires at the
-            // reserved amount. A call that failed on its own gives the headroom back at once.
-            ...(reservation && !signal?.aborted
+            // Only a failure that provably happened before the provider could start work gives the
+            // headroom back at once. Anything else (abort, deadline, timeout, reset, 5xx) may have
+            // been billed: the reservation stays and expires at the reserved amount.
+            ...(reservation && !signal?.aborted && !deadlineSignal?.aborted && noWorkDone(e)
               ? { reservationId: reservation.reservationId }
               : {}),
           });

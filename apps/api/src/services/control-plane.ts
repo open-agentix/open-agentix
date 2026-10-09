@@ -193,6 +193,7 @@ export class ControlPlaneService {
       maxOutputTokens: r.reservedOutputTokens,
       reservedMicros: r.reservedMicros,
       priced: r.priced,
+      deadlineMs: r.deadlineMs,
       remaining: r.remaining,
     };
   }
@@ -227,9 +228,37 @@ export class ControlPlaneService {
       .where(eq(runs.id, runId));
     if (!run) throw notFound('run');
     const scope = { tenantId: run.tenantId };
-    // A reservation of another run looks exactly like a missing one.
-    const open = await this.accounting.list(scope, { runId, status: 'active' });
-    if (!open.some((r) => r.id === step.reservationId)) throw notFound('reservation');
+    // A reservation of another run, of a proxied session or of another agent looks exactly like a
+    // missing one: only the in-process executor of this very step may settle it.
+    const mine = (await this.accounting.list(scope, { runId })).find(
+      (r) => r.id === step.reservationId && r.sessionId === null && r.agentId === step.agentId,
+    );
+    if (!mine) throw notFound('reservation');
+    if (mine.status === 'settled') throw notFound('reservation');
+    if (mine.status !== 'active') {
+      // The reaper already booked the reserved amount (the call outlived its deadline or the
+      // worker was slow). A late report must not fail a run whose call succeeded: record the
+      // reported usage as a correction in the audit trail; the ledger keeps the conservative
+      // amount that was already booked.
+      if (step.kind === 'model_call') {
+        await this.audit.append({
+          actor: 'system',
+          tenantId: scope.tenantId,
+          action: 'model.late_settlement',
+          target: `${mine.provider}/${mine.model}`,
+          runId,
+          payload: {
+            callId: mine.id,
+            agentId: mine.agentId,
+            reservedMicros: Number(mine.reservedMicros),
+            bookedMicros: Number(mine.actualMicros ?? 0),
+            reportedTokensIn: step.tokensIn ?? 0,
+            reportedTokensOut: step.tokensOut ?? 0,
+          },
+        });
+      }
+      return true;
+    }
     if (step.kind === 'error') {
       const message = (step.output as { message?: unknown } | undefined)?.message;
       await this.accounting.release(

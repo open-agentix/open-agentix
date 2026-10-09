@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { costLedger, modelReservations, runSteps, runs } from '../src/db/schema.js';
+import { auditLog, costLedger, modelReservations, runSteps, runs } from '../src/db/schema.js';
 import { testNode, type TestNode } from './helpers.js';
 
 /** In-process model calls reserve and settle through the control plane (ADR 0009 section 4.4). */
@@ -160,6 +160,78 @@ describe('ControlPlaneService.reserveModelCall and settlement', () => {
     // a second report cannot double count: the reservation is no longer open
     expect(await code(cp.recordStep(runId, step))).toBe('not_found');
     expect((await runRow(runId)).tokensIn).toBe(10);
+  });
+
+  it('returns the call deadline the reservation was sized for', async () => {
+    const runId = await mkRun();
+    const grant = await n.services.control.reserveModelCall(runId, {
+      agentId: 'a',
+      inputTokens: 10,
+      maxOutputTokens: 10,
+    });
+    expect(grant.deadlineMs).toBe(n.ctx.config.modelProxy.maxCallSeconds * 1000);
+  });
+
+  it('books a correction instead of failing when the reservation already expired', async () => {
+    const runId = await mkRun();
+    const cp = n.services.control;
+    const grant = await cp.reserveModelCall(runId, {
+      agentId: 'a',
+      inputTokens: 10,
+      maxOutputTokens: 10,
+    });
+    await n.ctx.db
+      .update(modelReservations)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(modelReservations.id, grant.reservationId));
+    expect(await n.services.modelAccounting.expire()).toBe(1);
+    await cp.recordStep(runId, {
+      kind: 'model_call',
+      agentId: 'a',
+      name: 'x',
+      status: 'ok',
+      tokensIn: 7,
+      tokensOut: 8,
+      reservationId: grant.reservationId,
+    });
+    const audit = await n.ctx.db.select().from(auditLog).where(eq(auditLog.runId, runId));
+    const late = audit.find((a) => a.action === 'model.late_settlement');
+    expect(late?.payload).toMatchObject({
+      callId: grant.reservationId,
+      reportedTokensIn: 7,
+      reportedTokensOut: 8,
+    });
+    // the conservative amount booked at expiry is not booked a second time
+    expect((await reservations(runId))[0]).toMatchObject({ status: 'expired' });
+    const steps = await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId));
+    expect(steps.filter((s) => s.kind === 'model_call')).toHaveLength(1);
+  });
+
+  it('settles only reservations of an in-process call of the same agent', async () => {
+    const runId = await mkRun();
+    const cp = n.services.control;
+    const grant = await cp.reserveModelCall(runId, {
+      agentId: 'a',
+      inputTokens: 10,
+      maxOutputTokens: 10,
+    });
+    const step = {
+      kind: 'model_call' as const,
+      name: 'x',
+      status: 'ok' as const,
+      tokensIn: 1,
+      tokensOut: 1,
+      reservationId: grant.reservationId,
+    };
+    // another agent of the run
+    expect(await code(cp.recordStep(runId, { ...step, agentId: 'other' }))).toBe('not_found');
+    // a reservation of a proxied run node session belongs to the proxy
+    await n.ctx.db
+      .update(modelReservations)
+      .set({ sessionId: '8a1b7d6e-1d0e-4b2a-9d7c-3a5f6f6f6f6f' })
+      .where(eq(modelReservations.id, grant.reservationId));
+    expect(await code(cp.recordStep(runId, { ...step, agentId: 'a' }))).toBe('not_found');
+    expect((await reservations(runId))[0]).toMatchObject({ status: 'active' });
   });
 
   it('does not let a run settle the reservation of another run', async () => {

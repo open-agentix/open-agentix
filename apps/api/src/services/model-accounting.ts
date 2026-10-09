@@ -107,6 +107,8 @@ export interface Reservation {
   /** The granted output bound (possibly lower than requested when `minOutputTokens` was set). */
   reservedOutputTokens: number;
   priced: boolean;
+  /** Call deadline the reservation was sized for (the expiry adds the grace on top). */
+  deadlineMs: number;
   expiresAt: Date;
   /** Tightest remaining headroom after this reservation. */
   remaining: Remaining;
@@ -327,8 +329,13 @@ export class ModelAccountingService {
         agent.provider,
         agent.model,
       );
-    } catch {
-      // The transaction reports the real problem (unknown run, agent not published, ...).
+    } catch (err) {
+      // The transaction reports the real problem (unknown run, agent not published, ...); the
+      // warning makes a broken price lookup visible (names only, no secrets).
+      this.ctx.logger.warn(
+        { err: err instanceof Error ? err.message : String(err), runId, agentId },
+        'could not resolve the model price for a run',
+      );
       return undefined;
     }
   }
@@ -537,9 +544,8 @@ export class ModelAccountingService {
       ? toSafeNumber(ceilDiv(inputNano + BigInt(output) * outRate, MICRO))
       : 0;
     const now = this.ctx.now();
-    const expiresAt = new Date(
-      now.getTime() + (req.deadlineMs ?? this.options.defaultDeadlineMs) + this.options.graceMs,
-    );
+    const deadlineMs = req.deadlineMs ?? this.options.defaultDeadlineMs;
+    const expiresAt = new Date(now.getTime() + deadlineMs + this.options.graceMs);
     const id = randomUUID();
     await tx.insert(modelReservations).values({
       id,
@@ -580,6 +586,7 @@ export class ModelAccountingService {
       reservedInputTokens: req.inputTokens,
       reservedOutputTokens: output,
       priced: rates !== null,
+      deadlineMs,
       expiresAt,
       remaining,
     };

@@ -69,6 +69,8 @@ export interface ModelReservationGrant {
   maxOutputTokens: number;
   reservedMicros: number;
   priced: boolean;
+  /** Time the provider call may take: the reservation expires shortly after this deadline. */
+  deadlineMs?: number;
   remaining: { costMicros?: number; tokens?: number; modelCalls?: number };
 }
 

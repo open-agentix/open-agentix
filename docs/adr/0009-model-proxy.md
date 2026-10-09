@@ -784,3 +784,32 @@ service. Where they differ from the text above, this section wins.
    remaining headroom would have covered the actual cost. Size small budgets with the output bound
    in mind (`maxTokensPerCall`).
 
+
+### W1-3b-4 review amendments (2026-10-09)
+
+Where these differ from the W1-3b-4 section above, this section wins.
+
+1. **Release rule.** An in-process error releases its reservation at zero only for failures that
+   provably did no work, the same rule as the proxy's `noWorkDone`: `egress_denied`, a DNS or
+   refused-connection failure before the request was sent, or a 4xx answer other than 408, 409 and
+   429. Everything else (aborts, deadlines, timeouts, resets, 5xx, stream errors) keeps the
+   reservation, which expires and is charged at the reserved amount.
+2. **Call deadline.** The reservation grant carries `deadlineMs` (the deadline the reservation was
+   sized for, `OAX_MODEL_PROXY_MAX_CALL_SECONDS` by default). The executor aborts the in-process
+   provider call at that deadline, so a call cannot outlive its reservation (which expires after
+   the deadline plus the grace). A late report for an already expired reservation no longer fails
+   the run with `404`: the amount booked at expiry stands and the report is recorded as a
+   `model.late_settlement` audit entry (reported tokens, booked amount). A report for a reservation
+   that was settled normally is still `404`.
+3. **Reservation ownership.** An in-process settlement requires a reservation of the same run with
+   no run node session (`sessionId` null) and the same agent as the step; everything else looks
+   like a missing reservation.
+4. **Pricing.** The fallback keys (catalog provider, adapter kind) are looked up in the platform
+   price table only. Overrides of a tenant connection count only under the name of the connection
+   the agent actually uses, so a tenant connection named like a catalog provider cannot change the
+   price of another connection. A failing price lookup is logged as a warning.
+5. **Compatibility breaks (also in the changelog).** Isolated node steps fail with
+   `model_proxy_unavailable` while `OAX_MODEL_PROXY_ENABLED=false` (the default), the simulated
+   provider included. Old `oax run-node` images report `model_call` steps and now get `400
+   step_kind_refused`: roll out control node and node images together. A model without a price is
+   rejected with `422 model_unpriced` as soon as any cost limit applies.

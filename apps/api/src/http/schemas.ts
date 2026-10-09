@@ -601,6 +601,7 @@ export const ModelReservationSchema = z.strictObject({
   maxOutputTokens: z.number().int(),
   reservedMicros: z.number().int(),
   priced: z.boolean(),
+  deadlineMs: z.number().int().positive().optional(),
   remaining: z.strictObject({
     costMicros: z.number().int().optional(),
     tokens: z.number().int().optional(),

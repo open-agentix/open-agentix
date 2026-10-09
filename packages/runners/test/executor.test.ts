@@ -489,13 +489,74 @@ describe('executePipeline model reservations and metered providers (ADR 0009)', 
     },
   );
 
+  it('gives the reservation back only for failures that provably did no work', async () => {
+    const failWith = (err: Error): ModelProvider => ({
+      name: 'simulated',
+      kind: 'simulated',
+      clearance: 'restricted',
+      complete: async () => {
+        throw err;
+      },
+    });
+    const grantOf = () => async () => ({
+      reservationId: 'res-x',
+      maxOutputTokens: 10,
+      reservedMicros: 1,
+      priced: true,
+      remaining: {},
+    });
+    const released = async (err: Error): Promise<boolean> => {
+      const e = env(def, { providers: [failWith(err)] });
+      (e.control as { reserveModelCall?: unknown }).reserveModelCall = grantOf();
+      await executePipeline(prepared(def), e.ctx);
+      return e.control.steps.find((s) => s.kind === 'error')?.reservationId === 'res-x';
+    };
+    const withProps = (m: string, p: object) => Object.assign(new Error(m), p);
+    expect(await released(withProps('denied', { code: 'egress_denied' }))).toBe(true);
+    expect(await released(withProps('dns', { status: null, preSend: true }))).toBe(true);
+    expect(await released(withProps('bad request', { status: 400 }))).toBe(true);
+    expect(await released(withProps('forbidden', { status: 403 }))).toBe(true);
+    // may have been billed: the reservation stays and expires at the reserved amount
+    expect(await released(new Error('upstream 500'))).toBe(false);
+    expect(await released(withProps('server', { status: 500 }))).toBe(false);
+    expect(await released(withProps('timeout', { status: 408 }))).toBe(false);
+    expect(await released(withProps('conflict', { status: 409 }))).toBe(false);
+    expect(await released(withProps('rate', { status: 429 }))).toBe(false);
+    expect(await released(withProps('reset', { status: null }))).toBe(false);
+  });
+
+  it('bounds the provider call by the reservation deadline and keeps the reservation', async () => {
+    const waiting: ModelProvider = {
+      name: 'simulated',
+      kind: 'simulated',
+      clearance: 'restricted',
+      complete: (_req, opts) =>
+        new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => reject(new Error('call timed out')));
+        }),
+    };
+    const e = env(def, { providers: [waiting] });
+    (e.control as { reserveModelCall?: unknown }).reserveModelCall = async () => ({
+      reservationId: 'res-d',
+      maxOutputTokens: 10,
+      reservedMicros: 1,
+      priced: true,
+      deadlineMs: 30,
+      remaining: {},
+    });
+    const r = await executePipeline(prepared(def), e.ctx);
+    expect(r.status).toBe('failed');
+    expect(r.error?.code).toBe('provider_error');
+    expect(e.control.steps.find((s) => s.kind === 'error')?.reservationId).toBeUndefined();
+  });
+
   it('gives the reservation back when the provider fails on its own, but not when aborted', async () => {
     const failing: ModelProvider = {
       name: 'simulated',
       kind: 'simulated',
       clearance: 'restricted',
       complete: async () => {
-        throw new Error('upstream 500');
+        throw Object.assign(new Error('bad request'), { status: 400 });
       },
     };
     const { ctx, control } = env(def, { providers: [failing] });

@@ -350,6 +350,33 @@ describe('reserve', () => {
     expect(await acc.list(scope)).toHaveLength(0);
   });
 
+  it('logs a warning when the price of a run cannot be resolved', async () => {
+    const warn = vi.spyOn(n.ctx.logger, 'warn');
+    const failing = new ModelAccountingService(
+      n.ctx,
+      n.services.audit,
+      n.services.agents,
+      n.services.budgets,
+      undefined,
+      {
+        maxConcurrentPerSession: 1000,
+        maxConcurrentPerTenant: 1000,
+        graceMs: 60_000,
+        defaultDeadlineMs: 600_000,
+        priceFor: async () => {
+          throw new Error('price lookup broke');
+        },
+      },
+    );
+    const { runId } = await mkRun();
+    await failing.reserve(scope, reserveReq(runId)).catch(() => undefined);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: 'price lookup broke', runId }),
+      'could not resolve the model price for a run',
+    );
+    warn.mockRestore();
+  });
+
   it('enforces the concurrency limits per session and per tenant from the database', async () => {
     const small = new ModelAccountingService(
       n.ctx,

@@ -228,7 +228,20 @@ export class ModelsService {
     provider: string,
     model: string,
   ): Promise<PriceEntry | undefined> {
-    const costs = await this.costModelFor(scope);
+    // Overrides count only under the name of the connection the agent actually uses (the one
+    // that wins for this scope). The fallback keys (catalog provider, adapter kind) are looked up
+    // in the platform table alone, so a tenant connection that happens to be named like a catalog
+    // provider cannot rewrite the platform price of another connection.
+    const rows = await this.catalog.connectionsForRun('model', scope);
+    const own = rows.find((r) => r.name === provider);
+    if (own) {
+      const ownEntries = modelPriceEntries(
+        own.name,
+        (own.config as { models?: ModelEntry[] }).models,
+      );
+      const hit = new CostModel(ownEntries, false).find(provider, model);
+      if (hit) return hit;
+    }
     const keys = [provider];
     try {
       const registry = await this.registryFor(scope);
@@ -241,7 +254,7 @@ export class ModelsService {
       // a broken connection only loses the fallback keys
     }
     for (const key of keys) {
-      const entry = costs.find(key, model);
+      const entry = this.ctx.costModel.find(key, model);
       if (entry) return entry;
     }
     return undefined;

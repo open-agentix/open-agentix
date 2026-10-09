@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Breaking
+
+- **Model proxy cutover (W1-3b-4)**: isolated run node steps now call models only through the
+  model proxy. With `OAX_MODEL_PROXY_ENABLED=false` (the default) they fail with
+  `model_proxy_unavailable`, the simulated provider included. Old `oax run-node` images report
+  `model_call` steps themselves and now get `400 step_kind_refused`: roll out control node and node
+  images together. As soon as any cost limit applies (run, step, team or monthly), a model without
+  a price is rejected with `422 model_unpriced`.
+
+### Security
+
+- Price lookups resolve the fallback keys (catalog provider, adapter kind) against the platform
+  table only; a tenant connection named like a catalog provider can no longer zero the price of
+  another connection. Tenant overrides apply only under the connection name the agent uses.
+- In-process reservations are settled only by the in-process call of the same agent; reservations
+  of a proxied session are refused.
+
+### Fixed
+
+- In-process model errors release their reservation only for failures that provably did no work
+  (egress refusal, DNS or refused connection, 4xx other than 408, 409 and 429); everything else
+  expires at the reserved amount like the proxy does.
+- The in-process provider call is bounded by the reservation deadline, and a late report for an
+  already expired reservation is recorded as a `model.late_settlement` correction in the audit log
+  instead of failing the run.
+- A price lookup that fails during reservation or settlement is logged as a warning.
+
 ### Added
 
 - **Run node and executor on the model proxy (W1-3b-4)**: `oax run-node` sends every model call of
