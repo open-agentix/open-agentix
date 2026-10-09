@@ -1,0 +1,420 @@
+import { rootCertificates } from 'node:tls';
+import { Agent as HttpAgent } from 'node:http';
+import { Agent as HttpsAgent } from 'node:https';
+import {
+  NetworkConfigSchema,
+  OaxError,
+  compileNetwork,
+  legacyProxyFromEnv,
+  readConfigFile,
+  resolveRoute,
+  type CompiledNetwork,
+  type NetworkPurpose,
+  type RouteResolution,
+  type RouteScope,
+} from '@openagentix/core';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { Agent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
+import { createPinnedLookup, type HostLookup } from './ssrf.js';
+
+/**
+ * The one place where outbound HTTP(S) clients get their connection (ADR 0011, amendment 3).
+ *
+ * For every request the factory asks the pure resolver (`resolveRoute`) how the request leaves the
+ * platform and builds the matching undici dispatcher: direct with a pinned DNS lookup, or through
+ * the selected HTTP(S) proxy (CONNECT for https targets). Trust store and client certificate come
+ * from the network configuration. A `deny` or veto result is an `egress_denied` error; redirects
+ * are never followed; connect/header/body timeouts and a response size limit always apply.
+ *
+ * DNS pinning limitation: behind an HTTP proxy the PROXY resolves the destination name, so the
+ * destination address cannot be pinned or checked here. Only the pre-request checks of the
+ * resolver (name, literal address, metadata veto, air-gapped allowlist) apply for proxied
+ * requests. The proxy host itself is pinned (checked at connect time) when it was chosen by a
+ * tenant (`proxyUrl`), which is the only case where the proxy address is not operator-trusted.
+ */
+
+/** Reads a secret by reference name. Synchronous: callers pre-load a snapshot (never a URL). */
+export type SecretReader = (ref: string) => string | undefined;
+
+export interface OutboundLimits {
+  /** TCP/TLS connect timeout (ms). Default 15 000. */
+  connectTimeoutMs?: number;
+  /** Time to the response headers (ms). Default 300 000 (LLMs can think for a while). */
+  headersTimeoutMs?: number;
+  /** Max idle time between body chunks (ms). Default 300 000. */
+  bodyTimeoutMs?: number;
+  /** Upper bound of the response body in bytes. Default 64 MiB; exceeding it errors the stream. */
+  maxResponseBytes?: number;
+}
+
+export interface OutboundOptions {
+  /** Compiled network configuration. Default: only the legacy HTTPS_PROXY/HTTP_PROXY/NO_PROXY env. */
+  network?: CompiledNetwork | undefined;
+  env?: Record<string, string | undefined> | undefined;
+  secrets?: SecretReader | undefined;
+  /** Reads a trust-bundle file (absolute path). Default: size-limited regular-file read. */
+  readFile?: ((path: string) => string) | undefined;
+  limits?: OutboundLimits | undefined;
+  /**
+   * Compatibility mode for callers that are not yet configured through the network configuration:
+   * platform destinations may use plain `http://` (in-cluster model servers), as before. Ignored
+   * for tenant-origin requests. Default false.
+   */
+  allowPlainHttpForPlatform?: boolean | undefined;
+  /** Called for every routing decision (allowed or denied); the argument never holds secrets. */
+  onRoute?: ((audit: RouteAudit) => void) | undefined;
+  /** Test seam: replaces the undici fetch. */
+  fetchImpl?:
+    | ((
+        url: string,
+        init: Omit<RequestInit, 'dispatcher'> & { dispatcher?: unknown },
+      ) => Promise<Response>)
+    | undefined;
+}
+
+export interface OutboundContext {
+  purpose: NetworkPurpose;
+  scope?: RouteScope | undefined;
+  /**
+   * Connect-time DNS pinning for direct requests: every resolved address must be public (or in
+   * `allow` / the network `privateAllow`). Tenant-origin requests are always pinned.
+   */
+  pin?: { allow?: readonly string[] | undefined; lookup?: HostLookup | undefined } | undefined;
+  /** Total time limit for this request in addition to the dispatcher timeouts (ms). */
+  timeoutMs?: number | undefined;
+}
+
+/** Routing decision for logs and audit. Contains no credentials, paths or query strings. */
+export interface RouteAudit {
+  purpose: NetworkPurpose;
+  decision: RouteResolution['decision'];
+  via: string;
+  routeName: string;
+  code?: string | undefined;
+  target?: { scheme: string; host: string; port: number } | undefined;
+  clientCertificate?: string | undefined;
+  trust: { mode: string; bundles: readonly string[] };
+  /** The connect step validated the destination address (false behind a proxy). */
+  pinned: boolean;
+  /** The proxy resolves the destination name (pinning impossible; documented limitation). */
+  proxyResolves: boolean;
+  reasons: readonly string[];
+}
+
+export interface OutboundPlan {
+  route: RouteResolution;
+  audit: RouteAudit;
+  dispatcher: Dispatcher;
+}
+
+export interface NodeAgents {
+  route: RouteResolution;
+  audit: RouteAudit;
+  httpsAgent: HttpsAgent;
+  httpAgent?: HttpAgent;
+}
+
+export interface OutboundDispatcher {
+  /** Resolves the route and returns (or builds) the dispatcher. Throws `egress_denied` on deny. */
+  plan(url: string | URL, ctx: OutboundContext): OutboundPlan;
+  /** fetch through the planned dispatcher: no redirects, timeouts, size limit. */
+  fetch(url: string | URL, init: RequestInit | undefined, ctx: OutboundContext): Promise<Response>;
+  /** The same routing for Node http(s) agents (AWS SDK). */
+  nodeAgents(url: string | URL, ctx: OutboundContext): NodeAgents;
+  /** The effective network (for diagnostics). */
+  readonly network: CompiledNetwork;
+  /** Closes every cached dispatcher (config reload, shutdown). */
+  close(): Promise<void>;
+}
+
+const MiB = 1024 * 1024;
+const DEFAULTS = {
+  connectTimeoutMs: 15_000,
+  headersTimeoutMs: 300_000,
+  bodyTimeoutMs: 300_000,
+  maxResponseBytes: 64 * MiB,
+} as const;
+
+/** Network built from the environment only: the behaviour of installs without a network file. */
+export function legacyNetwork(env: Record<string, string | undefined> = process.env) {
+  return compileNetwork(NetworkConfigSchema.parse({}), { legacy: legacyProxyFromEnv(env) });
+}
+
+const deniedError = (r: RouteResolution) =>
+  new OaxError('egress_denied', `outbound request refused (${r.code ?? 'egress_denied'})`, {
+    code: r.code,
+    routeName: r.routeName,
+    target: r.target,
+  });
+
+function audit(
+  purpose: NetworkPurpose,
+  r: RouteResolution,
+  net: CompiledNetwork,
+  pinned: boolean,
+): RouteAudit {
+  return {
+    purpose,
+    decision: r.decision,
+    via: r.via,
+    routeName: r.routeName,
+    ...(r.code ? { code: r.code } : {}),
+    ...(r.target ? { target: r.target } : {}),
+    ...(r.clientCert ? { clientCertificate: r.clientCert } : {}),
+    trust: { mode: net.trust.mode, bundles: net.trust.bundles },
+    pinned: r.decision === 'direct' && pinned,
+    proxyResolves: r.decision === 'proxy',
+    reasons: r.reasons,
+  };
+}
+
+/** Value of the Proxy-Authorization header from "user:password" or a full header value. */
+export function proxyAuthorization(raw: string): string {
+  return /^(Basic|Bearer) \S/.test(raw)
+    ? raw
+    : `Basic ${Buffer.from(raw, 'utf8').toString('base64')}`;
+}
+
+function userinfo(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`);
+    if (!u.username && !u.password) return undefined;
+    return `${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function limitBody(res: Response, max: number): Response {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) {
+    void res.body?.cancel().catch(() => undefined);
+    throw new OaxError('egress_denied', 'the response is larger than the allowed size');
+  }
+  if (!res.body) return res;
+  let seen = 0;
+  const limited = res.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        seen += chunk.byteLength;
+        if (seen > max)
+          controller.error(new OaxError('egress_denied', 'the response exceeded the allowed size'));
+        else controller.enqueue(chunk);
+      },
+    }),
+  );
+  return new Response(limited, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers,
+  });
+}
+
+export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDispatcher {
+  const env = opts.env ?? process.env;
+  let netCache: CompiledNetwork | undefined = opts.network;
+  const net = (): CompiledNetwork => (netCache ??= legacyNetwork(env));
+  const limits = { ...DEFAULTS, ...stripUndefined(opts.limits) };
+  const readFile = opts.readFile ?? readConfigFile;
+  const dispatchers = new Map<string, Dispatcher>();
+  const pems = new Map<string, string>();
+
+  const secret = (ref: string): string => {
+    const v = opts.secrets?.(ref);
+    if (!v) throw new OaxError('network_secret_unavailable', `secret "${ref}" is not available`);
+    return v;
+  };
+
+  const bundlePem = (name: string): string => {
+    const hit = pems.get(name);
+    if (hit !== undefined) return hit;
+    const b = net().config.trust.bundles.find((x) => x.name === name);
+    if (!b) throw new OaxError('network_config_invalid', `unknown trust bundle "${name}"`);
+    const pem = b.file ? readFile(b.file) : secret(b.secret ?? '');
+    pems.set(name, pem);
+    return pem;
+  };
+
+  /** CA list: system roots (mode system+extra) plus the named bundles. undefined = Node default. */
+  const caList = (bundles: readonly string[]): string[] | undefined => {
+    const extra = bundles.map(bundlePem);
+    if (net().trust.mode === 'system+extra' && extra.length === 0) return undefined;
+    return net().trust.mode === 'system+extra' ? [...rootCertificates, ...extra] : extra;
+  };
+
+  const clientCert = (name: string | undefined) => {
+    if (!name) return {};
+    const c = net().config.clientCertificates.find((x) => x.name === name);
+    if (!c) throw new OaxError('client_certificate_unknown', `client certificate "${name}"`);
+    return { cert: secret(c.certSecret), key: secret(c.keySecret) };
+  };
+
+  const resolve = (url: string | URL, ctx: OutboundContext) => {
+    const n = net();
+    const scope = ctx.scope ?? {};
+    const route = resolveRoute(
+      url,
+      ctx.purpose,
+      {
+        ...scope,
+        ...(opts.allowPlainHttpForPlatform && scope.origin !== 'tenant'
+          ? { allowPlainHttp: true }
+          : {}),
+      },
+      n,
+    );
+    const pinned = ctx.scope?.origin === 'tenant' || ctx.pin !== undefined;
+    const a = audit(ctx.purpose, route, n, pinned);
+    opts.onRoute?.(a);
+    if (route.decision === 'deny') throw deniedError(route);
+    return { route, audit: a, pinned, scope };
+  };
+
+  const pinLookup = (ctx: OutboundContext) =>
+    createPinnedLookup({
+      allow: [...(ctx.pin?.allow ?? []), ...net().config.privateAllow],
+      ...(ctx.pin?.lookup ? { lookup: ctx.pin.lookup } : {}),
+    }) as never;
+
+  /** Proxy credentials: configured secret, else userinfo of the env / legacy connection URL. */
+  const proxyToken = (route: RouteResolution, scope: RouteScope): string | undefined => {
+    const p = route.proxy;
+    if (!p) return undefined;
+    if (p.authSecret) return proxyAuthorization(secret(p.authSecret));
+    let raw: string | undefined;
+    if (route.routeName === 'legacy-proxyUrl') raw = userinfo(scope.proxyUrl);
+    else if (p.envUserinfo)
+      raw = userinfo(
+        p.name === 'env:https'
+          ? (env.HTTPS_PROXY ?? env.https_proxy)
+          : (env.HTTP_PROXY ?? env.http_proxy),
+      );
+    return raw ? proxyAuthorization(raw) : undefined;
+  };
+
+  const build = (r: ReturnType<typeof resolve>, ctx: OutboundContext): Dispatcher => {
+    const { route, scope } = r;
+    const p = route.proxy;
+    const destCa = caList(
+      p?.tlsInspection && p.caBundle ? [...route.ca.bundles, p.caBundle] : route.ca.bundles,
+    );
+    const common = {
+      ...(destCa ? { ca: destCa } : {}),
+      ...clientCert(route.clientCert),
+    };
+    const timeouts = {
+      headersTimeout: limits.headersTimeoutMs,
+      bodyTimeout: limits.bodyTimeoutMs,
+    };
+    if (p) {
+      const token = proxyToken(route, scope);
+      const proxyCa = p.caBundle ? caList([p.caBundle]) : caList([]);
+      const tenantChosen = p.source === 'connection';
+      return new ProxyAgent({
+        uri: p.url,
+        ...(token ? { token } : {}),
+        requestTls: { ...common, timeout: limits.connectTimeoutMs },
+        proxyTls: {
+          ...(proxyCa ? { ca: proxyCa } : {}),
+          timeout: limits.connectTimeoutMs,
+          ...(tenantChosen ? { lookup: pinLookup(ctx) } : {}),
+        },
+        ...timeouts,
+      });
+    }
+    return new Agent({
+      connect: {
+        ...common,
+        timeout: limits.connectTimeoutMs,
+        ...(r.pinned ? { lookup: pinLookup(ctx) } : {}),
+      },
+      ...timeouts,
+    });
+  };
+
+  const keyOf = (r: ReturnType<typeof resolve>, ctx: OutboundContext) =>
+    JSON.stringify([
+      r.route.via,
+      r.route.proxy?.url,
+      r.route.routeName === 'legacy-proxyUrl' ? r.scope.proxyUrl : null,
+      r.route.ca.bundles,
+      r.route.clientCert ?? null,
+      r.pinned,
+      r.pinned ? (ctx.pin?.allow ?? []) : null,
+    ]);
+
+  const plan = (url: string | URL, ctx: OutboundContext): OutboundPlan => {
+    const r = resolve(url, ctx);
+    const key = keyOf(r, ctx);
+    let dispatcher = dispatchers.get(key);
+    if (!dispatcher) {
+      dispatcher = build(r, ctx);
+      dispatchers.set(key, dispatcher);
+    }
+    return { route: r.route, audit: r.audit, dispatcher };
+  };
+
+  const impl: NonNullable<OutboundOptions['fetchImpl']> =
+    opts.fetchImpl ?? ((u, init) => undiciFetch(u, init as never) as unknown as Promise<Response>);
+
+  return {
+    get network() {
+      return net();
+    },
+    plan,
+    async fetch(url, init, ctx) {
+      const { dispatcher } = plan(url, ctx);
+      const signals: AbortSignal[] = [];
+      if (init?.signal) signals.push(init.signal);
+      if (ctx.timeoutMs) signals.push(AbortSignal.timeout(ctx.timeoutMs));
+      const res = await impl(String(url), {
+        ...init,
+        // A redirect would carry the request (and its credentials) to another origin.
+        redirect: 'error',
+        dispatcher,
+        ...(signals.length > 0 ? { signal: AbortSignal.any(signals) } : {}),
+      });
+      return limitBody(res, limits.maxResponseBytes);
+    },
+    nodeAgents(url, ctx) {
+      const r = resolve(url, ctx);
+      const p = r.route.proxy;
+      const destCa = caList(r.route.ca.bundles);
+      const common = { ...(destCa ? { ca: destCa } : {}), ...clientCert(r.route.clientCert) };
+      if (p) {
+        const token = proxyToken(r.route, r.scope);
+        const proxyCa = p.caBundle ? caList([p.caBundle]) : caList([]);
+        return {
+          route: r.route,
+          audit: r.audit,
+          httpsAgent: new HttpsProxyAgent(p.url, {
+            ...common,
+            ...(token ? { headers: { 'Proxy-Authorization': token } } : {}),
+            ...(proxyCa ? { ca: proxyCa } : {}),
+            ...(p.source === 'connection' ? { lookup: pinLookup(ctx) } : {}),
+          }),
+        };
+      }
+      const lookup = r.pinned ? { lookup: pinLookup(ctx) } : {};
+      return {
+        route: r.route,
+        audit: r.audit,
+        httpsAgent: new HttpsAgent({ ...common, ...lookup }),
+        httpAgent: new HttpAgent({ ...lookup }),
+      };
+    },
+    async close() {
+      const all = [...dispatchers.values()];
+      dispatchers.clear();
+      pems.clear();
+      await Promise.all(all.map((d) => d.close().catch(() => undefined)));
+    },
+  };
+}
+
+function stripUndefined<T extends object>(o: T | undefined): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(o ?? {}).filter(([, v]) => v !== undefined),
+  ) as Partial<T>;
+}
