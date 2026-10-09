@@ -39,3 +39,12 @@ Happy path through the gate, denied (forbidden) tool call, built-in tool use rep
 `harness_unmanaged_tool`, step/cost/time limits and cancellation (process killed), air-gapped
 refusal, secret redaction in text and tool output, minimal environment, temporary directory cleanup,
 checksum pinning.
+
+## Proxy mode (not verified with a real CLI yet)
+
+Through the model proxy the generated config contains one provider `oax-proxy`
+(`@ai-sdk/anthropic` with `baseURL <surface>/v1`, or `@ai-sdk/openai-compatible`) whose `apiKey` is
+`{env:OAX_OPENCODE_API_KEY}` (the model token). Verified only with the fake CLI; the real run (PLAT-60)
+has to confirm that the provider packages accept this `baseURL` and send the key as `x-api-key` /
+`Authorization: Bearer`, both of which the proxy accepts.
+

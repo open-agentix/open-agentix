@@ -1,3 +1,4 @@
+import { HARNESS_KINDS } from '@openagentix/core';
 import { z } from 'zod';
 
 /**
@@ -159,7 +160,14 @@ export const ModelTokenResponseSchema = z.strictObject({
 export type ModelTokenResponse = z.infer<typeof ModelTokenResponseSchema>;
 
 /** Request body of `POST /v1/worker/runs/{id}/model-token`. */
-export const ModelTokenRequestSchema = z.strictObject({ agentId: Id });
+export const ModelTokenRequestSchema = z.strictObject({
+  agentId: Id,
+  /**
+   * Set by a harness step (`agents[].runtime.harness`): the control node then answers with the
+   * pass-through surface that harness has to use. It must equal the harness the step published.
+   */
+  harness: z.enum(HARNESS_KINDS).optional(),
+});
 export type ModelTokenRequest = z.infer<typeof ModelTokenRequestSchema>;
 
 /** Platform error envelope of the native and `model-token` routes. */

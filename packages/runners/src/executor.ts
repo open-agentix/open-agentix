@@ -208,6 +208,13 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
       // Condition and input handover run before anything else: a skipped step touches nothing.
       const start = await flow.begin(agent, previous);
       if (start.skipped) continue;
+      // A harness never runs in the orchestrator process (ADR 0009 section 10): fail closed when
+      // a harness step would run inline, whatever the publish checks let through.
+      if (agent.runtime?.harness && !ctx.dispatcher?.isolates(agent))
+        throw new OaxError(
+          'harness_requires_isolated_runner',
+          `step "${agent.id}" names the ${agent.runtime.harness} harness and needs an isolating runner`,
+        );
       if (ctx.dispatcher?.isolates(agent)) {
         // Isolated step: a run node executes it with its own short-lived credentials. Cancellation
         // and budgets are checked here first; the output is validated here again (authoritative).

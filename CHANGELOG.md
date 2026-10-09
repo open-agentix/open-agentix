@@ -6,6 +6,35 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Harness adapters through the model proxy (W1-3b-7, PLAT-04)**: `agents[].runtime.harness:
+  claude-code | opencode` runs a step in a run node with the harness as executor. The harness reaches
+  its model only through `/v1/model-proxy/anthropic|openai` with the step's model token and never
+  holds a provider key or OAuth token. `POST /v1/worker/runs/{id}/model-token` accepts `harness` and
+  answers with the pass-through surface. New `OAX_HARNESSES_ENABLED` (default empty, requires the model
+  proxy). Cost is measured by the proxy; the harness report is stored in the `output` step. Publish
+  checks: isolating runner, no `simulation`, enabled harness. Hardening: `assertProxyInvocation`
+  guard, default 30-minute time limit, process-group kill. See ADR 0009 amendment W1-3b-7.
+- Run node environment variables `OAX_CLAUDE_BIN`, `OAX_OPENCODE_BIN`, `OAX_OPENCODE_SHA256`
+  (the images with pinned binaries are PLAT-05).
+
+### Security
+
+- **Harness review fixes (W1-3b-7)**: OpenCode substitutes `{env:...}` / `{file:...}` in the raw
+  text of its config, so author strings could pull the model token or the run token file into the
+  prompt. Such sequences are now refused in `provider`, `model` and the instructions of a harness
+  step at validation, and escaped (`\u007b`) in every string written to the generated
+  `opencode.json` (proxy and BYOK variants). The run token file is removed once read (best effort).
+  Tokens are redacted in the recorded `call.args` of gate calls and in harness errors; stderr is
+  redacted before it is truncated; a malformed model token response no longer surfaces a ZodError.
+  The harness environment is an allowlist behind the proxy (loader, certificate and OpenCode/Claude
+  config variables are refused for every harness), `ANTHROPIC_BASE_URL` must equal the proxy URL and
+  the check runs on the environment actually passed to `spawn`. A harness run no longer hangs on a
+  grandchild that keeps stdout open (`exit` is handled, the process group is always signalled).
+  Model tokens carry a `surface` claim (`native` | `harness`) plus the harness kind: the native
+  `/model` route refuses a harness token and the pass-through surfaces refuse a native one.
+
 ### Breaking
 
 - **Model proxy cutover (W1-3b-4)**: isolated run node steps now call models only through the

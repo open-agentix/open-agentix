@@ -873,3 +873,115 @@ differ from the text above, this section wins.
    (never the upstream id) and usage capped to the bounds the books use. (e) The model token is
    checked before the request body is validated. (f) Non-streaming answers stay validated against the
    wire schema; only a relayed stream (already delivered event by event) skips it.
+
+### W1-3b-7: harness adapters through the proxy (2026-10-09)
+
+Decisions taken while implementing section 10 for Claude Code and OpenCode in the run node (PLAT-04).
+Where they differ from the text above, this section wins. The run-node **images** that contain the
+harness binaries (`run-node-claude-code`, `run-node-opencode`) are PLAT-05 and not part of this
+change; the node looks the binaries up through `OAX_CLAUDE_BIN`, `OAX_OPENCODE_BIN` and
+`OAX_OPENCODE_SHA256` and fails with `harness_spawn_failed` when they are missing.
+
+**Threat model of a harness step.** A harness is a large, fast-moving third-party program with its
+own tools, plugins, network stack and update logic, driven by a model that reads untrusted text. We
+assume it can be steered into any action its process can perform, and that its output is attacker
+influenced.
+
+| # | Threat | Control |
+| --- | --- | --- |
+| H1 | The harness holds a provider key or an OAuth token and misuses or leaks it (prompt injection, tool output, a log line) | The child's only credential is the **model token** of its step (section 2.2). No provider key, no `CLAUDE_CODE_OAUTH_TOKEN`, no cloud variable reaches the node (`assertProxyInvocation` refuses them when the invocation is built and again before the spawn). A token file or host login configured on the adapter is ignored in proxy mode. The token is scrubbed from everything the harness returns |
+| H2 | A stolen model token is used elsewhere | Bound to run, session, node, step and one `jti`, expires with the session, dies when the session is revoked (section 2.2); opens model endpoints only, never the gate, approvals, credentials or handover. Spending stays inside the step's reservations and the run, step and tenant limits of the admission chain. A harness step gets its token **for the harness** (`{ agentId, harness }`); the native token is refused for it |
+| H3 | The harness bypasses the policy gate through built-in tools (shell, file edit, web fetch) | Claude Code: `--tools ""`, `--strict-mcp-config`, `--permission-mode dontAsk`, an allowlist of exactly the gate tools the control node serves for this step, `--restricted`. OpenCode: `"*": "deny"`, every built-in tool denied and switched off, one provider, one MCP server (the gate). Flags that switch the permission model off are refused. The tool list comes from `exposedTools(agent)`, i.e. from the step's concrete grants (profiles are expanded at publish), so the harness never sees more than a native step. Anything the stream reports outside the gate ends the run `blocked_by_policy` (`harness_unmanaged_tool`) |
+| H4 | A policy decision is skipped | Every gate call is decided by the control node (`POST /v1/worker/runs/{id}/gate`, audited `policy.decision`); approvals are awaited there; the harness has no other way to act |
+| H5 | The harness uses a different model or a hidden route (background calls, telemetry, update checks) | The proxy only lets the step's published model through, so the adapters set every model variable the CLI consults (`ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL`) to it; non-essential traffic, telemetry, error reporting, auto-update, experimental betas, model-catalog and LSP downloads, plugins and sharing are switched off; `HTTP(S)_PROXY`-style variables are not set. Where a harness still tries another host, the node's egress rules (the egress proxy of the container runner) apply |
+| H6 | Cost is misreported | The ledger line of every upstream call is written by the proxy (`via = 'proxy'`). The harness' own report is stored in the output step (`harness.reported`) for comparison only; the `model_call` step of a node is refused (`step_kind_refused`), so none is written in proxy mode. `--max-budget-usd` and the platform-side check on the reported cost stay as a secondary limit |
+| H7 | Runaway or hanging harness | `budget.maxSteps` (turn limit, enforced by flag and counted by the platform), `budget.timeoutSeconds` (kill), a **default of 30 minutes** when the agent sets none, cancellation, output cap of 16 MiB, stderr cap. The child runs in its own process group and the whole group is killed on stop and after exit, so nothing it forked survives. CPU, memory, PID and disk limits come from the container (or Job) of the run node; the adapter does not try to replace them |
+| H8 | Output is hostile (tool output, final answer) | Captured as data only: the answer becomes the `output` step, validated against `output.schema` by the orchestrator; tool results are recorded by the gate (`tool_call` step, size-capped, credential values scrubbed) and truncated in the transcript; nothing the harness prints is executed or interpreted by the platform. The audit chain therefore holds: gate decisions and tool calls (control node), proxy calls and `model_token.issued` (control node), and the `output` / `error` step of the node, which carries the harness report (turns, termination, tool names, reported usage) |
+| H9 | The harness binary is swapped or downloaded at run time | The platform never downloads a harness. Binaries are part of the node image (pinned and checksummed at build time, PLAT-05); OpenCode additionally verifies `OAX_OPENCODE_SHA256` before every start. Tests use fakes and fixtures only |
+| H10 | A harness step runs in the worker process | Refused at publish (`harness` needs `container` or `kubernetes-job`), refused again by the step executor (`harness_requires_isolated_runner`), and the dispatcher only hands steps to run nodes |
+| H11 | Cross-protocol confusion | No translation: Claude Code is limited to the Anthropic surface, OpenCode may use either, and the control node picks the surface from the harness **and the provider kind** (`400 model_surface_mismatch` otherwise, section 2.4). The CLI's choice never decides |
+
+**Decisions.**
+
+1. **Field and checks.** `agents[].runtime.harness: claude-code | opencode` (additive, optional;
+   `hermes` and `openclaw` stay stubs and are not selectable). Definition check: the effective runner
+   must be `container` or `kubernetes-job`, and the step must not have a `simulation`. Publish check:
+   the harness is listed in the new `OAX_HARNESSES_ENABLED` (default empty). That variable requires
+   `OAX_MODEL_PROXY_ENABLED=true` at startup (a harness without the proxy would need a provider key).
+   The provider is checked when the token is issued, because only then the connection is resolved
+   for the run's tenant.
+2. **Model token for harnesses.** `POST /v1/worker/runs/{id}/model-token` accepts
+   `{ agentId, harness? }`. With `harness` the step must have been published with exactly that
+   harness (and the harness must be enabled); the answer is
+   `{ protocol: "anthropic" | "openai", baseUrl: <control>/v1/model-proxy/<protocol>, model, token, expiresAt }`.
+   `baseUrl` is the surface root **without** `/v1`: Claude Code appends `/v1/messages` itself, OpenCode
+   gets `<baseUrl>/v1`. A harness step cannot ask for the native form. The audit entry
+   `model_token.issued` gains `harness` and `protocol`.
+3. **Adapter interface.** `ExternalHarness.buildInvocation(..., proxy?: ModelProxyEndpoint)`. With
+   `proxy` the adapter builds the command line and environment for the proxy; `HarnessInvocation`
+   carries `modelProxy` (public part) and `redact` (the token, for scrubbing). The CLI keeps its direct
+   modes unchanged (`oax run --harness`, token file, BYOK connections).
+4. **Run node.** For a step with `runtime.harness` the node requests the harness token, runs
+   `executeWithHarness` with the proxy option (policy gate over loopback MCP as before) and reports the
+   output. No `model_call` step and no usage numbers of the harness enter the books of the node.
+   Classification and air-gap checks are the proxy's (`clearance restricted` on the node side);
+   the direct-egress allowlist of the adapter does not apply behind the proxy.
+5. **Tool and permission mapping.** Unchanged in principle (section 10 and ADR 0005): the harness gets
+   exactly the tools the gate serves for the step. New is the guard `assertProxyInvocation`
+   (forbidden environment, permission-bypass flags, permission mode, non-model secrets, missing time
+   limit, base URL mismatch).
+6. **Limits.** Default time limit, process-group kill, existing turn/cost/output limits (H7).
+
+**Not in this change (open).** Run-node images with pinned binaries and the per-harness image
+selection (PLAT-05); the verified variable names of the pinned CLI versions (the names above come from
+the CLI documentation; the first real run is PLAT-60 and updates `docs/verification/`); an in-process
+(orchestrator) harness session; `count_tokens` for harnesses that call it; hard CPU/memory limits
+inside the node beyond what the container runner sets; harness steps with `credentials` that the
+harness itself should see (the child never receives them; only MCP tools of the gate do).
+
+**Review amendment (2026-10-09).** Findings of the PR review and their resolution.
+
+1. **Config placeholder injection (OpenCode).** OpenCode substitutes `{env:NAME}` and `{file:PATH}` in
+   the raw text of its configuration file before parsing. Author-controlled strings (instructions,
+   `provider`, `model`, ids) could therefore pull `OAX_OPENCODE_API_KEY` (the model token) or the run
+   token file (`OAX_RUN_TOKEN_FILE`) into the prompt. Controls: (a) definition validation refuses
+   `{env:` and `{file:` (case-insensitive) in `provider`, `model` and the instructions of a harness
+   step; (b) the adapter writes the opening brace of such sequences as the JSON escape `\u007b` in
+   every string of the generated file, so the substitution pattern never matches while `JSON.parse`
+   still yields the literal text. The adapter's own placeholders (key, header values) are inserted
+   last through a per-build random marker that an author cannot know. (c) The node removes the run
+   token file after reading it (the token is never re-read, there is no refresh); this is best
+   effort, because a container reads `/dev/stdin` and a mounted Secret is read-only. The harness
+   environment never contains the path.
+2. **Environment.** Behind the proxy the environment is an allowlist (PATH, LANG, NO_COLOR, HOME, XDG
+   dirs, the documented Claude/OpenCode switches, the model variables, `OAX_OPENCODE_*`); everything
+   else is refused. For every harness (also the direct modes) the loader and trust variables
+   (`NODE_*`, `LD_*`, `DYLD_*`, `BUN_*`, `SSL_CERT_*`, `CLAUDE_CONFIG_DIR`, `ANTHROPIC_CUSTOM_HEADERS`,
+   `OPENCODE_CONFIG_CONTENT|DIR`, `OPENCODE_PERMISSION`, CA bundle variables) are refused.
+   `ANTHROPIC_BASE_URL` must equal the proxy base URL. The check runs on the environment that is
+   actually passed to `spawn`, after the adapter added HOME, XDG, config path and key.
+3. **Process end and redaction.** The adapter reacts to `exit` and not only `close`; the process
+   group is always signalled (also after the leader exited) so a descendant holding stdout cannot hang
+   the run. stderr is redacted before it is truncated. Model token response errors report field names
+   only. Gate call args and harness errors are redacted with the step's tokens before they are
+   recorded.
+4. **Token surface.** The model token gets the claims `surface` (`native` | `harness`, default
+   `native` for older tokens) and, for `harness`, the harness kind. `POST .../model` accepts only
+   `native` tokens, the pass-through surfaces only `harness` tokens (`model_not_allowed`). The control
+   node still decides which harness a step may use at issue time.
+
+**Merge-blocking verification notes (to be confirmed with the pinned binaries, PLAT-05/PLAT-60).**
+
+- OpenCode must **not install npm provider packages at run time**. The config names
+  `@ai-sdk/anthropic` / `@ai-sdk/openai-compatible`; the node image must bundle them and the node
+  must have no registry egress. Verify with the pinned binary and no network that a run starts and
+  that no `npm`/`bun add` is attempted. Until verified this is a residual risk (a run-time install
+  would execute third-party code with the model token in its environment).
+- Claude Code `managed-settings.json` must **not exist in the node image** (nor
+  `/etc/claude-code`, nor a `CLAUDE_CONFIG_DIR`), because managed settings override flags such as
+  `--restricted` and permissions. Verify by listing the image file system in the image build test.
+- The default egress of harness steps should be **control node only**. The container runner of this
+  change still applies the pipeline's `runtime.egress` allowlist; it has no per-step "control node
+  only" default for harness steps. This is documented as a **residual risk**: until it exists, a
+  harness step should be published with `runtime.egress: []` (the narrowest declaration); whether the
+  egress proxy then admits the control node only was not verified here.

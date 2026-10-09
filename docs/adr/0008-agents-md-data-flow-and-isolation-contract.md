@@ -198,6 +198,10 @@ literal := string | number | "true" | "false" | "null"
   `agents[].toolbox` stays the per-step toolbox override.
 - Publish refuses a step runner that is not in `OAX_RUNNERS_ENABLED` (the api check is extended to
   per-step runners by W1-3).
+- `harness?: claude-code | opencode` (ADR 0009 section 10 and amendment W1-3b-7): run the step through
+  an external harness behind the model proxy. Needs an isolating runner and no `simulation`; the
+  harness must be enabled by the operator (`OAX_HARNESSES_ENABLED`). The harness child holds only the
+  step's model token and gets the policy gate as its only tool source.
 
 ### 2. Credential broker contract (W1-3; used by W1-4)
 

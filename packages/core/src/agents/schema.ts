@@ -179,9 +179,21 @@ export const RUNNER_KINDS = [
 ] as const;
 export type RunnerKind = (typeof RUNNER_KINDS)[number];
 
+/**
+ * External agent harnesses that can execute a step through the model proxy (ADR 0009 section 10).
+ * Hermes and OpenClaw are documented stubs and therefore not selectable.
+ */
+export const HARNESS_KINDS = ['claude-code', 'opencode'] as const;
+export type HarnessKind = (typeof HARNESS_KINDS)[number];
+
 /** Per-step runtime override: another runner, or a narrower egress list (ADR 0008). */
 export const StepRuntimeSchema = z.strictObject({
   runner: z.enum(RUNNER_KINDS).optional(),
+  /**
+   * Run the step through an external harness that talks to the model proxy (ADR 0009 section 10).
+   * Needs an isolating runner; the harness gets the policy gate as its only tool source.
+   */
+  harness: z.enum(HARNESS_KINDS).optional(),
   /** Must be a subset of the pipeline's `runtime.egress`; a step can only narrow it. */
   egress: z.array(z.string().min(1)).optional(),
 });
@@ -189,12 +201,24 @@ export type StepRuntime = z.infer<typeof StepRuntimeSchema>;
 
 export const WHEN_MAX_LENGTH = 512;
 
+/**
+ * Harness configuration files substitute `{env:NAME}` / `{file:PATH}` placeholders (OpenCode). Ids
+ * that end up in such a file must not contain them.
+ */
+export const CONFIG_PLACEHOLDER = /\{(?:env|file):/i;
+
 export const AgentSpecSchema = z.strictObject({
   id: slug,
   description: z.string().optional(),
   /** Name of a configured provider (see docs/configuration.md), e.g. `simulated`, `bedrock`. */
-  provider: z.string().min(1),
-  model: z.string().min(1),
+  provider: z
+    .string()
+    .min(1)
+    .refine((v) => !CONFIG_PLACEHOLDER.test(v), 'must not contain "{env:" or "{file:"'),
+  model: z
+    .string()
+    .min(1)
+    .refine((v) => !CONFIG_PLACEHOLDER.test(v), 'must not contain "{env:" or "{file:"'),
   temperature: z.number().min(0).max(2).optional(),
   maxTokensPerCall: z.number().int().positive().optional(),
   /** Inline instructions; usually taken from the `## Agent: <id>` markdown section instead. */

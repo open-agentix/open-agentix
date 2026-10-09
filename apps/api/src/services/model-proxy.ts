@@ -12,6 +12,7 @@ import {
   type AgentDefinition,
   type AgentSpec,
   type Budget,
+  type HarnessKind,
   type ModelTokenClaims,
   type RunTokenClaims,
 } from '@openagentix/core';
@@ -28,6 +29,7 @@ import {
   modelErrorEnvelope,
   sanitizeEvent,
   anthropicMessageId,
+  harnessSurface,
   openaiCompletionId,
   type SanitizeOpts,
   synthesizeEvents,
@@ -41,6 +43,7 @@ import {
   type ModelProvider,
   type ModelTokenResponse,
   type PassthroughRequest,
+  type PassthroughSurface,
   type ProviderConfig,
   type StreamPlan,
   type StreamResult,
@@ -151,6 +154,8 @@ export interface CallAuth {
   nodeId: string;
   /** Model token: the one step the token is bound to. Run token: `null` (checked against `steps`). */
   boundAgentId: string | null;
+  /** Model token: the endpoint family it was issued for (`null` for a run token). */
+  surface: 'native' | 'harness' | null;
   steps: readonly string[];
   tenantId: string;
   /** When the session (the step) started: step timeouts are measured from here. */
@@ -266,7 +271,11 @@ export class ModelProxyService {
    * step. Accepts the step-scoped run token of the node or its model token; an orchestrator token
    * (no `sid`), a token of another run and a token whose session is gone are refused.
    */
-  async authenticate(bearer: string | null, runId: string): Promise<CallAuth> {
+  async authenticate(
+    bearer: string | null,
+    runId: string,
+    surface: 'native' | 'harness' = 'native',
+  ): Promise<CallAuth> {
     const secret = this.ctx.config.runToken.secret;
     const now = this.ctx.now().getTime();
     if (!bearer) throw new ModelProxyError('unauthenticated', 'valid model or run token required');
@@ -281,6 +290,7 @@ export class ModelProxyService {
           sid: modelClaims.sid,
           nodeId: modelClaims.nodeId,
           boundAgentId: modelClaims.agentId,
+          surface: modelClaims.surface,
           steps: [modelClaims.agentId],
         };
       } else {
@@ -296,6 +306,7 @@ export class ModelProxyService {
           sid: claims.sid,
           nodeId: claims.workerId,
           boundAgentId: null,
+          surface: null,
           steps: claims.steps ?? [],
         };
       }
@@ -305,6 +316,13 @@ export class ModelProxyService {
     }
     if (auth.runId !== runId)
       throw new ModelProxyError('model_not_allowed', 'the token is not valid for this run');
+    // A model token opens one endpoint family only: the native /model route refuses a harness
+    // token and the harness pass-through surfaces refuse a native one.
+    if (auth.surface !== null && auth.surface !== surface)
+      throw new ModelProxyError(
+        'model_not_allowed',
+        'the model token is not valid for this endpoint',
+      );
     const session = await this.nodes.sessionById(auth.sid);
     const dead = (message: string) => new ModelProxyError('run_node_session_revoked', message);
     if (!session || session.runId !== runId || session.nodeId !== auth.nodeId)
@@ -335,7 +353,7 @@ export class ModelProxyService {
     } catch {
       throw new ModelProxyError('unauthenticated', 'a valid model token is required');
     }
-    return this.authenticate(credential, claims.runId);
+    return this.authenticate(credential, claims.runId, 'harness');
   }
 
   /** The one model of the token's step (`GET .../models` lists exactly this). */
@@ -368,7 +386,11 @@ export class ModelProxyService {
   // ---------- model token ----------
 
   /** Issues the model token of one step, once per step and session (ADR 0009 section 2.2). */
-  async issueToken(auth: CallAuth, agentId: string): Promise<ModelTokenResponse> {
+  async issueToken(
+    auth: CallAuth,
+    agentId: string,
+    harness?: HarnessKind,
+  ): Promise<ModelTokenResponse> {
     this.assertEnabled();
     if (auth.via !== 'run-token')
       throw new ModelProxyError('unauthenticated', 'a step-scoped run token is required');
@@ -386,6 +408,38 @@ export class ModelProxyService {
         'model_not_allowed',
         'the provider of this step is not available',
       );
+    // A harness step (ADR 0009 section 10): the harness has to be the one the version published and
+    // the platform enabled, and its protocol has to match the provider (no translation).
+    let surface: PassthroughSurface | undefined;
+    if (harness) {
+      if (
+        agent.runtime?.harness !== harness ||
+        !this.ctx.config.harnesses.enabled.includes(harness)
+      )
+        throw await this.deny(
+          auth,
+          agentId,
+          'model_not_allowed',
+          'this step is not published for that harness',
+        );
+      surface = harnessSurface(harness, resolved.provider.kind) ?? undefined;
+      if (!surface)
+        throw await this.deny(
+          auth,
+          agentId,
+          'model_surface_mismatch',
+          `the provider of this step cannot be used by the ${harness} harness`,
+        );
+    } else if (agent.runtime?.harness) {
+      // A harness step gets its token for the harness protocol only; the native endpoint is for
+      // the built-in step loop.
+      throw await this.deny(
+        auth,
+        agentId,
+        'model_not_allowed',
+        'a harness step requests its model token for the harness',
+      );
+    }
     const session = await this.nodes.sessionById(auth.sid);
     if (!session) throw new ModelProxyError('run_node_session_revoked', 'session not found');
     const cfg = this.ctx.config;
@@ -396,6 +450,8 @@ export class ModelProxyService {
         sid: auth.sid,
         nodeId: auth.nodeId,
         agentId,
+        surface: harness ? 'harness' : 'native',
+        ...(harness ? { harness } : {}),
         ttlSeconds: cfg.runToken.ttlSeconds,
         notAfterMs: session.expiresAt.getTime(),
       },
@@ -420,14 +476,17 @@ export class ModelProxyService {
         agentId,
         jti: issued.claims.jti,
         expiresAt: new Date(issued.claims.exp * 1000).toISOString(),
+        ...(harness ? { harness, protocol: surface } : {}),
       },
     });
     const base = (cfg.runners.container.nodeControlUrl ?? cfg.publicUrl).replace(/\/$/, '');
     return {
       token: issued.token,
       expiresAt: new Date(issued.claims.exp * 1000).toISOString(),
-      protocol: 'native',
-      baseUrl: `${base}/v1/worker/runs/${auth.runId}`,
+      protocol: surface ?? 'native',
+      baseUrl: surface
+        ? `${base}/v1/model-proxy/${surface}`
+        : `${base}/v1/worker/runs/${auth.runId}`,
       model: agent.model,
     };
   }
