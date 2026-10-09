@@ -31,7 +31,7 @@ Differences between the plan below and what S1 shipped:
   once, a rate-limited warning with the differing lines, switch `OAX_ROLE_BINDINGS_SHADOW`, default
   on). Switching the read path is the first step of S2, once the mismatch counter has stayed at
   zero and the mirror has been reconciled once (rows written by an older application version during
-  a rolling deploy or after an application-only rollback are not mirrored; see the S2 follow-up).
+  a rolling deploy or after an application-only rollback are not mirrored; #216, #217).
 - `RoleBinding` gained the optional `permissions`, `useCase` and `source`; the checks read the
   narrowed `permissions` (never wider than the role, `bindingPermissions`).
 - The resolver takes the acting node's placement (`id`, `rootId`, `path`) instead of a tree
