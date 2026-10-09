@@ -81,9 +81,23 @@ export interface DemoUser {
   tenant: DemoTenantKey;
   teams?: { slug: string; role: Role }[];
   agents?: { name: string; role: Role }[];
+  /**
+   * Platform operator, modelled exactly like the seed's bootstrap owner (`users.platform_admin`):
+   * lists every tenant and may act in any of them (`X-OAX-Tenant`). The demo stays read-only for
+   * this user as well (the read-only hook does not look at the principal).
+   */
+  platformAdmin?: boolean;
 }
 
 export const DEMO_USERS: DemoUser[] = [
+  // Platform operator for visitors: sees all four demo tenants and the tenant switcher.
+  {
+    email: 'owner@example.org',
+    displayName: 'Olga Owner',
+    globalRoles: ['admin'],
+    tenant: 'root',
+    platformAdmin: true,
+  },
   {
     email: 'admin@example.org',
     displayName: 'Ada Admin',
@@ -324,6 +338,11 @@ export async function seedDemo(
       globalRoles: u.globalRoles,
     });
     users[u.email] = created.id;
+    if (u.platformAdmin)
+      await ctx.db
+        .update(usersTable)
+        .set({ platformAdmin: true })
+        .where(eq(usersTable.id, created.id));
   }
   for (const [key, teamId] of Object.entries(teamIds)) {
     const [tenant, slug] = key.split('/') as [DemoTenantKey, string];

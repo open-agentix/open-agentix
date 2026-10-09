@@ -6,6 +6,11 @@
 export const DEMO_EVENT_SOURCE = '/demo/scenarios';
 export const DEMO_EVENT_TYPE = 'io.openagentix.demo.scenario';
 export const DEMO_TRIGGER_PREFIX = 'demo-scenario:';
+/**
+ * Scenario runs are created in this tenant and nowhere else, whoever asks and whichever tenant
+ * they act in (`X-OAX-Tenant`): the agent is looked up by name inside this tenant only.
+ */
+export const DEMO_SCENARIO_TENANT_SLUG = 'security';
 
 export interface DemoScenario {
   id: string;
