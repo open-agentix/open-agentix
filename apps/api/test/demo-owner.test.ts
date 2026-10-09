@@ -65,6 +65,23 @@ describe('demo users', () => {
     expect(counts).toEqual({ default: 1, security: 3, platform: 1, 'acme-labs': 1 });
   });
 
+  it('opens the listed accounts with the shared password and the unlisted seed helpers not at all', async () => {
+    const attempt = (username: string, i: number) =>
+      n.app.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        payload: { username, password: PW },
+        // One address per attempt: the sign-in rate limit is per client address.
+        remoteAddress: `192.0.2.${10 + i}`,
+      });
+    const listed = DEMO_USERS.map((u) => u.email);
+    for (const [i, email] of listed.entries())
+      expect((await attempt(email, i)).statusCode, email).toBe(200);
+    // demo-owner@ (platform admin) and the Acme admin get a random password per seed.
+    for (const [i, hidden] of ['demo-owner@example.org', 'admin@acme.example.org'].entries())
+      expect((await attempt(hidden, 50 + i)).statusCode, hidden).toBe(401);
+  });
+
   it('keeps the other visitor accounts in one tenant (no switcher for them)', async () => {
     const admin = await n.login('admin@example.org', PW);
     expect((await n.req({ method: 'GET', url: '/v1/me', token: admin })).json().platformAdmin).toBe(

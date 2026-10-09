@@ -230,6 +230,10 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Security
 
+- **Demo: unlisted seed accounts no longer share the published password**: `demo-owner@example.org`
+  (platform admin) and `admin@acme.example.org` (Acme Labs admin) only build the data set; they get
+  a random password per seed, so the shared demo password opens only the accounts on the sign-in
+  page.
 - **Demo: scenario limits hold under concurrent requests**: `POST /v1/demo/scenarios/{id}/run`
   checked its limits before inserting the run, so a burst of parallel requests passed all of them
   (per-visitor window, daily cap, one live run and the daily budget in `claude-code` mode). Starts

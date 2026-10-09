@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { CostModel, type Principal, type Role } from '@openagentix/core';
 import { createEvent } from '@openagentix/events';
 import {
@@ -195,6 +196,15 @@ async function executeRun(
 }
 
 /** Seeds the demo data set once (no-op when agents exist unless `force`). */
+/**
+ * Password of the seed's helper accounts that the sign-in page does not list (`demo-owner@`, the
+ * Acme tenant admin): random per seed and never stored or logged, so the shared, published demo
+ * password opens only the listed accounts.
+ */
+function unlistedPassword(): string {
+  return randomBytes(24).toString('base64url');
+}
+
 export async function seedDemo(
   ctx: AppContext,
   services: Services,
@@ -216,7 +226,8 @@ export async function seedDemo(
     {
       email: 'demo-owner@example.org',
       displayName: 'Demo Owner',
-      password: opts.password,
+      // Builds the data set only; nobody signs in as it (owner@ is the visitors' platform admin).
+      password: unlistedPassword(),
       globalRoles: ['admin'],
     },
   );
@@ -249,7 +260,7 @@ export async function seedDemo(
           admin: {
             email: 'admin@acme.example.org',
             displayName: 'Acme Admin',
-            password: opts.password,
+            password: unlistedPassword(),
           },
         });
     tenantIds[t.key] = row.id;
