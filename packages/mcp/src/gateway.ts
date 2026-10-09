@@ -1,8 +1,12 @@
 import {
+  ContextGuard,
   OaxError,
   classifyTool,
   evaluateToolCall,
   findGrant,
+  isGuardReportEmpty,
+  mergeGuardReports,
+  type GuardReport,
   type PolicyContext,
   type PolicyDecision,
   type ToolAccess,
@@ -40,7 +44,13 @@ export interface ExposedTool {
 }
 
 export type GatewayCallResult =
-  | { status: 'ok'; decision: PolicyDecision; result: ToolResult }
+  | {
+      status: 'ok';
+      decision: PolicyDecision;
+      result: ToolResult;
+      /** Set when the guard removed or replaced something in the result (counts only). */
+      guard?: GuardReport;
+    }
   | { status: 'denied'; decision: PolicyDecision }
   | { status: 'approval_required'; decision: PolicyDecision };
 
@@ -54,6 +64,12 @@ export class ToolGateway {
   constructor(
     private readonly configs: readonly McpServerConfig[],
     private readonly deps: ConnectDeps,
+    /**
+     * Guards every tool result before the caller sees it (invisible Unicode removed). This is the
+     * one place all tool results pass, for inline runs, run nodes and harness steps alike. On by
+     * default.
+     */
+    readonly guard: ContextGuard = new ContextGuard(),
   ) {}
 
   private async connection(server: string): Promise<McpConnection> {
@@ -108,8 +124,18 @@ export class ToolGateway {
     if (decision.effect === 'require_approval' && !opts.approved)
       return { status: 'approval_required', decision };
     const conn = await this.connection(call.server);
-    const result = await conn.callTool(call.tool, call.args, opts.signal);
-    return { status: 'ok', decision, result };
+    const raw = await conn.callTool(call.tool, call.args, opts.signal);
+    const text = this.guard.text(raw.text);
+    if (raw.structured === undefined && isGuardReportEmpty(text.report))
+      return { status: 'ok', decision, result: raw };
+    const structured = raw.structured === undefined ? undefined : this.guard.value(raw.structured);
+    const report = text.report;
+    if (structured) mergeGuardReports(report, structured.report);
+    const result: ToolResult = { ...raw, text: text.text };
+    if (structured) result.structured = structured.value;
+    return isGuardReportEmpty(report)
+      ? { status: 'ok', decision, result }
+      : { status: 'ok', decision, result, guard: report };
   }
 
   async close(): Promise<void> {

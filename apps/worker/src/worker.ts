@@ -8,7 +8,7 @@ import {
   type RunResult,
   type Runner,
 } from '@openagentix/runners';
-import type { HarnessKind, RunnerKind } from '@openagentix/core';
+import { contextGuardFromEnv, type HarnessKind, type RunnerKind } from '@openagentix/core';
 import type { PullRequestDelivery } from './git/delivery.js';
 import { NodeDispatcher } from './node-dispatcher.js';
 import { RunQueue } from './queue.js';
@@ -89,15 +89,19 @@ export class Worker {
     // Tool servers resolve per run: only connections of the run's tenant (and platform ones) exist.
     const run = await this.services.runs.get(runId);
     const toolScope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
-    const tools = new ToolGateway(await this.services.catalog.mcpConfigs(toolScope), {
-      // Tenant allowlist (tenants.secret_refs) applies in-process exactly as it does for nodes;
-      // only connections of PLATFORM scope keep the unrestricted (operator-chosen) resolver.
-      ...(await this.services.runNodes.resolverForRun(
-        run.tenantId,
-        await this.services.catalog.platformMcpNames(toolScope),
-      )),
-      ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
-    });
+    const tools = new ToolGateway(
+      await this.services.catalog.mcpConfigs(toolScope),
+      {
+        // Tenant allowlist (tenants.secret_refs) applies in-process exactly as it does for nodes;
+        // only connections of PLATFORM scope keep the unrestricted (operator-chosen) resolver.
+        ...(await this.services.runNodes.resolverForRun(
+          run.tenantId,
+          await this.services.catalog.platformMcpNames(toolScope),
+        )),
+        ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
+      },
+      contextGuardFromEnv(process.env),
+    );
     try {
       return await withSpan('oax.run', { 'oax.run_id': runId, 'oax.worker': this.id }, async () => {
         const prepared = await this.services.control.prepare(runId);

@@ -3,6 +3,7 @@ import { lstat, mkdir, open, readFile, rm, unlink, writeFile } from 'node:fs/pro
 import { join } from 'node:path';
 import {
   CostModel,
+  contextGuardFromEnv,
   OaxError,
   StaticSecretResolver,
   type AgentDefinition,
@@ -417,11 +418,16 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
     const proxyEnv: Record<string, string> = proxyUrl
       ? { HTTPS_PROXY: proxyUrl, https_proxy: proxyUrl, HTTP_PROXY: proxyUrl, http_proxy: proxyUrl }
       : {};
-    tools = new ToolGateway(mergeCredentials(handover.mcp, creds, proxyEnv), {
-      secrets: new StaticSecretResolver({}),
-      env: proxyEnv,
-      ...(opts.inMemoryMcp ? { inMemory: opts.inMemoryMcp } : {}),
-    });
+    const guard = contextGuardFromEnv(opts.env ?? process.env);
+    tools = new ToolGateway(
+      mergeCredentials(handover.mcp, creds, proxyEnv),
+      {
+        secrets: new StaticSecretResolver({}),
+        env: proxyEnv,
+        ...(opts.inMemoryMcp ? { inMemory: opts.inMemoryMcp } : {}),
+      },
+      guard,
+    );
     // Every model call of a node goes through the control node's model proxy (ADR 0009), the
     // simulated provider included, so tests and demos exercise the real path. `localProviders` is
     // for unit tests only; the node binary never sets it.

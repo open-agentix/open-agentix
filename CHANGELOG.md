@@ -148,6 +148,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **Invisible-Unicode filter for model input** (ADR 0008 Amendment 6): zero-width, bidi, tag-block
+  and control characters are removed from prompts and from every tool result before it enters the
+  model context or a stored step output. Choke points: `ToolGateway.call` and the executors. ZWJ/ZWNJ
+  are kept only between non-ASCII letters or emoji. Audited as an `input_guard` control step with
+  counts and class names only (a run node may report exactly that step). On by default;
+  `OAX_STRIP_INVISIBLE_UNICODE=false` switches it off for diagnostics. Docs:
+  `docs/security-input-hardening.md`.
 - Network configuration refuses plain `http://` proxies in production (`proxy_plain_http`), proxy
   URLs with credentials (use `authSecret` references), any key that would disable TLS verification
   and `NODE_TLS_REJECT_UNAUTHORIZED=0` (`tls_insecure`). Cloud metadata addresses and names are

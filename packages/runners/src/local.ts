@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   CostModel,
+  contextGuardFromEnv,
   DefaultSecretResolver,
   loadAgentDefinition,
   type PolicyBundle,
@@ -80,7 +81,11 @@ export async function runLocal(opts: LocalRunOptions): Promise<LocalRunReport> {
       ...(DEMO_TOOL_ACCESS[name] ? { tools: DEMO_TOOL_ACCESS[name] } : {}),
     }))
   ).map((c) => McpServerConfigSchema.parse(c));
-  const tools = new ToolGateway(mcp, { secrets, inMemory: inMemoryServers(demoServerFactories()) });
+  const tools = new ToolGateway(
+    mcp,
+    { secrets, inMemory: inMemoryServers(demoServerFactories()) },
+    contextGuardFromEnv(process.env),
+  );
   const control = new LocalControlPlane({
     definition,
     toolAccess: toolAccessOfConfigs(mcp),

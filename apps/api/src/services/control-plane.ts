@@ -3,6 +3,7 @@ import type { OaxError } from '@openagentix/core';
 import {
   evaluateToolCall,
   issueRunToken,
+  auditShapeOfReport,
   stepAuditEntry,
   verifyRunToken,
   type AgentDefinition,
@@ -40,6 +41,8 @@ const ACTIVE = ['running', 'awaiting_approval'];
 const NODE_STEP_MAX_BYTES = 64 * 1024;
 /** Step kinds a run node may report. */
 const NODE_STEP_KINDS: ReadonlySet<string> = new Set(['tool_call', 'output', 'error']);
+/** The one control step a node may report: what its context guard removed (counts only). */
+const isNodeGuardStep = (s: StepInput): boolean => s.kind === 'control' && s.name === 'input_guard';
 
 /**
  * The control node side of the worker contract. Every method is scoped by a signed run token,
@@ -363,6 +366,22 @@ export class ControlPlaneService {
       const text = JSON.stringify(v);
       return text.length <= NODE_STEP_MAX_BYTES ? v : { truncated: true, bytes: text.length };
     };
+    if (isNodeGuardStep(step)) {
+      // Whatever the node sends, only counts and class names are kept.
+      const o = (step.output ?? {}) as { source?: unknown; tool?: unknown };
+      const text = (v: unknown) => (typeof v === 'string' ? v.slice(0, 200) : undefined);
+      return {
+        kind: 'control',
+        agentId: step.agentId,
+        name: 'input_guard',
+        status: 'ok',
+        output: {
+          ...(text(o.source) ? { source: text(o.source) } : {}),
+          ...(text(o.tool) ? { tool: text(o.tool) } : {}),
+          ...auditShapeOfReport(step.output),
+        },
+      };
+    }
     return {
       kind: step.kind,
       agentId: step.agentId,
@@ -394,7 +413,7 @@ export class ControlPlaneService {
         'step_kind_refused',
         'a run node cannot report model calls; the model proxy records them',
       );
-    if (node && !NODE_STEP_KINDS.has(rawStep.kind)) return;
+    if (node && !NODE_STEP_KINDS.has(rawStep.kind) && !isNodeGuardStep(rawStep)) return;
     if (!node && (await this.settleReserved(runId, rawStep))) return;
     // Values the broker handed out for this run never reach step rows or audit payloads.
     const step = await this.nodes.scrub(runId, node ? this.sanitizeNodeStep(rawStep) : rawStep);

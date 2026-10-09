@@ -1258,6 +1258,33 @@ describe('what a node may report, and who said it', () => {
       ),
     ).toBe(true);
   });
+  it('accepts the node context-guard step, reduced to counts and names', async () => {
+    const runId = await newRun();
+    const s = await session(runId);
+    const res = await post(runId, s.token, {
+      kind: 'control',
+      agentId: 'research',
+      name: 'input_guard',
+      status: 'error',
+      output: {
+        source: 'tool_result',
+        tool: 'read',
+        invisible: { total: 2, classes: { tag: 2, 'not a class, a leaked sentence': 9 } },
+        content: 'ghp_must_not_be_stored',
+      },
+    });
+    expect(res.statusCode).toBe(204);
+    const [row] = await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId));
+    expect(row).toMatchObject({ kind: 'control', status: 'ok', reportedBy: `node:${s.nodeId}` });
+    expect(row?.output).toEqual({
+      source: 'tool_result',
+      tool: 'read',
+      invisible: { total: 2, classes: { tag: 2 } },
+    });
+    const entries = (await auditOf(runId)).filter((e) => e.action === 'step.control');
+    expect(entries).toHaveLength(1);
+    expect(JSON.stringify(entries)).not.toContain('must_not_be_stored');
+  });
   it('steps of the trusted worker carry no node provenance', async () => {
     const runId = await newRun();
     const token = n.services.control.issueToken(runId, 'w1');

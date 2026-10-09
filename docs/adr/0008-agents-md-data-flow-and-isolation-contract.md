@@ -648,3 +648,20 @@ the run node) is the only supported use. Details: [workspace tools](../workspace
   secret scrubber (a changed byte would only break its digest); the worker scans it. Delivery
   requires `lastTestRun.passed` **and** `testedFinalTree` (the stricter rule of Amendment 2).
 
+
+## Amendment 6 (input hardening, 2026-10-09): invisible Unicode is removed before the model sees it
+
+Untrusted text (issue and event text, tool results, the previous agent's output) was already
+treated as data by the system prompt and the policy gate. A deterministic stage now runs on it
+before it enters a model context or a stored step output. Details and limits:
+[input hardening](../security-input-hardening.md).
+
+- **Choke points.** `ToolGateway.call` guards every tool result (all runners, run nodes and the
+  harness gate go through it) and the executors guard the finished first prompt. The model proxy is
+  not changed: text a harness generates inside its own process is out of scope.
+- **Invisible Unicode** (zero-width, bidi, tag block, variation selector supplement, control codes)
+  is removed; ZWJ and ZWNJ survive only between non-ASCII letters, marks or emoji.
+- **Audit.** A `control` step `input_guard` with counts and class names only. A run node may
+  report exactly this one control step; the control node reduces it to the same shape.
+- **Setting.** `OAX_STRIP_INVISIBLE_UNICODE`, on by default, off only for diagnostics; an
+  unrecognised value keeps the stage on.

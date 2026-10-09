@@ -14,6 +14,8 @@ export * from './agents/handover.js';
 export * from './policy/engine.js';
 export * from './control/controller.js';
 export * from './redact.js';
+export * from './invisible-text.js';
+export * from './context-guard.js';
 export * from './audit/chain.js';
 export * from './cost/model.js';
 export * from './model-token.js';
