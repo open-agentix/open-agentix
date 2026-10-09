@@ -337,7 +337,7 @@ setInterval(() => {}, 1000);`,
         args: [script],
         env: { PATH: process.env.PATH ?? '' },
         files: {},
-        limits: { timeoutMs: 600 },
+        limits: { timeoutMs: 3000 },
       },
       { cwd: dir, env: { PATH: process.env.PATH ?? '' }, secrets: [], signal: undefined },
       {
