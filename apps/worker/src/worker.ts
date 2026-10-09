@@ -9,6 +9,7 @@ import {
   type Runner,
 } from '@openagentix/runners';
 import type { HarnessKind, RunnerKind } from '@openagentix/core';
+import type { PullRequestDelivery } from './git/delivery.js';
 import { NodeDispatcher } from './node-dispatcher.js';
 import { RunQueue } from './queue.js';
 
@@ -18,6 +19,8 @@ export interface WorkerOptions {
   /** In-process MCP servers (demo/test); real deployments use stdio or streamable-http connections. */
   inMemoryMcp?: InMemoryTransportFactory;
   runner?: Runner;
+  /** Pull request delivery for steps with a `pull-request` output (DOG-4); off when unset. */
+  delivery?: (services: Services, workerId: string) => PullRequestDelivery | undefined;
   /**
    * Isolating runners (container, ...) by kind plus how run nodes reach the control node. Steps
    * whose effective runner is isolating are executed by short-lived run nodes (ADR 0008).
@@ -47,6 +50,7 @@ export class Worker {
   private readonly active = new Map<string, AbortController>();
   private readonly providers: ProviderRegistry | null;
   private readonly runner: Runner;
+  private readonly delivery: PullRequestDelivery | undefined;
   private loop: Promise<void> | null = null;
   private stopping = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -57,6 +61,7 @@ export class Worker {
   ) {
     this.id = opts.workerId ?? `worker-${randomUUID().slice(0, 8)}`;
     this.services = createServices(ctx);
+    this.delivery = opts.delivery?.(this.services, this.id);
     this.queue = new RunQueue(ctx, this.id, (runId) =>
       this.services.runNodes.revokeRun(runId, 'lease_lost'),
     );
@@ -113,6 +118,7 @@ export class Worker {
               services: this.services,
               runners: this.opts.isolation?.runners ?? {},
               workerId: this.id,
+              ...(this.delivery ? { delivery: this.delivery } : {}),
               controlUrl: this.opts.isolation?.controlUrl ?? '',
               limits: this.opts.isolation?.limits ?? { cpus: 1, memoryMb: 512, pids: 256 },
               ...(this.opts.isolation?.cancelPollMs

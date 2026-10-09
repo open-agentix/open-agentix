@@ -29,6 +29,8 @@ const PATTERNS: [string, RegExp][] = [
   ['slack-webhook', /hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/],
   ['anthropic-key', /\bsk-ant-[A-Za-z0-9_-]{16,}\b/],
   ['openai-style-key', /\bsk-(?:proj-)?[A-Za-z0-9_-]{24,}\b/],
+  ['run-token', /\boaxrt\.[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]{8,})?/],
+  ['model-token', /\boaxmt\.[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_-]{8,})?/],
   ['platform-token', /\boax_[A-Za-z0-9]{8,}_[A-Za-z0-9_-]{16,}\b/],
   ['npm-token', /\bnpm_[A-Za-z0-9]{30,}\b/],
   ['google-api-key', /\bAIza[0-9A-Za-z_-]{35}\b/],

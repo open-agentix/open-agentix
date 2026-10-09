@@ -1,4 +1,6 @@
-import { lstat, readFile, unlink } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   CostModel,
   OaxError,
@@ -8,6 +10,7 @@ import {
   type OaxEvent,
   type StepCredentials,
 } from '@openagentix/core';
+import { unpackSeed, type UnpackLimits } from './seed-unpack.js';
 import { ToolGateway, type InMemoryTransportFactory, type McpServerConfig } from '@openagentix/mcp';
 import { ProviderRegistry, type ModelProvider } from '@openagentix/providers';
 import {
@@ -18,6 +21,9 @@ import {
   executeWithHarness,
   type ExternalHarness,
   type FetchFn,
+  MAX_WORKSPACE_SEED_BYTES,
+  PatchAttachmentSchema,
+  type PatchAttachment,
   type PreparedRun,
   type StepHandover,
   type StepHandoverResult,
@@ -50,6 +56,16 @@ export interface RunNodeOptions {
   harnessWorkRoot?: string;
   /** How long to wait for the token file the runner uploads after the container started. */
   tokenWaitMs?: number;
+  /** Workspace of a step with a `pull-request` output (DOG-4); defaults come from the environment. */
+  workspace?: {
+    root?: string;
+    stateDir?: string;
+    /** How long to wait for the workspace server's result file after the harness ended. */
+    resultWaitMs?: number;
+    limits?: Partial<UnpackLimits>;
+    /** Command and arguments of `run_tests` (default: this node binary with `--test`). */
+    tests?: { command: string; args: string[]; filePattern: string };
+  };
   signal?: AbortSignal;
   log?: (line: string) => void;
 }
@@ -205,6 +221,131 @@ function stepDefinition(h: StepHandover): AgentDefinition {
   } as AgentDefinition;
 }
 
+/**
+ * The workspace of a step with a `pull-request` output (DOG-4, ADR 0008 Amendment 5): the seed is
+ * fetched once with the step token, verified against the announced SHA-256 and unpacked with the
+ * node's own checks; then the configuration of the `workspace` MCP server (root, test command) is
+ * written by the node, never by the model. The server (a stdio connection of the step) writes its
+ * final result next to it when the harness is done.
+ */
+interface NodeWorkspace {
+  root: string;
+  stateDir: string;
+  resultFile: string;
+}
+
+async function prepareWorkspace(
+  control: HttpControlPlane,
+  runId: string,
+  agentId: string,
+  opts: RunNodeOptions,
+  env: NodeJS.ProcessEnv,
+): Promise<NodeWorkspace> {
+  const root = opts.workspace?.root ?? env.OAX_WORKSPACE_ROOT ?? '/tmp/workspace';
+  const stateDir = opts.workspace?.stateDir ?? env.OAX_WORKSPACE_STATE_DIR ?? '/tmp/oax-workspace';
+  const seed = await control.fetchWorkspaceSeed(runId, agentId, MAX_WORKSPACE_SEED_BYTES);
+  await unpackSeed(seed.archive, seed.sha256, root, {
+    maxArchiveBytes: MAX_WORKSPACE_SEED_BYTES,
+    maxFiles: 5_000,
+    maxFileBytes: 1024 * 1024,
+    maxTotalBytes: MAX_WORKSPACE_SEED_BYTES,
+    maxPathChars: 300,
+    maxDepth: 24,
+    ...opts.workspace?.limits,
+  });
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  const tests = opts.workspace?.tests ?? {
+    command: process.execPath,
+    args: ['--test'],
+    filePattern: '^test/[a-z0-9-]+\\.test\\.js$',
+  };
+  await writeFile(
+    join(stateDir, 'config.json'),
+    JSON.stringify({ root, tests: { ...tests, timeoutMs: 60_000, memoryMb: 1024, maxRuns: 8 } }),
+    { mode: 0o600, flag: 'wx' },
+  );
+  return { root, stateDir, resultFile: join(stateDir, 'result.json') };
+}
+
+type PatchOutcome =
+  { ok: true; patch: PatchAttachment } | { ok: false; code: string; message: string };
+
+/** Reads the workspace server's result file (waits for it: the server writes it while it shuts down). */
+async function readWorkspaceResult(file: string, waitMs: number): Promise<PatchOutcome> {
+  const deadline = Date.now() + waitMs;
+  let text: string | undefined;
+  for (;;) {
+    try {
+      // O_NOFOLLOW: a link planted at the result path is never followed
+      const fh = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        if ((await fh.stat()).size > 2 * 1024 * 1024) throw new Error('too large');
+        text = await fh.readFile('utf8');
+      } finally {
+        await fh.close();
+      }
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT' || Date.now() >= deadline)
+        return {
+          ok: false,
+          code: 'workspace_result_missing',
+          message: 'the workspace server left no usable result',
+        };
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  const invalid = (): PatchOutcome => ({
+    ok: false,
+    code: 'workspace_result_invalid',
+    message: 'the workspace result has an unexpected shape',
+  });
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return invalid();
+  }
+  const rec = (v: unknown): Record<string, unknown> | undefined =>
+    v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+  const top = rec(raw);
+  const p = rec(top?.patch);
+  if (!top || !p) return invalid();
+  if (p.ok === false) {
+    const code = typeof p.code === 'string' && /^[a-z_]{1,60}$/.test(p.code) ? p.code : 'invalid';
+    return {
+      ok: false,
+      code: `workspace_${code}`,
+      message: (typeof p.message === 'string' ? p.message : 'the patch was refused').slice(0, 500),
+    };
+  }
+  if (p.ok !== true || typeof p.patch !== 'string') return invalid();
+  if (p.patch.length === 0)
+    return { ok: false, code: 'no_changes', message: 'the agent changed nothing' };
+  const run = rec(top.lastTestRun);
+  const candidate = {
+    patch: p.patch,
+    patchSha256: p.patchSha256,
+    changedFiles: p.changedFiles,
+    lastTestRun: run
+      ? {
+          passed: run.passed,
+          exitCode: run.exitCode,
+          timedOut: run.timedOut,
+          durationMs:
+            typeof run.durationMs === 'number' ? Math.round(run.durationMs) : run.durationMs,
+          file: run.file,
+        }
+      : null,
+    fullSuitePassed: top.fullSuitePassed,
+    treeMatchesLastRun: top.treeMatchesLastRun,
+    testedFinalTree: top.testedFinalTree,
+  };
+  // changedFiles of the workspace carry exactly these four fields; anything else is refused.
+  const parsed = PatchAttachmentSchema.safeParse(candidate);
+  return parsed.success ? { ok: true, patch: parsed.data } : invalid();
+}
+
 async function removeRegularFile(path: string): Promise<void> {
   if ((await lstat(path)).isFile()) await unlink(path);
 }
@@ -236,6 +377,7 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
   }
   const agentId = env.stepIds[0]!;
   let tools: ToolGateway | undefined;
+  let workspace: NodeWorkspace | undefined;
   const report = async (result: StepHandoverResult): Promise<number> => {
     try {
       await control.postHandoverResult(env.runId, result);
@@ -250,6 +392,15 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
     if (handover.agentId !== agentId)
       throw new OaxError('run_node_invalid', 'the handover is for another step');
     const creds = await control.fetchCredentials(env.runId, agentId);
+    // A step with a `pull-request` output works on the seed of its target (DOG-4).
+    if (handover.agent.outputs.some((o) => o.format === 'pull-request'))
+      workspace = await prepareWorkspace(
+        control,
+        env.runId,
+        agentId,
+        opts,
+        opts.env ?? process.env,
+      );
     const proxyEnv: Record<string, string> = proxyUrl
       ? { HTTPS_PROXY: proxyUrl, https_proxy: proxyUrl, HTTP_PROXY: proxyUrl, http_proxy: proxyUrl }
       : {};
@@ -330,11 +481,30 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
         usage: result.usage,
       });
     }
+    let patch: PatchAttachment | undefined;
+    if (workspace) {
+      // The workspace server writes its result while it shuts down: close the tools first.
+      await tools.close().catch(() => undefined);
+      const outcome = await readWorkspaceResult(
+        workspace.resultFile,
+        opts.workspace?.resultWaitMs ?? 20_000,
+      );
+      if (!outcome.ok)
+        return await report({
+          agentId,
+          format: 'none',
+          content: '',
+          failure: { status: 'failed', code: outcome.code, message: outcome.message },
+          usage: result.usage,
+        });
+      patch = outcome.patch;
+    }
     return await report({
       agentId,
       format: out.format,
       content: out.content,
       ...(Object.hasOwn(out, 'json') ? { json: out.json } : {}),
+      ...(patch ? { patch } : {}),
       usage: result.usage,
     });
   } catch (e) {
@@ -353,5 +523,9 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
     return 1;
   } finally {
     await tools?.close().catch(() => undefined);
+    if (workspace) {
+      await rm(workspace.root, { recursive: true, force: true }).catch(() => undefined);
+      await rm(workspace.stateDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
