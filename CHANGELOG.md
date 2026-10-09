@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **API: agent summary fields and list filters (UX slice A1, #155)**: `GET /v1/agents`,
+  `GET /v1/agents/{id}`, `POST /v1/agents` and `PUT /v1/agents/{id}/draft` return `tenant`
+  (`id, slug, slugPath, name`), `useCase`, `ownerTeam` (`id, slug, name`, readable with
+  `agents:read`), `status` (`draft`, `published`, `changed`), `lastRun` (`id, status, createdAt`,
+  only runs the caller may read), `monthSpendUsd` and `budget` (the monthly tenant, use case or team
+  budget closest to its limit; both `null` without `costs:read`). The list accepts the filters
+  `teamId`, `useCase` (prefix per `/` segment), `status` and an extended `q` (name, description,
+  use case) that narrow within the caller's visibility; paging is unchanged. The fields are
+  additive; the `agents.use_case` column and two indexes arrive with migration
+  `0015_agent_summary_fields` (down script included). Gaps: no `disabled` status (#161), no `sort`,
+  `changed` is a byte-wise comparison of draft and latest version. See `docs/ux/multi-tenant-ux.md`.
+  `labels.useCase` is now limited to 200 characters (the length use case budgets already accept):
+  a longer label is a validation error instead of an internal error on the new index; the backfill
+  leaves such legacy values empty.
 - **Demo seed as a tenant tree with stable ids (A8, #162)**: the demo data set now has the root
   "Example Org (demo)" with the sub-tenants `security` (cve-triage, ticket-updater, hardening-review,
   the three scenarios and the pending approval) and `platform` (feature-builder), plus the separate

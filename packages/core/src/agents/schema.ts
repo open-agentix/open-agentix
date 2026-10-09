@@ -8,6 +8,12 @@ const slug = z
   .string()
   .regex(/^[a-z][a-z0-9-]{0,62}$/, 'must be a lowercase slug (a-z, 0-9, -), max. 63 chars');
 
+/**
+ * Longest `labels.useCase` (characters). The use case is stored, indexed and matched (cost ledger,
+ * use case budgets, agent list filter); budgets accept the same length (`PUT /v1/budgets/use-cases`).
+ */
+export const MAX_USE_CASE_LENGTH = 200;
+
 export const ClassificationSchema = z.enum(CLASSIFICATIONS);
 
 const scalar = z.union([z.string(), z.number(), z.boolean()]);
@@ -276,7 +282,13 @@ export const PipelineFrontMatterSchema = z.strictObject({
   description: z.string().optional(),
   owner: slug,
   classification: ClassificationSchema.default('internal'),
-  labels: z.record(z.string(), z.string()).default({}),
+  labels: z
+    .record(z.string(), z.string())
+    .refine((l) => (l.useCase ?? '').length <= MAX_USE_CASE_LENGTH, {
+      message: `useCase must be at most ${MAX_USE_CASE_LENGTH} characters`,
+      path: ['useCase'],
+    })
+    .default({}),
   triggers: z.array(TriggerSchema).default([{ type: 'manual' }]),
   budget: BudgetSchema.default({}),
   approvals: ApprovalSettingsSchema.default({

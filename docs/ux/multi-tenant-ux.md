@@ -37,11 +37,67 @@ sees five rows with names and versions and nothing that says "tenant" (the scree
 
 | Endpoint | Fields relevant here | Missing for this design |
 | --- | --- | --- |
-| `GET /v1/agents` | `id, name, teamId, description, latestVersion, latestVersionId, draftUpdatedAt, createdAt` | tenant, use case, owner team name, status, last run, spend, budget, filters (#155) |
+| `GET /v1/agents` | `id, name, teamId, description, latestVersion, latestVersionId, draftUpdatedAt, createdAt`; since slice A1 (#155) also `tenant`, `useCase`, `ownerTeam`, `status`, `lastRun`, `monthSpendUsd`, `budget` and the filters `teamId`, `useCase`, `status`, `q` (see "Agent summary API" below) | `disabled` status (#161), `sort` |
 | `GET /v1/me` | `user`, `tenant {id, slug, name}`, `platformAdmin`, `permissions`, `bindings [{role, teamId}]` | tenant path, bindings per node/use case, installation mode (#156) |
 | `GET /v1/tenants` | flat list for platform admins | visible tree with counts and roles (#157) |
 | `GET /v1/runs`, approvals, events, costs, audit, budgets | one tenant; `allTenants` for platform admins on costs and audit | `scope=subtree` with a tenant on each row (#158) |
 | (none) | | effective governance with source (#159), allowed actions with reasons (#160), agent disable (#161), locate for deep links (#163), preferences (#164) |
+
+### 1.2.1 Agent summary API (slice A1)
+
+`GET /v1/agents` (and `GET /v1/agents/{id}`, `POST /v1/agents`, `PUT /v1/agents/{id}/draft`) return
+these additive, read-only fields. No new permission: they follow `agents:read`, and the two that
+touch other data are `null` when the caller may not read that data.
+
+| Field | Meaning | Visibility |
+| --- | --- | --- |
+| `tenant` | `{ id, slug, slugPath, name }` of the acting tenant; `slugPath` lists the slugs from the organisation root (`acme/security`) | `agents:read` |
+| `useCase` | `labels.useCase` of the latest published version; of the draft while the agent was never published | `agents:read` |
+| `ownerTeam` | `{ id, slug, name }` or `null` | `agents:read`, same as `GET /v1/teams` (any signed-in user of the tenant) |
+| `status` | `draft` (never published), `published` (draft equals latest version), `changed` (draft differs) | `agents:read` |
+| `lastRun` | `{ id, status, createdAt }` of the newest run, or `null` | only runs the caller may read (`runs:read`, team and agent scopes) |
+| `monthSpendUsd` | spend of this agent in the current UTC month | `null` without `costs:read` for the agent |
+| `budget` | the monthly budget closest to its limit among tenant, use case and team: `{ limitUsd, spentUsd, percentUsed, source, sourceName }`; `spentUsd` is the spend of the whole budget scope | `null` without `costs:read` or when no scope has a limit |
+
+Query parameters: `teamId`, `useCase` (the use case or any sub-use case, matching per `/` segment as
+in ADR 0013 section 7.2), `status`, `q` (case-insensitive substring of name, description or use
+case; before A1 only the name). Filters combine with AND and are applied **after** the visibility
+scope, so a filter can only narrow the result: a team or use case of another tenant, or one the caller
+cannot see, yields an empty page, indistinguishable from an unknown value. Paging stays keyset-based
+on `(createdAt, id)`, so pages are stable under any filter.
+
+Cost: one query for the page plus a fixed number of batched lookups (tenant and ancestors, teams,
+draft/version comparison, last run as one lateral join, spend and budget aggregates); nothing runs per
+agent. Migration `0015_agent_summary_fields` adds the denormalised `agents.use_case` column (kept
+current on create, draft update before the first publish, and publish) and the indexes
+`agents_tenant_created_idx` and `agents_tenant_use_case_idx`; its down script is
+`apps/api/drizzle/down/0015_agent_summary_fields.down.sql`. The backfill of never published agents
+reads `useCase:` from the draft text with a regular expression, so an exotic YAML layout may leave it
+empty until the next draft save. `labels.useCase` is limited to 200 characters (`MAX_USE_CASE_LENGTH`, the same
+length `PUT /v1/budgets/use-cases/{useCase}` accepts), because a btree entry above about 2.7 kB is an
+error in PostgreSQL; the backfill leaves longer legacy values empty instead of aborting.
+The migration runs inside drizzle's migration transaction, so the two indexes are built without
+`CONCURRENTLY`: the `ALTER TABLE` lock on `agents` (one row per agent, not per run) is held until
+the backfill and both index builds commit, which is short at realistic sizes.
+
+Known gaps:
+
+- `status: disabled` is not returned and `disabled` is not a filter value yet; it arrives with agent
+  disable/enable (#161) as an additive enum value.
+- `changed` compares the draft with the latest version **byte for byte**. A cosmetic edit (whitespace,
+  comments) counts as `changed` although publishing it would be a no-op.
+- No `sort` parameter (`lastRun`, `spend`): the list stays ordered by creation time. A sort by last run
+  or spend needs a keyset over an aggregate and is left to a follow-up.
+- The budget model has no per-agent limit, so `budget.source` is `tenant`, `use_case` or `team`
+  (the issue's `agent` source does not exist). Use case budgets match the exact label, like the hard
+  stop; sub-use cases do not inherit a parent's budget.
+- Scope is the acting tenant only; subtree and "All my tenants" listing is slice A4 (#158).
+  `tenant.slugPath` exposes the slugs of the acting tenant's ancestors to its members. ADR 0013
+  section 7.4 allows exactly this ("a user sees the names and slugs of the ancestors on the path
+  (breadcrumb) only"); no ids, settings or resources of ancestors are returned.
+- `budget.spentUsd` is the spend of the whole scope (tenant, use case or team), also for callers whose
+  `costs:read` is limited to one team or agent. This matches `GET /v1/budgets` today, which shows the
+  same totals to every `costs:read` holder; narrowing both is tracked in #174.
 
 ### 1.3 Users and jobs
 

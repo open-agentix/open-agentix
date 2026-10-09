@@ -1,5 +1,6 @@
 import type { AuditCheckpoint, PublishedExpansion } from '@openagentix/core';
-import type { AgentRow, AgentVersionRow, VersionSummary } from '../services/agents.js';
+import type { AgentSummary } from '../services/agent-summaries.js';
+import type { AgentVersionRow, VersionSummary } from '../services/agents.js';
 import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
 import type { PublicUser, TeamRow, TenantRow, TokenInfo } from '../services/identity.js';
 import type { EventRow, SourceRow } from '../services/ingest.js';
@@ -8,7 +9,7 @@ import type { ApprovalRow, RunRow, StepRow } from '../services/runs.js';
 const iso = (d: Date | string) => (typeof d === 'string' ? d : d.toISOString());
 const isoOrNull = (d: Date | string | null | undefined) => (d ? iso(d) : null);
 
-export const agentDto = (a: AgentRow) => ({
+export const agentDto = ({ agent: a, ...context }: AgentSummary) => ({
   id: a.id,
   name: a.name,
   teamId: a.teamId,
@@ -17,9 +18,19 @@ export const agentDto = (a: AgentRow) => ({
   latestVersionId: a.latestVersionId,
   draftUpdatedAt: iso(a.draftUpdatedAt),
   createdAt: iso(a.createdAt),
+  tenant: context.tenant,
+  useCase: context.useCase,
+  ownerTeam: context.ownerTeam,
+  status: context.status,
+  lastRun: context.lastRun && { ...context.lastRun, createdAt: iso(context.lastRun.createdAt) },
+  monthSpendUsd: context.monthSpendUsd,
+  budget: context.budget,
 });
 
-export const agentDetailDto = (a: AgentRow) => ({ ...agentDto(a), draftSource: a.draftSource });
+export const agentDetailDto = (s: AgentSummary) => ({
+  ...agentDto(s),
+  draftSource: s.agent.draftSource,
+});
 
 export const versionDto = (v: VersionSummary) => ({ ...v, publishedAt: iso(v.publishedAt) });
 

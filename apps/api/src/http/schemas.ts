@@ -1,4 +1,5 @@
 import { CLASSIFICATIONS, PERMISSIONS, ROLES, RUN_STATUSES, STEP_KINDS } from '@openagentix/core';
+import { AGENT_STATUSES } from '../services/agent-filters.js';
 import { PatchAttachmentSchema } from '@openagentix/runners';
 import { z } from 'zod';
 
@@ -43,6 +44,49 @@ export const AgentSchema = z.object({
   latestVersionId: Id.nullable(),
   draftUpdatedAt: Iso,
   createdAt: Iso,
+  tenant: z
+    .object({
+      id: Id,
+      slug: z.string(),
+      slugPath: z
+        .string()
+        .describe('slugs from the organisation root to the tenant, e.g. acme/security'),
+      name: z.string(),
+    })
+    .describe('tenant the agent belongs to (always the tenant the request acts in)'),
+  useCase: z
+    .string()
+    .nullable()
+    .describe('labels.useCase of the latest published version, of the draft while unpublished'),
+  ownerTeam: z
+    .object({ id: Id, slug: z.string(), name: z.string() })
+    .nullable()
+    .describe('owner team; readable with agents:read, like GET /v1/teams'),
+  status: z
+    .enum(AGENT_STATUSES)
+    .describe(
+      'draft: never published; published: draft equals latest version; changed: it differs',
+    ),
+  lastRun: z
+    .object({ id: Id, status: z.enum(RUN_STATUSES), createdAt: Iso })
+    .nullable()
+    .describe('latest run of the agent the caller may read (runs:read); null if none or no access'),
+  monthSpendUsd: z
+    .number()
+    .nullable()
+    .describe('spend of this agent in the current UTC month; null without costs:read'),
+  budget: z
+    .object({
+      limitUsd: z.number(),
+      spentUsd: z.number().describe('spend of the whole budget scope this month, not of the agent'),
+      percentUsed: z.number(),
+      source: z.enum(['tenant', 'use_case', 'team']),
+      sourceName: z.string(),
+    })
+    .nullable()
+    .describe(
+      'monthly budget closest to its limit among the scopes that apply; null without costs:read or limit',
+    ),
 });
 export const AgentDetailSchema = AgentSchema.extend({ draftSource: z.string() });
 export const AgentSourceBody = z.object({ source: z.string().min(1).max(512_000) });

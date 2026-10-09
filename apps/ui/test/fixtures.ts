@@ -132,6 +132,13 @@ export const agent: Agent = {
   latestVersionId: ids.version,
   draftUpdatedAt: iso(-3_600_000),
   createdAt: iso(-86_400_000),
+  tenant: { ...tenant, slugPath: 'acme' },
+  useCase: null,
+  ownerTeam: null,
+  status: 'changed',
+  lastRun: null,
+  monthSpendUsd: 0,
+  budget: null,
   draftSource,
 };
 
@@ -143,6 +150,7 @@ export const draftOnlyAgent: Agent = {
   latestVersion: null,
   latestVersionId: null,
   teamId: null,
+  status: 'draft',
 };
 
 export const versions: AgentVersion[] = [

@@ -1,5 +1,8 @@
+import type { Principal } from '@openagentix/core';
 import { createEvent, isCloudEvent, parseCloudEvent } from '@openagentix/events';
 import { z } from 'zod';
+import { AGENT_STATUSES } from '../../services/agent-filters.js';
+import type { AgentRow } from '../../services/agents.js';
 import { dryRunAgent } from '../../services/dry-run.js';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
@@ -9,6 +12,7 @@ import {
   AgentSchema,
   AgentSourceBody,
   ErrorSchema,
+  Id,
   IdParams,
   ManualRunBody,
   MembersBody,
@@ -27,7 +31,9 @@ const sec = [{ bearer: [] }];
 const tags = ['agents'];
 
 export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
-  const { agents } = services;
+  const { agents, agentSummaries } = services;
+  const summarize = async (principal: Principal, row: AgentRow) =>
+    (await agentSummaries.summarize(principal, [row]))[0]!;
 
   app.get(
     '/v1/agents',
@@ -37,15 +43,31 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
         tags,
         summary: 'List agents',
         security: sec,
+        description:
+          'Agents the caller may read, newest first. Filters narrow that set and combine with AND. Each item carries tenant, use case, owner team, status, last run, month spend and budget.',
         querystring: PageQuery.extend({
-          q: z.string().max(100).optional().describe('filter by name (substring)'),
+          q: z
+            .string()
+            .max(100)
+            .optional()
+            .describe('case-insensitive substring of name, description or use case'),
+          teamId: Id.optional().describe('only agents owned by this team'),
+          useCase: z
+            .string()
+            .min(1)
+            .max(200)
+            .optional()
+            .describe('use case or any sub-use case (prefix match per "/" segment)'),
+          status: z.enum(AGENT_STATUSES).optional().describe('lifecycle status'),
         }),
         response: { 200: pageOf(AgentSchema) },
       },
     },
     async (req) => {
-      const r = await agents.list(principalOf(req), req.query.limit, req.query.cursor, req.query.q);
-      return { items: r.items.map(agentDto), nextCursor: r.nextCursor };
+      const principal = principalOf(req);
+      const r = await agents.list(principal, req.query);
+      const items = await agentSummaries.summarize(principal, r.items);
+      return { items: items.map(agentDto), nextCursor: r.nextCursor };
     },
   );
 
@@ -64,7 +86,14 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
     async (req, reply) =>
       reply
         .status(201)
-        .send(agentDetailDto(await agents.create(principalOf(req), req.body.source))),
+        .send(
+          agentDetailDto(
+            await summarize(
+              principalOf(req),
+              await agents.create(principalOf(req), req.body.source),
+            ),
+          ),
+        ),
   );
 
   app.post(
@@ -108,7 +137,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
     async (req) => {
       const a = await agents.get(req.params.id, principalOf(req));
       await agents.assertAccess(principalOf(req), a, 'agents:read');
-      return agentDetailDto(a);
+      return agentDetailDto(await summarize(principalOf(req), a));
     },
   );
 
@@ -125,8 +154,15 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: AgentDetailSchema },
       },
     },
-    async (req) =>
-      agentDetailDto(await agents.updateDraft(principalOf(req), req.params.id, req.body.source)),
+    async (req) => {
+      const principal = principalOf(req);
+      return agentDetailDto(
+        await summarize(
+          principal,
+          await agents.updateDraft(principal, req.params.id, req.body.source),
+        ),
+      );
+    },
   );
 
   app.post(

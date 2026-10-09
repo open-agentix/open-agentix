@@ -64,6 +64,13 @@
       "when": 1791300000000,
       "tag": "0014_workspace_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791574677035,
+      "tag": "0015_agent_summary_fields",
+      "breakpoints": true
     }
   ]
 }
