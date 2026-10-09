@@ -48,6 +48,30 @@
   --shadow-sm: 0 1px 2px rgb(16 24 40 / 0.05);
   --shadow-md: 0 8px 24px rgb(16 24 40 / 0.12);
   --scrim: rgb(15 18 25 / 0.45);
+  --tenant-0-bg: #4338ca;
+  --tenant-0-fg: #ffffff;
+  --tenant-1-bg: #0f766e;
+  --tenant-1-fg: #ffffff;
+  --tenant-2-bg: #b45309;
+  --tenant-2-fg: #ffffff;
+  --tenant-3-bg: #be123c;
+  --tenant-3-fg: #ffffff;
+  --tenant-4-bg: #1d4ed8;
+  --tenant-4-fg: #ffffff;
+  --tenant-5-bg: #15803d;
+  --tenant-5-fg: #ffffff;
+  --tenant-6-bg: #7e22ce;
+  --tenant-6-fg: #ffffff;
+  --tenant-7-bg: #c2410c;
+  --tenant-7-fg: #ffffff;
+  --tenant-8-bg: #0e7490;
+  --tenant-8-fg: #ffffff;
+  --tenant-9-bg: #a21caf;
+  --tenant-9-fg: #ffffff;
+  --tenant-10-bg: #4d7c0f;
+  --tenant-10-fg: #ffffff;
+  --tenant-11-bg: #475569;
+  --tenant-11-fg: #ffffff;
   color-scheme: light;
 }
 
@@ -78,6 +102,30 @@
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-md: 0 12px 32px rgb(0 0 0 / 0.5);
   --scrim: rgb(0 0 0 / 0.6);
+  --tenant-0-bg: #25235a;
+  --tenant-0-fg: #c7d2fe;
+  --tenant-1-bg: #0f3b38;
+  --tenant-1-fg: #99f6e4;
+  --tenant-2-bg: #45290c;
+  --tenant-2-fg: #fcd34d;
+  --tenant-3-bg: #4a1425;
+  --tenant-3-fg: #fda4af;
+  --tenant-4-bg: #172a5c;
+  --tenant-4-fg: #bfdbfe;
+  --tenant-5-bg: #12331f;
+  --tenant-5-fg: #86efac;
+  --tenant-6-bg: #35194f;
+  --tenant-6-fg: #e9d5ff;
+  --tenant-7-bg: #471f0b;
+  --tenant-7-fg: #fdba74;
+  --tenant-8-bg: #0d3a47;
+  --tenant-8-fg: #a5f3fc;
+  --tenant-9-bg: #471448;
+  --tenant-9-fg: #f5d0fe;
+  --tenant-10-bg: #2c3a0e;
+  --tenant-10-fg: #d9f99e;
+  --tenant-11-bg: #2a3341;
+  --tenant-11-fg: #cbd5e1;
   color-scheme: dark;
 }
 
@@ -109,6 +157,30 @@
     --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
     --shadow-md: 0 12px 32px rgb(0 0 0 / 0.5);
     --scrim: rgb(0 0 0 / 0.6);
+    --tenant-0-bg: #25235a;
+    --tenant-0-fg: #c7d2fe;
+    --tenant-1-bg: #0f3b38;
+    --tenant-1-fg: #99f6e4;
+    --tenant-2-bg: #45290c;
+    --tenant-2-fg: #fcd34d;
+    --tenant-3-bg: #4a1425;
+    --tenant-3-fg: #fda4af;
+    --tenant-4-bg: #172a5c;
+    --tenant-4-fg: #bfdbfe;
+    --tenant-5-bg: #12331f;
+    --tenant-5-fg: #86efac;
+    --tenant-6-bg: #35194f;
+    --tenant-6-fg: #e9d5ff;
+    --tenant-7-bg: #471f0b;
+    --tenant-7-fg: #fdba74;
+    --tenant-8-bg: #0d3a47;
+    --tenant-8-fg: #a5f3fc;
+    --tenant-9-bg: #471448;
+    --tenant-9-fg: #f5d0fe;
+    --tenant-10-bg: #2c3a0e;
+    --tenant-10-fg: #d9f99e;
+    --tenant-11-bg: #2a3341;
+    --tenant-11-fg: #cbd5e1;
     color-scheme: dark;
   }
 }

@@ -61,6 +61,45 @@
     "auditor": "reads audit trail, verifies and exports",
     "viewer": "read-only"
   },
+  "tenancy": {
+    "tenant": "Tenant",
+    "organization": "Organization",
+    "subTenant": "Sub-tenant",
+    "useCase": "Use case",
+    "team": "Team",
+    "ownerTeam": "Owner team",
+    "scope": "Scope",
+    "scopeChip": "Scope: {tenant}",
+    "tenantChip": "Tenant: {tenant}",
+    "tileLabel": "Tenant {tenant}",
+    "active": "Active tenant",
+    "actingIn": "Acting in {tenant}",
+    "thisTenant": "This tenant",
+    "allMyTenants": "All my tenants",
+    "inheritedFrom": "Inherited from {tenant}",
+    "limitedBy": "Limited by {tenant}",
+    "switchTenant": "Switch tenant",
+    "budgetUsed": "Budget used",
+    "teamFallback": "Team {id}",
+    "teamNoValue": "No team",
+    "roles": {
+      "platformAdmin": "Platform admin",
+      "tenantAdmin": "Tenant admin",
+      "useCaseAdmin": "Use-case admin",
+      "agentEngineer": "Agent engineer",
+      "integrator": "Integrator",
+      "operator": "Operator",
+      "auditor": "Auditor",
+      "viewer": "Viewer",
+      "pentest": "Pentest"
+    },
+    "status": {
+      "draft": "Draft",
+      "published": "Published",
+      "changed": "Changed",
+      "disabled": "Disabled"
+    }
+  },
   "nav": {
     "main": "Main",
     "skip": "Skip to content",

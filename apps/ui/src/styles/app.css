@@ -1906,3 +1906,139 @@ details[open] summary {
     flex-wrap: wrap;
   }
 }
+
+/* Tenancy: tile, scope chip, active-tenant badge (colours come from tokens.css) */
+.tenant-tile {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  border: 1px solid rgb(0 0 0 / 0.12);
+}
+.tenant-tile-sm {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 0.5625rem;
+}
+.tenant-tile.tc-0 {
+  background: var(--tenant-0-bg);
+  color: var(--tenant-0-fg);
+}
+.tenant-tile.tc-1 {
+  background: var(--tenant-1-bg);
+  color: var(--tenant-1-fg);
+}
+.tenant-tile.tc-2 {
+  background: var(--tenant-2-bg);
+  color: var(--tenant-2-fg);
+}
+.tenant-tile.tc-3 {
+  background: var(--tenant-3-bg);
+  color: var(--tenant-3-fg);
+}
+.tenant-tile.tc-4 {
+  background: var(--tenant-4-bg);
+  color: var(--tenant-4-fg);
+}
+.tenant-tile.tc-5 {
+  background: var(--tenant-5-bg);
+  color: var(--tenant-5-fg);
+}
+.tenant-tile.tc-6 {
+  background: var(--tenant-6-bg);
+  color: var(--tenant-6-fg);
+}
+.tenant-tile.tc-7 {
+  background: var(--tenant-7-bg);
+  color: var(--tenant-7-fg);
+}
+.tenant-tile.tc-8 {
+  background: var(--tenant-8-bg);
+  color: var(--tenant-8-fg);
+}
+.tenant-tile.tc-9 {
+  background: var(--tenant-9-bg);
+  color: var(--tenant-9-fg);
+}
+.tenant-tile.tc-10 {
+  background: var(--tenant-10-bg);
+  color: var(--tenant-10-fg);
+}
+.tenant-tile.tc-11 {
+  background: var(--tenant-11-bg);
+  color: var(--tenant-11-fg);
+}
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 2px 10px 2px 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.scope-chip .scope-label {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.scope-chip .scope-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.scope-chip-compact {
+  padding: 1px 8px 1px 2px;
+  font-size: var(--text-xs);
+}
+.page-scope {
+  margin-top: var(--space-2);
+}
+.tenant-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.tenant-badge .tenant-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tenant-badge-top {
+  display: none;
+  margin-left: auto;
+  max-width: 45%;
+}
+.tenant-badge-side {
+  padding: 0 var(--space-2);
+}
+
+@media (max-width: 900px) {
+  .tenant-badge-top {
+    display: inline-flex;
+  }
+  .tenant-badge-side {
+    display: none;
+  }
+}
