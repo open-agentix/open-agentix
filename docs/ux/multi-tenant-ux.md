@@ -106,11 +106,12 @@ Implemented in #156 and #157; the contract is `openapi.yaml`, the rules are in
 - `actingTenant.path` is the breadcrumb, **root first and ending with the acting tenant**; the
   compatibility field `tenant` equals `actingTenant` (it is the tenant the request acts in, not the
   home tenant; use `homeTenant` for that).
-- `installationMode` is `multi` exactly when `visibleTenantCount > 1`. A viewer, or an admin of a
-  leaf node, gets `single` even in a large installation: there is nothing for them to switch to,
-  and the answer reveals nothing about tenants they cannot see.
-- Before per-node bindings (W13-6) only the global `admin` role reaches below the home node;
-  other roles see the home node only.
+- `installationMode` is `multi` exactly when `visibleTenantCount > 1`. Everybody but a platform
+  admin gets `single` even in a large installation: there is nothing for them to switch to, and
+  the answer reveals nothing about tenants they cannot see.
+- Until inheriting role bindings exist (ADR 0014 S1/S2; inheritance is opt-in per binding) only
+  platform admins reach beyond the home node; tenant admins and all other roles see the home node
+  only, so the tenant switcher and the subtree tree stay platform-admin features until then.
 - Count fields are `null` when the caller may not read them (the console shows an em dash, not 0);
   `counts` itself is `null` unless `include=counts`.
 - Ancestors above the caller's node are `visible: false` path stubs. The tree is capped by `limit`

@@ -49,13 +49,20 @@ console can detect a mismatch between the tenant it believes it acts in and the 
 | Caller | May name (reach) |
 | --- | --- |
 | platform operator | every node of every organisation |
-| tenant admin (global `admin` role) | the home node and everything below it |
-| every other user | the home node only |
+| every other user, tenant admins included | the home node only |
 
-Any other node (a sibling, an ancestor, a cousin, another organisation, a node that does not exist,
-a malformed value) answers the same `404 not_found`, so neither existence nor slugs can be probed.
-The roles stay those of the home tenant (until per-node role bindings, ADR 0013 W13-6, land): a
-tenant admin acting in a child keeps `admin` there but is not a platform operator.
+Any other node (a child, a sibling, an ancestor, a cousin, another organisation, a node that does
+not exist, a malformed value) answers the same `404 not_found`, so neither existence nor slugs can
+be probed. For a caller limited to its home node the value is compared with that node only (id,
+slug, slug path); no other node is looked up, so the response time does not depend on which other
+slugs exist.
+
+Why a tenant admin does not reach its children yet: [ADR 0014](adr/0014-tenant-tree-role-inheritance.md)
+makes inheritance down the tree **opt-in per binding** (`inherit = true`, default `false`), and
+today's roles (`users.global_roles`, team and agent bindings) become non-inheriting bindings on the
+home node. Reaching below the home node therefore arrives with the bindings table and the acting
+node of ADR 0014 (slices S1 and S2, reads only until S5). A platform operator acting in another node
+keeps the roles of its home tenant there (`homeTenantId` on the principal).
 
 - `GET /v1/me` reports `actingTenant` (with the breadcrumb `path`, root first; ancestors by name and
   slug only), `homeTenant`, the bindings anchored at their node, `visibleTenantCount` and
@@ -71,14 +78,14 @@ tenant admin acting in a child keeps `admin` there but is not a platform operato
   approvals, spend of the month (own and subtree) and the node's monthly cap, each only when the
   caller holds the matching read permission on the whole node (`agents:read`, `runs:read`,
   `costs:read`; a team or agent scoped role does not count, an API token scope does restrict).
-  Subtree sums are sums over the nodes the caller can see: a viewer's `agentsSubtree` equals the
-  own count.
+  Subtree sums are sums over the nodes the caller can see: for everybody but a platform operator
+  `agentsSubtree` equals the own count and `hasChildren` is `false`.
 - `GET /v1/tenants/search?q=` finds nodes of the reach by name or slug (at most 20).
 - Queries: one for the nodes, one aggregate per metric (grouped by tenant, rolled up along the
   materialised path in memory), no query per node. Migration `0017` adds
   `approvals(tenant_id, status)`.
 
-Not yet: roles are not bound per node (a viewer never reaches below the home node), `status` is
+Not yet: roles are not bound per node (nobody but a platform operator reaches below the home node), `status` is
 always `active` (blocking comes with budget caps, W13-4), and the display colour and use case of a
 node need storage that arrives with W13-2 and W13-6.
 
