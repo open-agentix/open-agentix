@@ -6,6 +6,9 @@ import {
   setEgressPolicy,
   resetEgressPolicy,
   type AllowEntry,
+  type NetworkSettings,
+  checkNetworkAirgap,
+  loadNetworkSettings,
 } from '@openagentix/core';
 import { installNetworkGuard, type NetworkGuard } from '@openagentix/providers';
 import type { Config } from './config.js';
@@ -63,7 +66,13 @@ export function configuredEndpoints(config: Config, env: Env = process.env): Air
     out.push({ purpose: 'model catalog refresh', url: config.airgap.catalogRefreshUrl });
   for (const url of config.airgap.webhookOutUrls) out.push({ purpose: 'outbound webhook', url });
   for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) {
-    if (env[k]) out.push({ purpose: `${k} proxy`, url: env[k]! });
+    const v = env[k]?.trim();
+    // A bare host:port is read as http://host:port (as the network loader does).
+    if (v)
+      out.push({
+        purpose: `${k} proxy`,
+        url: /^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : `http://${v}`,
+      });
   }
   return out;
 }
@@ -170,11 +179,33 @@ export function failClosed(problems: string[]): never {
 }
 
 let guard: NetworkGuard | null = null;
+let networkSettings: NetworkSettings | null = null;
+
+/** The validated network configuration (ADR 0011), available after `activateAirgap`. */
+export function getNetworkSettings(): NetworkSettings | null {
+  return networkSettings;
+}
+
+/**
+ * Loads and validates the outbound network configuration (file/env only, no write API). Plain
+ * `http://` proxies in the configuration are refused in production; an invalid file, an insecure
+ * TLS environment or (air-gapped) a proxy/route outside the allowlist aborts start-up.
+ */
+export function loadNetwork(config: Config, policy: EgressPolicy, env: Env): NetworkSettings {
+  const settings = loadNetworkSettings(env, {
+    production: config.env === 'production',
+    egress: policy,
+  });
+  const problems = checkNetworkAirgap(settings.net, policy);
+  if (problems.length > 0) failClosed(problems);
+  return settings;
+}
 
 /** Installs the policy and network guard (idempotent). Call before any outbound client exists. */
 export function activateAirgap(config: Config, env: Env = process.env): EgressPolicy {
   deactivateAirgap();
   const policy = buildPolicy(config);
+  networkSettings = loadNetwork(config, policy, env);
   if (!policy.airgapped) return policy;
   const problems = checkAirgapConfig(config, policy, env);
   if (problems.length > 0) failClosed(problems);
@@ -186,6 +217,7 @@ export function activateAirgap(config: Config, env: Env = process.env): EgressPo
 export function deactivateAirgap(): void {
   guard?.uninstall();
   guard = null;
+  networkSettings = null;
   resetEgressPolicy();
 }
 
