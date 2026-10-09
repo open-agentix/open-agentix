@@ -63,6 +63,10 @@ Limits (all configurable, see `docs/configuration.md`): runs per visitor and win
 10 minutes; the visitor is a salted hash of the client IP, so set `OAX_TRUST_PROXY=true` behind an
 ingress), runs per day for the whole demo (100), and `429` with `Retry-After` when exceeded.
 
+> **Planned:** a real read-only agent that answers visitor questions from the public repository
+> (design: [demo-repo-agent.md](demo-repo-agent.md), plan item W11-1). Not implemented yet; until it
+> ships, nothing a visitor types reaches a model.
+
 ## Optional: live Claude Code runs (`OAX_DEMO_LLM=claude-code`)
 
 Scenario runs are executed by the Claude Code harness (`docs/harnesses.md`) instead of the simulated

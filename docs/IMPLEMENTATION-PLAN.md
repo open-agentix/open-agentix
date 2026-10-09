@@ -1,6 +1,7 @@
 # Implementation plan: from promises to code
 
-Status: proposal for review (2026-10-04). Owner: the maintainers. Source of truth for the order of
+Status: proposal for review (2026-10-04; waves 9-12 added the same day from ADRs 0010-0012 and
+the demo repository agent design). Owner: the maintainers. Source of truth for the order of
 work until the items are closed; [ROADMAP.md](../ROADMAP.md) carries the milestone view and the
 GitHub issues (label `roadmap`, labels `wave/*`) carry the work.
 
@@ -224,6 +225,22 @@ Evidence paths are relative to this repository unless prefixed (`helm:` = open-a
 | Homelab example agents (CVE triage, log anomalies, auto-repair PRs, incidents, backup verification) | roadmap v0.2, concept 30 | partial | `examples/cve-triage.agents.md`, `examples/ticket-updater.agents.md` | Four more, with tests | W4-4 |
 
 
+<!-- gap-1-15:start -->
+### 1.15 Owner requests of 2026-10-04: authoring, GitOps, outbound network, connections, data protection
+
+| Capability | Promised in | Status | Evidence | Gap | Plan |
+| --- | --- | --- | --- | --- | --- |
+| Graphical no-code agent builder with a round-trip code view | owner request | not started | `apps/ui/src/features/agents/AgentEditor.tsx` is a textarea with live validation | Edit model, form, live lint | W9-1 |
+| Agent Check lint while editing agents.md | owner request, `docs/agent-check.md` | partial | lint runs on plans only (`packages/core/src/plan/lint.ts`) | `planFromDefinition`, validate response | W9-1-2 |
+| Agents from Git repositories (GitOps) with review, publish and drift handling | owner request | not started | agents live only in the database | Bindings, sync, publish modes, PR-back | W9-2, W9-3 |
+| Per-destination outbound proxies, CA bundles, mTLS, safe connectivity tests | owner request, ADR 0004 | partial | env proxies and per-provider `proxyUrl` (`packages/providers/src/proxy.ts`) | Network configuration, resolver, trust store, admin page | W10-1 |
+| Private model endpoints (Bedrock PrivateLink, Azure private endpoints, Vertex PSC) | ADR 0004, website providers page | partial | Bedrock `endpoint` override exists | Signing region, control endpoint, Entra auth, Vertex | W10-2, W10-3 |
+| Real read-only demo agent on the project repository | owner request | not started | demo agents run fixed scenarios only (`docs/demo.md`) | Pinned GitHub MCP server, ask endpoint, caps | W11-1 |
+| Separate MCP server and model provider areas, several typed instances, central grants | owner request | partial | one `connections` table and page; platform connections visible to every tenant | Types, grants, namespace rules, UI split | W12-1 |
+| Data protection: data flow rules, retention, PII, processing record, export, erasure, operator separation | owner request, concept (GDPR) | not started | secrets redacted, capture `metadata` in the model proxy only | ADR 0012 section 7 | W12-2 |
+
+<!-- gap-1-15:end -->
+
 ## 2. Wave plan
 
 Conventions for every item:
@@ -241,7 +258,9 @@ Conventions for every item:
   `apps/ui/src/api/schema.d.ts` and `apps/ui/src/i18n/locales/*.json` are regenerated or appended on
   rebase, never hand-merged. Migration numbers are fixed here: 0005 agent plans (W1-5), 0006
   security overrides (W2-3), 0007 evaluations (W2-4), 0008 agent budgets and channels (W2-5),
-  0009 run node sessions (W1-3a), 0010 model proxy reservations and ledger columns (W1-3b).
+  0009 run node sessions (W1-3a), 0010 model proxy reservations and ledger columns (W1-3b),
+  0011 agent repositories (W9-2), 0012 connection instances, grants and data protection columns
+  (W12-1, W12-2).
 - **Docs and website:** the item's PR updates the platform docs; the website/blog change is made
   when the item ships in a release (never before).
 - Subagents leave PRs open; the main agent reviews, merges and checks the result.
@@ -339,6 +358,30 @@ flowchart LR
   W6_3 --> W8_1
   W2_1 --> W8_2
   W3_6 --> W8_4
+  W9_1["W9-1"]
+  W9_2["W9-2"]
+  W9_3["W9-3"]
+  W10_1["W10-1"]
+  W10_2["W10-2"]
+  W10_3["W10-3"]
+  W11_1["W11-1"]
+  W12_1["W12-1"]
+  W12_2["W12-2"]
+  W1_5 --> W9_1
+  W1_1 --> W9_1
+  W1_2 --> W9_1
+  W9_1 --> W9_2
+  W9_2 --> W9_3
+  W1_3b --> W10_1
+  W10_1 --> W10_2
+  W10_1 --> W10_3
+  W1_2 --> W12_1
+  W1_3b --> W12_1
+  W12_1 --> W12_2
+  W3_3 --> W12_2
+  W12_1 -.-> W9_1
+  W12_1 -.-> W11_1
+  W10_1 -.-> W9_2
 ```
 
 ### Wave 0: preparation (day 0)
@@ -1223,6 +1266,609 @@ Tests: Smoke check of the demo endpoints after deploy.
 
 Docs and website: Website demo page (today 'coming soon').
 
+<!-- waves-9-12:start -->
+### Wave 9: agent authoring (form builder, code view, Git-synced agents)
+
+Milestone: **v0.3** (W9-3: v0.4). Design: [ADR 0010](adr/0010-agent-authoring-builder-and-git-sync.md). Independent of W1-3b; the builder pickers use connection instances of W12-1 when they exist and plain connections before.
+
+| Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W9-1 | No-code agent builder with a round-trip code view and live Agent Check lint | L (6 tasks) | sonnet (design: opus, ADR 0010) | yes | W1-5 (lint), W1-1, W1-2 (fields); W12-1 optional (instance pickers) | packages/core/src/agents/edit.ts (new), packages/core/src/plan/from-definition.ts (new), apps/api/src/http/routes/agents.ts (validate response), apps/ui/src/features/agents/builder/* (new), apps/ui/src/features/agents/{AgentEditor,EditorTab,NewAgentPage}.tsx, apps/ui/src/i18n/locales/*.json | #84, #85, #86, #87, #88, #89 |
+| W9-2 | Git-synced agent repositories (GitOps): bindings, sync, review and publish, drift | L (7 tasks) | sonnet (design: opus, ADR 0010) | yes | W9-1-2 (lint), W10-1-1 (outbound resolver; before it: environment proxies) | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/services/repositories/* (new), apps/api/src/http/routes/{repositories,repo-hooks}.ts (new), apps/worker/src/repo-sync.ts (new), packages/core/src/rbac.ts, apps/ui/src/features/repositories/* (new) | #90, #91, #92, #93, #94, #95, #96 |
+| W9-3 | PR-back: propose console edits of Git-managed agents as pull requests | M (1 task) | sonnet | yes | W9-2 | apps/api/src/services/repositories/pr-back.ts (new), forge adapters, apps/ui/src/features/agents/EditorTab.tsx | #97 |
+
+#### W9-1 No-code agent builder with a round-trip code view and live Agent Check lint
+
+*As an integrator or team lead, I want to build and change agents in a form (metadata, triggers, budget, steps, tools by profile, handovers, conditions, runtime, classification) and switch to the code view at any time without losing comments or unknown fields so that I do not need to write YAML and engineers can still work in code.* Milestone v0.3, size L (6 tasks), model `sonnet` (design: opus, ADR 0010), security review required.
+
+Acceptance criteria (item level):
+
+- The agent editor offers Form and Code views of the same draft; switching never saves and never loses an unsaved change.
+- Opening and serializing any example or fixture without edits is byte-identical; a field edit changes only that node; comments and unknown keys are kept (ADR 0010 section 2).
+- Validation errors, warnings and Agent Check lint findings are shown live in both views; in the form each finding is anchored to its field.
+- Everything the form cannot express is shown read-only with 'edit in code'.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W9-1-1 | Source edit model for agents.md (round-trip safe patches) | M | sonnet | v0.3 | - | packages/core/src/agents/edit.ts (new), packages/core/src/agents/parser.ts (shared split helpers), packages/core/test/agents-edit.test.ts (new) | #84 |
+| W9-1-2 | Agent Check lint on agents.md in validate and publish | S | sonnet | v0.3 | - | packages/core/src/plan/from-definition.ts (new), apps/api/src/services/agents.ts, apps/api/src/http/routes/agents.ts, apps/api/src/http/schemas.ts, openapi.yaml (regenerate), apps/ui/src/features/agents/PublishDialog.tsx | #85 |
+| W9-1-3 | Builder shell: Form/Code switch, pipeline sections, live issues panel | M | sonnet | v0.3 | W9-1-1, W9-1-2 | apps/ui/src/features/agents/builder/{Builder,FormView,IssuesPanel,descriptor}.tsx (new), apps/ui/src/features/agents/{EditorTab,AgentEditor}.tsx, apps/ui/src/i18n/locales/{en,de}.json | #86 |
+| W9-1-4 | Builder step editor: models, tools by profile, access, credentials, outputs | M | sonnet | v0.3 | W9-1-3 | apps/ui/src/features/agents/builder/{StepList,StepEditor,ToolPicker,CredentialPicker}.tsx (new), apps/ui/src/features/connections/profiles.ts | #87 |
+| W9-1-5 | Builder handover and condition editors (schemas, input.from, when) | M | sonnet | v0.3 | W9-1-4 | apps/ui/src/features/agents/builder/{SchemaBuilder,InputFrom,WhenBuilder}.tsx (new), packages/core/src/agents/when.ts (export a printer for the grammar) | #88 |
+| W9-1-6 | Builder as default for new agents, wizard and plan hand-off, end-to-end tests | S | sonnet | v0.3 | W9-1-5 | apps/ui/src/features/agents/NewAgentPage.tsx, apps/ui/src/features/wizard/WizardPage.tsx, apps/ui/src/features/plans/PlansPage.tsx, apps/ui/test/e2e/* (new Playwright specs), docs/authoring.md (new) | #89 |
+
+##### W9-1-1 Source edit model for agents.md (round-trip safe patches)
+
+Acceptance criteria:
+
+- `openSource`, `formModel`, `apply(ops)`, `serialize` as in ADR 0010 section 2, pure, no I/O; uses `yaml` `parseDocument` with the core schema and an alias limit.
+- Operations: set/unset field, insert/move/remove/rename step (rename updates `pipeline`, `input.from`, `when` and the section heading or refuses), set instructions, add/remove tool grant, set schema.
+- Values are checked against the zod field schemas before they are written; refused values leave the document unchanged and return an error per path.
+
+Tests: Property test over every file in `examples/` and the parser fixtures: open -> serialize is byte-identical; single-field edits change only that node (line diff); comments and unknown keys survive 100 random edit sequences. Security tests: paths or keys `__proto__`, `constructor`, `prototype` refused; alias bomb (billion laughs) and documents over the body limit refused without exponential work (time bound asserted); custom tags (`!!js/function`, `!foo`) refused; a rename that cannot rewrite a `when` safely is refused, never half-applied.
+
+##### W9-1-2 Agent Check lint on agents.md in validate and publish
+
+Acceptance criteria:
+
+- `planFromDefinition(definition)` maps a parsed agents.md to an AgentPlan (ADR 0010 section 3); `lintPlan` runs against the tenant's offered connections.
+- `POST /v1/agents/validate` returns an additive `lint` field; the publish dialog lists the findings; findings stay advisory in the console.
+- No model call, no network; lint version is reported.
+
+Tests: Mapping tests per field (profile grants, concrete grants, wildcards, `when`, `input.from`, schemas); every LP code reachable from an agents.md fixture; API test for the new field; the generator round trip (plan -> agents.md -> plan) is stable. Security test: tool descriptions and instructions never influence the lint (fixture with adversarial instructions yields the same findings).
+
+##### W9-1-3 Builder shell: Form/Code switch, pipeline sections, live issues panel
+
+Acceptance criteria:
+
+- Segmented Form/Code switch (keyboard reachable, last choice remembered in localStorage with try/catch fallback).
+- Form sections: metadata incl. SemVer bump helper, triggers, budget, approvals, classification, runtime/egress with the ceiling hint; unknown fields panel read-only.
+- Issues panel (aria-live) with validation and lint; 'Show problems' moves focus to the first invalid field; invalid YAML disables the form with the parse error.
+- The edit model and `yaml` load as a lazy chunk on the editor route only; chunk size measured in CI (budget 60 KiB gzip).
+
+Tests: Component tests per section (render, edit, serialized diff), switch tests (no loss of unsaved edits), axe accessibility checks, a test that fails when a schema field has neither a descriptor entry nor a code-only marker; en/de keys complete.
+
+##### W9-1-4 Builder step editor: models, tools by profile, access, credentials, outputs
+
+Acceptance criteria:
+
+- Steps: add, duplicate, remove, reorder (drag and buttons), id, provider instance and model pickers, access, instructions, outputs.
+- Tool picker lists MCP instances, their profiles and per-tool access classes (names and classes only); a read-only step offers only profiles without write tools; concrete grants with approval, maxCallsPerRun and common argument constraints.
+- Credential picker shows secret reference names allowed by the tenant's `secret_refs` patterns, never values; reserved env names refused inline.
+
+Tests: Component tests for every control and the serialized result; picker tests with fixture connections. Security tests: the picker never requests or renders secret values or tool descriptions (network mock asserts the fields fetched); a read-only step cannot get a write profile through the UI (and the server refuses it anyway, asserted end to end); a crafted connection name with markup is rendered as text.
+
+##### W9-1-5 Builder handover and condition editors (schemas, input.from, when)
+
+Acceptance criteria:
+
+- Schema builder for the JSON Schema subset (object, scalar properties, enum, arrays of scalars, required, length and range limits); anything beyond is code-only.
+- `input.from` multiselect of `event` and earlier steps; `output.schema` and `onInvalid`.
+- `when` rows (path, operator, typed value, all/any) compiled with a printer of the existing grammar; expressions the rows cannot represent are shown as text, editable in code.
+
+Tests: Printer/parser round trip for every expression the rows can build (property test); schema builder output validates with the existing subset validator. Security tests: values with quotes, backslashes and unicode escapes are printed so that the parser reads the same literal (no injection into the expression); paths with `__proto__` refused; a `when` referencing a later step cannot be produced.
+
+##### W9-1-6 Builder as default for new agents, wizard and plan hand-off, end-to-end tests
+
+Acceptance criteria:
+
+- New agent opens the form with a valid skeleton; wizard and plan drafts open in the form; read-only users see the form disabled.
+- `docs/authoring.md` describes form, code view, lint and round-trip guarantees.
+
+Tests: Playwright flows: create an agent in the form, switch to code, add a comment, switch back, edit a field, save, publish; the comment is still there. Run against the dev stack and report real results in the PR.
+
+Docs and website: `docs/authoring.md` (new: builder, code view, lint), `docs/agent-check.md` (lint on agents.md); website agents.md reference and lifecycle page when released.
+
+#### W9-2 Git-synced agent repositories (GitOps): bindings, sync, review and publish, drift
+
+*As a platform team, I want to connect a Git repository path as the source of a team's agents, with validation and Agent Check in the sync and publishing after review, so that agents are reviewed in pull requests, protected by branch rules and rolled back with a revert.* Milestone v0.3, size L (7 tasks), model `sonnet` (design: opus, ADR 0010), security review required.
+
+Acceptance criteria (item level):
+
+- A tenant can bind a repository path (GitHub first, then GitLab and Gitea) with read-only credentials as secret references; sync by poll, webhook poke and manual trigger.
+- Every synced file passes secret scan, parse/validate, binding ceiling, lint mode and the version rule before it becomes a candidate; refusals are reported per file with codes.
+- Candidates are published manually or on merge to a protected branch; published versions are immutable and record the commit; Git wins for Git-managed agents; detach and adopt are explicit and audited.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W9-2-1 | Repository bindings: migration 0011, permissions, GitHub adapter, URL and SSRF checks | M | sonnet | v0.3 | - | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/db/schema.ts, apps/api/src/services/repositories/{bindings,forge-github}.ts (new), apps/api/src/http/routes/repositories.ts (new), packages/core/src/rbac.ts (repos:read/write/sync), openapi.yaml | #90 |
+| W9-2-2 | Sync engine: fetch with limits, secret scan, validation, ceiling, lint, candidates | M | sonnet | v0.3 | W9-2-1, W9-1-2 | apps/worker/src/repo-sync.ts (new), apps/api/src/services/repositories/{sync,secret-scan,ceiling}.ts (new), apps/worker/src/queue.ts (job kind) | #91 |
+| W9-2-3 | Webhook poke endpoint for forge push events | S | sonnet | v0.3 | W9-2-2 | apps/api/src/http/routes/repo-hooks.ts (new), apps/api/src/services/repositories/webhooks.ts (new) | #92 |
+| W9-2-4 | Review and publish flow, Git-managed lock, drift, adopt and detach | M | sonnet | v0.3 | W9-2-2 | apps/api/src/services/agents.ts (source_kind checks), apps/api/src/services/repositories/publish.ts (new), apps/api/src/http/routes/agents.ts (adopt, detach), apps/ui/src/features/agents/{EditorTab,PublishDialog,OverviewTab}.tsx | #93 |
+| W9-2-5 | GitLab and Gitea forge adapters | S | sonnet | v0.3 | W9-2-1 | apps/api/src/services/repositories/{forge-gitlab,forge-gitea}.ts (new) | #94 |
+| W9-2-6 | Console: repositories page, sync reports, candidates | S | sonnet | v0.3 | W9-2-4 | apps/ui/src/features/repositories/* (new), apps/ui/src/router.tsx, apps/ui/src/i18n/locales/{en,de}.json, docs/git-sync.md (new) | #95 |
+| W9-2-7 | Hostile repository test suite for Git sync | S | haiku (tests; must run them and report real results) | v0.3 | W9-2-3, W9-2-4 | apps/worker/test/repo-sync.hostile.test.ts (new), test fixtures | #96 |
+
+##### W9-2-1 Repository bindings: migration 0011, permissions, GitHub adapter, URL and SSRF checks
+
+Acceptance criteria:
+
+- Tables and agent columns of ADR 0010 section 11; CRUD `/v1/repositories` with `repos:*` permissions; tenant-partitioned and covered by the isolation tests.
+- GitHub adapter: branch head, tree at SHA, blob reads, branch protection read; auth `github-app` (installation token per sync for one repository with contents:read), `token`, `none`.
+- `baseUrl` validation: https only, no IP literals of private/loopback/link-local/metadata ranges, resolved addresses checked and pinned, no cross-host redirects; air-gapped mode requires the host on the allowlist.
+
+Tests: Adapter tests against a recorded fake forge. Security tests: `baseUrl` with `169.254.169.254`, `localhost`, `[::ffff:127.0.0.1]`, decimal/octal IP spellings, a name that resolves to a private address, and a redirect to another host are all refused with zero requests to the target; a secret value instead of a reference is refused; tenant B cannot read or sync tenant A's binding (404); the installation token request names exactly one repository and `contents: read`.
+
+##### W9-2-2 Sync engine: fetch with limits, secret scan, validation, ceiling, lint, candidates
+
+Acceptance criteria:
+
+- Queue job `repo-sync` (one in flight per binding), poll interval >= 60 s, manual sync endpoint; limits of ADR 0010 section 7.2.
+- Per-file checks in the order of section 7.3; candidates written; sync report with codes and paths; audit entries of section 10.
+- Version rule: same version with another digest refused (`version_conflict`); removed files mark agents `source_missing`.
+
+Tests: Sync tests with a fake forge: happy path, every refusal code, limits. Security tests: symlink, submodule, LFS pointer, NUL bytes, invalid UTF-8, a path with `..`, 201 files, a 257 KiB file and a tree of 20 001 entries are refused without partial application; a file containing an AWS key, a GitHub token or a PEM private key is refused and the value appears in no report, log line or audit payload (searched); a YAML alias bomb fails in bounded time; a file that names a secret outside `ceiling.secretRefs` or a connection outside the ceiling is refused; a file trying to take over a UI-managed agent name is refused.
+
+##### W9-2-3 Webhook poke endpoint for forge push events
+
+Acceptance criteria:
+
+- `POST /v1/repo-hooks/{bindingId}` verifies GitHub HMAC, GitLab token and Gitea HMAC in constant time, checks event type and branch, and only enqueues a sync; the payload is never used for content.
+- Unknown binding and bad signature look the same (404, same timing class); per-IP and per-binding rate limits; at most one queued sync per binding.
+
+Tests: Signature tests per forge incl. wrong secret, missing header, replayed body for a deduplicated job. Security tests: a valid signature with a forged payload that names other files does not change what is synced (the sync reads the forge); 1 000 requests produce at most one queued job; a timing test bounds the difference between unknown binding and bad signature.
+
+##### W9-2-4 Review and publish flow, Git-managed lock, drift, adopt and detach
+
+Acceptance criteria:
+
+- Git-managed drafts are read-only in API and UI (`agent_managed_by_git`); 'Copy as patch'; publish dialog shows commit, diff and findings.
+- `publishMode: on-merge` publishes as `repo:<bindingId>` only when branch protection is confirmed via the forge API; otherwise the binding stays manual and says why.
+- Adopt and detach (repos:write), deletion of a binding leaves agents UI-managed; all audited.
+
+Tests: Publish flow tests for both modes; drift tests (UI save refused, detach then commit refused with `agent_detached`). Security tests: on-merge with unprotected branch never publishes; a binding cannot widen its ceiling without `agents:publish` on the team; a published version is never modified by a later sync (digest compared).
+
+##### W9-2-5 GitLab and Gitea forge adapters
+
+Acceptance criteria:
+
+- Same adapter contract as GitHub: head, tree, blobs, protection, project/deploy tokens as secret references; self-hosted base URLs with the same URL checks.
+
+Tests: Recorded fixture tests per forge; the shared adapter conformance suite passes for all three. Security test: the SSRF and redirect cases of W9-2-1 run against both adapters.
+
+##### W9-2-6 Console: repositories page, sync reports, candidates
+
+Acceptance criteria:
+
+- List and create bindings (secret reference pickers, ceiling editor, publish and lint mode), sync now, sync reports with per-file refusals, candidates with publish action, the warning that merge rights equal agents:write.
+
+Tests: Component tests, axe checks, en/de keys; Playwright flow against a fake forge.
+
+##### W9-2-7 Hostile repository test suite for Git sync
+
+Acceptance criteria:
+
+- One suite with a hostile fake forge combining every refusal case of W9-2-1..4 plus injection-style agents.md content; the PR lists each check with its real result.
+
+Tests: As above; nothing is claimed that did not run.
+
+Docs and website: `docs/git-sync.md` (new), `docs/configuration.md` (limits), `docs/airgapped.md` (forge host on the allowlist); website lifecycle page when released.
+
+Helm: Ingress path for `/v1/repo-hooks/` (public, rate-limited) and NetworkPolicy egress for the forge host.
+
+#### W9-3 PR-back: propose console edits of Git-managed agents as pull requests
+
+*As an agent engineer, I want to change a Git-managed agent in the console and get a pull request instead of a conflict so that Git stays the source of truth without forcing everyone into an editor.* Milestone v0.4, size M (1 task), model `sonnet`, security review required.
+
+Acceptance criteria (item level):
+
+- With `prBack.enabled` and a separate write credential, 'Propose change' creates a branch and a pull request; it never pushes to the bound branch; the console shows PR state.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W9-3-1 | PR-back from the console to the bound repository | M | sonnet | v0.4 | W9-2-4 | apps/api/src/services/repositories/pr-back.ts (new), apps/api/src/http/routes/agents.ts (`propose`), forge adapters, apps/ui/src/features/agents/EditorTab.tsx | #97 |
+
+##### W9-3-1 PR-back from the console to the bound repository
+
+Acceptance criteria:
+
+- Branch `oax/<agent>/<id>` from the last synced commit, one commit with the edited file, PR against the bound branch, author = service identity, `Proposed-by` trailer with an opaque user id.
+- Requires `agents:write` on the agent and `prBack.enabled`; audited `repo.pr_opened`.
+
+Tests: Adapter tests per forge. Security tests: the sync credential is never used for writes (spy); the write credential is never used by the sync; a request targeting the bound branch directly is impossible (asserted on the fake forge); file path outside the binding's `paths` refused; no name or mail in the commit unless the tenant opted in.
+
+Docs and website: `docs/git-sync.md` PR-back section.
+
+### Wave 10: outbound network (central proxy configuration, private model endpoints)
+
+Milestone: **v0.3** (W10-3: v1.0). Design: [ADR 0011](adr/0011-outbound-network-proxies-and-private-endpoints.md). Depends on W1-3b: model calls of isolated steps leave from the control node (ADR 0009), so the `model` routes must be wired in the api; W10-1-3 lands after W1-3b-5 (streaming transports) so that both transports use the same dispatcher factory.
+
+| Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W10-1 | Central outbound network configuration: per-destination proxies, trust store, mTLS, safe connectivity tests | L (8 tasks) | sonnet (design: opus, ADR 0011) | yes | W1-3b (model proxy, tasks 3 and 5), W1-3a (egress proxy, merged) | packages/core/src/network/* (new), packages/providers/src/network/* (new), packages/providers/src/{proxy,http,bedrock,anthropic,openai,ollama}.ts, packages/mcp/src/connection.ts, apps/api/src/{auth,config}.ts, apps/api/src/http/routes/network.ts (new), packages/runners/src/egress-proxy.ts, apps/ui/src/features/settings/network/* (new) | #98, #99, #100, #101, #102, #103, #104, #105 |
+| W10-2 | Private model endpoints: Bedrock PrivateLink and Azure OpenAI private endpoints | M (2 tasks) | sonnet | yes | W10-1-2, W1-3b-5 | packages/providers/src/{bedrock,openai,registry}.ts, packages/providers/src/stream/bedrock.ts, docs/providers.md, docs/verification/* | #106, #107 |
+| W10-3 | Google Vertex AI provider with Private Service Connect | M (1 task) | sonnet (short opus design comment first) | yes | W10-1, W1-3b | packages/providers/src/vertex.ts (new), packages/providers/src/stream/*, registry, catalog mapping | #108 |
+
+#### W10-1 Central outbound network configuration: per-destination proxies, trust store, mTLS, safe connectivity tests
+
+*As a platform operator in a corporate network, I want to define per destination which proxy (with credentials from the secret store), which CA bundle and which client certificate is used, and test connectivity safely, so that every outbound call of openagentix follows our network rules without code changes.* Milestone v0.3, size L (8 tasks), model `sonnet` (design: opus, ADR 0011), security review required.
+
+Acceptance criteria (item level):
+
+- One network configuration (file or env) with proxies, trust bundles, client certificates and ordered routes; one resolver used by every outbound HTTP client; existing env proxies behave as before.
+- No way to disable TLS verification; proxy credentials and client keys never appear in logs, errors, responses or child environments.
+- Admins see the configuration read-only and can run reference-based connectivity tests that return categories only.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W10-1-1 | Network configuration contract and pure route resolver | S | sonnet | v0.3 | - | packages/core/src/network/{config,resolve}.ts (new), packages/core/src/egress.ts (shared host matcher), apps/api/src/config.ts, apps/worker/src/config.ts | #98 |
+| W10-1-2 | Dispatcher factory: trust store, client certificates, DNS pinning | M | sonnet | v0.3 | W10-1-1 | packages/providers/src/network/{dispatcher,trust,pinning}.ts (new), packages/providers/src/proxy.ts (delegates), packages/providers/src/bedrock.ts (NodeHttpHandler) | #99 |
+| W10-1-3 | Route every outbound client through the resolver | M | sonnet | v0.3 | W10-1-2, W1-3b-5 | packages/providers/src/*.ts and stream/*, packages/mcp/src/connection.ts, apps/api/src/auth/*, change-gate probes, outbound webhooks, catalog refresh, apps/api/src/telemetry.ts, eslint rule or test `no-raw-egress` (new) | #100 |
+| W10-1-4 | Tenant proxy selection and hardening of the BYOK proxyUrl | S | sonnet | v0.3 | W10-1-1 | apps/api/src/services/catalog.ts, packages/providers/src/registry.ts (`network` field), docs/providers.md | #101 |
+| W10-1-5 | Network admin page and safe connectivity test API | M | sonnet | v0.3 | W10-1-3 | apps/api/src/http/routes/network.ts (new), apps/api/src/services/network-test.ts (new), apps/ui/src/features/settings/network/* (new), openapi.yaml | #102 |
+| W10-1-6 | Upstream proxy for the run-node egress proxy | S | sonnet | v0.3 | W10-1-2 | packages/runners/src/{egress-proxy,egress-rules}.ts, apps/worker/src/egress-proxy-cli.ts, docs/runners.md | #103 |
+| W10-1-7 | Helm, Compose and docs for the network configuration | S | sonnet | v0.3 | W10-1-3 | docker-compose.yml, docs/{network,configuration,airgapped,providers,runners}.md (network.md new), CHANGELOG.md; open-agentix-helm mirror issue | #104 |
+| W10-1-8 | Network abuse test suite (SSRF, rebinding, credential leakage, TLS) | S | haiku (tests; must run them and report real results) | v0.3 | W10-1-5, W10-1-6 | packages/providers/test/network.abuse.test.ts (new), apps/api/test/network-test.abuse.test.ts (new) | #105 |
+
+##### W10-1-1 Network configuration contract and pure route resolver
+
+Acceptance criteria:
+
+- zod schema of ADR 0011 section 1 (strict; refuses `insecure`/`rejectUnauthorized`-like keys), `OAX_NETWORK_CONFIG_FILE`/`OAX_NETWORK_CONFIG`, legacy env mapped to an implicit last route.
+- `resolveRoute(url, purpose, scope)` pure, first match wins, precedence of section 1; air-gapped start-up check covers proxies and routes.
+- `NODE_TLS_REJECT_UNAUTHORIZED=0` refuses start (`tls_insecure`).
+
+Tests: Table tests for matching (hosts, suffixes, CIDR v4/v6, ports, purposes), precedence, legacy mapping (existing proxy tests unchanged). Security tests: wildcard-all routes in air-gapped mode refused; a route to a non-allowlisted host refused at start; a proxy URL with userinfo in the config refused (credentials only via `authSecret`); config file with prototype keys refused.
+
+##### W10-1-2 Dispatcher factory: trust store, client certificates, DNS pinning
+
+Acceptance criteria:
+
+- undici Agent/ProxyAgent with system+extra or extra-only roots, per-route client certificate, SNI = destination name; AWS SDK handler with the same agents.
+- Bundles re-read on change (at most every 60 s); key material in memory only, registered with the redactor.
+- Direct routes for tenant-supplied destinations resolve once, check every address against the private-range policy and connect to the checked address.
+
+Tests: TLS tests with a local test CA: trusted, untrusted, hostname mismatch, client certificate required/accepted/rejected, rotation of a bundle file. Security tests: DNS rebinding fixture (first answer public, second private) never connects to the private address; metadata addresses refused for every spelling; proxy credentials only in `Proxy-Authorization` to the proxy and never sent to the destination (asserted on both fake servers); key and credential values absent from logs and errors (captured and searched).
+
+##### W10-1-3 Route every outbound client through the resolver
+
+Acceptance criteria:
+
+- Providers (incl. streaming), MCP HTTP, OIDC, webhooks out, probes, catalog refresh and Git sync use the factory with their purpose; LDAP uses the trust store and refuses proxied routes; OTLP documented.
+- A lint test fails on raw `fetch`/`https.request`/AWS clients outside the factory (reasoned allowlist).
+- Child process environments (harnesses, toolbox commands, run nodes) never contain proxy variables with credentials.
+
+Tests: Per-client tests with fake proxy and destination: correct route per purpose. Security tests: harness and run-node spawn environment searched for proxy credentials; in air-gapped mode zero egress attempts for a full agent run (existing test extended with routes).
+
+##### W10-1-4 Tenant proxy selection and hardening of the BYOK proxyUrl
+
+Acceptance criteria:
+
+- Connections take `network: { proxy: <tenantSelectable name> | direct, clientCertificate?: <platform name> }`; tenant/team/agent connections refuse new or changed `proxyUrl` (`proxy_url_not_allowed`); existing ones keep working and are listed.
+- TLS-inspecting proxies cap classification (`classification_exceeds_route`).
+
+Tests: Catalog tests for every scope. Security tests: a tenant cannot select a proxy outside `tenantSelectable`; a tenant `proxyUrl` to an internal address is refused; a confidential run through an inspecting proxy is refused before any connection (fetch spy).
+
+##### W10-1-5 Network admin page and safe connectivity test API
+
+Acceptance criteria:
+
+- `GET /v1/network` (redacted view), `POST /v1/network/resolve` (pure), `POST /v1/network/test` with destination references only and category results (ADR 0011 section 8); rate limit and audit `network.tested`.
+- UI page under Settings with proxies, bundles (fingerprint, expiry), certificates, routes, air-gapped state, legacy `proxyUrl` users; tenant admins can test their own connections.
+
+Tests: API and UI tests per category. Security tests: a free URL in any field is refused (strict schema); `probeHost` outside the route's match list refused; responses contain no body, header, address or exact timing (schema asserted); 11th test in a minute gets 429; tenant admins cannot test another tenant's connection (404).
+
+##### W10-1-6 Upstream proxy for the run-node egress proxy
+
+Acceptance criteria:
+
+- Purpose `node-egress` chooses the next hop per CONNECT target after the existing checks (ceiling, grant, resolved address, air-gap); upstream credentials only in the egress proxy service.
+
+Tests: Integration tests with a fake upstream. Security tests: the order of checks is unchanged (a private target is refused before the upstream is contacted); upstream credentials never reach the node or the worker environment; a grant cannot select the upstream.
+
+##### W10-1-7 Helm, Compose and docs for the network configuration
+
+Acceptance criteria:
+
+- `docs/network.md` with examples for corporate proxy, PrivateLink and mTLS gateway; changelog bullet incl. the `proxyUrl` behaviour change; Helm mirror issue filed with the values of ADR 0011 section 10.
+
+Tests: `docker compose config` in CI with a sample network file; docs link check.
+
+##### W10-1-8 Network abuse test suite (SSRF, rebinding, credential leakage, TLS)
+
+Acceptance criteria:
+
+- One suite that runs every security case of W10-1-1..6 end to end against local fake servers; the PR lists each check with its real result.
+
+Tests: As above; nothing is claimed that did not run.
+
+Docs and website: `docs/network.md` (new), `docs/configuration.md` (Outbound proxy section replaced), `docs/airgapped.md`, `docs/runners.md` (egress upstream); website security/deployment pages when released.
+
+Helm: `network.*` values, ConfigMap/Secret mounts into api and worker, provider egress NetworkPolicy also on the api, air-gapped proxy rule relaxed to 'proxy host must be allowlisted'.
+
+#### W10-2 Private model endpoints: Bedrock PrivateLink and Azure OpenAI private endpoints
+
+*As a cloud platform owner, I want model calls to reach Bedrock and Azure OpenAI over private connectivity (VPC interface endpoints, private endpoints) with correct signing and identity-based auth so that prompts never cross the public internet.* Milestone v0.3, size M (2 tasks), model `sonnet`, security review required.
+
+Acceptance criteria (item level):
+
+- Bedrock: `endpoint`, `controlEndpoint`, `signingRegion`; SigV4 independent of the endpoint hostname; STS regional endpoint documented.
+- Azure OpenAI: private endpoint documented with a direct route; optional `auth: entra` with workload identity.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W10-2-1 | Bedrock over PrivateLink: signing region, control endpoint, STS | S | sonnet | v0.3 | W10-1-2 | packages/providers/src/{bedrock,registry}.ts, packages/providers/src/stream/bedrock.ts, docs/providers.md, docs/verification/bedrock-privatelink.md (new) | #106 |
+| W10-2-2 | Azure OpenAI private endpoints and Entra workload identity | M | sonnet | v0.3 | W10-1-2 | packages/providers/src/{openai,registry}.ts, packages/providers/src/azure-auth.ts (new), docs/providers.md | #107 |
+
+##### W10-2-1 Bedrock over PrivateLink: signing region, control endpoint, STS
+
+Acceptance criteria:
+
+- New optional `controlEndpoint` and `signingRegion`; runtime and streaming calls sign for `bedrock` and `signingRegion` with any endpoint host; docs for private DNS vs endpoint-specific names and the STS VPC endpoint.
+
+Tests: Recorded SigV4 signature tests for regional, endpoint-specific VPCE and private-DNS hostnames; streaming through the same handler. Opt-in real test (`OAX_TEST_BEDROCK_VPCE=1`) documented, results reported only when run.
+
+##### W10-2-2 Azure OpenAI private endpoints and Entra workload identity
+
+Acceptance criteria:
+
+- `auth: apiKey | entra` for `azure-openai`; Entra tokens from workload identity (federated token file) for the cognitive services scope, cached until shortly before expiry, per connection.
+- Token endpoint routed by the resolver (purpose `identity`); private endpoint recipe documented.
+
+Tests: Token flow tests with a fake identity endpoint. Security tests: tokens never logged or returned; token cache keyed per connection and tenant (no cross-tenant reuse); expired tokens refreshed, not reused.
+
+Docs and website: `docs/providers.md`, `docs/network.md` recipes, verification notes.
+
+Helm: IRSA/workload identity annotations documented next to the network values.
+
+#### W10-3 Google Vertex AI provider with Private Service Connect
+
+*As a GCP customer, I want Vertex AI models through a Private Service Connect endpoint with workload identity federation so that model traffic stays private like on AWS and Azure.* Milestone v1.0, size M (1 task), model `sonnet` (short opus design comment first), security review required.
+
+Acceptance criteria (item level):
+
+- Provider kind `vertex` (Anthropic and Gemini models on Vertex) with endpoint override for PSC, workload identity federation, metering through the model proxy.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W10-3-1 | Vertex AI provider with Private Service Connect endpoints | M | sonnet | v1.0 | W10-1-3, W1-3b-6 | packages/providers/src/vertex.ts (new), packages/providers/src/stream/vertex.ts (new), packages/providers/src/registry.ts, docs/providers.md | #108 |
+
+##### W10-3-1 Vertex AI provider with Private Service Connect endpoints
+
+Acceptance criteria:
+
+- Non-streaming and streaming calls, usage extraction, PSC endpoint override, workload identity federation; model proxy surfaces accept vertex-backed models where the protocol fits.
+
+Tests: Recorded fixtures; token flow tests. Security tests: credentials never logged; tenant-scoped token caches; air-gapped refusal without allowlisted endpoint.
+
+Docs and website: `docs/providers.md`, `docs/network.md`.
+
+### Wave 11: a real read-only demo agent for the project repository
+
+Milestone: **v0.3**. Design: [docs/demo-repo-agent.md](demo-repo-agent.md). Independent of W1-3b in Claude Code OAuth mode (orchestrator only); a provider-backed mode for node steps follows W1-3b.
+
+| Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W11-1 | Real read-only demo agent that answers questions about the project from its public repository | M (4 tasks) | sonnet | yes | demo profile and Claude Code demo mode (done); W12-1-1 optional (instance type `github`) | apps/api/src/demo/*, apps/api/src/http/routes/demo.ts, apps/worker/src/demo-runner.ts, Dockerfile (`worker-demo-repo` target), docker-compose.demo-repo.yml (new), apps/ui/src/features/dashboard/DemoScenarios.tsx | #109, #110, #111, #112 |
+
+#### W11-1 Real read-only demo agent that answers questions about the project from its public repository
+
+*As a visitor of the demo, I want to ask a question about openagentix and get an answer with citations from the public repository so that I see a real agent work under the policy gate, read-only profile, budget and audit chain.* Milestone v0.3, size M (4 tasks), model `sonnet`, security review required.
+
+Acceptance criteria (item level):
+
+- `OAX_DEMO_REPO_AGENT=off|questions|free-text` (default off); the seeded `project-guide` agent answers from allowlisted repositories through a pinned read-only GitHub MCP server.
+- Only read tools of the profile, allowlisted owner/repo enforced by the gate and the demo runner; existing demo caps apply with a separate per-visitor counter.
+- Answers rendered safely with a link allowlist, the AI label and the list of files actually read.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W11-1-1 | Pinned read-only GitHub MCP server for the demo with a repository allowlist | M | sonnet | v0.3 | - | Dockerfile (`worker-demo-repo` target, pinned version and SHA-256), apps/worker/src/demo-runner.ts (allowlist wrapper), apps/api/src/demo/seed.ts (connection instance and profile), docker-compose.demo-repo.yml (new), docs/verification/demo-repo-agent.md (new) | #109 |
+| W11-1-2 | Demo ask endpoint and the project-guide agent with caps | M | sonnet | v0.3 | W11-1-1 | apps/api/src/http/routes/demo.ts, apps/api/src/demo/{agents,scenario-service}.ts, apps/worker/src/demo-runner.ts, docs/{demo,configuration}.md | #110 |
+| W11-1-3 | Ask box and safe answer rendering in the demo console | S | sonnet | v0.3 | W11-1-2 | apps/ui/src/features/dashboard/AskProject.tsx (new), apps/ui/src/components/SafeMarkdown.tsx (new, no HTML), apps/ui/src/i18n/locales/{en,de}.json | #111 |
+| W11-1-4 | Demo repo agent abuse and acceptance suite | S | haiku (tests; must run them and report real results) | v0.3 | W11-1-3 | apps/worker/test/demo-repo.abuse.test.ts (new), apps/api/test/demo-ask.test.ts | #112 |
+
+##### W11-1-1 Pinned read-only GitHub MCP server for the demo with a repository allowlist
+
+Acceptance criteria:
+
+- Server installed at build time, read-only mode and toolsets verified against the pinned version and recorded; nothing downloaded at run time.
+- Connection `github-public` with all tools `read`, profile `read` with the six tools of the design (no search); argument constraints on owner and repo; optional token file mount, scrubbed.
+
+Tests: Image build test checks the checksum; tool list test against the pinned server (opt-in). Security tests: tool calls with another owner/repo, a search tool or a write tool are refused by the gate and by the wrapper; the token value never appears in steps, audit, logs or responses (searched); the server process gets no other environment secrets.
+
+##### W11-1-2 Demo ask endpoint and the project-guide agent with caps
+
+Acceptance criteria:
+
+- `POST /v1/demo/ask` (question 3-500 chars, normalised; `questionId` in questions mode), 404 outside demo mode, per-visitor counter, shared daily budget with reservations, one live run at a time, per-run caps.
+- Model via Claude Code OAuth mode or `provider:<name>` with clearance >= public; model forced, tool and turn limits.
+
+Tests: API tests for every limit and input rule. Security tests: injected instructions in the question and in a fake issue body never lead to a non-read tool call (scripted model outputs); questions are not logged; event data of questions purged with the demo reset; the OAuth token never leaves the harness spawn path.
+
+##### W11-1-3 Ask box and safe answer rendering in the demo console
+
+Acceptance criteria:
+
+- Ask box with curated questions and (in free-text mode) a text field, limit messages, answer view with the AI label and the list of files and issues read (from the tool log).
+
+Tests: Component tests en/de, axe checks. Security tests: HTML and `javascript:` links in answers are rendered as text; links outside the allowlist are not clickable; images are not loaded.
+
+##### W11-1-4 Demo repo agent abuse and acceptance suite
+
+Acceptance criteria:
+
+- Runs the acceptance tests of `docs/demo-repo-agent.md` with an injection corpus (question and repository content) and the cost cap cases; the opt-in real run is executed only when the owner token is available and reported honestly.
+
+Tests: As above; nothing is claimed that did not run.
+
+Docs and website: `docs/demo-repo-agent.md` (this design, updated with the verified flags), `docs/demo.md`, `docs/configuration.md`; website demo page when live.
+
+Helm: `demo.repoAgent.enabled`, token Secret reference.
+
+### Wave 12: connections as instances, central vs tenant scope, data protection
+
+Milestone: **v0.3** (W12-2-5 and W12-2-6: v0.4). Design: [ADR 0012](adr/0012-connections-instances-scopes-and-data-protection.md). W12-1-2 extends the reservations of W1-3b-2 and the admission of W1-3b-3; W12-2-6 prepares W7-1 (per-tenant audit chains).
+
+| Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W12-1 | Connections: MCP servers and model providers as separate areas, typed instances, central grants | L (4 tasks) | sonnet (design: opus, ADR 0012) | yes | W1-2 (profiles), W1-3b-2/3 (reservations, admission) | apps/api/drizzle/0012_connection_instances.sql (new), packages/core/src/connections/* (new), apps/api/src/services/{catalog,models,model-accounting,run-nodes}.ts, apps/ui/src/features/{mcp-servers,model-providers}/* (new) | #113, #114, #115, #116 |
+| W12-2 | Data protection: data flow rules, retention, PII hooks, processing record, export and erasure, operator separation | L (8 tasks) | sonnet (design: opus, ADR 0012) | yes | W12-1-1; W3-3 (RE2 patterns) for tenant PII patterns; W7-1 for per-tenant chains (later) | packages/core/src/{classification,redact}.ts, packages/core/src/pii/* (new), apps/api/src/services/{agents,runs,audit,tenants}.ts, apps/api/src/services/data-protection/* (new), apps/worker/src/retention.ts (new), docs/data-protection.md (new) | #117, #118, #119, #120, #121, #122, #123, #124 |
+
+#### W12-1 Connections: MCP servers and model providers as separate areas, typed instances, central grants
+
+*As a tenant admin, I want MCP servers and model providers in their own console areas, several instances of the same server type with their own credentials, profiles, policies and budgets, and central connections only when the operator grants them, so that each use case gets exactly the access it needs and nothing is shared by accident.* Milestone v0.3, size L (4 tasks), model `sonnet` (design: opus, ADR 0012), security review required.
+
+Acceptance criteria (item level):
+
+- Types and instances, default-deny grants for central instances, one flat namespace per tenant without shadowing, per-instance budgets and rate limits, cost lines per instance.
+- Separate console areas with list, create from type, test, usage and audit; operators manage types, central instances and grants.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W12-1-1 | Connection types and instances: migration 0012, grants, namespace rules | M | sonnet | v0.3 | - | apps/api/drizzle/0012_connection_instances.sql (new), apps/api/src/db/schema.ts, packages/core/src/connections/{types,grants}.ts (new), packages/core/src/connections/types/*.json (built-in types), apps/api/src/services/catalog.ts, apps/api/src/http/routes/{catalog,connection-types,connection-grants}.ts, openapi.yaml | #113 |
+| W12-1-2 | Enforcement on central connections: quotas, budgets, cache isolation, broker and proxy rules | M | sonnet | v0.3 | W12-1-1, W1-3b-3 | apps/api/src/services/{model-accounting,model-proxy,run-nodes,agents}.ts, apps/api/drizzle/0012_connection_instances.sql (ledger and reservation columns), packages/mcp/src/gateway.ts (session keys) | #114 |
+| W12-1-3 | Console: separate MCP servers and Model providers areas | M | sonnet | v0.3 | W12-1-1 | apps/ui/src/features/{mcp-servers,model-providers}/* (new, from features/connections), apps/ui/src/router.tsx (redirect from /connections), apps/ui/src/layout/*, apps/ui/src/i18n/locales/{en,de}.json | #115 |
+| W12-1-4 | Per-instance policies and budgets | S | sonnet | v0.3 | W12-1-2 | apps/api/src/services/{budgets,catalog}.ts, packages/core/src/policy/engine.ts (instance binding), docs/budgets.md | #116 |
+
+##### W12-1-1 Connection types and instances: migration 0012, grants, namespace rules
+
+Acceptance criteria:
+
+- Columns, partial unique indexes, `connection_types`, `connection_grants` of ADR 0012 section 8; upgrade path of section 9 (grants for existing usage, collisions listed, grant disabled on collision).
+- Instances bind to types; tool classes of the type are a floor; `visible()` and `resolveForRun` use grants (default deny) instead of `scope = 'platform'`.
+
+Tests: Migration test on a database with platform/tenant collisions; catalog tests. Security tests: tenant B never sees an ungranted central instance (list, get, run resolution, validation, lint offer: all 404 or unknown); a tenant instance cannot reuse a granted alias and vice versa; an instance cannot declare a type's write tool as read; a grant cannot widen classification, teams, profiles or budget; the isolation test suite covers the new routes.
+
+##### W12-1-2 Enforcement on central connections: quotas, budgets, cache isolation, broker and proxy rules
+
+Acceptance criteria:
+
+- Reservations with grant and instance scopes; rate limits per grant in admission; `cost_ledger.connection_id/connection_scope`.
+- `cacheIsolation: tenant` for central model instances, tenant pseudonym as end-user field where supported; client, session and token caches keyed by tenant, connection and credential version.
+- Publish refuses node steps with tools of central shared-credential MCP instances (`central_mcp_node_unsupported`) until a control-node relay exists; central `multi-tenant` MCP instances cannot be granted twice.
+
+Tests: Concurrency test: two tenants on one central instance with per-tenant budgets never exceed their own limits. Security tests: tenant A's prompt prefix never yields a cache hit for tenant B (fake provider with a prefix cache); cache keys of every cache in api/worker include the tenant (static test over `cached(` calls); the broker refuses platform secrets of a central instance to a node; a revoked grant fails the next call.
+
+##### W12-1-3 Console: separate MCP servers and Model providers areas
+
+Acceptance criteria:
+
+- Two navigation entries with list (incl. central badge and alias), create from type gallery, detail tabs Configuration, Profiles or Models and prices, Test, Usage, Access, Audit (ADR 0012 section 6); `/connections` redirects.
+- Operator view for types, central instances and grants per tenant.
+
+Tests: Component and route tests, axe checks, en/de keys, Playwright: create two Jira instances with different secret references and bind two agents to them.
+
+##### W12-1-4 Per-instance policies and budgets
+
+Acceptance criteria:
+
+- Monthly budget per instance (cost centre) with alerts like other budgets; policy bundles bindable to an instance (extends W3-3 when it lands, otherwise instance-scoped rules in the connection).
+
+Tests: Budget tests with the reservation path. Security test: an instance policy can only make decisions stricter (a permissive instance bundle cannot override a tenant deny).
+
+Docs and website: `docs/connections.md` (new), `docs/providers.md`, `docs/mcp.md`, `docs/tenancy.md`; website connection pages when released.
+
+Helm: `OAX_PLATFORM_CONNECTIONS_DEFAULT_GRANT` value.
+
+#### W12-2 Data protection: data flow rules, retention, PII hooks, processing record, export and erasure, operator separation
+
+*As a data protection officer, I want classification, region and personal-data rules per connection, retention per tenant, a processing record of every external service, export and erasure, and operators kept away from tenant content, so that the platform supports GDPR obligations by design.* Milestone v0.3, size L (8 tasks), model `sonnet` (design: opus, ADR 0012), security review required.
+
+Acceptance criteria (item level):
+
+- Publish and run-time refusals for classification, source classification, region and personal data; retention per tenant with a purge job; PII redaction hooks; processing record export; tenant export; person and tenant erasure with tombstones, salted digests and crypto-shredding; operator content access only via audited break-glass.
+
+Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
+
+| Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| W12-2-1 | Data flow rules: connection clearance, source classification, regions, personal data | M | sonnet | v0.3 | W12-1-1 | packages/core/src/{classification,policy/engine}.ts, apps/api/src/services/agents.ts (publish checks), apps/api/src/services/model-proxy.ts (admission), packages/mcp/src/gateway.ts | #117 |
+| W12-2-2 | Retention per tenant and the purge job | M | sonnet | v0.3 | W12-1-1 | apps/api/src/services/tenants.ts (retention), apps/worker/src/retention.ts (new), apps/api/src/services/runs.ts (metadata-only capture), apps/ui/src/features/settings/* | #118 |
+| W12-2-3 | PII redaction hooks before storage, logging and optionally before model or tool calls | M | sonnet | v0.3 | W12-2-1 | packages/core/src/pii/{detectors,chain}.ts (new), packages/core/src/redact.ts, apps/api/src/services/{step-writer,audit,model-proxy}.ts, packages/mcp/src/gateway.ts | #119 |
+| W12-2-4 | Record of processing and sub-processor view per tenant | S | sonnet | v0.3 | W12-1-1 | apps/api/src/services/data-protection/processing.ts (new), apps/api/src/http/routes/data-protection.ts (new), apps/ui/src/features/settings/DataProtection*.tsx (new), docs/data-protection.md (new) | #120 |
+| W12-2-5 | Tenant data export | S | sonnet | v0.4 | W12-2-2 | apps/api/src/services/data-protection/export.ts (new), apps/worker/src/jobs/tenant-export.ts (new), openapi.yaml | #121 |
+| W12-2-6 | Erasure: pseudonymisation, audit payload tombstones, salted digests, per-tenant data keys | M | sonnet (design review by opus before merge) | v0.4 | W12-2-2 | packages/core/src/audit/*.ts (salted digest, tombstone verify), apps/api/src/services/{audit,users,tenants}.ts, apps/api/src/services/data-protection/{erase,keys}.ts (new), apps/api/drizzle/0012_connection_instances.sql (audit and tenant columns) | #122 |
+| W12-2-7 | Operator separation and break-glass support access | M | sonnet | v0.3 | W12-1-1 | apps/api/src/http/app.ts and apps/api/src/services/identity.ts (X-OAX-Tenant handling), apps/api/src/services/tenants.ts (`operatorAccess`, support access), apps/api/src/services/{runs,events}.ts (content stripping), apps/ui/src/features/settings/* | #123 |
+| W12-2-8 | Tenant isolation suite for central connections and data protection | S | haiku (tests; must run them and report real results) | v0.3 | W12-1-2, W12-2-7 | apps/api/test/central-connections.isolation.test.ts (new), apps/worker/test/central-connections.e2e.test.ts (new) | #124 |
+
+##### W12-2-1 Data flow rules: connection clearance, source classification, regions, personal data
+
+Acceptance criteria:
+
+- MCP clearance and `dataClassification`, `region`, `personalData` on instances; tenant `allowedRegions`; refusals `classification_exceeds_connection`, `classification_below_source`, `region_not_allowed` at publish and again at run time.
+
+Tests: Publish and gate tests per rule. Security tests: a confidential agent cannot write to an internal-clearance MCP instance or output target; an internal agent cannot read from a confidential source; a region outside the tenant list is refused in admission even when the version was published before the tenant setting changed.
+
+##### W12-2-2 Retention per tenant and the purge job
+
+Acceptance criteria:
+
+- Tenant `retention` of ADR 0012 section 7.2 (operator defaults, tenant can only shorten); metadata-only capture for new tenants; daily purge with `retention.purged` (counts); existing tenants keep their behaviour with a notice.
+
+Tests: Purge tests with a clock fixture. Security tests: purged content is gone from every table that held it (step records, events, model capture) and absent from API responses; a tenant admin cannot extend retention beyond the operator default; purge of tenant A never touches tenant B.
+
+##### W12-2-3 PII redaction hooks before storage, logging and optionally before model or tool calls
+
+Acceptance criteria:
+
+- Built-in detectors (e-mail, phone, IBAN, card with Luhn, IP), tenant patterns via RE2 when W3-3 lands, extension point for an external detector through the network resolver; per-instance `pii: off | mask | block`; audit `pii.blocked` without values.
+
+Tests: Detector tests with true/false positives per locale. Security tests: masked values never reach the fake provider (request captured); blocked calls make zero upstream requests; detector patterns are linear-time (ReDoS corpus with time bound); the PII value is absent from audit payloads and logs.
+
+##### W12-2-4 Record of processing and sub-processor view per tenant
+
+Acceptance criteria:
+
+- `GET /v1/data-protection/processing` with instances, vendors, hosts, regions, clearance, personal-data flags, central/shared marker, bound agents and operator sub-processors; JSON, CSV and Markdown export; console page; `docs/data-protection.md`.
+
+Tests: API tests incl. tenant isolation (tenant B's instances never listed for A; central instances only when granted); export format snapshot tests.
+
+##### W12-2-5 Tenant data export
+
+Acceptance criteria:
+
+- Asynchronous export bundle (agents, versions, runs with retained content, costs, audit entries with verification data, processing record), downloadable once by tenant admins, audited `tenant.exported`.
+
+Tests: Export content tests. Security tests: the bundle contains no secret values and no data of other tenants (searched across a two-tenant fixture); the download link is single-use and expires.
+
+##### W12-2-6 Erasure: pseudonymisation, audit payload tombstones, salted digests, per-tenant data keys
+
+Acceptance criteria:
+
+- Person erasure (pseudonymise user, delete matching retained content, tombstone audit payloads keeping `payloadDigest`); `audit verify` reports `payload_erased` and still verifies the chain; new entries use salted payload digests.
+- Retained content encrypted with a per-tenant data key (envelope); tenant deletion destroys the key (`tenant.key_destroyed`).
+
+Tests: Chain verification before and after erasure; key rotation tests. Security tests: an erased payload cannot be recovered by hashing candidate values against the stored digest (salt erased); after key destruction no retained content of the tenant can be decrypted (also from a database dump fixture); erasure of a person in tenant A changes nothing in tenant B; erasure is audited without naming the person.
+
+##### W12-2-7 Operator separation and break-glass support access
+
+Acceptance criteria:
+
+- `operatorAccess: metadata | full` per tenant (default metadata); operators acting in a tenant get no step content, event data or prompts (`operator_content_denied`); time-boxed break-glass with reason, tenant admin notification and audit in both partitions.
+
+Tests: Route table test: every route that returns content is covered by the stripping rule (fails when a new content route is added without classification). Security tests: an operator with `X-OAX-Tenant` cannot read a step output, run event or capture by any route; break-glass expires on time; tenant admins see every support access.
+
+##### W12-2-8 Tenant isolation suite for central connections and data protection
+
+Acceptance criteria:
+
+- Two-tenant end-to-end suite on shared central instances: no shared caches, sessions or tokens, no cross-tenant cost or audit visibility, grants enforced, data flow rules enforced, operator separation enforced; the PR lists each check with its real result.
+
+Tests: As above; nothing is claimed that did not run.
+
+Docs and website: `docs/data-protection.md` (new, DPIA-friendly), `docs/tenancy.md`, `docs/configuration.md`, `docs/audit` notes; website security and privacy pages when released.
+
+Helm: KEK secret reference, retention defaults, `OAX_DPA_SUBPROCESSORS` file mount.
+
+<!-- waves-9-12:end -->
+
 ## 3. Summary
 
 | Status | Capabilities |
@@ -1239,9 +1885,9 @@ Docs and website: Website demo page (today 'coming soon').
 | Milestone | Waves | Items |
 | --- | --- | --- |
 | v0.2 | 0, 1, 2, 3, 4 | W0-1, W0-2, W1-1, W1-2, W1-3, W1-3b, W1-4, W1-5, W1-6, W2-1, W2-2, W2-3, W2-4, W2-5, W2-6, W3-1, W3-2, W3-3, W3-4, W3-5, W3-6, W4-4 |
-| v0.3 | 4, 5 | W4-1, W4-2, W4-3, W4-5, W5-1, W5-2, W5-3, W5-4, W5-5, W5-6 |
-| v0.4 | 6 | W6-1, W6-2, W6-3, W6-4, W6-5 |
-| v1.0 | 7, 8 | W7-1, W7-2, W7-3, W7-4, W7-5, W7-6, W8-1, W8-2, W8-3, W8-4 |
+| v0.3 | 4, 5, 9, 10, 11, 12 | W4-1, W4-2, W4-3, W4-5, W5-1, W5-2, W5-3, W5-4, W5-5, W5-6, W9-1, W9-2, W10-1, W10-2, W11-1, W12-1, W12-2 (tasks W12-2-5 and W12-2-6: v0.4) |
+| v0.4 | 6, 9, 12 | W6-1, W6-2, W6-3, W6-4, W6-5, W9-3, W12-2-5, W12-2-6 |
+| v1.0 | 7, 8, 10 | W7-1, W7-2, W7-3, W7-4, W7-5, W7-6, W8-1, W8-2, W8-3, W8-4, W10-3 |
 
 ### Changes against the previous roadmap
 
@@ -1255,6 +1901,15 @@ Docs and website: Website demo page (today 'coming soon').
 - New items that were promised but on no roadmap: emergency security overrides, output target
   delivery, MCP catalog review states and container MCP servers, console pages for the lifecycle,
   the remote run node and credential broker, the public demo deployment.
+
+<!-- changes-9-12:start -->
+- Added on 2026-10-04 (owner requests, existing items not renumbered): wave 9 (no-code builder,
+  Git-synced agents, PR-back; ADR 0010), wave 10 (central outbound network configuration, private
+  model endpoints, Vertex PSC; ADR 0011), wave 11 (real read-only demo agent on the project
+  repository; `docs/demo-repo-agent.md`), wave 12 (connection types and instances, central grants,
+  data protection; ADR 0012). Waves 9-12 are parallel tracks numbered after wave 8, not later in
+  time: their milestones are v0.3 (most), v0.4 (W9-3, W12-2-5, W12-2-6) and v1.0 (W10-3).
+<!-- changes-9-12:end -->
 
 ## 4. Top risks
 
@@ -1292,6 +1947,22 @@ Docs and website: Website demo page (today 'coming soon').
 9. **Load on reviewers.** Six parallel L/M items per wave produce large PRs. Mitigation: each
    item lands as small Conventional Commits in one PR, tests in the same commit, and subagents
    leave PRs open for the main reviewer.
+
+<!-- risks-9-12:start -->
+10. **Untrusted Git content and forge credentials (W9-2, W9-3).** Merge rights on a bound branch
+    become agent authoring rights; a forge credential is a new secret. Mitigation: binding ceilings,
+    secret scan, lint mode, manual publish by default, `on-merge` only with branch protection,
+    read-only sync credentials separate from PR-back credentials, hostile repository suite (W9-2-7).
+11. **One resolver for all egress (W10-1).** A bug sends traffic around the corporate proxy or leaks
+    proxy credentials; a test button becomes an SSRF oracle. Mitigation: pure resolver with table
+    tests, no TLS-verification switch, reference-only tests with category results, DNS pinning,
+    a lint rule against raw egress, abuse suite (W10-1-8).
+12. **Central connections and data protection (W12-1, W12-2).** Shared credentials and caches can
+    leak one tenant's data to another; erasure can break audit integrity. Mitigation: default-deny
+    grants, cache keys with tenant, cache isolation on shared model keys, tombstones with salted
+    digests instead of rewriting the chain, operator content access only via break-glass, a
+    two-tenant isolation suite (W12-2-8).
+<!-- risks-9-12:end -->
 
 ## Appendix A: issue map
 
@@ -1348,6 +2019,49 @@ work is mirrored in `open-agentix/open-agentix-helm`.
 | W8-2 | #60 | v1.0 | open-agentix-helm#17 |
 | W8-3 | #61 | v1.0 | open-agentix-helm#18 |
 | W8-4 | #62 | v1.0 | - |
+<!-- issues-9-12:start -->
+| W9-1-1 | #84 | v0.3 | - |
+| W9-1-2 | #85 | v0.3 | - |
+| W9-1-3 | #86 | v0.3 | - |
+| W9-1-4 | #87 | v0.3 | - |
+| W9-1-5 | #88 | v0.3 | - |
+| W9-1-6 | #89 | v0.3 | - |
+| W9-2-1 | #90 | v0.3 | - |
+| W9-2-2 | #91 | v0.3 | - |
+| W9-2-3 | #92 | v0.3 | open-agentix-helm (to be filed with the task) |
+| W9-2-4 | #93 | v0.3 | - |
+| W9-2-5 | #94 | v0.3 | - |
+| W9-2-6 | #95 | v0.3 | - |
+| W9-2-7 | #96 | v0.3 | - |
+| W9-3-1 | #97 | v0.4 | - |
+| W10-1-1 | #98 | v0.3 | - |
+| W10-1-2 | #99 | v0.3 | - |
+| W10-1-3 | #100 | v0.3 | - |
+| W10-1-4 | #101 | v0.3 | - |
+| W10-1-5 | #102 | v0.3 | - |
+| W10-1-6 | #103 | v0.3 | - |
+| W10-1-7 | #104 | v0.3 | open-agentix-helm (to be filed with the task) |
+| W10-1-8 | #105 | v0.3 | - |
+| W10-2-1 | #106 | v0.3 | - |
+| W10-2-2 | #107 | v0.3 | - |
+| W10-3-1 | #108 | v1.0 | - |
+| W11-1-1 | #109 | v0.3 | open-agentix-helm (to be filed with the task) |
+| W11-1-2 | #110 | v0.3 | - |
+| W11-1-3 | #111 | v0.3 | - |
+| W11-1-4 | #112 | v0.3 | - |
+| W12-1-1 | #113 | v0.3 | - |
+| W12-1-2 | #114 | v0.3 | - |
+| W12-1-3 | #115 | v0.3 | - |
+| W12-1-4 | #116 | v0.3 | - |
+| W12-2-1 | #117 | v0.3 | - |
+| W12-2-2 | #118 | v0.3 | - |
+| W12-2-3 | #119 | v0.3 | - |
+| W12-2-4 | #120 | v0.3 | - |
+| W12-2-5 | #121 | v0.4 | - |
+| W12-2-6 | #122 | v0.4 | open-agentix-helm (to be filed with the task) |
+| W12-2-7 | #123 | v0.3 | - |
+| W12-2-8 | #124 | v0.3 | - |
+<!-- issues-9-12:end -->
 
 #7 (LLM second opinion) stays open as part of W6-4 next to #6.
 
