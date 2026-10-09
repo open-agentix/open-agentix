@@ -45,6 +45,10 @@ export const KubernetesJobRunnerConfigSchema = z.strictObject({
   toolboxAllowlist: z.array(z.string()).default([]),
   /** Non-toolbox images (exact repository path below `registry`, e.g. `openagentix-worker`). */
   runNodeImages: z.array(z.string()).default([]),
+  /** Default run node image (digest-pinned, validated against the allowlists at construction). */
+  image: z.string().optional(),
+  /** Toolbox name -> digest-pinned image (validated at construction); unknown toolboxes fail closed. */
+  toolboxImages: z.record(z.string(), z.string()).default({}),
   /** Always-denied destinations (`except` blocks) in addition to the built-in link-local/IMDS/loopback: cluster, pod and service CIDRs. */
   denyCidrs: z.array(z.string()).default([]),
   /** Air-gapped mode (OAX_AIRGAPPED): a step may not declare any egress. */

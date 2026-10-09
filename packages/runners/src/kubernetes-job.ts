@@ -1,4 +1,9 @@
-import { NotImplementedError, OaxError, type RunnerKind } from '@openagentix/core';
+import {
+  NotImplementedError,
+  OaxError,
+  type HarnessKind,
+  type RunnerKind,
+} from '@openagentix/core';
 import type { z } from 'zod';
 import {
   ALWAYS_DENIED_CIDRS,
@@ -446,11 +451,51 @@ export class KubernetesJobRunner implements IsolatingRunner {
       throw bad('the run namespace must differ from the worker namespace');
     }
     validateResourceCeiling(this.config.resources);
+    // Misconfigured images are a start-up error, not a surprise at the first step (fail closed).
+    for (const image of [this.config.image, ...Object.values(this.config.toolboxImages)]) {
+      if (image !== undefined) validateImage(image, this.config);
+    }
     this.client = opts.client;
     this.pollMs = opts.pollMs ?? 2000;
     this.cleanupPolls = Math.max(1, Math.ceil((opts.cleanupTimeoutMs ?? 60_000) / this.pollMs));
     this.sleep = opts.sleep ?? defaultSleep;
     this.warn = opts.warn ?? (() => undefined);
+  }
+
+  /** Limits the worker hands to ordinary steps: the operator ceilings (steps are clamped again). */
+  defaultLimits(): { cpus: number; memoryMb: number; pids: number } {
+    return {
+      cpus: parseCpu(this.config.resources.cpu),
+      memoryMb: Math.floor(parseMemoryMb(this.config.resources.memory)),
+      pids: 256,
+    };
+  }
+
+  /** Image for a step: its toolbox image, else the default. Unknown toolboxes/harnesses fail closed. */
+  imageFor(toolbox: string | undefined, harness?: HarnessKind): string {
+    if (harness) {
+      throw new OaxError(
+        'harness_image_unknown',
+        `harness "${harness}" steps are not supported by the kubernetes-job runner yet`,
+      );
+    }
+    if (!toolbox) {
+      if (!this.config.image) {
+        throw new OaxError(
+          'run_node_image_unknown',
+          'no run node image is configured (OAX_K8S_IMAGE)',
+        );
+      }
+      return this.config.image;
+    }
+    const image = this.config.toolboxImages[toolbox];
+    if (!image) {
+      throw new OaxError(
+        'toolbox_image_unknown',
+        `no image is configured for toolbox "${toolbox}" (OAX_K8S_TOOLBOX_IMAGES)`,
+      );
+    }
+    return image;
   }
 
   async execute(_run: PreparedRun, _ctx: RunnerContext): Promise<RunResult> {
