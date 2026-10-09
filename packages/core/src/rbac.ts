@@ -108,8 +108,18 @@ export interface Principal extends TenantActor {
   /** Platform operators manage tenants and may switch the tenant they act in. */
   platformAdmin: boolean;
   bindings: RoleBinding[];
+  /**
+   * The user's own tenant while `tenantId` is another node of the tree (`X-OAX-Tenant`). Absent
+   * when the principal acts in its home tenant. Bindings are always anchored at the home tenant.
+   */
+  homeTenantId?: string | undefined;
   /** API tokens may be restricted to a subset of permissions; `undefined` = no restriction. */
   scopes?: readonly Permission[] | undefined;
+}
+
+/** The tenant the principal belongs to, whichever node it currently acts in. */
+export function homeTenantOf(principal: Pick<Principal, 'tenantId' | 'homeTenantId'>): string {
+  return principal.homeTenantId ?? principal.tenantId;
 }
 
 export function isRole(value: string): value is Role {

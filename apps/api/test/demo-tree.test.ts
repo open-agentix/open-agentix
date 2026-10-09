@@ -27,7 +27,7 @@ interface TenantItem {
 }
 const tenantsOf = async (n: TestNode) =>
   (await n.req({ method: 'GET', url: '/v1/tenants' })).json().items as TenantItem[];
-/** The tree columns are not in the API yet (A3, #157): read them from the table. */
+/** Read the tree columns straight from the table (the API shows parentId, depth and slugPath). */
 const treeOf = (n: TestNode) => n.ctx.db.select().from(tenantsTable);
 
 describe('uuidV5', () => {

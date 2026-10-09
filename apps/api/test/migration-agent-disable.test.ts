@@ -30,8 +30,8 @@ describe(`migration ${TAG}`, () => {
   });
   afterAll(async () => db.close());
 
-  it('is the last journal entry and keeps existing agents enabled', async () => {
-    expect(journal.entries.at(-1)!.tag).toBe(TAG);
+  it('is in the journal and keeps existing agents enabled', async () => {
+    expect(journal.entries.map((e) => e.tag)).toContain(TAG);
     const { rows } = await db.query<{
       disabled_at: Date | null;
       disabled_by: string | null;

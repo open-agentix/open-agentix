@@ -658,7 +658,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Current principal */
+        /**
+         * Current principal, the acting tenant and what the caller can switch to
+         * @description Honours `X-OAX-Tenant` (id, slug or slug path of a node the caller may act in; any other node is 404). The node that was used is also returned in the response header `X-OAX-Acting-Tenant`.
+         */
         get: {
             parameters: {
                 query?: never;
@@ -694,11 +697,34 @@ export interface paths {
                                 createdAt: string;
                                 lastLoginAt: string | null;
                             };
+                            /** @description the tenant the request acts in (same as `actingTenant`; kept for compatibility) */
                             tenant: {
                                 /** Format: uuid */
                                 id: string;
                                 slug: string;
                                 name: string;
+                            };
+                            actingTenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                slugPath: string;
+                                name: string;
+                                /** @description breadcrumb, root first, ending with the acting tenant itself; ancestors by name only */
+                                path: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    name: string;
+                                }[];
+                            };
+                            /** @description the tenant the user belongs to, regardless of `X-OAX-Tenant` */
+                            homeTenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                name: string;
+                                slugPath: string;
                             };
                             platformAdmin: boolean;
                             /** @enum {string} */
@@ -707,7 +733,23 @@ export interface paths {
                             bindings: {
                                 role: string;
                                 teamId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description the node the role is bound on (the home tenant until per-node bindings)
+                                 */
+                                tenantId: string;
+                                tenantSlugPath: string;
+                                /** @description use case restriction; null = the whole node */
+                                useCase: string | null;
+                                expiresAt: string | null;
                             }[];
+                            /** @description number of tenants the caller can act in (`X-OAX-Tenant`), at least 1 */
+                            visibleTenantCount: number;
+                            /**
+                             * @description `multi` when the caller can act in more than one tenant, else `single`
+                             * @enum {string}
+                             */
+                            installationMode: "single" | "multi";
                         };
                     };
                 };
@@ -6145,6 +6187,12 @@ export interface paths {
                                 /** Format: uuid */
                                 id: string;
                                 slug: string;
+                                /** @description slugs from the organisation root down to this tenant, e.g. `acme/security` */
+                                slugPath: string;
+                                /** @description parent tenant; null for an organisation (root) */
+                                parentId: string | null;
+                                /** @description 0 for an organisation, 1 for its children, ... */
+                                depth: number;
                                 name: string;
                                 monthlyBudgetUsd: number | null;
                                 /** @description secret reference globs the credential broker may hand out for this tenant */
@@ -6211,6 +6259,12 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             slug: string;
+                            /** @description slugs from the organisation root down to this tenant, e.g. `acme/security` */
+                            slugPath: string;
+                            /** @description parent tenant; null for an organisation (root) */
+                            parentId: string | null;
+                            /** @description 0 for an organisation, 1 for its children, ... */
+                            depth: number;
                             name: string;
                             monthlyBudgetUsd: number | null;
                             /** @description secret reference globs the credential broker may hand out for this tenant */
@@ -6263,6 +6317,181 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tenants/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The tenant tree the caller may see, with the caller's roles and optional counts per node
+         * @description Platform operators see every organisation; everybody else, tenant admins included, their own node until role bindings can inherit down the tree (ADR 0014). The ancestors of the caller's node appear as path stubs (`visible: false`: name and slug only). Siblings, cousins and other organisations never appear. A `root` outside the caller's reach is 404. Counts are included only for nodes and metrics the caller may read. Parents come before their children; siblings are ordered by slug. At most `limit` nodes are returned, shallowest first (`truncated`).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description start node: id or slug path */
+                    root?: string;
+                    /** @description levels below the start node */
+                    depth?: number;
+                    /** @description `counts` adds the per-node counts the caller may read */
+                    include?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                parentId: string | null;
+                                slug: string;
+                                slugPath: string;
+                                name: string;
+                                depth: number;
+                                hasChildren: boolean;
+                                /** @description false for an ancestor shown as a path stub: name and slug only, no counts or roles */
+                                visible: boolean;
+                                /** @enum {string} */
+                                status: "active" | "blocked";
+                                myRoles: string[];
+                                inheritedRoles: string[];
+                                /** @description null unless `include=counts`; single fields are null when the caller may not read them */
+                                counts: {
+                                    agents: number | null;
+                                    agentsSubtree: number | null;
+                                    runs30d: number | null;
+                                    pendingApprovals: number | null;
+                                    spendMonthUsd: number | null;
+                                    spendMonthSubtreeUsd: number | null;
+                                    capUsd: number | null;
+                                    capSource: "tenant" | null;
+                                } | null;
+                            }[];
+                            /** @description more nodes matched than `limit`; the shallowest come first */
+                            truncated: boolean;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search the tenants the caller may act in by name or slug (at most 20) */
+        get: {
+            parameters: {
+                query: {
+                    q: string;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                name: string;
+                                slugPath: string;
+                                depth: number;
+                                parentId: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tenants/{id}": {
         parameters: {
             query?: never;
@@ -6292,6 +6521,12 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             slug: string;
+                            /** @description slugs from the organisation root down to this tenant, e.g. `acme/security` */
+                            slugPath: string;
+                            /** @description parent tenant; null for an organisation (root) */
+                            parentId: string | null;
+                            /** @description 0 for an organisation, 1 for its children, ... */
+                            depth: number;
                             name: string;
                             monthlyBudgetUsd: number | null;
                             /** @description secret reference globs the credential broker may hand out for this tenant */
@@ -6366,6 +6601,12 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             slug: string;
+                            /** @description slugs from the organisation root down to this tenant, e.g. `acme/security` */
+                            slugPath: string;
+                            /** @description parent tenant; null for an organisation (root) */
+                            parentId: string | null;
+                            /** @description 0 for an organisation, 1 for its children, ... */
+                            depth: number;
                             name: string;
                             monthlyBudgetUsd: number | null;
                             /** @description secret reference globs the credential broker may hand out for this tenant */

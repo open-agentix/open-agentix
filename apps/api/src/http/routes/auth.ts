@@ -102,21 +102,47 @@ export function registerAuthRoutes(app: ZApp, { ctx, services }: Deps): void {
       config: { access: 'authenticated' },
       schema: {
         tags: ['auth'],
-        summary: 'Current principal',
+        summary: 'Current principal, the acting tenant and what the caller can switch to',
+        description:
+          'Honours `X-OAX-Tenant` (id, slug or slug path of a node the caller may act in; any other ' +
+          'node is 404). The node that was used is also returned in the response header ' +
+          '`X-OAX-Acting-Tenant`.',
         security: [{ bearer: [] }],
         response: { 200: MeSchema },
       },
     },
     async (req) => {
       const p = principalOf(req);
-      const tenant = await services.tenants.get(p, p.tenantId);
+      const ctxt = await services.tenants.views.actingContext(p);
+      const ref = (t: { id: string; slug: string; name: string }) => ({
+        id: t.id,
+        slug: t.slug,
+        name: t.name,
+      });
+      const visibleTenantCount = Math.max(ctxt.visibleTenantCount, 1);
       return {
         user: userDto(await services.identity.getUser(p.userId)),
-        tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name },
+        tenant: ref(ctxt.acting),
+        actingTenant: {
+          ...ref(ctxt.acting),
+          slugPath: ctxt.slugPath,
+          path: ctxt.path.map(ref),
+        },
+        homeTenant: { ...ref(ctxt.home), slugPath: ctxt.homeSlugPath },
         platformAdmin: p.platformAdmin,
         kind: p.kind,
         permissions: effectivePermissions(p),
-        bindings: p.bindings,
+        // Roles are bound on the home tenant until per-node bindings (ADR 0013 W13-6).
+        bindings: p.bindings.map((b) => ({
+          role: b.role,
+          teamId: b.teamId,
+          tenantId: ctxt.home.id,
+          tenantSlugPath: ctxt.homeSlugPath,
+          useCase: null,
+          expiresAt: null,
+        })),
+        visibleTenantCount,
+        installationMode: visibleTenantCount > 1 ? ('multi' as const) : ('single' as const),
       };
     },
   );
