@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  GRANTABLE_ROLES,
   INHERITED_READ_ONLY,
   PERMISSIONS,
   ROLES,
@@ -8,6 +9,8 @@ import {
   bindingPermissions,
   effectiveAt,
   hasPermission,
+  isGrantableRole,
+  isRole,
   sameBindings,
   visibleNodeIds,
   visibleTeams,
@@ -135,6 +138,10 @@ const opts = { now: NOW };
 describe('rbac additions', () => {
   it('knows pentest but does not offer it as a grantable role', () => {
     expect(ROLES).toContain('pentest');
+    expect(GRANTABLE_ROLES).not.toContain('pentest');
+    expect(isGrantableRole('pentest')).toBe(false);
+    expect(isRole('pentest')).toBe(true);
+    expect([...GRANTABLE_ROLES, 'pentest'].sort()).toEqual([...ROLES].sort());
     expect(ROLE_PERMISSIONS.pentest).toContain('audit:read');
     for (const w of [
       'agents:write',
@@ -267,6 +274,15 @@ describe('effectiveAt', () => {
     expect(effectiveAt(raw, { ...f.a, path: '/nope/' }, opts)).toEqual([]);
     expect(effectiveAt(raw, { ...f.a, id: f.b.id }, opts)).toEqual([]);
     expect(effectiveAt(raw, { ...f.a, rootId: f.x.id }, opts)).toEqual([]);
+    // The node's id must be the last id of its path: a team of a1 must not apply at "a1" placed
+    // at a's path.
+    const team = rawOf(f.a, { teamBindings: [{ tenantId: f.a1.id, teamId: 't1', role: 'admin' }] });
+    expect(effectiveAt(team, f.a1, opts)).toHaveLength(1);
+    expect(effectiveAt(team, { ...f.a, id: f.a1.id }, opts)).toEqual([]);
+    // The node's root must be the first id of its path: a node of org A claiming org B's root
+    // gets nothing from a user of org B.
+    const orgB = rawOf(f.x, { nodeBindings: [grant(f.a.id, 'admin')] });
+    expect(effectiveAt(orgB, { ...f.a, rootId: f.x.id }, opts)).toEqual([]);
     expect(effectiveAt({ ...raw, platformAdmin: true }, { ...f.a, path: '/nope/' }, opts)).toEqual(
       [],
     );
