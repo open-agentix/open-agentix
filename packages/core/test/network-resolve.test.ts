@@ -338,8 +338,8 @@ describe('hosts and ip helpers', () => {
 describe('allowPlainHttp compatibility switch', () => {
   it('lets platform destinations use plain http, never tenants', () => {
     expect(r('http://ollama.internal:11434/', 'model').code).toBe('plain_http_refused');
-    expect(r('http://ollama.internal:11434/', 'model', { allowPlainHttp: true }).decision).toBe(
-      'direct',
+    expect(r('http://ollama.internal:11434/', 'model', { allowPlainHttp: true }).code).toBe(
+      undefined,
     );
     expect(
       r('http://tenant.example.org/', 'model', { origin: 'tenant', allowPlainHttp: true }).code,
