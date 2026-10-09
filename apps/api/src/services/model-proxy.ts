@@ -1,11 +1,11 @@
-import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import {
   OaxError,
-  effectiveBudget,
   estimateInputUpperBound,
   getEgressPolicy,
   issueModelToken,
   mayFlow,
+  outputFloorFromBytes,
   MODEL_TOKEN_PREFIX,
   verifyModelToken,
   verifyRunToken,
@@ -19,6 +19,8 @@ import {
   ChatStreamAggregator,
   MODEL_ERRORS,
   ProviderError,
+  StreamError,
+  assertPublicDestination,
   StreamAbortedError,
   UnavailableProvider,
   WorkerModelResponseSchema,
@@ -62,6 +64,8 @@ const MAX_OUTPUT_TOKENS_CEILING = 131_072;
 const OVERRUN_FACTOR = 1.1;
 /** Repeated identical denials of one session are written once per window (flood protection). */
 const DENIED_WINDOW_MS = 60_000;
+/** Extra output tokens tolerated above the cut-off bound when a provider reports its usage. */
+const OVERRUN_ALLOWANCE_TOKENS = 256;
 /** Provider error text in responses, audit entries and logs is cut to this many characters. */
 const MESSAGE_MAX = 300;
 
@@ -84,6 +88,15 @@ export class ModelProxyError extends Error {
   }
 }
 
+const BUDGET_MESSAGES: Record<string, string> = {
+  control_budget_tokens: 'the token budget cannot cover the call',
+  control_budget_cost: 'the cost budget cannot cover the call',
+  control_budget_steps: 'the model call budget is used up',
+  control_budget_tenant: 'a monthly budget cannot cover the call',
+  control_budget_use_case: 'a monthly budget cannot cover the call',
+  control_budget_team: 'a monthly budget cannot cover the call',
+};
+
 const isModelCode = (c: unknown): c is ModelErrorCode =>
   typeof c === 'string' && Object.prototype.hasOwnProperty.call(MODEL_ERRORS, c);
 
@@ -96,7 +109,15 @@ export function toModelProxyError(e: unknown): ModelProxyError {
   if (e instanceof ModelProxyError) return e;
   const code = (e as { code?: unknown } | null)?.code;
   if (e instanceof HttpError || e instanceof OaxError) {
-    if (isModelCode(code)) return new ModelProxyError(code, e.message);
+    if (isModelCode(code)) {
+      // Budget refusals name scopes (team, use case) and numbers: the node gets a fixed text.
+      if (code.startsWith('control_budget_'))
+        return new ModelProxyError(
+          code,
+          BUDGET_MESSAGES[code] ?? 'the budget cannot cover the call',
+        );
+      return new ModelProxyError(code, e.message);
+    }
     // Existing platform codes that surface through shared services.
     if (code === 'invalid_state' || code === 'run_node_session_revoked')
       return new ModelProxyError('run_node_session_revoked', 'run node session is not active');
@@ -125,6 +146,8 @@ export interface CallAuth {
   boundAgentId: string | null;
   steps: readonly string[];
   tenantId: string;
+  /** When the session (the step) started: step timeouts are measured from here. */
+  sessionCreatedAt: Date;
 }
 
 export interface StreamSink {
@@ -217,7 +240,7 @@ export class ModelProxyService {
     const secret = this.ctx.config.runToken.secret;
     const now = this.ctx.now().getTime();
     if (!bearer) throw new ModelProxyError('unauthenticated', 'valid model or run token required');
-    let auth: Omit<CallAuth, 'tenantId'>;
+    let auth: Omit<CallAuth, 'tenantId' | 'sessionCreatedAt'>;
     let modelClaims: ModelTokenClaims | null = null;
     try {
       if (bearer.startsWith(`${MODEL_TOKEN_PREFIX}.`)) {
@@ -262,7 +285,7 @@ export class ModelProxyService {
     if (state) throw dead(state);
     if (modelClaims && session.modelTokenJti !== modelClaims.jti)
       throw new ModelProxyError('unauthenticated', 'model token is not the one issued');
-    return { ...auth, tenantId: session.tenantId };
+    return { ...auth, tenantId: session.tenantId, sessionCreatedAt: session.createdAt };
   }
 
   /** Why a session cannot make calls any more, or `null` when it is alive and its run is running. */
@@ -430,11 +453,7 @@ export class ModelProxyService {
 
   // ---------- admission (ADR 0009 section 3) ----------
 
-  private async admit(
-    auth: CallAuth,
-    body: WorkerModelRequest,
-    wantStream: boolean,
-  ): Promise<Admitted> {
+  private async admit(auth: CallAuth, body: WorkerModelRequest): Promise<Admitted> {
     const agentId = body.agentId;
     // 3. The token binds the step; a node cannot call for another agent of the run.
     if (auth.boundAgentId !== null ? auth.boundAgentId !== agentId : !auth.steps.includes(agentId))
@@ -450,9 +469,23 @@ export class ModelProxyService {
         'model is not the one published for this step',
         pinned,
       );
+    // Deadline: the run's timeout runs from the run start, the step's from the start of its
+    // session (a late step of a long run keeps its own full step timeout).
+    const now = this.ctx.now().getTime();
+    const left = (seconds: number | undefined, since: number) =>
+      seconds === undefined ? Number.POSITIVE_INFINITY : seconds * 1000 - (now - since);
+    const deadlineMs = Math.max(
+      1000,
+      Math.min(
+        this.cfg().maxCallSeconds * 1000,
+        left((definition.budget as Budget).timeoutSeconds, run.startedAt?.getTime() ?? now),
+        left(agent.budget?.timeoutSeconds, auth.sessionCreatedAt.getTime()),
+      ),
+    );
     const resolved = await this.models.resolve(
       { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId },
       agent.provider,
+      { timeoutMs: deadlineMs },
     );
     if (!resolved)
       throw await this.deny(
@@ -462,7 +495,7 @@ export class ModelProxyService {
         'the provider of this step is not available to this run',
         pinned,
       );
-    const { provider, config } = resolved;
+    const { provider, config, tenantControlled } = resolved;
     // Data classification: checked here with the published classification, never from the node.
     if (!mayFlow(definition.classification, provider.clearance))
       throw await this.deny(
@@ -485,6 +518,26 @@ export class ModelProxyService {
             agentId,
             'egress_denied',
             'the provider endpoint is not on the air-gap allowlist',
+            pinned,
+          );
+        throw e;
+      }
+    }
+    // A tenant-controlled endpoint must not reach loopback, private, link-local or metadata
+    // addresses (SSRF), unless the operator allowlisted them (OAX_MODEL_PROXY_PRIVATE_ALLOW).
+    if (config && tenantControlled) {
+      try {
+        for (const ep of providerEndpoints(config, 'provider'))
+          await assertPublicDestination(new URL(ep.url).hostname, {
+            allow: this.cfg().privateAllow,
+          });
+      } catch (e) {
+        if ((e as { code?: string }).code === 'egress_denied')
+          throw await this.deny(
+            auth,
+            agentId,
+            'egress_denied',
+            'the provider endpoint is not a public address',
             pinned,
           );
         throw e;
@@ -531,20 +584,20 @@ export class ModelProxyService {
       MAX_OUTPUT_TOKENS_CEILING,
     ].filter((n): n is number => typeof n === 'number' && n > 0);
     const maxOutputTokens = Math.max(1, Math.min(...outputCap));
-    const budget: Budget = effectiveBudget(definition.budget as Budget, agent.budget);
-    const startedMs = run.startedAt?.getTime() ?? this.ctx.now().getTime();
-    const remainingMs =
-      budget.timeoutSeconds === undefined
-        ? Number.POSITIVE_INFINITY
-        : budget.timeoutSeconds * 1000 - (this.ctx.now().getTime() - startedMs);
-    const deadlineMs = Math.max(1000, Math.min(this.cfg().maxCallSeconds * 1000, remainingMs));
-
     const secrets = await this.models.secretValues(config);
+    // Every provider with a streaming transport is called through it, for plain JSON answers too:
+    // size limits, time limits and the output hard stop then apply uniformly.
     const plan =
-      wantStream && config
+      config && !(provider instanceof UnavailableProvider)
         ? await createStreamPlan(
             config,
-            { secrets: this.ctx.secrets, fetchImpl: this.ctx.fetchImpl },
+            {
+              secrets: this.ctx.secrets,
+              fetchImpl: this.ctx.fetchImpl,
+              ...(tenantControlled
+                ? { blockPrivateDestinations: { allow: this.cfg().privateAllow } }
+                : {}),
+            },
             {
               model: agent.model,
               limits: {
@@ -590,13 +643,24 @@ export class ModelProxyService {
       reservation,
       plan,
       deadlineMs,
-      digest: createHash('sha256').update(JSON.stringify(chat)).digest('hex'),
+      digest: this.digest(run.tenantId, chat),
       startedAt: Date.now(),
       messageCount: r.messages.length,
       toolNames: (r.tools ?? []).map((t) => t.name),
       priced: reservation.priced,
       gaugesReleased: false,
     };
+  }
+
+  /**
+   * Request digest for correlation: an HMAC under a key derived per tenant from the server secret,
+   * so it cannot be used to confirm guesses about a prompt (a plain hash of low-entropy input can).
+   */
+  private digest(tenantId: string, chat: ChatRequest): string {
+    const key = createHmac('sha256', this.ctx.config.runToken.secret)
+      .update(`openagentix/model-digest/v1:${tenantId}`)
+      .digest();
+    return createHmac('sha256', key).update(JSON.stringify(chat)).digest('hex');
   }
 
   // ---------- running a call ----------
@@ -696,27 +760,50 @@ export class ModelProxyService {
     return scrub(text, adm.secrets, MESSAGE_MAX);
   }
 
-  /** Error of the provider call as a proxy error with a scrubbed message (no body, no key). */
-  private providerFailure(e: unknown, adm: Admitted): ModelProxyError {
-    const raw = e instanceof Error ? e.message : 'upstream error';
+  /**
+   * Error of the provider call as a proxy error. The node only learns the HTTP status or the kind
+   * of stream failure, never text from the provider (it can carry anything, also about the
+   * tenant's own network).
+   */
+  private providerFailure(e: unknown, _adm: Admitted): ModelProxyError {
     const code = (e as { code?: unknown } | null)?.code;
     if (code === 'provider_timeout')
-      return new ModelProxyError('provider_timeout', this.scrubMessage(raw, adm));
+      return new ModelProxyError('provider_timeout', 'the provider did not answer in time');
     if (code === 'egress_denied')
       return new ModelProxyError('egress_denied', 'the provider endpoint is not allowed');
-    return new ModelProxyError('provider_error', this.scrubMessage(raw, adm));
+    if (e instanceof ProviderError)
+      return new ModelProxyError(
+        'provider_error',
+        e.status === null
+          ? 'the provider could not be reached'
+          : `the provider answered with HTTP ${e.status}`,
+      );
+    if (e instanceof StreamError)
+      return new ModelProxyError('provider_error', `the provider stream failed (${e.reason})`);
+    return new ModelProxyError('provider_error', 'the provider call failed');
   }
 
-  /** True when the failure means the provider did no work (nothing to bill). */
+  /**
+   * True only when the failure provably happened before the provider could have started work:
+   * an egress refusal, a DNS or connection-refused failure before the request was sent, or a 4xx
+   * answer other than 408, 409 and 429. Everything else (timeouts, resets, 5xx, stream errors) may
+   * have been billed and is charged conservatively.
+   */
   private noWorkDone(e: unknown): boolean {
-    if (e instanceof ProviderError) return e.status === null || (e.status >= 400 && e.status < 504);
-    return (e as { code?: unknown } | null)?.code === 'egress_denied';
+    if ((e as { code?: unknown } | null)?.code === 'egress_denied') return true;
+    if (e instanceof ProviderError) {
+      if (e.preSend) return true;
+      const st = e.status;
+      return st !== null && st >= 400 && st < 500 && ![408, 409, 429].includes(st);
+    }
+    return false;
   }
 
   private count(code: string, adm: Pick<Admitted, 'provider'> | undefined): void {
     this.ctx.metrics.modelProxyRequests.inc({
       surface: 'native',
-      provider: adm?.provider.name ?? 'unknown',
+      // Bounded label: the provider family, never a tenant-chosen connection name.
+      provider: adm ? (adm.provider.family ?? adm.provider.kind) : 'unknown',
       code,
     });
   }
@@ -810,8 +897,10 @@ export class ModelProxyService {
     this.acquire();
     let adm: Admitted | undefined;
     try {
-      adm = await this.admit(auth, body, false);
-      const out = await this.runJson(adm, clientGone);
+      adm = await this.admit(auth, body);
+      const out = adm.plan
+        ? await this.runCollected(adm, adm.plan, clientGone)
+        : await this.runJson(adm, clientGone);
       this.count('ok', adm);
       return out;
     } catch (e) {
@@ -821,6 +910,32 @@ export class ModelProxyService {
     } finally {
       this.inflight--;
     }
+  }
+
+  /** A plain JSON answer produced through the streaming transport (all limits apply). */
+  private async runCollected(
+    adm: Admitted,
+    plan: StreamPlan,
+    clientGone: AbortSignal,
+  ): Promise<WorkerModelResponse> {
+    let result: WorkerModelResponse | undefined;
+    let failure: ModelProxyError | undefined;
+    const sink: StreamSink = {
+      delta: async () => undefined,
+      done: (r) => {
+        result = r;
+      },
+      error: (code, message) => {
+        failure = new ModelProxyError(code, message);
+        // Already counted by the stream path.
+        failure.counted = true;
+      },
+    };
+    await this.runStream(adm, plan, { signal: clientGone, begin: () => sink });
+    if (failure) throw failure;
+    if (!result)
+      throw new ModelProxyError('model_proxy_unavailable', 'the model proxy is unavailable');
+    return result;
   }
 
   private async runJson(adm: Admitted, clientGone: AbortSignal): Promise<WorkerModelResponse> {
@@ -842,21 +957,24 @@ export class ModelProxyService {
       contacted = true;
       const res = await adm.provider.complete(adm.chat, { signal: ac.signal });
       if (reason) throw new StreamAbortedError(reason);
-      const cache = {
-        cacheRead: res.usage.cacheReadTokens ?? 0,
-        cacheWrite: res.usage.cacheWriteTokens ?? 0,
-      };
+      const textBytes = Buffer.byteLength(res.text, 'utf8');
+      const usage = await this.capUsage(
+        adm,
+        {
+          input: res.usage.inputTokens,
+          output: res.usage.outputTokens,
+          cacheRead: res.usage.cacheReadTokens ?? 0,
+          cacheWrite: res.usage.cacheWriteTokens ?? 0,
+        },
+        textBytes,
+      );
+      const cache = { cacheRead: usage.cacheReadTokens, cacheWrite: usage.cacheWriteTokens };
       const ms = Date.now() - adm.startedAt;
       closed = true;
       const s = await this.settle(adm, {
-        usage: {
-          inputTokens: res.usage.inputTokens,
-          outputTokens: res.usage.outputTokens,
-          cacheReadTokens: cache.cacheRead,
-          cacheWriteTokens: cache.cacheWrite,
-        },
+        usage,
         output: {
-          textBytes: Buffer.byteLength(res.text, 'utf8'),
+          textBytes,
           toolArgBytes: Buffer.byteLength(JSON.stringify(res.toolCalls.map((c) => c.args)), 'utf8'),
         },
         detail: this.detail(adm, res, ms),
@@ -985,7 +1103,7 @@ export class ModelProxyService {
     this.acquire();
     let adm: Admitted | undefined;
     try {
-      adm = await this.admit(auth, body, true);
+      adm = await this.admit(auth, body);
       if (!adm.plan) {
         // No streaming transport (simulated, Bedrock non-Anthropic): complete, then replay.
         const res = await this.runJson(adm, io.signal);
@@ -1044,24 +1162,42 @@ export class ModelProxyService {
         { phase: 'ttfb' },
         (Date.now() - startedAt) / 1000,
       );
-      sink = io.begin(adm.reservation.reservationId);
-      let failure: ModelProxyError | null = null;
       try {
-        for await (const ev of upstream.events) {
-          const delta = agg.push(ev);
-          if (delta) await sink.delta(delta);
+        sink = io.begin(adm.reservation.reservationId);
+        let failure: ModelProxyError | null = null;
+        try {
+          for await (const ev of upstream.events) {
+            const delta = agg.push(ev);
+            if (delta) await sink.delta(delta);
+          }
+        } catch (e) {
+          failure = stopReason
+            ? this.abortError(stopReason)
+            : e instanceof ModelProxyError
+              ? e
+              : this.providerFailure(e, adm);
         }
+        const result = upstream.result();
+        const reason = result.abortReason ?? stopReason;
+        const ms = Date.now() - startedAt;
+        await this.finishStream(adm, agg, result, reason, failure, sink, ms);
       } catch (e) {
-        failure = stopReason
-          ? this.abortError(stopReason)
-          : e instanceof ModelProxyError
-            ? e
-            : this.providerFailure(e, adm);
+        // begin(), the aggregation or the final write failed: close the books with the estimate
+        // (nothing may stay reserved) and tell the client instead of leaving it hanging.
+        upstream.abort('internal_error');
+        if (!adm.gaugesReleased) {
+          await this.settle(adm, {
+            status: 'error',
+            auditExtra: this.auditExtra(adm, null, Date.now() - startedAt),
+            detail: this.detail(adm, null, Date.now() - startedAt),
+          }).catch(() => undefined);
+          this.released(adm);
+        }
+        const err = toModelProxyError(e);
+        this.countError(err, adm);
+        if (!sink) throw err;
+        sink.error(err.code, err.message);
       }
-      const result = upstream.result();
-      const reason = result.abortReason ?? stopReason;
-      const ms = Date.now() - startedAt;
-      await this.finishStream(adm, agg, result, reason, failure, sink, ms);
     } finally {
       stopWatch();
       io.signal.removeEventListener('abort', onGone);
@@ -1073,24 +1209,82 @@ export class ModelProxyService {
   private async failOpen(adm: Admitted, e: unknown, reason: string | undefined): Promise<never> {
     const ms = Date.now() - adm.startedAt;
     const out = reason ? this.abortError(reason) : this.providerFailure(e, adm);
-    if (reason || e instanceof StreamAbortedError) {
+    const timedOut = (e as { code?: unknown } | null)?.code === 'provider_timeout';
+    const abortReason =
+      reason ?? (timedOut ? 'deadline' : e instanceof StreamAbortedError ? 'aborted' : undefined);
+    if (!abortReason && this.noWorkDone(e)) await this.releaseQuietly(adm, out.code);
+    else {
+      // Possibly billed: charged with the reservation.
       await this.settle(adm, {
         status: 'error',
         auditExtra: this.auditExtra(adm, null, ms),
         detail: this.detail(adm, null, ms),
       }).catch(() => undefined);
-      await this.abortedAudit(adm, reason ?? 'aborted', 0);
-      this.ctx.metrics.modelProxyAborts.inc({ reason: reason ?? 'aborted' });
-    } else if (this.noWorkDone(e)) await this.releaseQuietly(adm, out.code);
-    else
-      await this.settle(adm, {
-        status: 'error',
-        auditExtra: this.auditExtra(adm, null, ms),
-        detail: this.detail(adm, null, ms),
-      }).catch(() => undefined);
+      if (abortReason) {
+        await this.abortedAudit(adm, abortReason, 0);
+        this.ctx.metrics.modelProxyAborts.inc({ reason: abortReason });
+      }
+    }
     this.released(adm);
     this.log(adm, out.code, null, ms);
     throw out;
+  }
+
+  /**
+   * Caps what the provider reports to what the reservation allows (a hostile endpoint can report
+   * absurd numbers): input and cache tokens together at the reserved input bound, output at the
+   * cut-off bound plus a small allowance, but never below the floor from the streamed bytes. The
+   * raw numbers are written to the `model.overrun` audit entry only.
+   */
+  private async capUsage(
+    adm: Admitted,
+    u: { input: number; output: number; cacheRead: number; cacheWrite: number },
+    outputBytes: number,
+  ) {
+    const resv = adm.reservation;
+    const input = Math.min(u.input, resv.reservedInputTokens);
+    const cacheRead = Math.min(u.cacheRead, resv.reservedInputTokens - input);
+    const cacheWrite = Math.min(u.cacheWrite, resv.reservedInputTokens - input - cacheRead);
+    const cap = Math.max(
+      outputFloorFromBytes(outputBytes),
+      Math.ceil(resv.reservedOutputTokens * OVERRUN_FACTOR) + OVERRUN_ALLOWANCE_TOKENS,
+    );
+    const output = Math.min(u.output, cap);
+    const capped =
+      input !== u.input ||
+      cacheRead !== u.cacheRead ||
+      cacheWrite !== u.cacheWrite ||
+      output !== u.output;
+    if (capped) {
+      try {
+        await this.audit.append({
+          actor: 'system',
+          tenantId: adm.auth.tenantId,
+          action: 'model.overrun',
+          target: `${adm.provider.name}/${adm.agent.model}`,
+          runId: adm.auth.runId,
+          payload: {
+            callId: resv.reservationId,
+            reason: 'reported_usage_capped',
+            reported: {
+              input: u.input,
+              output: u.output,
+              cacheRead: u.cacheRead,
+              cacheWrite: u.cacheWrite,
+            },
+            capped: { input, output, cacheRead, cacheWrite },
+          },
+        });
+      } catch (err) {
+        this.ctx.logger.warn({ err: (err as Error).name }, 'could not write model.overrun');
+      }
+    }
+    return {
+      inputTokens: input,
+      outputTokens: output,
+      cacheReadTokens: cacheRead,
+      cacheWriteTokens: cacheWrite,
+    };
   }
 
   private async finishStream(
@@ -1104,23 +1298,27 @@ export class ModelProxyService {
   ): Promise<void> {
     const complete = result.complete && !reason && !failure;
     const res = agg.finish(result.usage);
-    const cache = {
-      cacheRead: result.usage.cacheReadTokens,
-      cacheWrite: result.usage.cacheWriteTokens,
-    };
     let s: Settlement;
+    let cache: { cacheRead: number; cacheWrite: number };
     try {
+      const usage = result.usageReported
+        ? await this.capUsage(
+            adm,
+            {
+              input: result.usage.inputTokens,
+              output: result.usage.outputTokens,
+              cacheRead: result.usage.cacheReadTokens,
+              cacheWrite: result.usage.cacheWriteTokens,
+            },
+            result.outputBytes,
+          )
+        : undefined;
+      cache = {
+        cacheRead: usage?.cacheReadTokens ?? result.usage.cacheReadTokens,
+        cacheWrite: usage?.cacheWriteTokens ?? result.usage.cacheWriteTokens,
+      };
       s = await this.settle(adm, {
-        ...(result.usageReported
-          ? {
-              usage: {
-                inputTokens: result.usage.inputTokens,
-                outputTokens: result.usage.outputTokens,
-                cacheReadTokens: cache.cacheRead,
-                cacheWriteTokens: cache.cacheWrite,
-              },
-            }
-          : {}),
+        ...(usage ? { usage } : {}),
         output: { textBytes: agg.textBytes, toolArgBytes: agg.toolArgBytes },
         status: complete ? 'ok' : 'error',
         ...(reason ? { note: reason } : {}),

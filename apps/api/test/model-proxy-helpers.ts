@@ -73,6 +73,7 @@ export interface UpstreamCall {
   url: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
+  redirect: string | undefined;
   aborted: boolean;
 }
 
@@ -97,17 +98,98 @@ export class FakeUpstream {
         ]),
       ),
       body: JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>,
+      redirect: init.redirect,
       aborted: false,
     };
     this.calls.push(call);
     init.signal?.addEventListener('abort', () => (call.aborted = true), { once: true });
-    return this.handler(call, init);
+    const res = await this.handler(call, init);
+    // The proxy always streams when the provider has a streaming transport: a handler that
+    // answers with a plain JSON completion is replayed as an event stream.
+    if (
+      call.body.stream === true &&
+      res.status === 200 &&
+      res.headers.get('content-type')?.includes('json')
+    )
+      return jsonAsStream(call.url, (await res.json()) as Record<string, unknown>);
+    return res;
   };
 
   reset(): void {
     this.calls = [];
     this.handler = () => openaiJson({ text: 'ok' });
   }
+}
+
+const evs = (parts: string[]) =>
+  new Response(parts.join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+
+/** Replays a plain chat completion (OpenAI or Anthropic shape) as the equivalent event stream. */
+function jsonAsStream(url: string, body: Record<string, unknown>): Response {
+  const usage = (body.usage ?? {}) as Record<string, number>;
+  if (url.endsWith('/v1/messages')) {
+    const parts: string[] = [
+      sse(
+        {
+          type: 'message_start',
+          message: {
+            id: 'm',
+            model: body.model,
+            usage: { input_tokens: usage.input_tokens ?? 0, output_tokens: 1 },
+          },
+        },
+        'message_start',
+      ),
+    ];
+    let i = 0;
+    for (const b of (body.content ?? []) as Record<string, unknown>[]) {
+      if (b.type === 'text') {
+        parts.push(
+          sse(
+            { type: 'content_block_start', index: i, content_block: { type: 'text', text: '' } },
+            'content_block_start',
+          ),
+        );
+        parts.push(
+          sse(
+            { type: 'content_block_delta', index: i, delta: { type: 'text_delta', text: b.text } },
+            'content_block_delta',
+          ),
+        );
+      }
+      parts.push(sse({ type: 'content_block_stop', index: i++ }, 'content_block_stop'));
+    }
+    parts.push(
+      sse(
+        {
+          type: 'message_delta',
+          delta: { stop_reason: body.stop_reason },
+          usage: { output_tokens: usage.output_tokens ?? 0 },
+        },
+        'message_delta',
+      ),
+    );
+    parts.push(sse({ type: 'message_stop' }, 'message_stop'));
+    return evs(parts);
+  }
+  const choice = ((body.choices ?? []) as Record<string, unknown>[])[0] ?? {};
+  const message = (choice.message ?? {}) as { content?: string; tool_calls?: unknown[] };
+  const parts: string[] = [openaiChunk({ role: 'assistant', content: '' })];
+  if (message.content) parts.push(openaiChunk({ content: message.content }));
+  if (message.tool_calls)
+    parts.push(
+      openaiChunk({
+        tool_calls: (message.tool_calls as { id: string; function: unknown }[]).map((t, index) => ({
+          index,
+          id: t.id,
+          function: t.function,
+        })),
+      }),
+    );
+  parts.push(openaiChunk({}, String(choice.finish_reason ?? 'stop')));
+  parts.push(openaiUsage(usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0));
+  parts.push(DONE);
+  return evs(parts);
 }
 
 export const json = (body: unknown, status = 200) =>
@@ -142,7 +224,7 @@ export const openaiJson = (o: {
         finish_reason: o.finish ?? (o.toolCalls ? 'tool_calls' : 'stop'),
       },
     ],
-    usage: { prompt_tokens: o.prompt ?? 100, completion_tokens: o.completion ?? 50 },
+    usage: { prompt_tokens: o.prompt ?? 40, completion_tokens: o.completion ?? 50 },
   });
 
 export const sleep = (ms: number, signal?: AbortSignal) =>
@@ -227,6 +309,8 @@ export interface AgentOpts {
   budget?: string;
   maxTokensPerCall?: number;
   simulation?: string;
+  /** Agent (step) budget lines, e.g. `      timeoutSeconds: 60`. */
+  agentBudget?: string;
 }
 
 let counter = 0;
@@ -243,7 +327,7 @@ ${o.classification ? `classification: ${o.classification}\n` : ''}${o.budget ? `
   - id: a
     provider: ${o.provider ?? 'simulated'}
     model: ${o.model ?? 'sim-1'}
-${o.maxTokensPerCall ? `    maxTokensPerCall: ${o.maxTokensPerCall}\n` : ''}${o.simulation ? `    simulation:\n      responses:\n${o.simulation}\n` : ''}    instructions: Summarise the event.
+${o.maxTokensPerCall ? `    maxTokensPerCall: ${o.maxTokensPerCall}\n` : ''}${o.agentBudget ? `    budget:\n${o.agentBudget}\n` : ''}${o.simulation ? `    simulation:\n      responses:\n${o.simulation}\n` : ''}    instructions: Summarise the event.
 ---
 `;
 }

@@ -266,6 +266,7 @@ limit are per replica.
 | `OAX_MODEL_PROXY_GRACE_SECONDS` | `60` | A reservation outlives its call deadline by this long before the worker's reaper settles it at the reserved amount. |
 | `OAX_MODEL_PROXY_REVOCATION_POLL_MS` | `2000` | While a call is open the session and run are polled this often; revocation, cancellation or lease loss ends the call within one interval. |
 | `OAX_MODEL_PROXY_MAX_RESPONSE_BYTES` | `16777216` | Largest upstream response of one call (16 MiB). |
+| `OAX_MODEL_PROXY_PRIVATE_ALLOW` | – | Private destinations (hosts, suffixes, CIDRs) that tenant-controlled endpoints (BYOK model connections) may reach; everything private, loopback, link-local or metadata is refused otherwise (`403 egress_denied`). |
 | `OAX_MODEL_PROXY_CAPTURE` | `metadata` | `metadata` stores the response text, tool calls and stop reason in the step record (never the request); `off` stores only metadata. Bodies are never logged. |
 
 ## Webhooks

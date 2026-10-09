@@ -106,23 +106,27 @@ export class CatalogService {
   }
 
   /** Connections of a kind that apply to a run (most specific scope wins per name). */
-  async connectionsForRun(kind: string, scope: RunScope): Promise<ConnectionRow[]> {
-    const rows = await cached(
-      this.ctx.cache,
-      `connections:${kind}:${scope.tenantId}`,
-      30_000,
-      async () =>
-        (
-          await this.ctx.db
-            .select()
-            .from(connections)
-            .where(and(eq(connections.kind, kind), this.visible(scope.tenantId)))
-        ).map((r) => ({
-          ...r,
-          createdAt: r.createdAt.toISOString(),
-          updatedAt: r.updatedAt.toISOString(),
-        })),
-    );
+  async connectionsForRun(
+    kind: string,
+    scope: RunScope,
+    opts: { fresh?: boolean } = {},
+  ): Promise<ConnectionRow[]> {
+    // `fresh` (the model proxy) bypasses the 30 s cache so a removed or changed connection takes
+    // effect on the next call.
+    const load = async () =>
+      (
+        await this.ctx.db
+          .select()
+          .from(connections)
+          .where(and(eq(connections.kind, kind), this.visible(scope.tenantId)))
+      ).map((r) => ({
+        ...r,
+        createdAt: r.createdAt.toISOString(),
+        updatedAt: r.updatedAt.toISOString(),
+      }));
+    const rows = opts.fresh
+      ? await load()
+      : await cached(this.ctx.cache, `connections:${kind}:${scope.tenantId}`, 30_000, load);
     return resolveConnections(
       rows.map((r) => ({
         ...r,

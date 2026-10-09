@@ -1,5 +1,5 @@
 import { OaxError } from '@openagentix/core';
-import { ProviderError, createGuardedFetch, type FetchLike } from '../http.js';
+import { ProviderError, createGuardedFetch, isPreSendFailure, type FetchLike } from '../http.js';
 import {
   StreamGuard,
   createUpstreamStream,
@@ -27,6 +27,8 @@ export interface HttpTransportOptions {
   maxRetries?: number | undefined;
   /** Base backoff in ms (doubles per attempt). Default 250. */
   backoffMs?: number | undefined;
+  /** Refuse non-public destinations (SSRF through tenant-controlled base URLs). */
+  blockPrivateDestinations?: { allow?: readonly string[] } | undefined;
   /** Additional values that must never appear in an error message. */
   secrets?: readonly string[] | undefined;
 }
@@ -128,6 +130,7 @@ export async function openSseStream(
     allowedOrigins: [opts.baseUrl],
     proxyUrl: opts.proxyUrl,
     fetchImpl: opts.fetchImpl,
+    blockPrivateDestinations: opts.blockPrivateDestinations,
   });
   const guard = new StreamGuard(limits, req.call.signal);
   const maxRetries = opts.maxRetries ?? 2;
@@ -160,6 +163,7 @@ export async function openSseStream(
           `provider request failed: ${scrub(e instanceof Error ? e.message : 'network error', secrets)}`,
           null,
           true,
+          isPreSendFailure(e),
         ),
       );
     }

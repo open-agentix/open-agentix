@@ -501,21 +501,21 @@ describe('stream failures after the first byte', () => {
     expect((await reservations(r.runId))[0]?.status).toBe('active');
   });
 
-  it('answers an upstream that fails before the first event with 5xx as a released call', async () => {
+  it('charges an upstream 5xx before the first event conservatively and releases a plain 4xx', async () => {
     up.handler = () => json({ error: 'overloaded' }, 500);
     const r = await mkRun(n, { provider: 'oai', model: 'gpt-x' });
     const mt = await modelToken(n, r);
     const res = await stream(r.runId, mt, ask('x', {}, 'gpt-x'));
     expect(res.statusCode).toBe(502);
-    expect((await reservations(r.runId))[0]).toMatchObject({ status: 'settled', actualMicros: 0 });
-    // a gateway timeout may have done work: charged conservatively
-    up.handler = () => json({ error: 'gateway' }, 504);
+    expect(res.json().error.message).toBe('the provider answered with HTTP 500');
+    const [resv] = await reservations(r.runId);
+    expect(resv?.status).toBe('settled');
+    expect(Number(resv?.actualMicros)).toBeGreaterThan(0);
+    up.handler = () => json({ error: 'bad request' }, 400);
     const r2 = await mkRun(n, { provider: 'oai', model: 'gpt-x' });
     const t2 = await modelToken(n, r2);
     expect((await stream(r2.runId, t2, ask('x', {}, 'gpt-x'))).statusCode).toBe(502);
-    const [resv] = await reservations(r2.runId);
-    expect(resv?.status).toBe('settled');
-    expect(Number(resv?.actualMicros)).toBeGreaterThan(0);
+    expect((await reservations(r2.runId))[0]).toMatchObject({ status: 'settled', actualMicros: 0 });
   });
 
   it('applies backpressure: a slow reader does not make the proxy buffer an endless stream', async () => {

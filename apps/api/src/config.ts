@@ -196,6 +196,8 @@ export const EnvSchema = z.object({
     .min(1024)
     .default(16 * 1024 * 1024),
   OAX_MODEL_PROXY_CAPTURE: z.enum(['metadata', 'off']).default('metadata'),
+  /** Private destinations tenant-controlled endpoints may reach (hosts, suffixes, CIDRs). */
+  OAX_MODEL_PROXY_PRIVATE_ALLOW: z.string().default(''),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
   OTEL_SERVICE_NAME: z.string().optional(),
 
@@ -318,6 +320,8 @@ export interface Config {
     revocationPollMs: number;
     maxResponseBytes: number;
     capture: 'metadata' | 'off';
+    /** Operator allowlist of private destinations for tenant-controlled endpoints. */
+    privateAllow: string[];
   };
   airgap: {
     enabled: boolean;
@@ -498,6 +502,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       revocationPollMs: e.OAX_MODEL_PROXY_REVOCATION_POLL_MS,
       maxResponseBytes: e.OAX_MODEL_PROXY_MAX_RESPONSE_BYTES,
       capture: e.OAX_MODEL_PROXY_CAPTURE,
+      privateAllow: list(e.OAX_MODEL_PROXY_PRIVATE_ALLOW),
     },
     airgap: {
       enabled: e.OAX_AIRGAPPED,

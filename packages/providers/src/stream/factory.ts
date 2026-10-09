@@ -13,6 +13,8 @@ import type { StreamLimits, StreamingTransport } from './types.js';
 export interface StreamPlanDeps {
   secrets: SecretResolver;
   fetchImpl?: FetchLike | undefined;
+  /** Tenant-controlled endpoints: refuse private destinations (operator `allow` list). */
+  blockPrivateDestinations?: { allow?: readonly string[] } | undefined;
   bedrockClient?: BedrockStreamClient | undefined;
 }
 
@@ -49,8 +51,11 @@ export async function createStreamPlan(
   const common = {
     proxyUrl: cfg.proxyUrl,
     fetchImpl: deps.fetchImpl,
+    blockPrivateDestinations: deps.blockPrivateDestinations,
     limits: opts.limits,
-    ...(cfg.maxRetries === undefined ? {} : { maxRetries: cfg.maxRetries }),
+    // No retries: a retry would be a second billed call under one reservation. The node retries
+    // with a NEW reservation.
+    maxRetries: 0,
   };
   const openai = async (o: {
     baseUrl: string;
@@ -174,7 +179,7 @@ export async function createStreamPlan(
           region: cfg.region,
           endpoint: cfg.endpoint,
           proxyUrl: cfg.proxyUrl,
-          maxAttempts: cfg.maxRetries === undefined ? undefined : cfg.maxRetries + 1,
+          maxAttempts: 1,
           credentials,
           limits: opts.limits,
           secrets,

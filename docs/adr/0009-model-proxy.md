@@ -648,12 +648,18 @@ they differ from the text above, this section wins.
    `OAX_MODEL_PROXY_REVOCATION_POLL_MS`. The Valkey channel `oax:session-revoked` is not built: the
    cache interface has no publish/subscribe. The sliding-window call rate (`OAX_MODEL_PROXY_CALLS_PER_MINUTE`)
    is per replica and in memory; the concurrency limits are database counters and hold across replicas.
-3. **Hard stop rule.** The output of a stream is cut when `max(reported output tokens, ceil(streamed
-   bytes / 8))` exceeds the granted output bound by more than 10 %. Bytes / 8 is the floor of
-   section 4.1: an honest provider that obeys `max_tokens` never reaches it (using bytes / 3 would
-   cut honest answers that run into the limit). An aborted call is settled with the estimate
-   (bytes / 3, section 4.1), so for a provider that ignores `max_tokens` the settled cost can exceed
-   the reservation; that is recorded as `model.overrun` and is bounded by the cut-off point.
+3. **Hard stop rule and reported usage.** The output of a stream is cut when `max(reported output
+   tokens, ceil(streamed bytes / 8))` exceeds the granted output bound by more than 10 %. Bytes / 8
+   is the floor of section 4.1: an honest provider that obeys `max_tokens` never reaches it (using
+   bytes / 3 would cut honest answers that run into the limit). A provider that reports more than
+   the bound is therefore cut as well. Usage that is reported is capped before settlement: input and
+   cache tokens together at the reserved input bound, output at `ceil(1.1 x bound) + 256` (never
+   below the bytes / 8 floor); the raw numbers go to the `model.overrun` audit entry only. An
+   aborted stream is settled with the estimate (bytes / 3, section 4.1) from what was streamed,
+   which can exceed the reservation by at most the bytes seen before the cut-off.
+   *Corrected:* an earlier text of this amendment said a hostile provider could be charged well above
+   its reservation; with the cap and the early cut-off the settled amount stays within the
+   reservation plus the 10 % overrun of the output bound.
 4. **Token and binding errors.** A model token whose `jti` is not the one stored in the session is
    `401 unauthenticated`; a token or run token for another run than the path's, an agent that is not
    the token's step, and an orchestrator token without `sid` are `403 model_not_allowed`; a revoked
@@ -684,3 +690,37 @@ they differ from the text above, this section wins.
     such a model counts as unpriced (`422 model_unpriced` under a cost limit, otherwise `priced:
     false`). The connection schema has no `tokenBoundFactor`. The emergency-override check (W2-3) is
     a hook (`ModelProxyHooks.checkOverride`) without an implementation.
+
+### W1-3b-3 review fixes (2026-10-04)
+
+11. **One call, one provider request, no retries.** Every provider the proxy builds has
+    `maxRetries: 0` (Bedrock one attempt, stream transports no retries) and an HTTP timeout equal to
+    the call deadline; a retry is a second billed call under one reservation, so the node retries
+    with a new reservation. Only provably pre-send failures are released at zero (egress refusal, DNS
+    and connection-refused errors, and a 4xx other than 408, 409 and 429); timeouts, resets, 5xx and
+    stream errors are charged with the reservation or the estimate.
+12. **The JSON path uses the stream plan.** For every provider with a streaming transport the plain
+    JSON answer is produced through that transport and aggregated, so the response size limit
+    (`OAX_MODEL_PROXY_MAX_RESPONSE_BYTES`), time to first byte, idle and deadline timeouts and the
+    output hard stop apply uniformly. Providers without a transport (`simulated`, Bedrock models
+    that do not speak the Anthropic body) use the adapter; the adapter paths use a bounded body
+    reader, never follow redirects and have a call deadline, but the AWS SDK path has no response
+    size limit.
+13. **Deadline.** The call deadline is `min(OAX_MODEL_PROXY_MAX_CALL_SECONDS, time left of the run
+    timeout since the run start, time left of the step timeout since the session start)`, at least
+    one second.
+14. **Tenant-controlled endpoints.** Redirects are never followed (also in the SDK fetch). Endpoints
+    of tenant-scoped connections that are or resolve to loopback, private, link-local, metadata,
+    CGNAT or multicast addresses are refused with `403 egress_denied` before the call and again
+    right before each request, unless listed in `OAX_MODEL_PROXY_PRIVATE_ALLOW`. The check resolves
+    the name itself; a DNS answer that changes between that check and the connection (rebinding)
+    is not covered (a connect-time lookup hook needs a custom dispatcher; follow-up).
+15. **Node-facing errors carry no upstream text.** Provider failures are reported as the HTTP status
+    or the kind of stream failure; budget refusals use fixed texts without scope names or numbers.
+16. **Smaller points.** The `requestDigest` is an HMAC under a per-tenant key derived from the server
+    secret; the HTTP rate limit of the model routes is keyed by peer address and a 429 is answered
+    in the model envelope with `Retry-After` (invalid tokens are rejected by authentication before
+    the limiter); the model proxy reads connections fresh (no 30 s cache); a failure in `begin()` or
+    aggregation settles the reservation and reports an error; `oax_model_proxy_*` labels use the
+    provider family, not the connection name (the older `oax_cost_micro_usd_total` still labels by
+    provider name).

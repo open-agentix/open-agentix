@@ -367,7 +367,7 @@ describe('native call (JSON)', () => {
   it('serves the simulated provider through the proxy and books the measured cost', async () => {
     const r = await mkRun(n, {
       simulation:
-        '        - { text: "scripted answer", usage: { inputTokens: 120, outputTokens: 34 } }',
+        '        - { text: "scripted answer", usage: { inputTokens: 60, outputTokens: 34 } }',
     });
     const mt = await modelToken(n, r);
     const res = await postModel(n, r.runId, mt, ask('what is up?'));
@@ -376,7 +376,7 @@ describe('native call (JSON)', () => {
     const body = res.json();
     expect(body).toMatchObject({
       response: { text: 'scripted answer', stopReason: 'end_turn', model: 'sim-1' },
-      usage: { inputTokens: 120, outputTokens: 34, source: 'provider' },
+      usage: { inputTokens: 60, outputTokens: 34, source: 'provider' },
       costMicros: 0,
       priced: true,
     });
@@ -387,7 +387,7 @@ describe('native call (JSON)', () => {
     expect(line).toMatchObject({
       via: 'proxy',
       usageSource: 'provider',
-      tokensIn: 120,
+      tokensIn: 60,
       tokensOut: 34,
     });
     const [step] = (await steps(r.runId)).filter((s) => s.kind === 'model_call');
@@ -460,7 +460,7 @@ describe('native call (JSON)', () => {
       n,
       r.runId,
       mt,
-      ask('hello', { maxTokens: 999_999, temperature: 0.2 }, 'gpt-x'),
+      ask('h'.repeat(1100), { maxTokens: 999_999, temperature: 0.2 }, 'gpt-x'),
     );
     expect(res.statusCode).toBe(200);
     expect(up.calls).toHaveLength(1);
@@ -984,20 +984,9 @@ describe('metrics', () => {
 });
 
 describe('rate limit buckets', () => {
-  it('keys the HTTP rate limit per peer and token, not by the shared token prefix', async () => {
-    const a = await mkRun(n);
-    const b = await mkRun(n);
-    const ta = await modelToken(n, a);
-    const tb = await modelToken(n, b);
-    // all model tokens start with the same claim bytes; their buckets must still differ
-    expect(ta.slice(0, 24)).toBe(tb.slice(0, 24));
-    const key = (token: string, ip = '10.0.0.1') =>
-      modelRateKey({ ip, headers: { authorization: `Bearer ${token}` } });
-    expect(key(ta)).not.toBe(key(tb));
-    expect(key(ta)).toBe(key(ta));
-    expect(key(ta)).not.toBe(key(ta, '10.0.0.2'));
-    expect(key(ta)).not.toContain(ta);
-    expect(modelRateKey({ ip: '10.0.0.1', headers: {} })).toMatch(/^10\.0\.0\.1\|/);
+  it('keys the HTTP rate limit by peer address only, before authentication', () => {
+    expect(modelRateKey({ ip: '10.0.0.1' })).toBe('10.0.0.1');
+    expect(modelRateKey({ ip: '10.0.0.2' })).not.toBe(modelRateKey({ ip: '10.0.0.1' }));
   });
 });
 
@@ -1048,21 +1037,36 @@ describe('edge cases', () => {
     }
   });
 
-  it('releases or charges a failed call by what the provider can have done', async () => {
+  it('charges every failure that may have been billed and releases only provable no-work failures', async () => {
     const r = await mkRun(n, { provider: 'oai', model: 'gpt-x' });
     const mt = await modelToken(n, r);
-    // a network failure before any response: nothing was processed
+    const settled = async () => (await reservations(r.runId)).at(-1)!;
+    // a reset after the request was sent: the provider may have worked on it
     up.handler = () => {
       throw new Error('ECONNRESET');
     };
     expect((await postModel(n, r.runId, mt, ask('hi', {}, 'gpt-x'))).statusCode).toBe(502);
-    // a 504 from a gateway may have done work: charged conservatively
-    up.handler = () => json({ error: 'gateway timeout' }, 504);
+    const reset = await settled();
+    expect(Number(reset.actualMicros)).toBe(Number(reset.reservedMicros));
+    // 5xx, 408, 409 and 429 are charged as well
+    for (const status of [500, 504, 408, 409, 429]) {
+      up.handler = () => json({ error: 'x' }, status);
+      expect((await postModel(n, r.runId, mt, ask('hi', {}, 'gpt-x'))).statusCode).toBe(502);
+      const last = await settled();
+      expect(Number(last.actualMicros), String(status)).toBe(Number(last.reservedMicros));
+    }
+    // DNS failure and refused connection happen before anything is sent: released
+    for (const code of ['ENOTFOUND', 'ECONNREFUSED']) {
+      up.handler = () => {
+        throw Object.assign(new TypeError('fetch failed'), { cause: { code } });
+      };
+      expect((await postModel(n, r.runId, mt, ask('hi', {}, 'gpt-x'))).statusCode).toBe(502);
+      expect(Number((await settled()).actualMicros), code).toBe(0);
+    }
+    // an ordinary 4xx before generation: released
+    up.handler = () => json({ error: 'bad request' }, 400);
     expect((await postModel(n, r.runId, mt, ask('hi', {}, 'gpt-x'))).statusCode).toBe(502);
-    const all = await reservations(r.runId);
-    expect(all.every((x) => x.status === 'settled')).toBe(true);
-    expect(all.some((x) => Number(x.actualMicros) === 0)).toBe(true);
-    expect(all.some((x) => Number(x.actualMicros) > 0)).toBe(true);
+    expect(Number((await settled()).actualMicros)).toBe(0);
   });
 
   it('ends a call whose session lookup keeps failing (cannot tell: fail closed)', async () => {

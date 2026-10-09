@@ -140,7 +140,7 @@ describe('capture and reservation mode', () => {
     expect(JSON.stringify(step?.output)).not.toContain('SECRET-RESPONSE-TEXT');
     expect(step?.output).toMatchObject({ stopReason: 'end_turn' });
     const [line] = await n.ctx.db.select().from(costLedger).where(eq(costLedger.runId, r.runId));
-    expect(line?.tokensIn).toBe(100);
+    expect(line?.tokensIn).toBeLessThanOrEqual(40);
   });
 
   it('estimate mode reserves a third of the upper bound (bytes / 3)', async () => {
@@ -178,5 +178,32 @@ describe('hooks and direct service use', () => {
     const r = await mkRun(n, { provider: 'oai', model: 'gpt-x' });
     expect((await getModelToken(n, r.runId, r.runToken)).statusCode).toBe(200);
     expect(n.services.modelProxy.enabled).toBe(true);
+  });
+});
+
+describe('HTTP rate limit', () => {
+  it('answers 429 in the model envelope with Retry-After, keyed by peer address', async () => {
+    const small = await testNode(
+      { ...BASE_ENV, OAX_RATE_LIMIT_MAX: '8' },
+      { secrets, fetchImpl: up.fetch },
+    );
+    try {
+      const r = await mkRun(small, { provider: 'oai', model: 'gpt-x' });
+      const mt = await modelToken(small, r);
+      let limited;
+      const codes: number[] = [];
+      for (let i = 0; i < 14 && !limited; i++) {
+        const res = await postModel(small, r.runId, mt, body);
+        codes.push(res.statusCode);
+        if (res.statusCode === 429) limited = res;
+      }
+      expect(limited?.statusCode).toBe(429);
+      expect(limited?.json().error.code).toBe('model_rate_limited');
+      expect(Number(limited?.headers['retry-after'])).toBeGreaterThanOrEqual(1);
+      // the per-run limit (60) was not the one that fired
+      expect(codes.length).toBeLessThan(14);
+    } finally {
+      await small.close();
+    }
   });
 });

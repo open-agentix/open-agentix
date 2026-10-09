@@ -24,7 +24,11 @@ All notable changes to this project are documented here. The format follows
   configuration block (limits are bound to the accounting service and the stream transports).
   New route access kind `model-token`. `ModelAccountingService.settle` now scrubs step payloads
   before it opens its transaction. Not yet wired to the run node (W1-3b-4); the Anthropic and OpenAI
-  pass-through surfaces follow (W1-3b-6). `docs/runners.md`, `docs/configuration.md`.
+  pass-through surfaces follow (W1-3b-6). Provider calls of the proxy never retry (a retry would be a
+  second billed call), the HTTP timeout follows the call deadline, everything that may have been
+  billed is charged, JSON answers use the stream limits, reported usage is capped by the
+  reservation, and tenant-controlled endpoints cannot reach private or metadata addresses
+  (`OAX_MODEL_PROXY_PRIVATE_ALLOW`). `docs/runners.md`, `docs/configuration.md`.
 - **Streaming upstream transports for the model proxy (W1-3b-5)**: `@openagentix/providers` gets a
   streaming API next to `complete`: `AnthropicStreamTransport`, `BedrockStreamTransport`
   (`InvokeModelWithResponseStream`) and `OpenAIStreamTransport` (OpenAI, Azure, OpenRouter, vLLM,

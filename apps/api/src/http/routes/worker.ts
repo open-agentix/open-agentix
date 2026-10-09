@@ -6,7 +6,6 @@ import {
   WorkerModelResponseSchema,
   type ModelErrorCode,
 } from '@openagentix/providers';
-import { createHash } from 'node:crypto';
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 import {
   hasZodFastifySchemaValidationErrors,
@@ -42,15 +41,11 @@ import type { ZApp } from '../zapp.js';
 const sec = [{ runToken: [] }];
 const tags = ['worker'];
 /**
- * Rate limit bucket of a model route: one per peer and token. The global key (the first characters
- * of the bearer token) would put every model token into one bucket, because the claims all start
- * with the same bytes.
+ * Rate limit bucket of a model route, evaluated before authentication: the peer address only.
+ * (A token-derived key would let anyone mint unlimited buckets with invalid tokens, and the
+ * claims of all model tokens start with the same bytes.)
  */
-export const modelRateKey = (req: Pick<FastifyRequest, 'ip' | 'headers'>): string =>
-  `${req.ip}|${createHash('sha256')
-    .update(bearerOf(req as FastifyRequest) ?? '')
-    .digest('base64url')
-    .slice(0, 22)}`;
+export const modelRateKey = (req: Pick<FastifyRequest, 'ip'>): string => req.ip;
 const modelSec: Record<string, string[]>[] = [{ runToken: [] }, { modelToken: [] }];
 
 /** Parameter names are echoed in refusals; anything else is cut so an error never reflects input. */
@@ -75,6 +70,11 @@ function modelErrorHandler(err: FastifyError | Error, req: FastifyRequest, reply
           'model_request_invalid',
           `request validation failed: ${[...new Set(err.validation.map((v) => v.instancePath || '/'))].slice(0, 5).join(', ')}`,
         );
+  } else if (fe.statusCode === 429 && !(err instanceof ModelProxyError)) {
+    // @fastify/rate-limit: keep its Retry-After header, answer in the model envelope
+    out = new ModelProxyError('model_rate_limited', 'too many requests', undefined);
+    const retry = reply.getHeader('retry-after');
+    if (retry !== undefined) void reply.header('retry-after', String(retry));
   } else if (fe.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || fe.statusCode === 413) {
     out = new ModelProxyError('model_request_too_large', 'request body is too large');
   } else if (err instanceof StrictJsonError) {
