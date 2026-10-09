@@ -985,3 +985,47 @@ harness itself should see (the child never receives them; only MCP tools of the 
   only" default for harness steps. This is documented as a **residual risk**: until it exists, a
   harness step should be published with `runtime.egress: []` (the narrowest declaration); whether the
   egress proxy then admits the control node only was not verified here.
+
+### DOG-1: harness image selection, egress default, resources (2026-10-09)
+
+Closes the "run-node images" and "verified variable names" items of W1-3b-7 for Claude Code. Where it
+differs from the text above, this section wins.
+
+1. **Image per harness (H9).** `OAX_CONTAINER_HARNESS_IMAGES` maps a harness to a digest-pinned image.
+   The keys are the allowlist (only `HARNESS_KINDS`); a harness step runs **only** on the image of its
+   harness (`image_not_allowed` otherwise), an unmapped harness fails closed (`harness_image_unknown`,
+   and publish refuses it on the container runner). The Claude Code image is built from the Dockerfile
+   target `run-node-claude-code`: the native binary is downloaded at build time only and verified
+   against the SHA-512 of the registry metadata recorded in the Dockerfile; no package manager remains
+   in the image. OpenCode has no image target yet.
+2. **Egress default (H5).** A harness step publishes with `runtime.egress: []`. Declared hosts are
+   refused at publish and again by the container runner at node start (`harness_egress_denied`) unless
+   the operator sets `OAX_HARNESS_EGRESS_ALLOWED=true`. "Control node only" is thereby enforced rather
+   than a convention, and was verified from inside a node (control node reachable; DNS for
+   `api.anthropic.com` and `github.com` fails; direct IPs unreachable).
+3. **Resources (H7).** A harness node gets `OAX_CONTAINER_HARNESS_MEMORY_MB` (default 2048, capped by
+   `OAX_CONTAINER_MAX_MEMORY_MB`) and a `/tmp` of `OAX_CONTAINER_HARNESS_TMP_MB` (default 256);
+   ordinary nodes keep `OAX_CONTAINER_MEMORY_MB` (512) and `OAX_CONTAINER_TMP_MB` (64). The operator
+   maximum `OAX_CONTAINER_MAX_MEMORY_MB` is only the ceiling: raising it to 2048 for harness steps does
+   not give ordinary nodes 2048 MiB (the worker passes the default, not the ceiling, as step limit). A
+   `/tmp` larger than half of the node memory is a configuration error (config and runner schema), so
+   that tmpfs pages cannot starve the process. `/tmp` stays `noexec`.
+4. **Verification.** The environment variables `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and
+   `ANTHROPIC_MODEL` and the request shape (`/v1/messages`, Bearer, `tools: []`, no other request)
+   are verified against the pinned binary (`docs/verification/claude-code-harness.md`).
+5. **Licence.** The binary is proprietary: the image belongs in a private registry package. It carries no
+   `org.opencontainers.image.source` label (GHCR would link the package to the public repository), and
+   the build script verifies the package visibility with `gh api` before and after the push and aborts
+   if it is not private. The SHA-512 pin is the npm registry integrity, not an Anthropic signature (no
+   provenance): the registry is the trust anchor when the value is recorded.
+6. **Credential.** The upstream credential of the Claude Code pass-through surface is an API key with a
+   provider-side spend limit (owner decision 2026-10-09). The subscription-token option (`authTokenRef`,
+   section 10 stays "OAuth is orchestrator-only, not proxied") is not built (DOG-1b closed as not needed).
+7. **Review fixes.** (a) Publish refuses a harness step with a `toolbox` and an ordinary step whose
+   toolbox or default image is a harness image; the runner refuses an ordinary step on a harness image
+   unless it is also the default or a toolbox image. (b) `OAX_HARNESS_EGRESS_ALLOWED=true` is an
+   exfiltration risk (a harness node holds a model token and reads untrusted content) and is documented
+   as such. (c) "No DNS on the internal network" needs Docker Engine >= 26; Podman/aardvark-dns behaviour
+   must be verified with `scripts/test-harness-image.sh`. (d) The image smoke test is automated and
+   runs in CI; its egress part uses a fake proxy and proves the network path, not the real egress proxy
+   (whose grant checks are covered by the egress proxy unit tests).

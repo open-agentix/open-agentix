@@ -3,6 +3,7 @@ import type {
   AgentSpec,
   ControlLimits,
   CostModel,
+  HarnessKind,
   OaxEvent,
   PolicyBundle,
   PolicyDecision,
@@ -171,6 +172,8 @@ export interface RunNodeSpec {
   limits: { cpus: number; memoryMb: number; timeoutSeconds: number; pids: number };
   /** Effective step egress (only ever narrower than the pipeline's `runtime.egress`). */
   egress: string[];
+  /** Set for a harness step (`runtime.harness`): selects the harness image and its limits. */
+  harness?: HarnessKind;
 }
 
 export type RunNodeStopReason = 'step_end' | 'cancelled' | 'timeout' | 'lease_lost';

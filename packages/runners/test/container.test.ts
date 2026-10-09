@@ -485,3 +485,159 @@ describe('proxyUrlWithCredentials', () => {
     );
   });
 });
+
+describe('harness images and limits (DOG-1)', () => {
+  const HARNESS_IMG = `ghcr.io/open-agentix/open-agentix-run-node-claude-code@sha256:${'c'.repeat(64)}`;
+  const withHarness: Partial<ContainerRunnerConfigInput> = {
+    harnessImages: { 'claude-code': HARNESS_IMG },
+    maxMemoryMb: 4096,
+  };
+
+  it('maps a harness to its image and fails closed on an unconfigured one', () => {
+    const r = runner(fakeEngine(), withHarness);
+    expect(r.imageFor(undefined, 'claude-code')).toBe(HARNESS_IMG);
+    // the harness image wins over the toolbox: one image per harness
+    expect(r.imageFor('trivy', 'claude-code')).toBe(HARNESS_IMG);
+    expect(() => r.imageFor(undefined, 'opencode')).toThrow(/no image is configured for harness/);
+    try {
+      r.imageFor(undefined, 'opencode');
+    } catch (e) {
+      expect((e as { code: string }).code).toBe('harness_image_unknown');
+    }
+    expect(r.allowedImages().has(HARNESS_IMG)).toBe(true);
+  });
+
+  it('accepts only known harness kinds and digest-pinned harness images', () => {
+    expect(
+      () => new ContainerRunner({ ...baseConfig, harnessImages: { 'claude-code': 'x:latest' } }),
+    ).toThrow(/digest/);
+    expect(
+      () => new ContainerRunner({ ...baseConfig, harnessImages: { evil: HARNESS_IMG } as never }),
+    ).toThrow();
+  });
+
+  it('gives harness steps their own memory and /tmp size, capped by the operator maximum', () => {
+    const r = runner(fakeEngine(), withHarness);
+    const body = r.buildCreateBody(spec({ image: HARNESS_IMG, harness: 'claude-code' }));
+    expect(body.HostConfig.Memory).toBe(2048 * 1024 * 1024);
+    expect((body.HostConfig.Tmpfs as Record<string, string>)['/tmp']).toContain('size=256m');
+    expect(() => assertSafeCreateBody(body)).not.toThrow();
+    const capped = runner(fakeEngine(), { ...withHarness, maxMemoryMb: 1024 }).buildCreateBody(
+      spec({ image: HARNESS_IMG, harness: 'claude-code' }),
+    );
+    expect(capped.HostConfig.Memory).toBe(1024 * 1024 * 1024);
+    // ordinary nodes keep their defaults
+    const plain = r.buildCreateBody(spec());
+    expect(plain.HostConfig.Memory).toBe(256 * 1024 * 1024);
+    expect((plain.HostConfig.Tmpfs as Record<string, string>)['/tmp']).toContain('size=64m');
+  });
+
+  it('makes the /tmp sizes configurable', () => {
+    const body = runner(fakeEngine(), {
+      ...withHarness,
+      tmpMb: 128,
+      harnessTmpMb: 512,
+      harnessMemoryMb: 3072,
+    });
+    expect(
+      (body.buildCreateBody(spec()).HostConfig.Tmpfs as Record<string, string>)['/tmp'],
+    ).toContain('size=128m');
+    const h = body.buildCreateBody(spec({ image: HARNESS_IMG, harness: 'claude-code' }));
+    expect((h.HostConfig.Tmpfs as Record<string, string>)['/tmp']).toContain('size=512m');
+    expect(h.HostConfig.Memory).toBe(3072 * 1024 * 1024);
+  });
+
+  it('runs a harness step only on its own image and without egress by default', async () => {
+    const r = runner(fakeEngine(), { ...withHarness, ...withEgress });
+    expect(
+      await code(r.startNode(spec({ harness: 'claude-code' }))), // default image, not the harness image
+    ).toBe('image_not_allowed');
+    expect(
+      await code(
+        r.startNode(
+          spec({ image: HARNESS_IMG, harness: 'claude-code', egress: ['jira.example.com'] }),
+        ),
+      ),
+    ).toBe('harness_egress_denied');
+    const open = runner(fakeEngine(), {
+      ...withHarness,
+      ...withEgress,
+      harnessEgressAllowed: true,
+    });
+    const h = await open.startNode(
+      spec({ image: HARNESS_IMG, harness: 'claude-code', egress: ['jira.example.com'] }),
+    );
+    await h.stop('step_end');
+    const ok = runner(fakeEngine(), withHarness);
+    const h2 = await ok.startNode(spec({ image: HARNESS_IMG, harness: 'claude-code' }));
+    await h2.stop('step_end');
+  });
+});
+
+describe('memory classes and image separation (DOG-1 review)', () => {
+  const HARNESS_IMG = `ghcr.io/open-agentix/open-agentix-run-node-claude-code@sha256:${'c'.repeat(64)}`;
+
+  it('keeps ordinary nodes at the default memory when the ceiling is raised', () => {
+    const r = runner(fakeEngine(), {
+      harnessImages: { 'claude-code': HARNESS_IMG },
+      maxMemoryMb: 2048,
+    });
+    // the limits the worker hands to ordinary steps come from the default, not the ceiling
+    expect(r.defaultLimits()).toMatchObject({ memoryMb: 512 });
+    const body = r.buildCreateBody(spec({ limits: { ...spec().limits, ...r.defaultLimits() } }));
+    expect(body.HostConfig.Memory).toBe(512 * 1024 * 1024);
+    // an operator default above the ceiling is clamped to it
+    expect(
+      runner(fakeEngine(), { memoryMb: 1024, maxMemoryMb: 768 }).defaultLimits().memoryMb,
+    ).toBe(768);
+  });
+
+  it('requires /tmp to be at most half of the node memory, harness included', () => {
+    expect(
+      () => new ContainerRunner({ ...baseConfig, memoryMb: 2048, maxMemoryMb: 2048, tmpMb: 2047 }),
+    ).toThrow(/at most half/);
+    expect(
+      () => new ContainerRunner({ ...baseConfig, memoryMb: 2048, maxMemoryMb: 2048, tmpMb: 1024 }),
+    ).not.toThrow();
+    const harness = { harnessImages: { 'claude-code': HARNESS_IMG } };
+    expect(
+      () =>
+        new ContainerRunner({ ...baseConfig, ...harness, maxMemoryMb: 4096, harnessTmpMb: 2047 }),
+    ).toThrow(/OAX_CONTAINER_HARNESS_TMP_MB/);
+    // the harness /tmp is only checked when a harness image is configured
+    expect(
+      () => new ContainerRunner({ ...baseConfig, maxMemoryMb: 4096, harnessTmpMb: 2047 }),
+    ).not.toThrow();
+    // upper bound against typos
+    expect(() => new ContainerRunner({ ...baseConfig, maxMemoryMb: 2 ** 40 })).toThrow();
+  });
+
+  it('refuses a digest with uppercase letters or whitespace', () => {
+    for (const bad of [
+      `ghcr.io/o/r@sha256:${'A'.repeat(64)}`,
+      `ghcr.io/o/r@sha256:${'a'.repeat(64)}\n`,
+      ` ghcr.io/o/r@sha256:${'a'.repeat(64)}`,
+      `ghcr.io/o/r@sha256:${'a'.repeat(64)} `,
+      `ghcr.io/o/r@sha256: ${'a'.repeat(63)}`,
+      `ghcr.io/o/r@sha256:${'a'.repeat(63)}F`,
+    ]) {
+      expect(() => new ContainerRunner({ ...baseConfig, image: bad }), bad).toThrow();
+      expect(
+        () => new ContainerRunner({ ...baseConfig, harnessImages: { 'claude-code': bad } }),
+        bad,
+      ).toThrow();
+    }
+  });
+
+  it('refuses an ordinary step on a harness image unless it is also the default or a toolbox image', async () => {
+    const r = runner(fakeEngine(), { harnessImages: { 'claude-code': HARNESS_IMG } });
+    expect(await code(r.startNode(spec({ image: HARNESS_IMG })))).toBe('image_not_allowed');
+    // the operator reused the image as toolbox image: then it is allowed (explicit choice)
+    const shared = runner(fakeEngine(), {
+      harnessImages: { 'claude-code': HARNESS_IMG },
+      toolboxImages: { trivy: HARNESS_IMG },
+    });
+    const h = await shared.startNode(spec({ image: HARNESS_IMG }));
+    await h.stop('step_end');
+  });
+});

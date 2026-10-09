@@ -48,7 +48,10 @@ agents:
 
 The run-node image has to contain the pinned binary; the node finds it through `OAX_CLAUDE_BIN` or
 `OAX_OPENCODE_BIN` (+ `OAX_OPENCODE_SHA256`). Images are tracked separately (PLAT-05); without the binary
-the step fails with `harness_spawn_failed`. Real-run verification with the pinned versions is pending.
+the step fails with `harness_spawn_failed`. The Claude Code image (`run-node-claude-code`, pinned and
+checksummed, selected by `OAX_CONTAINER_HARNESS_IMAGES`) sets it; see
+[runners](runners.md#harness-images-dog-1). A harness step publishes with `runtime.egress: []`
+(enforced unless `OAX_HARNESS_EGRESS_ALLOWED=true`). Real-run verification with the pinned versions is pending.
 
 The sections below describe the **direct modes** of `oax run --harness` (CLI and orchestrator demos),
 which keep using a host login, a token file or a model connection.

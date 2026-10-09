@@ -1,4 +1,10 @@
-import { OaxError, type AgentDefinition, type AgentSpec, type RunnerKind } from '@openagentix/core';
+import {
+  OaxError,
+  type AgentDefinition,
+  type AgentSpec,
+  type HarnessKind,
+  type RunnerKind,
+} from '@openagentix/core';
 import type { Services } from '@openagentix/api';
 import {
   NodeStepFailure,
@@ -17,7 +23,12 @@ const INLINE: readonly RunnerKind[] = ['in-process', 'local'];
 export interface NodeDispatcherOptions {
   services: Pick<Services, 'runNodes' | 'control'>;
   /** Isolating runners that are enabled, by kind. */
-  runners: Partial<Record<RunnerKind, IsolatingRunner & { imageFor(toolbox?: string): string }>>;
+  runners: Partial<
+    Record<
+      RunnerKind,
+      IsolatingRunner & { imageFor(toolbox?: string, harness?: HarnessKind): string }
+    >
+  >;
   /** Id of the orchestrating worker (holds the run's lease). */
   workerId: string;
   /** Control node base URL as seen from run nodes. */
@@ -70,7 +81,9 @@ export class NodeDispatcher implements StepDispatcher {
     const egress = agent.runtime?.egress ?? pipelineEgress;
     if (!egress.every((h) => pipelineEgress.includes(h)))
       throw new OaxError('egress_denied', `step "${agent.id}" widens the pipeline's egress`);
-    const image = runner.imageFor(agent.toolbox ?? this.definition.runtime.toolbox);
+    const harness = agent.runtime?.harness;
+    // A harness step runs on the image of its harness (pinned binary); unknown harness fails closed.
+    const image = runner.imageFor(agent.toolbox ?? this.definition.runtime.toolbox, harness);
     const { runNodes, control } = this.opts.services;
     // The run's ledger counters before the node starts: what the model proxy adds while it runs is
     // this step's measured usage (ADR 0009 section 5). Steps of a run are sequential.
@@ -108,6 +121,7 @@ export class NodeDispatcher implements StepDispatcher {
           runToken: session.token,
           limits: { ...this.opts.limits, timeoutSeconds },
           egress,
+          ...(harness ? { harness } : {}),
         },
         { signal: cancel.signal },
       );

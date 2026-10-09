@@ -31,6 +31,30 @@ All notable changes to this project are documented here. The format follows
   removed from test output; the result file is written with `O_NOFOLLOW`; startup warning when
   `kernel.yama.ptrace_scope` is 0. Documented trust boundary: test code runs as the node's UID
   (ADR 0008 Amendment 3).
+- **Run-node image with Claude Code and harness runtime settings (DOG-1)**: Dockerfile target
+  `run-node-claude-code` with the Claude Code binary pinned to 2.1.295 and verified against the
+  registry SHA-512 at build time (no runtime download, no package manager, non-root, read-only root
+  compatible), `scripts/build-harness-image.sh` (build, push, digest). New settings
+  `OAX_CONTAINER_HARNESS_IMAGES` (harness -> digest-pinned image, `harness_image_unknown` fails
+  closed), `OAX_CONTAINER_TMP_MB`, `OAX_CONTAINER_HARNESS_MEMORY_MB` (2048) and
+  `OAX_CONTAINER_HARNESS_TMP_MB` (256), and `OAX_HARNESS_EGRESS_ALLOWED` (default off): a harness step
+  must publish with `runtime.egress: []` and the container runner refuses declared hosts at start
+  ("control node only" is enforced, not assumed). Verified in a hardened container on an internal
+  network; ADR 0008 amendment 4 and ADR 0009 amendment DOG-1. DOG-1b (subscription token) is not
+  built by owner decision. Review fixes: the image has no `org.opencontainers.image.source` label
+  (a linked GHCR package would follow the public repository) and `scripts/build-harness-image.sh`
+  refuses to push unless the package is private (verified with `gh api` before and after the push);
+  `scripts/test-harness-image.sh` is an automated image smoke test (pinned version, no managed
+  settings, no package manager, no setuid/setgid files, uid 10001, minimal writable paths, `noexec`
+  `/tmp`, fake egress proxy answering 407, no DNS and no route out) that runs in CI and before every
+  push; the base image is pinned by digest at build time and an unavailable pinned `git` version
+  prints the versions to use; new `OAX_CONTAINER_MEMORY_MB` (512) separates the memory of ordinary
+  nodes from the ceiling `OAX_CONTAINER_MAX_MEMORY_MB`; `/tmp` must be at most half of the node memory
+  (also checked by the runner schema) and integer settings have an upper bound; publish refuses a
+  harness step with a toolbox and an ordinary step on a harness image, and the runner refuses an
+  ordinary step on a harness image unless it is also the default or a toolbox image; documented
+  Docker >= 26 / Podman DNS caveats, the exfiltration risk of `OAX_HARNESS_EGRESS_ALLOWED` and the
+  trust anchor of the SHA-512 pin.
 - **Tenant tree data model (W13-1 first slice, ADR 0013)**: migration `0013_tenant_hierarchy.sql`
   (PostgreSQL and PGlite) adds `parent_id`, `root_id`, a materialized `path` with prefix index and
   `depth` (technical maximum 32) to `tenants`; slugs stay globally unique (`tenants_slug_unique` is kept, the

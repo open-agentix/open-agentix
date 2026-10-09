@@ -247,13 +247,16 @@ in DOG-2; the simplest form is that a step with a `pull-request` output gets its
 ### D8. Image and binary
 
 New Dockerfile target `run-node-claude-code` from `run-node`: Claude Code at a **pinned version**
-with a **SHA-256 checked at build time** (build fails on mismatch), `git` from the Alpine
+with a **SHA-512 (registry integrity) checked at build time** (build fails on mismatch), `git` from the Alpine
 repository pinned by version (used offline for `diff` only), the `oax-workspace` server, and an
-image test that asserts: no `managed-settings.json`, no `/etc/claude-code`, no `CLAUDE_CONFIG_DIR`,
+image test (`scripts/test-harness-image.sh`, run in CI and by the build script) that asserts: no `managed-settings.json`, no `/etc/claude-code`, no `CLAUDE_CONFIG_DIR`,
 no package manager, `claude --version` equals the pin. The version is the one verified on the host
 at build time (today `2.1.295`; the existing `worker-claude` pins `2.1.289`); "copy of the host
 version" means the same version and checksum, installed in the build, not a file copied from the
-host. If the native binary does not run on musl, the target uses a Debian slim base for this image
+host. The checksum is the registry's `dist.integrity` (SHA-512): it proves the tarball is the one the
+registry served, it is not an Anthropic signature and there is no provenance attestation; the trust anchor
+is the npm registry at the time the value is recorded (compare it with a second source on a version bump).
+If the native binary does not run on musl, the target uses a Debian slim base for this image
 only (verified in DOG-1, not assumed).
 
 Run-node limits for harness steps: memory 2048 MiB, 1 CPU, 256 PIDs, `/tmp` tmpfs 256 MiB (new
@@ -345,7 +348,7 @@ run node as a whole. Trusted: control node, worker, PostgreSQL, the delivery cod
 | T7 | **Cost and quota abuse** | Proxy reservations against 2 USD list price per run, monthly use-case budget, calls per minute and concurrency per session (below) | Subscription windows are shared with the owner's own use |
 | T8 | **Unwanted change reaches `main`** | Draft only, `oax/**` branch ruleset, `main` requires a pull request, no merge call in code, human merge | Token could merge if the worker were compromised (T3) |
 | T9 | **Hostile harness output** (forged transcript, fake test result) | Ledger from the proxy, tool calls from the gate, patch computed by the node and checked by digest; `lastTestRun` is node-reported and therefore re-run by the reviewer | A compromised node can lie about the test result; the review catches it |
-| T10 | **Supply chain of the harness** | Pinned version and SHA-256 at build, no run-time download, no managed settings, no instructions from the internet | Trust in the pinned upstream release |
+| T10 | **Supply chain of the harness** | Pinned version and SHA-512 at build, no run-time download, no managed settings, no instructions from the internet | Trust in the pinned upstream release |
 | T11 | **Leaks into the case study** (tokens, internal hostnames, personal data) | Redaction rules of section 8.3 and a scripted scan before publishing | Manual review remains |
 
 ### 6.3 Budgets and limits
@@ -393,7 +396,16 @@ sonnet, tests: haiku with real test runs, review and DOG-5: opus).
 
 ### DOG-1 Run-node image and harness runtime defaults
 
-- Dockerfile target `run-node-claude-code`: pinned Claude Code version and SHA-256 (build fails on
+> **Implemented (2026-10-09):** Dockerfile target `run-node-claude-code` (Claude Code 2.1.295, SHA-512
+> checked at build, Alpine/musl works, no Debian needed), `OAX_CONTAINER_HARNESS_IMAGES`,
+> `OAX_CONTAINER_TMP_MB`, `OAX_CONTAINER_HARNESS_MEMORY_MB|TMP_MB`, `OAX_HARNESS_EGRESS_ALLOWED`;
+> see [runners](runners.md#harness-images-dog-1) and the
+> [verification](verification/claude-code-harness.md#run-node-image-dog-1). `oax-workspace` (DOG-2, #139)
+> is built into the image (`node /app/packages/workspace/dist/main.js`); the end-to-end harness step in a real container with the full
+> stack follows with DOG-4b. Differences: the memory default applies to the harness class, not per
+> step, and `OAX_CLAUDE_BIN` is set by the image.
+
+- Dockerfile target `run-node-claude-code`: pinned Claude Code version and SHA-512 (npm registry `dist.integrity`; build fails on
   mismatch), pinned `git` (offline use), `oax-workspace` included; base Alpine if the binary runs on
   musl, otherwise Debian slim for this target only.
 - Image selection: a step with `runtime.harness` uses `OAX_CONTAINER_HARNESS_IMAGES`
@@ -413,6 +425,12 @@ sonnet, tests: haiku with real test runs, review and DOG-5: opus).
   and referenced by digest.
 
 ### DOG-1b Subscription credential at the control node
+
+> **Decision (owner, 2026-10-09): Q1 = no.** The proxy uses an Anthropic API key with a provider-side
+> spend limit; the subscription token is not relayed. DOG-1b (`authTokenRef`) is therefore **not
+> built** and ADR 0009 section 10 stays as is. The existing `anthropic` provider with `apiKeyRef`
+> already serves the pass-through surface of harness tokens. The bullets below are kept as the
+> design that would apply if the decision is reversed.
 
 - `anthropic` provider option `authTokenRef` (mutually exclusive with `apiKeyRef`); OAuth bearer
   header set for the upstream; allowed only for pass-through calls of `harness` tokens with

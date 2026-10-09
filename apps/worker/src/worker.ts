@@ -8,7 +8,7 @@ import {
   type RunResult,
   type Runner,
 } from '@openagentix/runners';
-import type { RunnerKind } from '@openagentix/core';
+import type { HarnessKind, RunnerKind } from '@openagentix/core';
 import { NodeDispatcher } from './node-dispatcher.js';
 import { RunQueue } from './queue.js';
 
@@ -23,7 +23,12 @@ export interface WorkerOptions {
    * whose effective runner is isolating are executed by short-lived run nodes (ADR 0008).
    */
   isolation?: {
-    runners: Partial<Record<RunnerKind, IsolatingRunner & { imageFor(toolbox?: string): string }>>;
+    runners: Partial<
+      Record<
+        RunnerKind,
+        IsolatingRunner & { imageFor(toolbox?: string, harness?: HarnessKind): string }
+      >
+    >;
     controlUrl: string;
     limits: { cpus: number; memoryMb: number; pids: number };
     /** How often a running node's run is checked for cancellation (default 2 s). */

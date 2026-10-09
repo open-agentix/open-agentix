@@ -426,6 +426,54 @@ describe('NodeDispatcher', () => {
       mk(def(), { container: strict }).dispatch(req({ id: 's', toolbox: 'git+node' })),
     ).rejects.toMatchObject({ code: 'toolbox_image_unknown' });
   });
+  it('selects the image by harness and passes the harness to the runner', async () => {
+    const seen: { harness?: unknown; image?: unknown }[] = [];
+    const askedFor: unknown[] = [];
+    const services = {
+      runNodes: {
+        createSession: async () => ({
+          sessionId: 's',
+          nodeId: 'n',
+          token: 'oaxrt.a.b',
+          expiresAt: new Date(),
+        }),
+        revoke: async () => undefined,
+        recordStopped: async () => undefined,
+        resultOf: async () => null,
+      },
+      control: { isCancelled: async () => false, runUsage: async () => ({}) },
+    };
+    const runner = {
+      imageFor: (_t?: string, harness?: string) => {
+        askedFor.push(harness);
+        if (harness === 'opencode') throw new OaxError('harness_image_unknown', 'x');
+        return harness ? `${IMAGE}-harness` : IMAGE;
+      },
+      startNode: async (spec: { harness?: unknown; image?: unknown }) => {
+        seen.push(spec);
+        throw new Error('stop here');
+      },
+    };
+    const d = new NodeDispatcher(
+      {
+        services: services as never,
+        runners: { container: runner } as never,
+        workerId: 'w',
+        controlUrl: 'http://api:8080',
+        limits: { cpus: 1, memoryMb: 128, pids: 8 },
+      },
+      def() as never,
+    );
+    const req = (agent: object) => ({ runId: 'r', agent, input: null }) as never;
+    await expect(
+      d.dispatch(req({ id: 's', runtime: { runner: 'container', harness: 'claude-code' } })),
+    ).rejects.toThrow('stop here');
+    expect(seen[0]).toMatchObject({ harness: 'claude-code', image: `${IMAGE}-harness` });
+    await expect(
+      d.dispatch(req({ id: 's', runtime: { runner: 'container', harness: 'opencode' } })),
+    ).rejects.toMatchObject({ code: 'harness_image_unknown' });
+    expect(askedFor).toEqual(['claude-code', 'opencode']);
+  });
   it('takes tokens and cost from the ledger of the control node, not from the node, and bounds its counters', async () => {
     const calls: string[] = [];
     const services = {

@@ -3,6 +3,7 @@
 #   docker build --target api -t ghcr.io/open-agentix/open-agentix-api:dev .
 #   docker build --target worker -t ghcr.io/open-agentix/open-agentix-worker:dev .
 #   docker build --target run-node -t ghcr.io/open-agentix/open-agentix-run-node:dev .
+#   docker build --target run-node-claude-code -t ghcr.io/open-agentix/open-agentix-run-node-claude-code:dev .
 ARG NODE_IMAGE=node:22-alpine
 
 FROM ${NODE_IMAGE} AS base
@@ -84,6 +85,64 @@ LABEL org.opencontainers.image.title="open-agentix-run-node" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}"
 COPY --from=build /src/apps/worker/dist /app/apps/worker/dist
+WORKDIR /app/apps/worker
+USER 10001:10001
+CMD ["node", "dist/run-node-cli.js"]
+
+# Claude Code binary for harness steps (DOG-1, docs/dogfooding-phase-1.md section 3 D8). The native
+# musl build is fetched at BUILD time only from the npm registry and verified against the SHA-512 of
+# the registry metadata (`npm view @anthropic-ai/claude-code-<platform>@<version> dist.integrity`,
+# converted to hex). A mismatch fails the build; nothing is downloaded when the image runs. To move
+# to another version, change the version and both digests together (see docs/runners.md).
+FROM ${NODE_IMAGE} AS claude-code-bin
+ARG TARGETARCH
+ARG CLAUDE_CODE_VERSION=2.1.295
+ARG CLAUDE_CODE_SHA512_AMD64=4bf70c9f893cbb3ba631830f0136f1d22d78a284a2f1c2c5aff58cc9f14a41cf07fc544c85a678ad60a60499edb563f6b3ddd8894e4ab0089f61fdf7db80ed16
+ARG CLAUDE_CODE_SHA512_ARM64=6a8f24ca81d2f975c8bba422794b616f956295b904b5b0811336da9bdedf585ffaeefcd9ae88095ff46224c84b65baca5fd2f96afa3bb21f9e2ba93ce410cf94
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) pkg=linux-x64-musl; sha="${CLAUDE_CODE_SHA512_AMD64}" ;; \
+      arm64) pkg=linux-arm64-musl; sha="${CLAUDE_CODE_SHA512_ARM64}" ;; \
+      *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    wget -q -O /tmp/claude.tgz "https://registry.npmjs.org/@anthropic-ai/claude-code-${pkg}/-/claude-code-${pkg}-${CLAUDE_CODE_VERSION}.tgz"; \
+    echo "${sha}  /tmp/claude.tgz" | sha512sum -c -; \
+    mkdir /out; \
+    tar -xzf /tmp/claude.tgz -C /out --strip-components=1 package/claude package/LICENSE.md; \
+    chmod 0555 /out/claude; \
+    /out/claude --version | grep -F "${CLAUDE_CODE_VERSION}"
+
+# Run node with the pinned Claude Code binary. Same hardening as `run-node` (numeric non-root user,
+# read-only root filesystem compatible: it writes only to /tmp and /run/oax, both tmpfs mounts of the
+# container runner). `git` is pinned by version (offline use for diffs only, it needs no network) and
+# the package manager is removed afterwards, so the image cannot install anything. The binary is
+# proprietary (Anthropic): keep the resulting image in a PRIVATE registry package. It also carries the
+# `oax-workspace` MCP server (packages/workspace, DOG-2): `node /app/packages/workspace/dist/main.js`.
+FROM runtime AS run-node-claude-code
+ARG VERSION=0.0.0-dev
+ARG CLAUDE_CODE_VERSION=2.1.295
+ARG GIT_VERSION=2.54.0-r0
+# No `org.opencontainers.image.source` label on purpose: GHCR links a package to the repository named
+# there, and a linked package inherits the (public) visibility of the repository. This image contains
+# the proprietary Claude Code binary and must stay in a private package (scripts/build-harness-image.sh
+# verifies that after the push).
+LABEL org.opencontainers.image.title="open-agentix-run-node-claude-code" \
+      org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-Anthropic-Claude-Code" \
+      org.opencontainers.image.version="${VERSION}" \
+      io.openagentix.harness="claude-code" \
+      io.openagentix.claude-code.version="${CLAUDE_CODE_VERSION}"
+USER root
+RUN apk add --no-cache git="${GIT_VERSION}" || { \
+      echo "ERROR: git=${GIT_VERSION} is not available in the Alpine repositories of this base image." >&2; \
+      echo "Alpine drops old package revisions. Available now: $(apk list git 2>/dev/null | tr '\n' ' ')" >&2; \
+      echo "Fix: rebuild with --build-arg GIT_VERSION=<one of the versions above> (and update the default here)." >&2; \
+      exit 1; } \
+ && rm -rf /sbin/apk /etc/apk /var/cache/apk /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
+COPY --from=claude-code-bin /out/claude /opt/claude-code/bin/claude
+COPY --from=claude-code-bin /out/LICENSE.md /opt/claude-code/LICENSE.md
+COPY --from=build /src/packages/workspace/dist /app/packages/workspace/dist
+COPY --from=build /src/apps/worker/dist /app/apps/worker/dist
+ENV OAX_CLAUDE_BIN=/opt/claude-code/bin/claude
 WORKDIR /app/apps/worker
 USER 10001:10001
 CMD ["node", "dist/run-node-cli.js"]

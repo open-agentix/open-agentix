@@ -608,3 +608,20 @@ separate UID or in a sibling container; seccomp denying `ptrace` and `process_vm
 server logs a warning at startup when `ptrace_scope` is 0. Until then the human review of the
 draft pull request is the control, and the dogfooding setup (own repository, no real secrets in
 the run node) is the only supported use. Details: [workspace tools](../workspace-tools.md).
+## Amendment 4 (DOG-1, 2026-10-09): harness nodes
+
+- **Image per step kind (3.3).** The image of a node is no longer a function of the toolbox alone: a
+  step with `runtime.harness` gets the image mapped for its harness (`OAX_CONTAINER_HARNESS_IMAGES`,
+  digest-pinned, `harness_image_unknown` fails closed) and `RunNodeSpec` carries the `harness`. The
+  runner refuses a harness step on any other image.
+- **Egress.** A harness node has no egress grant by default; declared hosts need
+  `OAX_HARNESS_EGRESS_ALLOWED=true` (publish and runner check, `harness_egress_denied`).
+- **Resources.** The runner applies per-class sizes: `OAX_CONTAINER_HARNESS_MEMORY_MB` and
+  `OAX_CONTAINER_HARNESS_TMP_MB` for harness nodes, `OAX_CONTAINER_MEMORY_MB` (512) and
+  `OAX_CONTAINER_TMP_MB` for the others; the operator maximum `OAX_CONTAINER_MAX_MEMORY_MB` is a
+  ceiling only and does not raise the default of ordinary nodes; `/tmp` may be at most half of the memory. The threat model is otherwise unchanged (read-only root,
+  `CapDrop ALL`, `noexec` tmpfs). Details: ADR 0009, amendment DOG-1.
+- **Images are exclusive (review fix).** A harness step may not set a toolbox; a step without a
+  harness may not run on a harness image (publish check, and a runner check that allows it only if the
+  operator also configured that image as default or toolbox image). The harness image carries no
+  `org.opencontainers.image.source` label and may only be pushed to a private package.

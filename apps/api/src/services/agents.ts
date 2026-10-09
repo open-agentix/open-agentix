@@ -250,6 +250,47 @@ export class AgentsService {
           path: `agents.${i}.runtime.harness`,
           message: `harness "${h}" is not enabled (OAX_HARNESSES_ENABLED=${this.ctx.config.harnesses.enabled.join(',')})`,
         });
+      if (!h) {
+        // A normal step never runs on a harness image (it carries a proprietary binary and the
+        // harness's settings): neither its toolbox nor the default image may be one.
+        const cfg = runners.container.config;
+        const isContainer = (a.runtime?.runner ?? def.runtime.runner) === 'container';
+        if (cfg && isContainer) {
+          const harnessImages = Object.values(cfg.harnessImages);
+          const toolbox = a.toolbox ?? def.runtime.toolbox;
+          const image = toolbox ? cfg.toolboxImages[toolbox] : cfg.image;
+          if (image && harnessImages.includes(image))
+            issues.push({
+              path: `agents.${i}.${a.toolbox ? 'toolbox' : 'runtime.runner'}`,
+              message: `step "${a.id}" has no harness but would run on a harness image; harness images are reserved for steps with runtime.harness`,
+            });
+        }
+        return;
+      }
+      if (a.toolbox)
+        issues.push({
+          path: `agents.${i}.toolbox`,
+          message: `harness step "${a.id}" must not set a toolbox: it runs on the image of its harness`,
+        });
+      // "Control node only": a harness step holds a model token and runs untrusted tool output, so it
+      // publishes without egress hosts unless the operator opened that explicitly (DOG-1).
+      const egress = a.runtime?.egress ?? def.runtime.egress;
+      if (egress.length > 0 && !this.ctx.config.harnesses.egressAllowed)
+        issues.push({
+          path: `agents.${i}.runtime.egress`,
+          message: `harness step "${a.id}" must not declare egress (runtime.egress: []); set OAX_HARNESS_EGRESS_ALLOWED=true to allow it`,
+        });
+      // The image of the harness must exist: otherwise the step would only fail when it starts.
+      const container = runners.container.config;
+      if (
+        (a.runtime?.runner ?? def.runtime.runner) === 'container' &&
+        container &&
+        !container.harnessImages[h]
+      )
+        issues.push({
+          path: `agents.${i}.runtime.harness`,
+          message: `no run node image is configured for harness "${h}" (OAX_CONTAINER_HARNESS_IMAGES)`,
+        });
     });
     // Step egress of container steps must lie inside the operator ceiling (never a union with it).
     const ceiling = (runners.container.config?.egressAllow ?? []).map(parseEgressEntry);
