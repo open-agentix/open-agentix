@@ -38,8 +38,8 @@ sees five rows with names and versions and nothing that says "tenant" (the scree
 | Endpoint | Fields relevant here | Missing for this design |
 | --- | --- | --- |
 | `GET /v1/agents` | `id, name, teamId, description, latestVersion, latestVersionId, draftUpdatedAt, createdAt`; since slice A1 (#155) also `tenant`, `useCase`, `ownerTeam`, `status`, `lastRun`, `monthSpendUsd`, `budget` and the filters `teamId`, `useCase`, `status`, `q` (see "Agent summary API" below) | `sort` (disable and enable: slice A7, see 1.2.2) |
-| `GET /v1/me` | `user`, `tenant {id, slug, name}`, `platformAdmin`, `permissions`, `bindings [{role, teamId}]` | tenant path, bindings per node/use case, installation mode (#156) |
-| `GET /v1/tenants` | flat list for platform admins | visible tree with counts and roles (#157) |
+| `GET /v1/me` | `user`, `tenant {id, slug, name}`, `platformAdmin`, `permissions`, `bindings [{role, teamId}]`; since slice A2 (#156) also `actingTenant`, `homeTenant`, `bindings[].tenantId/tenantSlugPath/useCase/expiresAt`, `visibleTenantCount`, `installationMode` | per-node bindings (W13-6) |
+| `GET /v1/tenants` | flat list of the caller's reach, with `parentId`, `depth`, `slugPath`; since slice A3 (#157) also `GET /v1/tenants/tree` (visible tree, counts, roles) and `GET /v1/tenants/search` | colour and use case of a node (need W13-2, W13-6) |
 | `GET /v1/runs`, approvals, events, costs, audit, budgets | one tenant; `allTenants` for platform admins on costs and audit | `scope=subtree` with a tenant on each row (#158) |
 | (none) | | effective governance with source (#159), allowed actions with reasons (#160), locate for deep links (#163), preferences (#164) |
 
@@ -97,6 +97,24 @@ Known gaps:
 - `budget.spentUsd` is the spend of the whole scope (tenant, use case or team), also for callers whose
   `costs:read` is limited to one team or agent. This matches `GET /v1/budgets` today, which shows the
   same totals to every `costs:read` holder; narrowing both is tracked in #174.
+
+### 1.2.1a Acting tenant and tenant tree (slices A2 and A3)
+
+Implemented in #156 and #157; the contract is `openapi.yaml`, the rules are in
+[tenancy](../tenancy.md#acting-in-the-tree). Decisions worth knowing for the console:
+
+- `actingTenant.path` is the breadcrumb, **root first and ending with the acting tenant**; the
+  compatibility field `tenant` equals `actingTenant` (it is the tenant the request acts in, not the
+  home tenant; use `homeTenant` for that).
+- `installationMode` is `multi` exactly when `visibleTenantCount > 1`. A viewer, or an admin of a
+  leaf node, gets `single` even in a large installation: there is nothing for them to switch to,
+  and the answer reveals nothing about tenants they cannot see.
+- Before per-node bindings (W13-6) only the global `admin` role reaches below the home node;
+  other roles see the home node only.
+- Count fields are `null` when the caller may not read them (the console shows an em dash, not 0);
+  `counts` itself is `null` unless `include=counts`.
+- Ancestors above the caller's node are `visible: false` path stubs. The tree is capped by `limit`
+  (`truncated`); use `root=` and `depth=` to load a large tree level by level.
 
 ### 1.2.2 Disable and enable agents (slice A7, #161)
 

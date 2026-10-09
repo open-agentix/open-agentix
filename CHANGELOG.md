@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **API: acting tenant in `/v1/me`, `X-OAX-Tenant` for the visible subtree and the tenant tree (UX
+  slices A2 and A3, #156 and #157)**: `GET /v1/me` adds `actingTenant` (with the breadcrumb `path`),
+  `homeTenant`, `bindings[].tenantId/tenantSlugPath/useCase/expiresAt`, `visibleTenantCount` and
+  `installationMode` (`single | multi`, derived from what the caller can act in). `X-OAX-Tenant`
+  accepts an id, a slug or a slug path and now works for tenant admins in their own node and
+  everything below it (other users: their own node; platform admins: everywhere); every other node
+  is the same `404`. Every authenticated response carries `X-OAX-Acting-Tenant: <slug path>`.
+  `GET /v1/tenants/tree?root=&depth=&include=counts&limit=` returns the visible tree (path stubs
+  for ancestors, the caller's roles per node, counts of agents, runs of 30 days, pending
+  approvals, spend and cap only where the caller may read them, capped with `truncated`),
+  `GET /v1/tenants/search?q=` finds nodes by name or slug, and `GET /v1/tenants` now returns the
+  caller's reach with `parentId`, `depth` and `slugPath` (additive). Migration
+  `0017_approvals_tenant_status_idx` (additive, down script and snapshot included);
+  `openapi.yaml` and the UI client types are regenerated, the console comes with later slices.
+  Tenant admins can now act below their node: a behaviour change for tenants with children, which
+  were API-invisible before (no HTTP route created them). See `docs/tenancy.md`.
 - **API: disable and enable agents (UX slice A7, #161)**: `POST /v1/agents/{id}/disable` and
   `/enable` (permission `agents:publish` on the agent, optional `reason` up to 500 characters with
   control, invisible and bidi characters removed, idempotent,
