@@ -4,7 +4,13 @@ Milestones are mirrored as GitHub milestones and issues (label `roadmap`). Every
 story; the work items, their order (waves), acceptance criteria and the gap analysis behind them
 are in [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md). Dates are targets, not promises.
 
-## v0.1 – Foundations (released 2026-10-04)
+Release status (2026-10-09): `v0.1.0` is tagged (2026-10-04) but there is no GitHub release object, and
+no release images are published: GitHub Actions has not run for this organisation's repositories since
+2026-10-04, so the release workflow has never run. Only the UI and worker images exist on GHCR; the
+API image does not. Everything below marked "on `main`" is built from source (Compose) until the
+first release with images.
+
+## v0.1 – Foundations (tagged v0.1.0 on 2026-10-04, built from source; no release images)
 
 - [x] `agents.md` format: versioned, immutable once published, pipelines of 1..n agents, budgets,
   tool allowlists with argument constraints, approvals, data classification, runtime/toolbox.
@@ -43,14 +49,15 @@ Wave 1:
 
 - [x] **Typed handovers with JSON Schema validation and conditional steps (`when`)** (W1-1, #25) – *As an agent engineer, I want each step to hand over a schema-validated JSON artifact and to run only when its condition holds so that agents never pass free text between each other and plans can branch without an orchestrator agent.*
 - [x] **Named read/write tool profiles per MCP server** (W1-2, #26) – *As an integrator, I want to publish named profiles per MCP server (for example `read` and `write`) with each tool classified as read or write so that agent engineers grant `jira:read` instead of hand-picking tools and a read-only step can never receive a write tool.*
-- [ ] **Remote run node, per-step credential broker and the container runner** (W1-3, #10) – *As a platform engineer, I want each run step in a short-lived container that receives only its own credentials and a short-lived run token so that a compromised tool cannot touch other runs or other steps' secrets.*
-- [ ] **Model proxy on the control node: model access for run nodes, measured cost, budget reservations, harnesses through the proxy** (W1-3b, design: [ADR 0009](docs/adr/0009-model-proxy.md)) – *As a platform engineer, I want isolated run nodes to call models only through a model proxy on the control node so that provider keys never reach a node, cost is measured by the platform instead of reported by the node, and budgets are hard limits even with concurrent calls.*
+- [x] **Remote run node, per-step credential broker and the container runner** (W1-3, #10, PR #76; opt-in, hardening follow-ups below) – *As a platform engineer, I want each run step in a short-lived container that receives only its own credentials and a short-lived run token so that a compromised tool cannot touch other runs or other steps' secrets.*
+- [ ] **Model proxy on the control node: model access for run nodes, measured cost, budget reservations, harnesses through the proxy** (W1-3b, design: [ADR 0009](docs/adr/0009-model-proxy.md); in progress: W1-3b-1 to -7 merged, PRs #78, #80, #81, #79, #126, #127, #129; -8 partly, run-node image and harness settings in PR #138; -9 (docs, observability) and -10 (end-to-end abuse suite) open) – *As a platform engineer, I want isolated run nodes to call models only through a model proxy on the control node so that provider keys never reach a node, cost is measured by the platform instead of reported by the node, and budgets are hard limits even with concurrent calls.*
 - [x] **Kubernetes Job runner (EKS/IRSA) with per-step credentials** (W1-4, #11) – *As an EKS operator, I want one Job per run step with its own ServiceAccount, IRSA role and NetworkPolicy so that credentials are scoped per agent step and nothing outlives the run.*
 - [x] **Agent Check and Agent Plan v1 (advisory plan generation with a least-privilege lint)** (W1-5, #27) – *As a business user, I want to describe a process in plain language and get a reviewable Agent Plan that splits it into least-privilege steps so that an agent engineer starts from a safe blueprint instead of a god agent.*
 - [x] **OpenCode harness adapter behind the policy gate** (W1-6, #28) – *As an agent engineer, I want to run an agent with OpenCode under openagentix so that its tool calls are policy-checked, approved, audited and costed exactly like native runs and like the Claude Code adapter.*
 
 Wave 2:
 
+- [ ] **Wave 1 hardening of the container runner: isolate test code from the node (separate UID, seccomp, patch secret scan)** (#140) – open; currently test code runs as the node's UID (ADR 0008 amendment 3). Rootless Podman instead of a Docker socket proxy is under consideration.
 - [ ] **Toolbox images in CI: build, cosign signing, SBOM, Trivy scan, digest pinning and verification** (W2-1, #29) – *As a security engineer, I want toolbox images built, signed (cosign), SBOM'd (syft) and scanned (trivy) so that only verified binaries run as worker nodes.*
 - [ ] **mTLS between remote worker nodes and the control node** (W2-2, #30) – *As an operator, I want mTLS between worker nodes and the control node so that run tokens are not the only protection.*
 - [ ] **Emergency security overrides (kill switch that always wins)** (W2-3, #31) – *As a security lead, I want to block a tool, server, agent or tenant immediately during an incident, without editing reviewed policies, so that a security block always wins and takes effect within seconds.*
@@ -58,10 +65,28 @@ Wave 2:
 - [ ] **Notification channels, budget alert delivery and per-agent monthly budgets** (W2-5, #32) – *As a finance owner, I want a monthly limit per agent and budget alerts pushed to chat or mail, configured through the API, so that the hard stop is never a surprise.*
 - [ ] **Console support for wave 1: plans, handovers and conditions, tool profiles, runners and credentials** (W2-6, #33) – *As an agent engineer, I want to see Agent Plans, step handovers, skipped steps, tool profiles and the runner of each step in the console so that every run is visible step by step.*
 
+Release and verification gaps (found in the 2026-10-09 gap analysis against the website; none built yet):
+
+- [ ] **First pre-release `v0.2.0-alpha.1`: API image on GHCR, GitHub release, signed images (cosign, SBOM), Helm install test on kind** – blocked while GitHub Actions is disabled for the account; the release workflow exists (`.github/workflows/release.yml`) but has never run.
+- [ ] **Wire the Kubernetes Job runner into the worker** – the runner (W1-4) and its configuration exist, `apps/worker` instantiates only the container runner; open review follow-ups, a test against kind and Helm wiring.
+- [ ] **Real-run verification of providers and harnesses** – OpenCode with a pinned binary; Claude Code through the model proxy inside a run node (the verified path of 2026-10-04 ran in-process); OpenAI, Azure OpenAI, OpenRouter, Bedrock with real accounts. Only Claude Code in-process is verified with real runs today.
+- [ ] **Visibility of platform connections across tenants (known gap, ADR 0012)** – tracked by W12-1 (#113, #114).
+- [ ] **Demo on the release images** (W8-4, #62) – the live demo runs on images built from source.
+
+Dogfooding phase 1 (design: [docs/dogfooding-phase-1.md](docs/dogfooding-phase-1.md)): a bug-fix agent that works on a separate sandbox repository and proposes draft pull requests.
+
+- [x] **DOG-0 design** (PR #137)
+- [x] **DOG-1 run-node image `run-node-claude-code` and harness runtime settings** (PR #138)
+- [ ] **DOG-1b subscription credential at the control node** – not built, by owner decision.
+- [x] **DOG-2 confined workspace tools and node-computed patch** (PR #139)
+- [x] **DOG-3a/3b hardened Git delivery and draft pull request extension** (PR #141)
+- [ ] **DOG-3c/DOG-4 seed endpoint, `pull-request` output delivery and the bug-fix agent** (PR #144, open)
+- [ ] **DOG-4a sandbox repository, DOG-4b stack and images, DOG-5 first real run** – need an API key with a spend limit and a token limited to the sandbox repository.
+
 Wave 3:
 
 - [ ] **Approval inbox with notifications and one-click decisions in Slack, Teams and mail** (W3-1, #34) – *As an operator, I want approvals in Slack/Teams/mail with one-click decisions so that agents do not wait for me to open the UI.*
-- [ ] **More change-gate probes: API with secrets, SQL query, MCP read** (W3-2, #4) – *As an integrator, I want schedules to run only when an authenticated API response, a database query or an MCP resource changes.*
+- [ ] **More change-gate probes: API with secrets, SQL query, MCP read** (W3-2, #4; the code comment and the website documentation name v0.3, the plan names v0.2: to be aligned) – *As an integrator, I want schedules to run only when an authenticated API response, a database query or an MCP resource changes.*
 - [ ] **Policy bindings per team and agent, control-agent rule API and RE2 patterns** (W3-3, #35) – *As a security engineer, I want to bind policy bundles to teams or agents, tune control-agent thresholds per team through the API and use ReDoS-safe patterns.*
 - [ ] **HTTP/API connections and delivery of agent outputs to targets** (W3-4, #36) – *As an integrator, I want plain HTTP API connections next to MCP servers, and agent outputs delivered to their declared target, so that agents call REST APIs and post results without writing an MCP server.*
 - [ ] **Observability completion: step, model and tool spans and the missing metrics** (W3-5, #37) – *As an operator, I want traces per run step, model call and tool call and metrics for tool calls, approvals, tokens and budget exhaustion so that I can see every run in my own monitoring.*
@@ -94,7 +119,7 @@ Waves 9-12 (added 2026-10-04, parallel tracks):
 
 - [ ] **No-code agent builder with a round-trip code view and live Agent Check lint** (W9-1, design: [ADR 0010](docs/adr/0010-agent-authoring-builder-and-git-sync.md), issues #84, #85, #86, #87, #88, #89) – *As an integrator or team lead, I want to build and change agents in a form (metadata, triggers, budget, steps, tools by profile, handovers, conditions, runtime, classification) and switch to the code view at any time without losing comments or unknown fields so that I do not need to write YAML and engineers can still work in code.*
 - [ ] **Git-synced agent repositories (GitOps): bindings, sync, review and publish, drift** (W9-2, design: [ADR 0010](docs/adr/0010-agent-authoring-builder-and-git-sync.md), issues #90, #91, #92, #93, #94, #95, #96) – *As a platform team, I want to connect a Git repository path as the source of a team's agents, with validation and Agent Check in the sync and publishing after review, so that agents are reviewed in pull requests, protected by branch rules and rolled back with a revert.*
-- [ ] **Central outbound network configuration: per-destination proxies, trust store, mTLS, safe connectivity tests** (W10-1, design: [ADR 0011](docs/adr/0011-outbound-network-proxies-and-private-endpoints.md), issues #98, #99, #100, #101, #102, #103, #104, #105) – *As a platform operator in a corporate network, I want to define per destination which proxy (with credentials from the secret store), which CA bundle and which client certificate is used, and test connectivity safely, so that every outbound call of openagentix follows our network rules without code changes.*
+- [ ] **Central outbound network configuration: per-destination proxies, trust store, mTLS, safe connectivity tests** (W10-1; in progress: W10-1-1 route resolver merged in PR #130, W10-1-2 dispatcher factory with DNS pinning merged in PR #133; design: [ADR 0011](docs/adr/0011-outbound-network-proxies-and-private-endpoints.md), issues #98, #99, #100, #101, #102, #103, #104, #105) – *As a platform operator in a corporate network, I want to define per destination which proxy (with credentials from the secret store), which CA bundle and which client certificate is used, and test connectivity safely, so that every outbound call of openagentix follows our network rules without code changes.*
 - [ ] **Private model endpoints: Bedrock PrivateLink and Azure OpenAI private endpoints** (W10-2, design: [ADR 0011](docs/adr/0011-outbound-network-proxies-and-private-endpoints.md), issues #106, #107) – *As a cloud platform owner, I want model calls to reach Bedrock and Azure OpenAI over private connectivity (VPC interface endpoints, private endpoints) with correct signing and identity-based auth so that prompts never cross the public internet.*
 - [ ] **Real read-only demo agent that answers questions about the project from its public repository** (W11-1, design: [demo-repo-agent.md](docs/demo-repo-agent.md), issues #109, #110, #111, #112) – *As a visitor of the demo, I want to ask a question about openagentix and get an answer with citations from the public repository so that I see a real agent work under the policy gate, read-only profile, budget and audit chain.*
 - [ ] **Connections: MCP servers and model providers as separate areas, typed instances, central grants** (W12-1, design: [ADR 0012](docs/adr/0012-connections-instances-scopes-and-data-protection.md), issues #113, #114, #115, #116) – *As a tenant admin, I want MCP servers and model providers in their own console areas, several instances of the same server type with their own credentials, profiles, policies and budgets, and central connections only when the operator grants them, so that each use case gets exactly the access it needs and nothing is shared by accident.*
@@ -110,6 +135,8 @@ Wave 6:
 - [ ] **Version approval bound to digest, model, eval set and policy, with re-evaluation on material change** (W6-3, #51) – *As a risk officer, I want an agent version approved for production only together with its model configuration, evaluation set and policy, and re-evaluated when any of them changes.*
 - [ ] **Dark software factory pipeline template, automatic hardening review of PRs and the LLM second opinion** (W6-4, #6) – *As a founder, I want a spec -> code -> tests -> PR template for prototypes with the fixed notice, and the hardening agent reviewing every development agent's PR automatically (optionally with a model that can only add findings).*
 - [ ] **Console for the lifecycle: plans, evaluations, approvals of versions, guidelines and tenant admin** (W6-5, #52) – *As a platform admin, I want Agent Plans, evaluations, version approvals, guidelines and tenants in the console so that the whole path from process to production is visible in one place.*
+
+- [ ] **Hierarchical tenants and setup modes** (W13, design: [ADR 0013](docs/adr/0013-hierarchical-tenants-and-setup-modes.md); in progress: W13-1 first slice, the tenant tree data model, merged in PR #136; sub-tenants cannot be created over HTTP yet; W13-2 onward not started).
 
 <!-- roadmap-v0.4-9-12:start -->
 Wave 9:
