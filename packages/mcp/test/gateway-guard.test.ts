@@ -5,6 +5,8 @@ import {
   ToolGrantSchema,
   type PolicyContext,
 } from '@openagentix/core';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   McpServerConfigSchema,
@@ -92,5 +94,36 @@ describe('ToolGateway context guard', () => {
     expect(r.result.text).not.toContain(value);
     expect(r.result.text).toContain('[redacted:known-secret]');
     expect(r.guard?.secrets.kinds).toEqual({ 'known-secret': 1 });
+  });
+
+  it('guards the message of a call that fails with a server error (harness gate path)', async () => {
+    const hidden = String.fromCodePoint(0xe0049, 0xe0047, 0xe004e);
+    const throwing = () => {
+      const server = new Server({ name: 'srv', version: '0' }, { capabilities: { tools: {} } });
+      server.setRequestHandler(ListToolsRequestSchema, async () => ({
+        tools: [{ name: 'read', inputSchema: { type: 'object' as const } }],
+      }));
+      server.setRequestHandler(CallToolRequestSchema, async () => {
+        throw new Error(`boom${hidden} ${FAKE_TOKEN}`);
+      });
+      return server;
+    };
+    const g = new ToolGateway([McpServerConfigSchema.parse({ name: 'srv', transport: 'in-memory' })], {
+      secrets: new StaticSecretResolver({}),
+      inMemory: inMemoryServers({ srv: throwing }),
+    });
+    gateways.push(g);
+    const err = await call(g).then(
+      () => {
+        throw new Error('expected a failure');
+      },
+      (e: unknown) => e as Error & { code?: string; guard?: { secrets: { total: number } } },
+    );
+    expect(err.code).toBe('tool_failed');
+    expect(err.message).toContain('boom');
+    expect(err.message).toContain('[redacted:github-token]');
+    expect(err.message).not.toContain(FAKE_TOKEN);
+    expect(err.message).not.toContain(hidden);
+    expect(err.guard?.secrets.total).toBe(1);
   });
 });

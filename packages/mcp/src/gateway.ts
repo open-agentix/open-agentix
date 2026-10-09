@@ -44,6 +44,9 @@ export interface ExposedTool {
   access?: ToolAccess | undefined;
 }
 
+/** A failed tool call: the message is guarded, `guard` says what was removed (counts only). */
+export type GuardedToolError = OaxError & { guard?: GuardReport };
+
 export type GatewayCallResult =
   | {
       status: 'ok';
@@ -138,8 +141,15 @@ export class ToolGateway {
     if (decision.effect === 'deny') return { status: 'denied', decision };
     if (decision.effect === 'require_approval' && !opts.approved)
       return { status: 'approval_required', decision };
-    const conn = await this.connection(call.server);
-    const raw = await conn.callTool(call.tool, call.args, opts.signal);
+    let raw: ToolResult;
+    try {
+      const conn = await this.connection(call.server);
+      raw = await conn.callTool(call.tool, call.args, opts.signal);
+    } catch (e) {
+      // The message of a failed call carries server text (a JSON-RPC error, a crash message) and
+      // reaches the model like a result: the executor shows it, the harness gate returns it.
+      throw this.guardedError(e);
+    }
     const text = this.guard.text(raw.text);
     if (raw.structured === undefined && isGuardReportEmpty(text.report))
       return { status: 'ok', decision, result: raw };
@@ -151,6 +161,18 @@ export class ToolGateway {
     return isGuardReportEmpty(report)
       ? { status: 'ok', decision, result }
       : { status: 'ok', decision, result, guard: report };
+  }
+
+  /** The error of a failed call with its message guarded; content-bearing details are dropped. */
+  private guardedError(e: unknown): GuardedToolError {
+    const message = e instanceof Error ? e.message : String(e);
+    const guarded = this.guard.text(message);
+    const out: GuardedToolError = new OaxError(
+      e instanceof OaxError ? e.code : 'tool_failed',
+      guarded.text,
+    );
+    if (!isGuardReportEmpty(guarded.report)) out.guard = guarded.report;
+    return out;
   }
 
   async close(): Promise<void> {
