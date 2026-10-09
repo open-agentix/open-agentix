@@ -5,6 +5,7 @@ import { costsQuery, teamsQuery, useAgentNames, useTeamNames } from '../../api/q
 import type { CostGroupBy, CostRow } from '../../api/types';
 import { useCan } from '../../auth/auth';
 import { Icon } from '../../components/Icon';
+import { ResponsiveList, type ListColumn } from '../../components/ResponsiveList';
 import {
   Badge,
   EmptyState,
@@ -52,7 +53,7 @@ export function CostsPage() {
   const from = periodStart(period);
   const costs = useQuery(costsQuery(groupBy, from));
   const agentNames = useAgentNames(can('agents:read'));
-  const teamNames = useTeamNames(can('users:read'));
+  const teamNames = useTeamNames();
   const label = (row: CostRow) => {
     if (row.key === null) return t('costs.unassigned');
     if (groupBy === 'agent') return agentNames.get(row.key) ?? shortId(row.key);
@@ -64,11 +65,56 @@ export function CostsPage() {
   const total = items.reduce((s, r) => s + r.costUsd, 0);
   const tokens = items.reduce((s, r) => s + r.tokensIn + r.tokensOut, 0);
   const max = items[0]?.costUsd ?? 0;
+  const costColumns: ListColumn<CostRow>[] = [
+    {
+      key: 'group',
+      header: t(`costs.groups.${groupBy}`),
+      cell: (r) => label(r),
+      mobileLine: 1,
+    },
+    {
+      key: 'cost',
+      header: t('costs.cost'),
+      cell: (r) => <span className="strong">{fmt.usd(r.costUsd)}</span>,
+      className: 'num',
+      mobileLine: 1,
+    },
+    {
+      key: 'in',
+      header: t('costs.tokensIn'),
+      cell: (r) => fmt.number(r.tokensIn),
+      className: 'num',
+      mobileLine: 2,
+    },
+    {
+      key: 'out',
+      header: t('costs.tokensOut'),
+      cell: (r) => fmt.number(r.tokensOut),
+      className: 'num',
+      mobileLine: 2,
+    },
+    {
+      key: 'share',
+      header: <span className="sr-only">{t('costs.share')}</span>,
+      cell: (r) => (
+        <span className="bar-cell" aria-hidden="true">
+          <span
+            className="bar"
+            style={{ width: `${max ? Math.max(2, (r.costUsd / max) * 100) : 0}%` }}
+          />
+        </span>
+      ),
+      decorative: true,
+      className: 'bar-col',
+      mobileLine: 3,
+    },
+  ];
   return (
     <div className="page">
       <PageHeader
         title={t('costs.title')}
         description={t('costs.subtitle')}
+        scope
         actions={
           <SelectField
             label={t('costs.period')}
@@ -105,46 +151,13 @@ export function CostsPage() {
               {t('costs.emptyText')}
             </EmptyState>
           ) : (
-            <div className="table-wrap">
-              <table className="table">
-                <caption className="sr-only">
-                  {t('costs.tableCaption', { group: t(`costs.groups.${groupBy}`) })}
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">{t(`costs.groups.${groupBy}`)}</th>
-                    <th scope="col" className="num">
-                      {t('costs.tokensIn')}
-                    </th>
-                    <th scope="col" className="num">
-                      {t('costs.tokensOut')}
-                    </th>
-                    <th scope="col" className="num">
-                      {t('costs.cost')}
-                    </th>
-                    <th scope="col" className="hide-sm">
-                      <span className="sr-only">{t('costs.share')}</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((r) => (
-                    <tr key={r.key ?? 'none'}>
-                      <td>{label(r)}</td>
-                      <td className="num">{fmt.number(r.tokensIn)}</td>
-                      <td className="num">{fmt.number(r.tokensOut)}</td>
-                      <td className="num strong">{fmt.usd(r.costUsd)}</td>
-                      <td className="hide-sm bar-cell" aria-hidden="true">
-                        <span
-                          className="bar"
-                          style={{ width: `${max ? Math.max(2, (r.costUsd / max) * 100) : 0}%` }}
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResponsiveList
+              caption={t('costs.tableCaption', { group: t(`costs.groups.${groupBy}`) })}
+              columns={costColumns}
+              rows={items}
+              rowKey={(r) => r.key ?? 'none'}
+              maxHeight={900}
+            />
           )}
         </Section>
       </TabPanel>

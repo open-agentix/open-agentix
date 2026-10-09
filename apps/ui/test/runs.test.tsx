@@ -220,7 +220,7 @@ describe('run detail', () => {
       ),
     );
     await renderApp(`/runs/${f.ids.run}`);
-    expect(await screen.findByText(/doesn't exist/i)).toBeInTheDocument();
+    expect(await screen.findByText('This run no longer exists')).toBeInTheDocument();
   });
 });
 

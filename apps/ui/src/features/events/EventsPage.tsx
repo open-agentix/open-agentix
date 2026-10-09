@@ -19,7 +19,7 @@ import type { EventSource, EventSourceInput, IngestedEvent } from '../../api/typ
 import { useCan } from '../../auth/auth';
 import { Icon } from '../../components/Icon';
 import { useToast } from '../../components/toast';
-import { VirtualTable, type Column } from '../../components/VirtualTable';
+import { ResponsiveList, type ListColumn } from '../../components/ResponsiveList';
 import {
   Badge,
   Button,
@@ -56,6 +56,7 @@ export function EventsPage() {
       <PageHeader
         title={t('events.title')}
         description={t('events.subtitle')}
+        scope
         actions={
           can('sources:write') ? (
             <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>
@@ -244,7 +245,7 @@ function RecentEvents() {
   const events = useInfiniteQuery(eventsQuery());
   const [selected, setSelected] = useState<IngestedEvent | null>(null);
   const rows = events.data?.pages.flatMap((p) => p.items) ?? [];
-  const columns: Column<IngestedEvent>[] = [
+  const columns: ListColumn<IngestedEvent>[] = [
     {
       key: 'type',
       header: t('events.type'),
@@ -253,9 +254,15 @@ function RecentEvents() {
           {e.type}
         </button>
       ),
+      mobileLine: 1,
     },
-    { key: 'subject', header: t('events.subject'), cell: (e) => e.subject ?? '–' },
-    { key: 'received', header: t('events.received'), cell: (e) => fmt.relative(e.receivedAt) },
+    { key: 'subject', header: t('events.subject'), cell: (e) => e.subject ?? '–', mobileLine: 2 },
+    {
+      key: 'received',
+      header: t('events.received'),
+      cell: (e) => fmt.relative(e.receivedAt),
+      mobileLine: 3,
+    },
   ];
   return (
     <Section title={t('events.recent')}>
@@ -264,7 +271,7 @@ function RecentEvents() {
       ) : events.isError ? (
         <ErrorState error={events.error} onRetry={() => void events.refetch()} />
       ) : rows.length ? (
-        <VirtualTable
+        <ResponsiveList
           caption={t('events.recent')}
           columns={columns}
           rows={rows}

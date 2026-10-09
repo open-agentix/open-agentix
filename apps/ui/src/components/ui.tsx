@@ -14,6 +14,7 @@ import { ApiError } from '../api/client';
 import type { RunStatus } from '../api/types';
 import { useT } from '../i18n/i18n';
 import { Icon, type IconName } from './Icon';
+import { ScopeChip } from './Tenant';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
@@ -229,11 +230,14 @@ export function PageHeader({
   description,
   actions,
   back,
+  scope = false,
 }: {
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
   back?: ReactNode;
+  /** Show the scope chip (active tenant) under the title; set on list pages. */
+  scope?: boolean;
 }) {
   return (
     <header className="page-header">
@@ -241,6 +245,11 @@ export function PageHeader({
         {back}
         <h1>{title}</h1>
         {description ? <p className="page-desc">{description}</p> : null}
+        {scope ? (
+          <div className="page-scope">
+            <ScopeChip />
+          </div>
+        ) : null}
       </div>
       {actions ? <div className="page-actions">{actions}</div> : null}
     </header>

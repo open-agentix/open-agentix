@@ -50,7 +50,13 @@ describe('demo scenarios', () => {
     const first = await run(n, 'cve-xz-backdoor');
     expect(first.statusCode).toBe(202);
     const runId = first.json().runId as string;
-    const detail = (await n.req({ method: 'GET', url: `/v1/runs/${runId}` })).json();
+    const detail = (
+      await n.req({
+        method: 'GET',
+        url: `/v1/runs/${runId}`,
+        headers: { 'x-oax-tenant': 'security' },
+      })
+    ).json();
     expect(detail).toMatchObject({
       status: 'queued',
       triggeredBy: expect.stringMatching(/^demo-scenario:[0-9a-f]{16}$/),

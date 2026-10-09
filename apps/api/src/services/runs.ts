@@ -90,6 +90,8 @@ export class RunsService {
     triggeredBy: string;
     versionId?: string;
     tx?: Db;
+    /** Fixed run id (deterministic demo seed); random when omitted. */
+    id?: string;
   }): Promise<RunRow> {
     const latest = await this.agents.latestVersionId(input.agentId);
     const versionId = input.versionId ?? latest.versionId;
@@ -120,7 +122,7 @@ export class RunsService {
     // Hard stop at admission: the first breached scope names the error code and reason.
     const breach = verdict.breaches[0];
     const budget = breach ? breach.message : null;
-    const id = randomUUID();
+    const id = input.id ?? randomUUID();
     const now = this.ctx.now();
     const [row] = await db
       .insert(runs)
