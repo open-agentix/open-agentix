@@ -1269,13 +1269,13 @@ Docs and website: Website demo page (today 'coming soon').
 <!-- waves-9-12:start -->
 ### Wave 9: agent authoring (form builder, code view, Git-synced agents)
 
-Milestone: **v0.3** (W9-3: v0.4). Design: [ADR 0010](adr/0010-agent-authoring-builder-and-git-sync.md). Independent of W1-3b; the builder pickers use connection instances of W12-1 when they exist and plain connections before.
+Milestone: **v0.3** (W9-2-5 and W9-3: v0.4). Design: [ADR 0010](adr/0010-agent-authoring-builder-and-git-sync.md) with Amendment 1 (any Git host over plain Git, owner decision 2026-10-04). Independent of W1-3b; the builder pickers use connection instances of W12-1 when they exist and plain connections before.
 
 | Item | Title | Size | Model | Security review | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | W9-1 | No-code agent builder with a round-trip code view and live Agent Check lint | L (6 tasks) | sonnet (design: opus, ADR 0010) | yes | W1-5 (lint), W1-1, W1-2 (fields); W12-1 optional (instance pickers) | packages/core/src/agents/edit.ts (new), packages/core/src/plan/from-definition.ts (new), apps/api/src/http/routes/agents.ts (validate response), apps/ui/src/features/agents/builder/* (new), apps/ui/src/features/agents/{AgentEditor,EditorTab,NewAgentPage}.tsx, apps/ui/src/i18n/locales/*.json | #84, #85, #86, #87, #88, #89 |
-| W9-2 | Git-synced agent repositories (GitOps): bindings, sync, review and publish, drift | L (7 tasks) | sonnet (design: opus, ADR 0010) | yes | W9-1-2 (lint), W10-1-1 (outbound resolver; before it: environment proxies) | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/services/repositories/* (new), apps/api/src/http/routes/{repositories,repo-hooks}.ts (new), apps/worker/src/repo-sync.ts (new), packages/core/src/rbac.ts, apps/ui/src/features/repositories/* (new) | #90, #91, #92, #93, #94, #95, #96 |
-| W9-3 | PR-back: propose console edits of Git-managed agents as pull requests | M (1 task) | sonnet | yes | W9-2 | apps/api/src/services/repositories/pr-back.ts (new), forge adapters, apps/ui/src/features/agents/EditorTab.tsx | #97 |
+| W9-2 | Git-synced agent repositories (GitOps) for any Git host over plain Git: bindings, sync, review and publish, drift | L (8 tasks) | sonnet (design: opus, ADR 0010 incl. Amendment 1) | yes | W9-1-2 (lint), W10-1-1 (outbound resolver), W10-1-2 (dispatcher factory, for the Git relay) | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/services/repositories/* (new), apps/api/src/http/routes/{repositories,repo-hooks}.ts (new), apps/worker/src/repo-sync.ts (new), apps/worker/src/git/* (new), packages/core/src/network/resolve.ts (`ssh` for purpose `git`), packages/core/src/rbac.ts, apps/ui/src/features/repositories/* (new) | #90, #91, #92, #93, #94, #95, #96, W9-2-8 (to be filed) |
+| W9-3 | PR-back: propose console edits of Git-managed agents as branches (every host) and pull requests (host extensions) | M (1 task) | sonnet | yes | W9-2, W9-2-5 (optional, for the pull request) | apps/api/src/services/repositories/pr-back.ts (new), apps/worker/src/git/* (push), host extensions, apps/ui/src/features/agents/EditorTab.tsx | #97 |
 
 #### W9-1 No-code agent builder with a round-trip code view and live Agent Check lint
 
@@ -1367,88 +1367,101 @@ Docs and website: `docs/authoring.md` (new: builder, code view, lint), `docs/age
 
 Acceptance criteria (item level):
 
-- A tenant can bind a repository path (GitHub first, then GitLab and Gitea) with read-only credentials as secret references; sync by poll, webhook poke and manual trigger.
+- A tenant can bind a repository path on any Git host over plain Git (HTTPS with a read-only token, or SSH with a platform-generated read-only deploy key and pinned host keys); no host API is needed; one repository serves exactly one tenant (ADR 0010 Amendment 1); sync by poll (baseline), optional webhook poke and manual trigger.
 - Every synced file passes secret scan, parse/validate, binding ceiling, lint mode and the version rule before it becomes a candidate; refusals are reported per file with codes.
-- Candidates are published manually or on merge to a protected branch; published versions are immutable and record the commit; Git wins for Git-managed agents; detach and adopt are explicit and audited.
+- Candidates are published manually, or on merge only with trusted commit signatures, fast-forward ancestry and branch protection (host extension or operator attestation); published versions are immutable and record the commit; Git wins for Git-managed agents; detach and adopt are explicit and audited.
 
 Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W9-2-1 | Repository bindings: migration 0011, permissions, GitHub adapter, URL and SSRF checks | M | sonnet | v0.3 | - | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/db/schema.ts, apps/api/src/services/repositories/{bindings,forge-github}.ts (new), apps/api/src/http/routes/repositories.ts (new), packages/core/src/rbac.ts (repos:read/write/sync), openapi.yaml | #90 |
-| W9-2-2 | Sync engine: fetch with limits, secret scan, validation, ceiling, lint, candidates | M | sonnet | v0.3 | W9-2-1, W9-1-2 | apps/worker/src/repo-sync.ts (new), apps/api/src/services/repositories/{sync,secret-scan,ceiling}.ts (new), apps/worker/src/queue.ts (job kind) | #91 |
-| W9-2-3 | Webhook poke endpoint for forge push events | S | sonnet | v0.3 | W9-2-2 | apps/api/src/http/routes/repo-hooks.ts (new), apps/api/src/services/repositories/webhooks.ts (new) | #92 |
+| W9-2-1 | Repository bindings: migration 0011, permissions, URL canonicalization, credentials and host keys | M | sonnet | v0.3 | - | apps/api/drizzle/0011_agent_repositories.sql (new), apps/api/src/db/schema.ts, apps/api/src/services/repositories/{bindings,url,keys,host-keys}.ts (new), apps/api/src/http/routes/repositories.ts (new), packages/core/src/rbac.ts (repos:read/write/sync/attest), openapi.yaml | #90 |
+| W9-2-2 | Sync engine: fetch with limits, secret scan, validation, ceiling, lint, candidates, signature verification | M | sonnet | v0.3 | W9-2-8, W9-1-2 | apps/worker/src/repo-sync.ts (new), apps/api/src/services/repositories/{sync,secret-scan,ceiling}.ts (new), apps/worker/src/queue.ts (job kind) | #91 |
+| W9-2-3 | Optional webhook poke endpoint with host-neutral verification | S | sonnet | v0.3 | W9-2-2 | apps/api/src/http/routes/repo-hooks.ts (new), apps/api/src/services/repositories/webhooks.ts (new) | #92 |
 | W9-2-4 | Review and publish flow, Git-managed lock, drift, adopt and detach | M | sonnet | v0.3 | W9-2-2 | apps/api/src/services/agents.ts (source_kind checks), apps/api/src/services/repositories/publish.ts (new), apps/api/src/http/routes/agents.ts (adopt, detach), apps/ui/src/features/agents/{EditorTab,PublishDialog,OverviewTab}.tsx | #93 |
-| W9-2-5 | GitLab and Gitea forge adapters | S | sonnet | v0.3 | W9-2-1 | apps/api/src/services/repositories/{forge-gitlab,forge-gitea}.ts (new) | #94 |
+| W9-2-5 | Optional host extensions: GitHub, GitLab, Gitea/Forgejo (pull requests, branch protection reads) | S | sonnet | v0.4 | W9-2-1 | apps/api/src/services/repositories/extensions/{github,gitlab,gitea}.ts (new) | #94 |
 | W9-2-6 | Console: repositories page, sync reports, candidates | S | sonnet | v0.3 | W9-2-4 | apps/ui/src/features/repositories/* (new), apps/ui/src/router.tsx, apps/ui/src/i18n/locales/{en,de}.json, docs/git-sync.md (new) | #95 |
-| W9-2-7 | Hostile repository test suite for Git sync | S | haiku (tests; must run them and report real results) | v0.3 | W9-2-3, W9-2-4 | apps/worker/test/repo-sync.hostile.test.ts (new), test fixtures | #96 |
+| W9-2-7 | Hostile repository and hostile Git server test suite | M | haiku (tests; must run them and report real results) | v0.3 | W9-2-3, W9-2-4, W9-2-8 | apps/worker/test/repo-sync.hostile.test.ts (new), test fixtures, test Git servers in containers (HTTPS and SSH) | #96 |
+| W9-2-8 | Git engine and transport relay (hardened `git`, HTTPS and SSH through the ADR 0011 resolver, transfer limits) | M | sonnet | v0.3 | W9-2-1, W10-1-2 | apps/worker/src/git/{engine,relay,limits,errors}.ts (new), packages/core/src/network/resolve.ts (`ssh` scheme for purpose `git`), Dockerfile (pinned `git`, `openssh-client`, no LFS) | to be filed |
 
-##### W9-2-1 Repository bindings: migration 0011, permissions, GitHub adapter, URL and SSRF checks
+##### W9-2-1 Repository bindings: migration 0011, permissions, URL canonicalization, credentials and host keys
 
 Acceptance criteria:
 
-- Tables and agent columns of ADR 0010 section 11; CRUD `/v1/repositories` with `repos:*` permissions; tenant-partitioned and covered by the isolation tests.
-- GitHub adapter: branch head, tree at SHA, blob reads, branch protection read; auth `github-app` (installation token per sync for one repository with contents:read), `token`, `none`.
-- `baseUrl` validation: https only, no IP literals of private/loopback/link-local/metadata ranges, resolved addresses checked and pinned, no cross-host redirects; air-gapped mode requires the host on the allowlist.
+- Tables and agent columns of ADR 0010 section 11 (incl. `agent_repository_claims`, `agent_repository_keys`); CRUD `/v1/repositories` with `repos:*` permissions (incl. `repos:attest`); tenant-partitioned and covered by the isolation tests.
+- URL rules of ADR 0010 A1.1 (`https://` and `ssh://` only, scp-like form canonicalized, no userinfo, no other transports, no option-injection paths); `url_key` and the installation-wide claim of A1.9 (`repository_unavailable` without naming the holder).
+- Auth kinds `https-token`, `ssh-deploy-key` (`generated` ed25519 key encrypted with the tenant data key, or `keyRef`), `none` (A1.2); no central Git credentials; endpoints `ssh-key`, `host-keys/scan`, `host-keys`, `attestation`, `test` (A1.4, section 12); shipped host-key list for well-known hosts.
 
-Tests: Adapter tests against a recorded fake forge. Security tests: `baseUrl` with `169.254.169.254`, `localhost`, `[::ffff:127.0.0.1]`, decimal/octal IP spellings, a name that resolves to a private address, and a redirect to another host are all refused with zero requests to the target; a secret value instead of a reference is refused; tenant B cannot read or sync tenant A's binding (404); the installation token request names exactly one repository and `contents: read`.
+Tests: URL canonicalization table tests (https/ssh/scp-like, ports, IDNA, `.git` suffix, Azure DevOps mapping). Security tests: URLs with `169.254.169.254`, `localhost`, `[::ffff:127.0.0.1]`, decimal/octal/hex IP spellings, `file://`, `git://`, `ext::`, `http://`, userinfo and a path starting with `-` are refused with zero connections; a secret value instead of a reference is refused; tenant B cannot read or sync tenant A's binding (404); a second tenant (also a child or sibling node) cannot bind the same repository and the refusal does not name the holder; the private key never appears in any API response, log or audit payload.
 
 ##### W9-2-2 Sync engine: fetch with limits, secret scan, validation, ceiling, lint, candidates
 
 Acceptance criteria:
 
-- Queue job `repo-sync` (one in flight per binding), poll interval >= 60 s, manual sync endpoint; limits of ADR 0010 section 7.2.
+- Queue job `repo-sync` (one in flight per binding), poll interval >= 60 s with jitter and backoff, ref advertisement before every fetch, manual sync endpoint; limits of ADR 0010 section 7.2 and A1.5; fetch, tree and blob reads through the W9-2-8 engine (no forge REST calls).
+- For `on-merge` bindings: range fetch up to `maxVerifyCommits` and signature verification of every new commit against `trustedSigners` (SSH and OpenPGP, A1.7).
 - Per-file checks in the order of section 7.3; candidates written; sync report with codes and paths; audit entries of section 10.
 - Version rule: same version with another digest refused (`version_conflict`); removed files mark agents `source_missing`.
 
-Tests: Sync tests with a fake forge: happy path, every refusal code, limits. Security tests: symlink, submodule, LFS pointer, NUL bytes, invalid UTF-8, a path with `..`, 201 files, a 257 KiB file and a tree of 20 001 entries are refused without partial application; a file containing an AWS key, a GitHub token or a PEM private key is refused and the value appears in no report, log line or audit payload (searched); a YAML alias bomb fails in bounded time; a file that names a secret outside `ceiling.secretRefs` or a connection outside the ceiling is refused; a file trying to take over a UI-managed agent name is refused.
+Tests: Sync tests against a test Git server: happy path, every refusal code, limits, unsigned/untrusted/expired signatures. Security tests: symlink, submodule, LFS pointer, NUL bytes, invalid UTF-8, a path with `..`, 201 files, a 257 KiB file and a tree of 20 001 entries are refused without partial application; a file containing an AWS key, a GitHub token or a PEM private key is refused and the value appears in no report, log line or audit payload (searched); a YAML alias bomb fails in bounded time; a file that names a secret outside `ceiling.secretRefs` or a connection outside the ceiling is refused; a file trying to take over a UI-managed agent name is refused.
 
-##### W9-2-3 Webhook poke endpoint for forge push events
+##### W9-2-3 Optional webhook poke endpoint with host-neutral verification
 
 Acceptance criteria:
 
-- `POST /v1/repo-hooks/{bindingId}` verifies GitHub HMAC, GitLab token and Gitea HMAC in constant time, checks event type and branch, and only enqueues a sync; the payload is never used for content.
+- `POST /v1/repo-hooks/{bindingId}` verifies with `hmac-sha256`, `shared-token` or `basic` (ADR 0010 A1.6, fixed header lists) in constant time and only enqueues a sync; the body is read up to 1 MiB for the HMAC and never parsed.
 - Unknown binding and bad signature look the same (404, same timing class); per-IP and per-binding rate limits; at most one queued sync per binding.
 
-Tests: Signature tests per forge incl. wrong secret, missing header, replayed body for a deduplicated job. Security tests: a valid signature with a forged payload that names other files does not change what is synced (the sync reads the forge); 1 000 requests produce at most one queued job; a timing test bounds the difference between unknown binding and bad signature.
+Tests: Verification tests per method with recorded deliveries of GitHub, GitLab, Gitea/Forgejo, Bitbucket and Azure DevOps, incl. wrong secret, missing header, replayed body for a deduplicated job. Security tests: a valid signature with a forged payload that names other files or branches does not change what is synced (the sync asks the Git host); 1 000 requests produce at most one queued job; a timing test bounds the difference between unknown binding and bad signature.
 
 ##### W9-2-4 Review and publish flow, Git-managed lock, drift, adopt and detach
 
 Acceptance criteria:
 
 - Git-managed drafts are read-only in API and UI (`agent_managed_by_git`); 'Copy as patch'; publish dialog shows commit, diff and findings.
-- `publishMode: on-merge` publishes as `repo:<bindingId>` only when branch protection is confirmed via the forge API; otherwise the binding stays manual and says why.
+- `publishMode: on-merge` publishes as `repo:<bindingId>` only when the conditions of ADR 0010 A1.7 hold (trusted signatures on every new commit, fast-forward ancestry, branch protection via host extension or an unexpired attestation); otherwise candidates only, and the binding says why; a history rewrite switches the binding to candidates-only until acknowledged.
 - Adopt and detach (repos:write), deletion of a binding leaves agents UI-managed; all audited.
 
-Tests: Publish flow tests for both modes; drift tests (UI save refused, detach then commit refused with `agent_detached`). Security tests: on-merge with unprotected branch never publishes; a binding cannot widen its ceiling without `agents:publish` on the team; a published version is never modified by a later sync (digest compared).
+Tests: Publish flow tests for both modes; drift tests (UI save refused, detach then commit refused with `agent_detached`). Security tests: on-merge never publishes with an unsigned or untrusted commit in the range, after a force push, without protection evidence, or with an expired attestation; a binding cannot widen its ceiling without `agents:publish` on the team; a published version is never modified by a later sync (digest compared).
 
-##### W9-2-5 GitLab and Gitea forge adapters
+##### W9-2-5 Optional host extensions: GitHub, GitLab, Gitea/Forgejo
 
 Acceptance criteria:
 
-- Same adapter contract as GitHub: head, tree, blobs, protection, project/deploy tokens as secret references; self-hosted base URLs with the same URL checks.
+- `GitHostExtension` of ADR 0010 A1.8: open and read change requests, read branch protection; API base derived from the canonical URL by fixed rules, fixed paths, strict response schemas; own credential (token reference or GitHub App installation token per call for one repository).
+- Not used by sync, validation or publishing; failure degrades to the generic behaviour.
 
-Tests: Recorded fixture tests per forge; the shared adapter conformance suite passes for all three. Security test: the SSRF and redirect cases of W9-2-1 run against both adapters.
+Tests: Recorded fixture tests per host; a shared conformance suite passes for all three. Security tests: the SSRF and redirect cases of W9-2-1 run against every extension; the extension credential is never used for Git transport and the sync credential never for the API (spies); host-provided free text is not stored.
 
 ##### W9-2-6 Console: repositories page, sync reports, candidates
 
 Acceptance criteria:
 
-- List and create bindings (secret reference pickers, ceiling editor, publish and lint mode), sync now, sync reports with per-file refusals, candidates with publish action, the warning that merge rights equal agents:write.
+- List and create bindings (URL, auth kind, secret reference pickers, ceiling editor, publish and lint mode), SSH public key display and rotation, host-key confirmation with fingerprints, `trustedSigners`, attestation with expiry, webhook verify method, sync now, sync reports with per-file refusals, candidates with publish action, the warning that merge rights equal agents:write.
 
-Tests: Component tests, axe checks, en/de keys; Playwright flow against a fake forge.
+Tests: Component tests, axe checks, en/de keys; Playwright flow against a test Git server.
 
 ##### W9-2-7 Hostile repository test suite for Git sync
 
 Acceptance criteria:
 
-- One suite with a hostile fake forge combining every refusal case of W9-2-1..4 plus injection-style agents.md content; the PR lists each check with its real result.
+- One suite with hostile repository content (every refusal case of W9-2-1..4 plus injection-style agents.md content) and hostile Git servers over HTTPS and SSH (malicious and oversized packs, delta bombs, endless streams, redirects, changed host keys, hooks/filters/submodules/LFS attempts, force push, unsigned and wrongly signed commits, a search for leaked tokens and keys in logs, reports, audit payloads and child process arguments); the PR lists each check with its real result.
 
 Tests: As above; nothing is claimed that did not run.
 
-Docs and website: `docs/git-sync.md` (new), `docs/configuration.md` (limits), `docs/airgapped.md` (forge host on the allowlist); website lifecycle page when released.
+##### W9-2-8 Git engine and transport relay
 
-Helm: Ingress path for `/v1/repo-hooks/` (public, rate-limited) and NetworkPolicy egress for the forge host.
+Acceptance criteria:
+
+- Engine interface (`lsRemote`, `fetch`, `listTree`, `readBlobs`, `verifyRange`, `pushBranch`) over a pinned `git` with the hardening of ADR 0010 A1.3 (allowlisted environment, no system/global config, forced options, bare throwaway repository on a size-limited tmpfs, no checkout, no LFS, no submodules, classified errors); start refused below the minimum `git` version.
+- Local relay of A1.5: SSH via `ProxyCommand` and HTTPS via a one-target `CONNECT` relay, both dialing through the ADR 0011 dispatcher factory (DNS pinning, proxies, trust store, client certificates); the resolver accepts `ssh` for purpose `git`; transfer limits enforced in the relay and the engine.
+- SSH options and pinned `known_hosts` of A1.4; tokens only through `GIT_CONFIG_*` of the child.
+
+Tests: Engine tests against test Git servers (HTTPS and SSH) in containers. Security tests: a server that redirects, offers another host key, streams beyond the byte cap or stalls is cut off with the right code; `protocol.allow` refuses `file`/`ext`; the token and the private key never appear in `argv`, logs or error text; Git never opens a socket itself (network namespace or spy).
+
+Docs and website: `docs/git-sync.md` (new: hosts, HTTPS tokens, SSH deploy keys and host keys, SSH over port 443 behind proxies, signing and branch protection for on-merge), `docs/configuration.md` (limits), `docs/airgapped.md` (Git host on the allowlist); website lifecycle page when released.
+
+Helm: Optional ingress path for `/v1/repo-hooks/` (public, rate-limited) and NetworkPolicy egress for the Git hosts (443 and 22, or the proxy); images ship a pinned `git` and `openssh-client`.
 
 #### W9-3 PR-back: propose console edits of Git-managed agents as pull requests
 
@@ -1456,22 +1469,22 @@ Helm: Ingress path for `/v1/repo-hooks/` (public, rate-limited) and NetworkPolic
 
 Acceptance criteria (item level):
 
-- With `prBack.enabled` and a separate write credential, 'Propose change' creates a branch and a pull request; it never pushes to the bound branch; the console shows PR state.
+- With `prBack.enabled` and a separate write credential, 'Propose change' pushes a new branch over plain Git on every host; with a host extension (W9-2-5) it also opens the pull request and the console shows its state; it never pushes to the bound branch.
 
 Tasks (each one PR, Conventional Commits, tests in the same commit, coverage >= 80 % per package, subagents leave the PR open):
 
 | Task | Title | Size | Model | Milestone | Depends on | Touches | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W9-3-1 | PR-back from the console to the bound repository | M | sonnet | v0.4 | W9-2-4 | apps/api/src/services/repositories/pr-back.ts (new), apps/api/src/http/routes/agents.ts (`propose`), forge adapters, apps/ui/src/features/agents/EditorTab.tsx | #97 |
+| W9-3-1 | PR-back from the console to the bound repository | M | sonnet | v0.4 | W9-2-4, W9-2-8; W9-2-5 optional | apps/api/src/services/repositories/pr-back.ts (new), apps/api/src/http/routes/agents.ts (`propose`), apps/worker/src/git/* (push), host extensions, apps/ui/src/features/agents/EditorTab.tsx | #97 |
 
 ##### W9-3-1 PR-back from the console to the bound repository
 
 Acceptance criteria:
 
-- Branch `oax/<agent>/<id>` from the last synced commit, one commit with the edited file, PR against the bound branch, author = service identity, `Proposed-by` trailer with an opaque user id.
-- Requires `agents:write` on the agent and `prBack.enabled`; audited `repo.pr_opened`.
+- Branch `oax/<agent>/<id>` from the last synced commit, one commit with the edited file, pushed create-only without force over plain Git (`repo.branch_proposed`); with a host extension a PR against the bound branch (`repo.pr_opened`); author = service identity, `Proposed-by` trailer with an opaque user id.
+- Requires `agents:write` on the agent and `prBack.enabled`.
 
-Tests: Adapter tests per forge. Security tests: the sync credential is never used for writes (spy); the write credential is never used by the sync; a request targeting the bound branch directly is impossible (asserted on the fake forge); file path outside the binding's `paths` refused; no name or mail in the commit unless the tenant opted in.
+Tests: Push tests against test Git servers (HTTPS and SSH); extension tests per host. Security tests: the sync credential is never used for writes (spy); the write credential is never used by the sync; a push to the bound branch or to an existing ref is impossible (asserted on the test server); file path outside the binding's `paths` refused; no name or mail in the commit unless the tenant opted in.
 
 Docs and website: `docs/git-sync.md` PR-back section.
 
@@ -1949,10 +1962,13 @@ Helm: KEK secret reference, retention defaults, `OAX_DPA_SUBPROCESSORS` file mou
    leave PRs open for the main reviewer.
 
 <!-- risks-9-12:start -->
-10. **Untrusted Git content and forge credentials (W9-2, W9-3).** Merge rights on a bound branch
-    become agent authoring rights; a forge credential is a new secret. Mitigation: binding ceilings,
-    secret scan, lint mode, manual publish by default, `on-merge` only with branch protection,
-    read-only sync credentials separate from PR-back credentials, hostile repository suite (W9-2-7).
+10. **Untrusted Git content, hostile Git servers and Git credentials (W9-2, W9-3).** Merge rights
+    on a bound branch become agent authoring rights; the platform runs a Git client against
+    servers it does not control; tokens and deploy keys are new secrets. Mitigation: binding
+    ceilings, secret scan, lint mode, manual publish by default, `on-merge` only with trusted
+    signatures and branch protection, hardened `git` behind the ADR 0011 relay with transfer limits
+    and pinned host keys, read-only sync credentials separate from PR-back credentials, hostile
+    repository and Git server suite (W9-2-7).
 11. **One resolver for all egress (W10-1).** A bug sends traffic around the corporate proxy or leaks
     proxy credentials; a test button becomes an SSRF oracle. Mitigation: pure resolver with table
     tests, no TLS-verification switch, reference-only tests with category results, DNS pinning,
@@ -2030,9 +2046,10 @@ work is mirrored in `open-agentix/open-agentix-helm`.
 | W9-2-2 | #91 | v0.3 | - |
 | W9-2-3 | #92 | v0.3 | open-agentix-helm (to be filed with the task) |
 | W9-2-4 | #93 | v0.3 | - |
-| W9-2-5 | #94 | v0.3 | - |
+| W9-2-5 | #94 | v0.4 | - |
 | W9-2-6 | #95 | v0.3 | - |
 | W9-2-7 | #96 | v0.3 | - |
+| W9-2-8 | to be filed | v0.3 | open-agentix-helm (images: pinned `git`, `openssh-client`) |
 | W9-3-1 | #97 | v0.4 | - |
 | W10-1-1 | #98 | v0.3 | - |
 | W10-1-2 | #99 | v0.3 | - |
