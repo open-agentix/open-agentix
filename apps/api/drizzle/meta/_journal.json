@@ -71,6 +71,13 @@
       "when": 1791574677035,
       "tag": "0015_agent_summary_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791579533367,
+      "tag": "0016_agent_disable",
+      "breakpoints": true
     }
   ]
 }

@@ -65,8 +65,17 @@ export const AgentSchema = z.object({
   status: z
     .enum(AGENT_STATUSES)
     .describe(
-      'draft: never published; published: draft equals latest version; changed: it differs',
+      'draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)',
     ),
+  disabledAt: Iso.nullable().describe('when the agent was disabled; null while it is enabled'),
+  disabledBy: z
+    .object({ id: Id, displayName: z.string() })
+    .nullable()
+    .describe('user who disabled the agent; null while enabled or if that user no longer exists'),
+  disabledReason: z
+    .string()
+    .nullable()
+    .describe('optional reason given when the agent was disabled (at most 500 characters)'),
   lastRun: z
     .object({ id: Id, status: z.enum(RUN_STATUSES), createdAt: Iso })
     .nullable()
@@ -89,6 +98,15 @@ export const AgentSchema = z.object({
     ),
 });
 export const AgentDetailSchema = AgentSchema.extend({ draftSource: z.string() });
+export const DisableBody = z
+  .object({
+    reason: z
+      .string()
+      .max(500)
+      .optional()
+      .describe('free text for the audit log, at most 500 characters'),
+  })
+  .optional();
 export const AgentSourceBody = z.object({ source: z.string().min(1).max(512_000) });
 
 export const VersionSchema = z.object({
@@ -243,6 +261,10 @@ export const SourcePatchBody = SourceCreateBody.omit({ name: true, kind: true })
 export const IngestResultSchema = z.object({
   eventId: Id,
   runId: Id.nullable(),
+  reason: z
+    .enum(['agent_disabled'])
+    .nullable()
+    .describe('why no run was queued although an agent is bound; the event is stored all the same'),
   status: z.literal('accepted'),
 });
 export const SourceIdParams = z.object({ sourceId: Id });

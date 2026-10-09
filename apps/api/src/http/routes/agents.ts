@@ -11,6 +11,7 @@ import {
   AgentDetailSchema,
   AgentSchema,
   AgentSourceBody,
+  DisableBody,
   ErrorSchema,
   Id,
   IdParams,
@@ -184,6 +185,35 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
         .send({ version: versionDto(r.version), created: r.created });
     },
   );
+
+  for (const action of ['disable', 'enable'] as const) {
+    app.post(
+      `/v1/agents/:id/${action}`,
+      {
+        config: { access: 'agents:publish' },
+        schema: {
+          tags,
+          summary:
+            action === 'disable'
+              ? 'Disable an agent: it accepts no new runs until it is enabled again'
+              : 'Enable a disabled agent again',
+          description:
+            action === 'disable'
+              ? 'Needs agents:publish on the agent. New runs from the API, schedules, webhooks and event sources are refused with 409 agent_disabled (events are stored, the refusal is audited); queued runs wait and are not claimed; runs that already started finish unless they are cancelled. Published versions stay immutable and readable. Idempotent: disabling a disabled agent returns 200 with the unchanged state.'
+              : 'Needs agents:publish on the agent. Runs, schedules and triggers work again; queued runs are claimed. Idempotent: enabling an enabled agent returns 200.',
+          security: sec,
+          params: IdParams,
+          body: DisableBody,
+          response: { 200: AgentDetailSchema, 400: ErrorSchema, 404: ErrorSchema },
+        },
+      },
+      async (req) => {
+        const principal = principalOf(req);
+        const { agent } = await agents[action](principal, req.params.id, req.body?.reason);
+        return agentDetailDto(await summarize(principal, agent));
+      },
+    );
+  }
 
   app.get(
     '/v1/agents/:id/versions',

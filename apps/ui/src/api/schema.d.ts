@@ -762,7 +762,7 @@ export interface paths {
                     /** @description use case or any sub-use case (prefix match per "/" segment) */
                     useCase?: string;
                     /** @description lifecycle status */
-                    status?: "draft" | "published" | "changed";
+                    status?: "draft" | "published" | "changed" | "disabled";
                 };
                 header?: never;
                 path?: never;
@@ -808,10 +808,20 @@ export interface paths {
                                     name: string;
                                 } | null;
                                 /**
-                                 * @description draft: never published; published: draft equals latest version; changed: it differs
+                                 * @description draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)
                                  * @enum {string}
                                  */
-                                status: "draft" | "published" | "changed";
+                                status: "draft" | "published" | "changed" | "disabled";
+                                /** @description when the agent was disabled; null while it is enabled */
+                                disabledAt: string | null;
+                                /** @description user who disabled the agent; null while enabled or if that user no longer exists */
+                                disabledBy: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    displayName: string;
+                                } | null;
+                                /** @description optional reason given when the agent was disabled (at most 500 characters) */
+                                disabledReason: string | null;
                                 /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
                                 lastRun: {
                                     /** Format: uuid */
@@ -912,10 +922,20 @@ export interface paths {
                                 name: string;
                             } | null;
                             /**
-                             * @description draft: never published; published: draft equals latest version; changed: it differs
+                             * @description draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)
                              * @enum {string}
                              */
-                            status: "draft" | "published" | "changed";
+                            status: "draft" | "published" | "changed" | "disabled";
+                            /** @description when the agent was disabled; null while it is enabled */
+                            disabledAt: string | null;
+                            /** @description user who disabled the agent; null while enabled or if that user no longer exists */
+                            disabledBy: {
+                                /** Format: uuid */
+                                id: string;
+                                displayName: string;
+                            } | null;
+                            /** @description optional reason given when the agent was disabled (at most 500 characters) */
+                            disabledReason: string | null;
                             /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
                             lastRun: {
                                 /** Format: uuid */
@@ -1126,10 +1146,20 @@ export interface paths {
                                 name: string;
                             } | null;
                             /**
-                             * @description draft: never published; published: draft equals latest version; changed: it differs
+                             * @description draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)
                              * @enum {string}
                              */
-                            status: "draft" | "published" | "changed";
+                            status: "draft" | "published" | "changed" | "disabled";
+                            /** @description when the agent was disabled; null while it is enabled */
+                            disabledAt: string | null;
+                            /** @description user who disabled the agent; null while enabled or if that user no longer exists */
+                            disabledBy: {
+                                /** Format: uuid */
+                                id: string;
+                                displayName: string;
+                            } | null;
+                            /** @description optional reason given when the agent was disabled (at most 500 characters) */
+                            disabledReason: string | null;
                             /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
                             lastRun: {
                                 /** Format: uuid */
@@ -1255,10 +1285,20 @@ export interface paths {
                                 name: string;
                             } | null;
                             /**
-                             * @description draft: never published; published: draft equals latest version; changed: it differs
+                             * @description draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)
                              * @enum {string}
                              */
-                            status: "draft" | "published" | "changed";
+                            status: "draft" | "published" | "changed" | "disabled";
+                            /** @description when the agent was disabled; null while it is enabled */
+                            disabledAt: string | null;
+                            /** @description user who disabled the agent; null while enabled or if that user no longer exists */
+                            disabledBy: {
+                                /** Format: uuid */
+                                id: string;
+                                displayName: string;
+                            } | null;
+                            /** @description optional reason given when the agent was disabled (at most 500 characters) */
+                            disabledReason: string | null;
                             /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
                             lastRun: {
                                 /** Format: uuid */
@@ -1414,6 +1454,324 @@ export interface paths {
                 };
                 /** @description Default Response */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable an agent: it accepts no new runs until it is enabled again
+         * @description Needs agents:publish on the agent. New runs from the API, schedules, webhooks and event sources are refused with 409 agent_disabled (events are stored, the refusal is audited); queued runs wait and are not claimed; runs that already started finish unless they are cancelled. Published versions stay immutable and readable. Idempotent: disabling a disabled agent returns 200 with the unchanged state.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description free text for the audit log, at most 500 characters */
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            name: string;
+                            teamId: string | null;
+                            description: string | null;
+                            latestVersion: string | null;
+                            latestVersionId: string | null;
+                            /** @description ISO 8601 timestamp */
+                            draftUpdatedAt: string;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            tenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
+                            /** @description labels.useCase of the latest published version, of the draft while unpublished */
+                            useCase: string | null;
+                            /** @description owner team; readable with agents:read, like GET /v1/teams */
+                            ownerTeam: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                name: string;
+                            } | null;
+                            /**
+                             * @description draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)
+                             * @enum {string}
+                             */
+                            status: "draft" | "published" | "changed" | "disabled";
+                            /** @description when the agent was disabled; null while it is enabled */
+                            disabledAt: string | null;
+                            /** @description user who disabled the agent; null while enabled or if that user no longer exists */
+                            disabledBy: {
+                                /** Format: uuid */
+                                id: string;
+                                displayName: string;
+                            } | null;
+                            /** @description optional reason given when the agent was disabled (at most 500 characters) */
+                            disabledReason: string | null;
+                            /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
+                            lastRun: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "queued" | "running" | "awaiting_approval" | "succeeded" | "failed" | "cancelled" | "blocked_by_policy";
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            } | null;
+                            /** @description spend of this agent in the current UTC month; null without costs:read */
+                            monthSpendUsd: number | null;
+                            /** @description monthly budget closest to its limit among the scopes that apply; null without costs:read or limit */
+                            budget: {
+                                limitUsd: number;
+                                /** @description spend of the whole budget scope this month, not of the agent */
+                                spentUsd: number;
+                                percentUsed: number;
+                                /** @enum {string} */
+                                source: "tenant" | "use_case" | "team";
+                                sourceName: string;
+                            } | null;
+                            draftSource: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable a disabled agent again
+         * @description Needs agents:publish on the agent. Runs, schedules and triggers work again; queued runs are claimed. Idempotent: enabling an enabled agent returns 200.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description free text for the audit log, at most 500 characters */
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            name: string;
+                            teamId: string | null;
+                            description: string | null;
+                            latestVersion: string | null;
+                            latestVersionId: string | null;
+                            /** @description ISO 8601 timestamp */
+                            draftUpdatedAt: string;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            tenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
+                            /** @description labels.useCase of the latest published version, of the draft while unpublished */
+                            useCase: string | null;
+                            /** @description owner team; readable with agents:read, like GET /v1/teams */
+                            ownerTeam: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                name: string;
+                            } | null;
+                            /**
+                             * @description draft: never published; published: draft equals latest version; changed: it differs; disabled: switched off, accepts no new runs (wins over the others)
+                             * @enum {string}
+                             */
+                            status: "draft" | "published" | "changed" | "disabled";
+                            /** @description when the agent was disabled; null while it is enabled */
+                            disabledAt: string | null;
+                            /** @description user who disabled the agent; null while enabled or if that user no longer exists */
+                            disabledBy: {
+                                /** Format: uuid */
+                                id: string;
+                                displayName: string;
+                            } | null;
+                            /** @description optional reason given when the agent was disabled (at most 500 characters) */
+                            disabledReason: string | null;
+                            /** @description latest run of the agent the caller may read (runs:read); null if none or no access */
+                            lastRun: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "queued" | "running" | "awaiting_approval" | "succeeded" | "failed" | "cancelled" | "blocked_by_policy";
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            } | null;
+                            /** @description spend of this agent in the current UTC month; null without costs:read */
+                            monthSpendUsd: number | null;
+                            /** @description monthly budget closest to its limit among the scopes that apply; null without costs:read or limit */
+                            budget: {
+                                limitUsd: number;
+                                /** @description spend of the whole budget scope this month, not of the agent */
+                                spentUsd: number;
+                                percentUsed: number;
+                                /** @enum {string} */
+                                source: "tenant" | "use_case" | "team";
+                                sourceName: string;
+                            } | null;
+                            draftSource: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -7665,6 +8023,8 @@ export interface paths {
                             /** Format: uuid */
                             eventId: string;
                             runId: string | null;
+                            /** @description why no run was queued although an agent is bound; the event is stored all the same */
+                            reason: "agent_disabled" | null;
                             /** @enum {string} */
                             status: "accepted";
                         };
@@ -7753,6 +8113,8 @@ export interface paths {
                             /** Format: uuid */
                             eventId: string;
                             runId: string | null;
+                            /** @description why no run was queued although an agent is bound; the event is stored all the same */
+                            reason: "agent_disabled" | null;
                             /** @enum {string} */
                             status: "accepted";
                         };

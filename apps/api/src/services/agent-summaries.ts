@@ -9,7 +9,15 @@ import {
 } from '@openagentix/core';
 import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
-import { agentVersions, agents, costLedger, runs, teams, useCaseBudgets } from '../db/schema.js';
+import {
+  agentVersions,
+  agents,
+  costLedger,
+  runs,
+  teams,
+  useCaseBudgets,
+  users,
+} from '../db/schema.js';
 import type { AgentStatus } from './agent-filters.js';
 import type { AgentRow } from './agents.js';
 import type { TeamRow, TenantRow } from './identity.js';
@@ -58,6 +66,15 @@ export interface AgentSummary {
   /** Null when the principal may not read costs of the agent. */
   monthSpendUsd: number | null;
   budget: AgentBudgetInfo | null;
+  /** Set while the agent is disabled; the user is a member of the principal's tenant. */
+  disabled: AgentDisabledInfo | null;
+}
+
+/** Who switched an agent off, when and why (UX slice A7). */
+export interface AgentDisabledInfo {
+  at: Date;
+  by: { id: string; displayName: string } | null;
+  reason: string | null;
 }
 
 interface BudgetCandidate {
@@ -88,12 +105,13 @@ export class AgentSummaryService {
     const costIds = rows
       .filter((r) => hasPermission(principal, 'costs:read', r.teamId, r.id))
       .map((r) => r.id);
-    const [tenantRow, teamRows, inSync, lastRuns, spend] = await Promise.all([
+    const [tenantRow, teamRows, inSync, lastRuns, spend, disabledBy] = await Promise.all([
       this.tenantNode(principal.tenantId),
       this.teamsOf(principal.tenantId, rows),
       this.draftInSync(principal.tenantId, ids),
       this.lastRuns(principal, ids),
       this.spendByAgent(principal.tenantId, costIds),
+      this.disablers(principal.tenantId, rows),
     ]);
     const costVisible = new Set(costIds);
     const budgets = await this.budgets(
@@ -111,7 +129,33 @@ export class AgentSummaryService {
       lastRun: lastRuns.get(agent.id) ?? null,
       monthSpendUsd: costVisible.has(agent.id) ? usd(spend.get(agent.id) ?? 0) : null,
       budget: budgets.get(agent.id) ?? null,
+      disabled: agent.disabledAt
+        ? {
+            at: agent.disabledAt,
+            by: agent.disabledBy ? (disabledBy.get(agent.disabledBy) ?? null) : null,
+            reason: agent.disabledReason,
+          }
+        : null,
     }));
+  }
+
+  /**
+   * Display names of the users who disabled the given agents, looked up inside the principal's
+   * tenant only (a user of another tenant, or a deleted one, yields no name). Names are shown to
+   * every `agents:read` holder, like the members of a team or an agent.
+   */
+  private async disablers(tenantId: string, rows: AgentRow[]) {
+    const ids = [
+      ...new Set(rows.flatMap((r) => (r.disabledAt && r.disabledBy ? [r.disabledBy] : []))),
+    ];
+    const out = new Map<string, { id: string; displayName: string }>();
+    if (ids.length === 0) return out;
+    const found = await this.ctx.db
+      .select({ id: users.id, displayName: users.displayName })
+      .from(users)
+      .where(and(eq(users.tenantId, tenantId), inArray(users.id, ids)));
+    for (const u of found) out.set(u.id, u);
+    return out;
   }
 
   /** The tenant and its ancestors (the principal's own chain only). */
@@ -293,6 +337,7 @@ const teamInfo = (t: TeamRow | undefined): AgentTeamInfo | null =>
   t ? { id: t.id, slug: t.slug, name: t.name } : null;
 
 function statusOf(agent: AgentRow, inSync: boolean | undefined): AgentStatus {
+  if (agent.disabledAt) return 'disabled';
   if (!agent.latestVersionId) return 'draft';
   return inSync === false ? 'changed' : 'published';
 }
