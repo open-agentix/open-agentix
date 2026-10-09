@@ -12,6 +12,7 @@ import {
   type AgentDefinition,
   type AgentSpec,
   type Budget,
+  type HarnessKind,
   type ModelTokenClaims,
   type RunTokenClaims,
 } from '@openagentix/core';
@@ -28,6 +29,7 @@ import {
   modelErrorEnvelope,
   sanitizeEvent,
   anthropicMessageId,
+  harnessSurface,
   openaiCompletionId,
   type SanitizeOpts,
   synthesizeEvents,
@@ -41,6 +43,7 @@ import {
   type ModelProvider,
   type ModelTokenResponse,
   type PassthroughRequest,
+  type PassthroughSurface,
   type ProviderConfig,
   type StreamPlan,
   type StreamResult,
@@ -368,7 +371,11 @@ export class ModelProxyService {
   // ---------- model token ----------
 
   /** Issues the model token of one step, once per step and session (ADR 0009 section 2.2). */
-  async issueToken(auth: CallAuth, agentId: string): Promise<ModelTokenResponse> {
+  async issueToken(
+    auth: CallAuth,
+    agentId: string,
+    harness?: HarnessKind,
+  ): Promise<ModelTokenResponse> {
     this.assertEnabled();
     if (auth.via !== 'run-token')
       throw new ModelProxyError('unauthenticated', 'a step-scoped run token is required');
@@ -386,6 +393,38 @@ export class ModelProxyService {
         'model_not_allowed',
         'the provider of this step is not available',
       );
+    // A harness step (ADR 0009 section 10): the harness has to be the one the version published and
+    // the platform enabled, and its protocol has to match the provider (no translation).
+    let surface: PassthroughSurface | undefined;
+    if (harness) {
+      if (
+        agent.runtime?.harness !== harness ||
+        !this.ctx.config.harnesses.enabled.includes(harness)
+      )
+        throw await this.deny(
+          auth,
+          agentId,
+          'model_not_allowed',
+          'this step is not published for that harness',
+        );
+      surface = harnessSurface(harness, resolved.provider.kind) ?? undefined;
+      if (!surface)
+        throw await this.deny(
+          auth,
+          agentId,
+          'model_surface_mismatch',
+          `the provider of this step cannot be used by the ${harness} harness`,
+        );
+    } else if (agent.runtime?.harness) {
+      // A harness step gets its token for the harness protocol only; the native endpoint is for
+      // the built-in step loop.
+      throw await this.deny(
+        auth,
+        agentId,
+        'model_not_allowed',
+        'a harness step requests its model token for the harness',
+      );
+    }
     const session = await this.nodes.sessionById(auth.sid);
     if (!session) throw new ModelProxyError('run_node_session_revoked', 'session not found');
     const cfg = this.ctx.config;
@@ -420,14 +459,17 @@ export class ModelProxyService {
         agentId,
         jti: issued.claims.jti,
         expiresAt: new Date(issued.claims.exp * 1000).toISOString(),
+        ...(harness ? { harness, protocol: surface } : {}),
       },
     });
     const base = (cfg.runners.container.nodeControlUrl ?? cfg.publicUrl).replace(/\/$/, '');
     return {
       token: issued.token,
       expiresAt: new Date(issued.claims.exp * 1000).toISOString(),
-      protocol: 'native',
-      baseUrl: `${base}/v1/worker/runs/${auth.runId}`,
+      protocol: surface ?? 'native',
+      baseUrl: surface
+        ? `${base}/v1/model-proxy/${surface}`
+        : `${base}/v1/worker/runs/${auth.runId}`,
       model: agent.model,
     };
   }

@@ -314,6 +314,8 @@ export interface AgentOpts {
   simulation?: string;
   /** Agent (step) budget lines, e.g. `      timeoutSeconds: 60`. */
   agentBudget?: string;
+  /** Step `runtime.harness` (needs the container runner and OAX_HARNESSES_ENABLED). */
+  harness?: string;
 }
 
 let counter = 0;
@@ -330,7 +332,7 @@ ${o.classification ? `classification: ${o.classification}\n` : ''}${o.budget ? `
   - id: a
     provider: ${o.provider ?? 'simulated'}
     model: ${o.model ?? 'sim-1'}
-${o.maxTokensPerCall ? `    maxTokensPerCall: ${o.maxTokensPerCall}\n` : ''}${o.agentBudget ? `    budget:\n${o.agentBudget}\n` : ''}${o.simulation ? `    simulation:\n      responses:\n${o.simulation}\n` : ''}    instructions: Summarise the event.
+${o.harness ? `    runtime: { runner: container, harness: ${o.harness} }\n` : ''}${o.maxTokensPerCall ? `    maxTokensPerCall: ${o.maxTokensPerCall}\n` : ''}${o.agentBudget ? `    budget:\n${o.agentBudget}\n` : ''}${o.simulation ? `    simulation:\n      responses:\n${o.simulation}\n` : ''}    instructions: Summarise the event.
 ---
 `;
 }

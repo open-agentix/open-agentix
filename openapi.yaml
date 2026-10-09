@@ -9581,6 +9581,11 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 200
+                harness:
+                  type: string
+                  enum:
+                    - claude-code
+                    - opencode
               required:
                 - agentId
               additionalProperties: false

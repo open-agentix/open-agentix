@@ -241,6 +241,16 @@ export class AgentsService {
           message: `runner "${r}" is not enabled (OAX_RUNNERS_ENABLED=${runners.enabled.join(',')})`,
         });
     });
+    // Harness steps (ADR 0009 section 10): only harnesses the operator enabled, on an isolating
+    // runner that is enabled too (the definition check already rejects in-process and local).
+    def.agents.forEach((a, i) => {
+      const h = a.runtime?.harness;
+      if (h && !this.ctx.config.harnesses.enabled.includes(h))
+        issues.push({
+          path: `agents.${i}.runtime.harness`,
+          message: `harness "${h}" is not enabled (OAX_HARNESSES_ENABLED=${this.ctx.config.harnesses.enabled.join(',')})`,
+        });
+    });
     // Step egress of container steps must lie inside the operator ceiling (never a union with it).
     const ceiling = (runners.container.config?.egressAllow ?? []).map(parseEgressEntry);
     def.agents.forEach((a, i) => {

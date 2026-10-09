@@ -1,6 +1,8 @@
 import {
   OaxError,
+  HARNESS_KINDS,
   RUNNER_KINDS,
+  type HarnessKind,
   type RunnerKind,
   PriceTableSchema,
   isRole,
@@ -174,6 +176,8 @@ export const EnvSchema = z.object({
   OAX_TOOLBOX_REQUIRE_SIGNATURE: bool.default(true),
   // Model proxy (W1-3b, ADR 0009): opt-in; with it off the model routes answer 503.
   OAX_MODEL_PROXY_ENABLED: bool.default(false),
+  /** Harnesses a step may name in `runtime.harness` (ADR 0009 section 10); empty = none. */
+  OAX_HARNESSES_ENABLED: z.string().default(''),
   OAX_MODEL_PROXY_MAX_BODY_BYTES: z.coerce
     .number()
     .int()
@@ -291,6 +295,8 @@ export interface Config {
     rate: { runs: number; windowSeconds: number };
     dailyRuns: number;
   };
+  /** External harnesses steps may run through the model proxy. Needs the model proxy. */
+  harnesses: { enabled: HarnessKind[] };
   runners: {
     enabled: RunnerKind[];
     kubernetesJob: { enabled: boolean } & z.infer<typeof KubernetesJobRunnerConfigSchema> & {
@@ -485,6 +491,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       dailyRuns: e.OAX_DEMO_DAILY_RUNS,
     },
     runners: runnersConfig(e),
+    harnesses: harnessesConfig(e),
     toolboxes: {
       registry: e.OAX_TOOLBOX_REGISTRY,
       allowlist: list(e.OAX_TOOLBOX_ALLOWLIST),
@@ -609,6 +616,24 @@ function containerConfig(e: z.infer<typeof EnvSchema>): Config['runners']['conta
     config: parsed.data,
     nodeControlUrl: need(e.OAX_NODE_CONTROL_URL, 'OAX_NODE_CONTROL_URL'),
   };
+}
+
+function harnessesConfig(e: z.infer<typeof EnvSchema>): Config['harnesses'] {
+  const enabled = list(e.OAX_HARNESSES_ENABLED);
+  for (const h of enabled) {
+    if (!(HARNESS_KINDS as readonly string[]).includes(h))
+      throw new OaxError(
+        'config_invalid',
+        `invalid configuration: OAX_HARNESSES_ENABLED contains unknown harness "${h}"`,
+      );
+  }
+  // A harness never holds a provider key: without the proxy it has no model to talk to.
+  if (enabled.length > 0 && !e.OAX_MODEL_PROXY_ENABLED)
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: OAX_HARNESSES_ENABLED requires OAX_MODEL_PROXY_ENABLED=true',
+    );
+  return { enabled: [...new Set(enabled)] as HarnessKind[] };
 }
 
 function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
