@@ -47,6 +47,8 @@ const PRICE_BEFORE =
 const PRICE_AFTER =
   'export function applyDiscount(cents, percent) {\n  return Math.round((cents * (100 - percent)) / 100);\n}\n';
 
+const HOSTILE_NAME = 'src/\u012e\u012e\u012fescape.js';
+
 const target = (over: Partial<GitTarget> = {}): GitTarget => ({
   url: srv.url,
   credential: { tokenRef: 'git-token', username: 'x-access-token' },
@@ -94,6 +96,8 @@ beforeAll(async () => {
       'src/price.js': PRICE_BEFORE,
       'src/hours.js': 'export const x = 1;\n',
       'test/price.test.js': "import test from 'node:test';\n",
+      // low bytes of these code units spell `../`: a latin1 tar header would escape `src/`
+      [HOSTILE_NAME]: 'export const escaped = true;\n',
       'README.md': '# sandbox\n',
       '.gitattributes': '* filter=evil\n',
       'lfs.bin': 'version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12345\n',
@@ -134,6 +138,7 @@ describe('GitEngine read side', () => {
           'run.sh',
           'src/hours.js',
           'src/price.js',
+          HOSTILE_NAME,
           'test/price.test.js',
         ].sort(),
       );
@@ -161,6 +166,9 @@ describe('GitEngine read side', () => {
       mkdirSync(dest, { recursive: true });
       execFileSync('tar', ['-xf', f, '-C', dest]);
       expect(readFileSync(path.join(dest, 'src/price.js'), 'utf8')).toBe(PRICE_BEFORE);
+      // the hostile name stays one file inside src/, nothing lands next to src/
+      expect(readFileSync(path.join(dest, HOSTILE_NAME), 'utf8')).toContain('escaped');
+      expect(existsSync(path.join(dest, 'escape.js'))).toBe(false);
     } finally {
       await s.dispose();
     }

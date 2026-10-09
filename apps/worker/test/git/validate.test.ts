@@ -306,6 +306,18 @@ describe('packSeed', () => {
       packSeed([{ path: 'x'.repeat(400), mode: '100644', content: Buffer.alloc(0) }]),
     ).toThrow();
   });
+
+  it('writes names as UTF-8 and refuses paths that could leave the unpack directory', () => {
+    const name = 'src/ĮĮįx.js';
+    const a = packSeed([{ path: name, mode: '100644', content: Buffer.from('x') }]);
+    expect(a.subarray(0, Buffer.byteLength(name)).toString('utf8')).toBe(name);
+    expect(a.subarray(0, 100).includes(Buffer.from('../'))).toBe(false);
+    for (const bad of ['../x', 'a/../x', '/etc/x', 'a//b', './a', 'a\\b', 'a\u0000b', 'a�b'])
+      expect(
+        () => packSeed([{ path: bad, mode: '100644', content: Buffer.alloc(0) }]),
+        JSON.stringify(bad),
+      ).toThrow();
+  });
 });
 
 describe('parsePullRequestTarget', () => {

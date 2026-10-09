@@ -694,8 +694,9 @@ export class GitSession {
       const unsafe =
         Buffer.byteLength(path) > lim.maxPathBytes ||
         path.split('/').length > lim.maxTreeDepth ||
+        // control characters, backslash, and U+FFFD (a name that is not valid UTF-8)
         // eslint-disable-next-line no-control-regex
-        /[\u0000-\u001f\u007f\\]/.test(path) ||
+        /[\u0000-\u001f\u007f\\\ufffd]/.test(path) ||
         path.startsWith('/') ||
         path
           .split('/')
