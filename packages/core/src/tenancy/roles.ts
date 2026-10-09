@@ -8,7 +8,7 @@ import {
   type Role,
   type RoleBinding,
 } from '../rbac.js';
-import { isValidPath, pathIds } from './path.js';
+import { MAX_TENANT_DEPTH, isValidPath, pathIds } from './path.js';
 
 /**
  * Role resolution over the tenant tree (ADR 0014 section 3.2).
@@ -115,6 +115,9 @@ function chainOf(node: RoleNode): string[] | undefined {
   if (!isValidPath(node.path)) return undefined;
   const ids = pathIds(node.path);
   if (ids[0] !== node.rootId || ids[ids.length - 1] !== node.id) return undefined;
+  // A chain longer than the tree can be deep, or one that names a node twice, is not a chain: a
+  // repeated id would put a descendant into the "ancestors" and let its grants flow up.
+  if (ids.length > MAX_TENANT_DEPTH + 1 || new Set(ids).size !== ids.length) return undefined;
   return ids;
 }
 

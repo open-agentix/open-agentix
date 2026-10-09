@@ -295,6 +295,31 @@ describe('effectiveAt', () => {
     ]);
   });
 
+  it('fails closed on a chain that names a node twice or is deeper than the tree can be', () => {
+    // `/root/a/a1/a/`: a1 (a descendant of a) would sit in the "ancestors" of a and its
+    // inheriting binding would flow up.
+    const loop: RoleNode = { ...f.a, path: `${f.a1.path}${f.a.id}/` };
+    const raw = rawOf(f.a, {
+      nodeBindings: [grant(f.a1.id, 'admin', { inherit: true }), grant(f.a.id, 'viewer')],
+    });
+    expect(effectiveAt(raw, f.a, opts).map((b) => b.role)).toEqual(['viewer']);
+    expect(effectiveAt(raw, loop, opts)).toEqual([]);
+    const ids = Array.from(
+      { length: 34 },
+      (_, i) => `cccccccc-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    );
+    const deep: RoleNode = { id: ids[33]!, rootId: ids[0]!, path: `/${ids.join('/')}/` };
+    const deepRaw: RawGrants = {
+      ...rawOf(f.a, { nodeBindings: [grant(deep.id, 'viewer')] }),
+      homeRootId: deep.rootId,
+    };
+    expect(effectiveAt(deepRaw, deep, opts)).toEqual([]);
+    const ok: RoleNode = { id: ids[32]!, rootId: ids[0]!, path: `/${ids.slice(0, 33).join('/')}/` };
+    expect(
+      effectiveAt({ ...deepRaw, nodeBindings: [grant(ok.id, 'viewer')] }, ok, opts),
+    ).toHaveLength(1);
+  });
+
   it('makes a platform admin admin everywhere, unless asked not to', () => {
     const raw = rawOf(f.a, { platformAdmin: true, nodeBindings: [grant(f.a.id, 'viewer')] });
     for (const n of f.all) {
