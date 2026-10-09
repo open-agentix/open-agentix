@@ -105,7 +105,7 @@ describe('agent detail', () => {
 
   it('shows a not-found error', async () => {
     await renderApp('/agents/00000000-0000-4000-8000-000000000000');
-    expect(await screen.findByText(/doesn't exist/i)).toBeInTheDocument();
+    expect(await screen.findByText('This agent no longer exists')).toBeInTheDocument();
   });
 
   it('navigates tabs with the keyboard', async () => {

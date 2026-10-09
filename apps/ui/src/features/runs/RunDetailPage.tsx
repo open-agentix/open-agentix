@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { useState } from 'react';
-import { api, call } from '../../api/client';
+import { ApiError, api, call } from '../../api/client';
 import { approvalsQuery, runQuery, runStepsQuery, useAgentNames } from '../../api/queries';
 import { isTerminal, type Run } from '../../api/types';
 import { useCan } from '../../auth/auth';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Icon } from '../../components/Icon';
+import { ItemNotFound } from '../../components/ItemNotFound';
 import { useToast } from '../../components/toast';
 import {
   Badge,
@@ -66,7 +67,11 @@ export function RunDetailPage() {
   if (run.isError)
     return (
       <div className="page">
-        <ErrorState error={run.error} onRetry={() => void run.refetch()} />
+        {run.error instanceof ApiError && run.error.status === 404 ? (
+          <ItemNotFound kind="run" />
+        ) : (
+          <ErrorState error={run.error} onRetry={() => void run.refetch()} />
+        )}
       </div>
     );
   const r = run.data;
