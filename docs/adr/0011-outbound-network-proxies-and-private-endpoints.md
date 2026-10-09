@@ -291,3 +291,35 @@ proxies get their own egress rule. Air-gapped values: a proxy is allowed if its 
 4. Azure Entra ID authentication for Azure OpenAI in W10-2, or as a separate item?
 5. Should an `http://` proxy (CONNECT) be refused in production profiles, requiring `https://`
    proxies?
+
+## Amendments
+
+### Amendment 1 (W10-1-1, 2026-10-09): configuration contract and resolver
+
+What the first implementation step settled (code in `packages/core/src/network/`):
+
+1. **Configuration source.** File (`OAX_NETWORK_CONFIG_FILE`, YAML or JSON, at most 1 MiB) or inline
+   JSON (`OAX_NETWORK_CONFIG`), not both. Open question 2 is decided: **file/Helm only, no write
+   API**. Hot reload and the Network page remain for later steps.
+2. **Plain `http://` proxies** (open question 5, owner decision): refused in production
+   (`NODE_ENV=production`) with `proxy_plain_http`; a warning elsewhere. The implicit legacy
+   environment route is not validated (existing installs keep working) but is reported as a warning.
+3. **Strict schema.** Unknown keys are errors. Keys that look like switches for certificate
+   verification (`insecure`, `rejectUnauthorized`, `skipTls`, ...) and prototype keys are refused
+   anywhere in the document. Proxy URLs must be bare origins without credentials; credentials come
+   only from `authSecret` (a secret reference name, never a value). `privateAllow` accepts IPs and
+   CIDRs only. `NODE_TLS_REJECT_UNAUTHORIZED=0` aborts start-up (`tls_insecure`).
+4. **Resolver contract.** `resolveRoute(url, purpose, scope, net)` is pure (no DNS, no I/O, no logging)
+   and takes the compiled network explicitly. Fixed order: metadata veto, tenant destination checks,
+   TLS-only purposes (`model`, `identity`, `git`, `webhook` refuse `http://` outside loopback and
+   `privateAllow`), `deny` route veto, connection `network.proxy`, legacy `proxyUrl` (tenants only
+   when grandfathered), routes, environment, direct. Loopback is always direct unless the
+   connection asks for a proxy. Classification caps and the air-gapped allowlist (target and proxy
+   host) are applied last and can only refuse. Results carry a deny `code`, reasons and a
+   credential-free proxy origin; they never contain userinfo, paths or secrets.
+5. **Air-gapped start-up check.** `checkNetworkAirgap` requires every proxy host to be allowlisted,
+   every non-`deny` route pattern to be covered by the allowlist and refuses a catch-all route.
+   The api runs it from `activateAirgap` and exposes the settings via `getNetworkSettings()`.
+6. **Not yet done** (next items): dispatcher factory with DNS pinning (reusing `packages/providers`
+   `ssrf.ts`), migration of all clients to the resolver, tenant proxy selection on connections,
+   Network page and tests endpoint, run-node upstream proxy, Helm.

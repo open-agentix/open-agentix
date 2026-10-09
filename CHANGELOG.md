@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Outbound network configuration and route resolver (W10-1-1, ADR 0011)**:
+  `OAX_NETWORK_CONFIG_FILE` (YAML/JSON) or `OAX_NETWORK_CONFIG` (inline JSON) defines named proxies,
+  trust bundles, client certificates, ordered routes and the proxies tenants may select. The pure
+  `resolveRoute(url, purpose, scope, net)` in `@openagentix/core` decides direct, proxy or deny
+  (precedence: connection selection, legacy `proxyUrl`, routes, `HTTP(S)_PROXY`/`NO_PROXY`, direct)
+  and never touches the network. The api validates the file at start-up (including the air-gapped
+  allowlist for proxy hosts and routes). The configuration is file/Helm only; there is no write API.
+  Dispatchers and client migration follow in W10-1-2 and later.
+
+### Security
+
+- Network configuration refuses plain `http://` proxies in production (`proxy_plain_http`), proxy
+  URLs with credentials (use `authSecret` references), any key that would disable TLS verification
+  and `NODE_TLS_REJECT_UNAUTHORIZED=0` (`tls_insecure`). Cloud metadata addresses and names are
+  never routable, tenant destinations must be public, loopback never goes through a proxy, and
+  proxies that inspect TLS cap the data classification.
+
 ### Breaking
 
 - **Model proxy cutover (W1-3b-4)**: isolated run node steps now call models only through the
