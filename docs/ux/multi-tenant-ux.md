@@ -92,8 +92,12 @@ Known gaps:
   (the issue's `agent` source does not exist). Use case budgets match the exact label, like the hard
   stop; sub-use cases do not inherit a parent's budget.
 - Scope is the acting tenant only; subtree and "All my tenants" listing is slice A4 (#158).
-  `tenant.slugPath` exposes the slugs of the acting tenant's ancestors to its members; this is the
-  breadcrumb the console needs and should be revisited with the role model of W13-6.
+  `tenant.slugPath` exposes the slugs of the acting tenant's ancestors to its members. ADR 0013
+  section 7.4 allows exactly this ("a user sees the names and slugs of the ancestors on the path
+  (breadcrumb) only"); no ids, settings or resources of ancestors are returned.
+- `budget.spentUsd` is the spend of the whole scope (tenant, use case or team), also for callers whose
+  `costs:read` is limited to one team or agent. This matches `GET /v1/budgets` today, which shows the
+  same totals to every `costs:read` holder; narrowing both is tracked in #174.
 
 ### 1.3 Users and jobs
 
