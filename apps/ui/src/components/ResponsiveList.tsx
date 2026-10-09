@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { useT } from '../i18n/i18n';
 import { useMediaQuery } from '../lib/hooks';
 import { VirtualTable, type Column } from './VirtualTable';
@@ -19,6 +19,13 @@ export interface ListColumn<T> extends Column<T> {
   decorative?: boolean;
 }
 
+/** A titled run of rows (group-by). Order of `groups` is the display order. */
+export interface RowGroup<T> {
+  key: string;
+  label: string;
+  rows: T[];
+}
+
 interface Props<T> {
   caption: string;
   columns: ListColumn<T>[];
@@ -30,6 +37,8 @@ interface Props<T> {
   hasMore?: boolean;
   loadingMore?: boolean;
   totalLabel?: string;
+  /** Group the rows under sticky headings (headed `rowgroup`s on wide screens). */
+  groups?: RowGroup<T>[];
 }
 
 /**
@@ -39,8 +48,13 @@ interface Props<T> {
 export function ResponsiveList<T>(props: Props<T>) {
   const phone = useMediaQuery(PHONE_QUERY);
   if (!phone) {
-    const { columns, ...rest } = props;
-    return <VirtualTable {...rest} columns={columns.filter((c) => !c.mobileOnly)} />;
+    const { columns, groups, ...rest } = props;
+    const wide = columns.filter((c) => !c.mobileOnly);
+    return groups ? (
+      <GroupedTable {...rest} columns={wide} groups={groups} />
+    ) : (
+      <VirtualTable {...rest} columns={wide} />
+    );
   }
   return <CardList {...props} />;
 }
@@ -54,31 +68,117 @@ function CardList<T>({
   hasMore = false,
   loadingMore = false,
   totalLabel,
+  groups,
 }: Props<T>) {
   const t = useT();
   const lines = [1, 2, 3] as const;
+  const items = (list: T[]) =>
+    list.map((row) => (
+      <li key={rowKey(row)} className="card-row">
+        {lines.map((n) => {
+          const cells = columns.filter((c) => (c.mobileLine ?? 2) === n);
+          if (!cells.length) return null;
+          return (
+            <div key={n} className={`card-line card-line-${n}`}>
+              {cells.map((c) => (
+                <CardCell key={c.key} header={n === 1 || c.decorative ? null : c.header}>
+                  {c.cell(row)}
+                </CardCell>
+              ))}
+            </div>
+          );
+        })}
+      </li>
+    ));
   return (
     <div>
-      <ul className="card-list" aria-label={caption}>
-        {rows.map((row) => (
-          <li key={rowKey(row)} className="card-row">
-            {lines.map((n) => {
-              const cells = columns.filter((c) => (c.mobileLine ?? 2) === n);
-              if (!cells.length) return null;
-              return (
-                <div key={n} className={`card-line card-line-${n}`}>
-                  {cells.map((c) => (
-                    <CardCell key={c.key} header={n === 1 || c.decorative ? null : c.header}>
-                      {c.cell(row)}
-                    </CardCell>
-                  ))}
-                </div>
-              );
-            })}
-          </li>
-        ))}
-      </ul>
+      {groups ? (
+        groups.map((g) => (
+          <section key={g.key} className="group-section" aria-label={g.label}>
+            <h2 className="group-head">
+              {g.label} <span className="group-count">({g.rows.length})</span>
+            </h2>
+            <ul className="card-list" aria-label={`${caption}: ${g.label}`}>
+              {items(g.rows)}
+            </ul>
+          </section>
+        ))
+      ) : (
+        <ul className="card-list" aria-label={caption}>
+          {items(rows)}
+        </ul>
+      )}
       <div className="card-foot">
+        {totalLabel ? <span>{totalLabel}</span> : <span />}
+        {loadingMore ? (
+          <span className="muted">
+            <Spinner small /> {t('common.loadingMore')}
+          </span>
+        ) : hasMore && onEndReached ? (
+          <button type="button" className="link-btn" onClick={onEndReached}>
+            {t('common.loadMore')}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Non-virtual table with one headed `tbody` per group; the headings stick below the header. */
+function GroupedTable<T>({
+  caption,
+  columns,
+  rowKey,
+  maxHeight = 600,
+  onEndReached,
+  hasMore = false,
+  loadingMore = false,
+  totalLabel,
+  groups,
+}: Props<T> & { groups: RowGroup<T>[] }) {
+  const t = useT();
+  const base = useId();
+  return (
+    <div
+      className="table-wrap"
+      style={{ maxHeight }}
+      tabIndex={0}
+      role="region"
+      aria-label={t('common.tableRegion', { name: caption })}
+    >
+      <table className="table table-grouped">
+        <caption className="sr-only">{caption}</caption>
+        <thead>
+          <tr>
+            {columns.map((c) => (
+              <th key={c.key} scope="col" className={c.className}>
+                {c.header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        {groups.map((g, i) => (
+          <tbody key={g.key} aria-labelledby={`${base}-${i}`}>
+            <tr className="group-row">
+              <th id={`${base}-${i}`} colSpan={columns.length} scope="rowgroup">
+                <h2 className="group-head">
+                  {g.label} <span className="group-count">({g.rows.length})</span>
+                </h2>
+              </th>
+            </tr>
+            {g.rows.map((row) => (
+              <tr key={rowKey(row)}>
+                {columns.map((c) => (
+                  <td key={c.key} className={c.className}>
+                    {c.cell(row)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        ))}
+      </table>
+      <div className="table-foot">
         {totalLabel ? <span>{totalLabel}</span> : <span />}
         {loadingMore ? (
           <span className="muted">
