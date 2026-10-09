@@ -1287,6 +1287,31 @@ describe('what a node may report, and who said it', () => {
     expect(entries).toHaveLength(1);
     expect(JSON.stringify(entries)).not.toContain('must_not_be_stored');
   });
+  it('drops made-up names, sources and tool names from a node guard step', async () => {
+    const runId = await newRun();
+    const s = await session(runId);
+    const res = await post(runId, s.token, {
+      kind: 'control',
+      agentId: 'research',
+      name: 'input_guard',
+      status: 'ok',
+      output: {
+        source: 'the database password is hunter2',
+        tool: 'read file; token=abc',
+        invisible: { total: 1, classes: { 'leaked-lowercase-sentence': 1, tag: 1 } },
+        secrets: { total: 1, kinds: { 'another-leaked-text': 1, 'known-secret': 1 } },
+      },
+    });
+    expect(res.statusCode).toBe(204);
+    const [row] = await n.ctx.db.select().from(runSteps).where(eq(runSteps.runId, runId));
+    expect(row?.output).toEqual({
+      invisible: { total: 1, classes: { tag: 1 } },
+      secrets: { total: 1, kinds: { 'known-secret': 1 } },
+    });
+    const audit = JSON.stringify(await auditOf(runId));
+    for (const leaked of ['hunter2', 'token=abc', 'leaked-lowercase', 'another-leaked'])
+      expect(audit).not.toContain(leaked);
+  });
   it('steps of the trusted worker carry no node provenance', async () => {
     const runId = await newRun();
     const token = n.services.control.issueToken(runId, 'w1');

@@ -169,15 +169,18 @@ describe('ContextGuard configuration', () => {
 });
 
 describe('auditShapeOfReport', () => {
-  it('keeps counts and safe names only', () => {
+  it('keeps counts and the names the guard can produce only', () => {
     const shaped = auditShapeOfReport({
-      invisible: { total: 3, classes: { tag: 2, 'Bad Name With Content!': 1 } },
-      secrets: { total: -4, kinds: { 'github-token': 'ghp_secret', ok_kind: 2 } },
+      invisible: { total: 3, classes: { tag: 2, 'Bad Name With Content!': 1, format: 1e30 } },
+      secrets: {
+        total: -4,
+        kinds: { 'github-token': 'ghp_secret', 'leaked-lowercase-text-here': 2, 'known-secret': 1 },
+      },
       extra: 'ignored',
     });
     expect(shaped).toEqual({
-      invisible: { total: 3, classes: { tag: 2 } },
-      secrets: { total: 0, kinds: { 'github-token': 0, ok_kind: 2 } },
+      invisible: { total: 3, classes: { tag: 2, format: 1_000_000_000 } },
+      secrets: { total: 0, kinds: { 'github-token': 0, 'known-secret': 1 } },
     });
     expect(auditShapeOfReport('junk')).toEqual({
       invisible: { total: 0, classes: {} },

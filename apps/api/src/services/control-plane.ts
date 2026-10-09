@@ -43,6 +43,10 @@ const NODE_STEP_MAX_BYTES = 64 * 1024;
 const NODE_STEP_KINDS: ReadonlySet<string> = new Set(['tool_call', 'output', 'error']);
 /** The one control step a node may report: what its context guard removed (counts only). */
 const isNodeGuardStep = (s: StepInput): boolean => s.kind === 'control' && s.name === 'input_guard';
+/** Values of `source` in a guard step; anything else from a node is dropped. */
+const GUARD_SOURCES: ReadonlySet<string> = new Set(['input', 'tool_result', 'tool_error']);
+/** Shape of an MCP tool name (spec: letters, digits, `_`, `-`, `.`, at most 128). */
+const TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 
 /**
  * The control node side of the worker contract. Every method is scoped by a signed run token,
@@ -369,15 +373,16 @@ export class ControlPlaneService {
     if (isNodeGuardStep(step)) {
       // Whatever the node sends, only counts and class names are kept.
       const o = (step.output ?? {}) as { source?: unknown; tool?: unknown };
-      const text = (v: unknown) => (typeof v === 'string' ? v.slice(0, 200) : undefined);
+      const source = typeof o.source === 'string' && GUARD_SOURCES.has(o.source) ? o.source : null;
+      const tool = typeof o.tool === 'string' && TOOL_NAME.test(o.tool) ? o.tool : null;
       return {
         kind: 'control',
         agentId: step.agentId,
         name: 'input_guard',
         status: 'ok',
         output: {
-          ...(text(o.source) ? { source: text(o.source) } : {}),
-          ...(text(o.tool) ? { tool: text(o.tool) } : {}),
+          ...(source ? { source } : {}),
+          ...(tool ? { tool } : {}),
           ...auditShapeOfReport(step.output),
         },
       };

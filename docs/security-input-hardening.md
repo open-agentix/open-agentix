@@ -92,8 +92,11 @@ When a stage removes or replaces something, a `control` step named `input_guard`
 `source` is `input` (prompt), `tool_result` or `tool_error`; `tool` is the configured tool name. The
 entry carries counts and class or kind names only, never the content or a digest of it. A clean
 text adds no entry. A run node may report this one control step; the control node reduces whatever
-it sends to counts and names matching `[a-z0-9_-]{1,40}` (`auditShapeOfReport`) and marks it
-`reportedBy: node:<id>`, like every node step. Any other control step from a node is still ignored.
+it sends to counts (capped) and the class and kind names the guard itself can produce
+(`auditShapeOfReport`), keeps `source` only if it is one of the three values above and `tool` only
+if it has the shape of an MCP tool name, and marks the step `reportedBy: node:<id>`, like every node
+step. Any other control step from a node is still ignored. A node can still put arbitrary text into
+the `tool_call` and `output` steps it is allowed to report; the guard step adds no new channel.
 
 ## Configuration
 

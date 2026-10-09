@@ -1,4 +1,4 @@
-import { stripInvisible, type InvisibleReport } from './invisible-text.js';
+import { INVISIBLE_CLASSES, stripInvisible, type InvisibleReport } from './invisible-text.js';
 import { SECRET_PATTERNS } from './secret-patterns.js';
 
 /**
@@ -203,26 +203,37 @@ export function contextGuardFromEnv(
   });
 }
 
+/** Every secret kind a report can contain. */
+export const SECRET_KINDS: ReadonlySet<string> = new Set([
+  'known-secret',
+  ...SECRET_PATTERNS.map(([kind]) => kind),
+]);
+const CLASS_NAMES: ReadonlySet<string> = new Set(INVISIBLE_CLASSES);
+const MAX_AUDIT_COUNT = 1_000_000_000;
+
 /**
- * The only shape of a guard report that is recorded in an audit entry: counts and names, bounded.
- * Used for node-reported reports too, so a node cannot smuggle content through the report.
+ * The only shape of a guard report that is recorded in an audit entry: counts and the names this
+ * guard can produce (invisible classes, secret kinds), nothing else. Used for node-reported reports
+ * too, so a node cannot carry text in made-up names or out-of-range numbers.
  */
 export function auditShapeOfReport(r: unknown): GuardReport {
   const out = emptyGuardReport();
   const rec = (v: unknown): Record<string, unknown> =>
     v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {};
   const num = (v: unknown) =>
-    typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
-  const pick = (v: unknown, into: Record<string, number>) => {
-    for (const [k, n] of Object.entries(rec(v)).slice(0, 64)) {
-      if (/^[a-z0-9_-]{1,40}$/.test(k)) into[k] = num(n);
+    typeof v === 'number' && Number.isFinite(v) && v >= 0
+      ? Math.min(Math.floor(v), MAX_AUDIT_COUNT)
+      : 0;
+  const pick = (v: unknown, known: ReadonlySet<string>, into: Record<string, number>) => {
+    for (const [k, n] of Object.entries(rec(v))) {
+      if (known.has(k)) into[k] = num(n);
     }
   };
   const inv = rec(rec(r).invisible);
   const sec = rec(rec(r).secrets);
   out.invisible.total = num(inv.total);
-  pick(inv.classes, out.invisible.classes as Record<string, number>);
+  pick(inv.classes, CLASS_NAMES, out.invisible.classes as Record<string, number>);
   out.secrets.total = num(sec.total);
-  pick(sec.kinds, out.secrets.kinds);
+  pick(sec.kinds, SECRET_KINDS, out.secrets.kinds);
   return out;
 }
