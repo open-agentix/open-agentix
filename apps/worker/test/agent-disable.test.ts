@@ -2,7 +2,7 @@ import { schema } from '@openagentix/api';
 import { createEvent } from '@openagentix/events';
 import { and, eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { agentSource } from '../../api/test/fixtures.js';
 import { testNode, type TestNode } from '../../api/test/helpers.js';
 import { CronScheduler, RunQueue } from '../src/index.js';
@@ -119,7 +119,7 @@ describe('cron', () => {
     s.stop();
   });
 
-  it('refuses ticks of a cron event source bound to a disabled agent, keeping the source', async () => {
+  it('does not schedule or probe a cron event source of a disabled agent, keeping the source', async () => {
     const src = await call('POST', '/v1/event-sources', {
       name: `nightly-${randomUUID().slice(0, 8)}`,
       kind: 'cron',
@@ -127,26 +127,36 @@ describe('cron', () => {
       config: { schedule: '30 2 * * *', timezone: 'UTC' },
     });
     const sourceId = src.json().id as string;
-    await call('POST', `/v1/agents/${otherId}/disable`, {});
+    const key = (keys: string[]) => keys.some((k) => k.startsWith(`source|${sourceId}`));
     const s = new CronScheduler(n.ctx, n.services);
-    // The source stays bound and scheduled.
-    expect((await s.reload()).some((k) => k.startsWith(`source|${sourceId}`))).toBe(true);
+    expect(key(await s.reload())).toBe(true);
+    await call('POST', `/v1/agents/${otherId}/disable`, {});
+    // The next reload stops the job: no event, no audit entry and no change probe per tick.
+    expect(key(await s.reload())).toBe(false);
+    // The source itself stays bound and enabled.
+    const kept = (await call('GET', `/v1/event-sources/${sourceId}`)).json();
+    expect(kept).toMatchObject({ agentId: otherId, enabled: true });
     const events = async () =>
       (await n.ctx.db.select().from(schema.events).where(eq(schema.events.sourceId, sourceId)))
         .length;
     const runsBefore = (
       await n.ctx.db.select().from(schema.runs).where(eq(schema.runs.agentId, otherId))
     ).length;
+    // A tick already in flight is refused and audited without running the change probe.
+    const probe = vi.spyOn(n.services.ingest, 'changeGate');
     expect(await s.fire(otherId, '30 2 * * *', tick('2026-10-08T02:30:00Z'), sourceId)).toBeNull();
-    // The event is stored (no silent drop), no run exists.
+    expect(probe).not.toHaveBeenCalled();
     expect(await events()).toBe(1);
     expect(
       (await n.ctx.db.select().from(schema.runs).where(eq(schema.runs.agentId, otherId))).length,
     ).toBe(runsBefore);
     await call('POST', `/v1/agents/${otherId}/enable`, {});
+    expect(key(await s.reload())).toBe(true);
     expect(
       await s.fire(otherId, '30 2 * * *', tick('2026-10-09T02:30:00Z'), sourceId),
     ).toBeTruthy();
+    expect(probe).toHaveBeenCalledTimes(1);
+    probe.mockRestore();
     s.stop();
   });
 });

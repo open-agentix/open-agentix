@@ -622,6 +622,17 @@ export class AgentsService {
     });
   }
 
+  /** The ids among `ids` whose agent is disabled (used by the scheduler for cron event sources). */
+  async disabledAgentIds(ids: readonly string[]): Promise<Set<string>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Set();
+    const rows = await this.ctx.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(inArray(agents.id, unique), isNotNull(agents.disabledAt)));
+    return new Set(rows.map((r) => r.id));
+  }
+
   /** Enabled, published agents with cron triggers (used by the scheduler; disabled agents have none). */
   async cronAgents(): Promise<
     { agentId: string; versionId: string; schedule: string; timezone?: string }[]
