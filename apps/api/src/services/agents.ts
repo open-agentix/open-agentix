@@ -55,8 +55,11 @@ export interface AgentListQuery {
   status?: AgentStatus | undefined;
 }
 
-/** The use case an agent is attributed to (cost attribution and budgets use the same label). */
-const useCaseOf = (def: AgentDefinition): string | null => def.labels.useCase ?? null;
+/**
+ * The use case an agent is attributed to (cost attribution and budgets use the same label). An
+ * empty label counts as none, as in the backfill of migration 0015.
+ */
+const useCaseOf = (def: AgentDefinition): string | null => def.labels.useCase || null;
 
 /** Agent registry: drafts, validation, immutable published versions. */
 export class AgentsService {

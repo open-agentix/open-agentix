@@ -236,6 +236,11 @@ describe('agent summary fields', () => {
     expect((await get(alice, `/v1/agents/${ok.id}`)).useCase).toBe('u'.repeat(200));
   });
 
+  it('stores an empty use case label as none, like the migration backfill', async () => {
+    const a = await createAgent(alice, 'empty-uc-agent', 'team-security', 'labels:\n  useCase: ""');
+    expect(a).toMatchObject({ useCase: null });
+  });
+
   it('shows the latest run the caller may read, the newest first', async () => {
     const a = await createAgent(alice, 'run-agent', 'team-security');
     await publish(alice, a.id);
