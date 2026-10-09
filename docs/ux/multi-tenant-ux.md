@@ -528,6 +528,23 @@ client sends `X-OAX-Tenant`; query keys include the tenant; focus and live-regio
 4.1; Undo toast. First version for platform admins from `GET /v1/tenants`. Tests: keyboard-only
 switch, cache separation (no row of tenant A after switching to B), reload keeps the tenant.
 
+**U4 as implemented (first version, platform admins).** Deviations from the slice text, all
+because the API has no tenant tree yet (A2 to A4):
+
+- `GET /v1/tenants` returns `id, slug, name` but no parent or path, and `GET /v1/me` returns the
+  acting tenant without `slugPath`. The switcher therefore shows a flat, alphabetical, searchable
+  list (plus Recent) instead of the two-level tree, and groups nothing by organisation. The
+  breadcrumb learns ancestors only from `tenant.slugPath` of loaded agent summaries and shows the
+  tenant name alone before that.
+- The acting tenant is **not** a `?tenant=` URL parameter yet (deep links need #163): it is kept per
+  browser tab in `sessionStorage` and shown in the shell, so a copied URL never silently carries or
+  loses a tenant. Query keys do not include the tenant; instead a switch cancels all requests and
+  resets every cached query except the list of switchable tenants.
+- There is no Undo toast (the toast component has no action yet); the toast and the polite live
+  region announce "Switched to ...".
+- The switcher is shown when `GET /v1/tenants` returns two or more tenants. The mismatch guard on
+  `X-OAX-Acting-Tenant` (#156) and the unsaved-draft guard belong to U9.
+
 **U5 Tenants overview.** Treegrid per section 7 with counts, cap bars, role badges (direct vs
 inherited), search, row actions gated by permission, side panel with effective values when
 available. Tests: keyboard tree navigation, use-case admin sees only attached nodes (fixture),
