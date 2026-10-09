@@ -123,7 +123,8 @@ describe.each(targets)('migration 0013 on existing flat data (%s)', (_kind, enab
     const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as {
       entries: { tag: string }[];
     };
-    journal.entries = journal.entries.filter((e) => !e.tag.startsWith('0013'));
+    // later migrations go too: drizzle skips a migration older than the last one applied
+    journal.entries = journal.entries.filter((e) => e.tag < '0013');
     writeFileSync(journalPath, JSON.stringify(journal));
     client = await open();
     await client.migrate(dir);

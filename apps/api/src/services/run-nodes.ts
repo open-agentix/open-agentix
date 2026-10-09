@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   OaxError,
   StaticCredentialSource,
@@ -17,7 +17,11 @@ import {
   type StepCredentials,
 } from '@openagentix/core';
 import type { McpServerConfig } from '@openagentix/mcp';
-import type { StepHandover, StepHandoverResult } from '@openagentix/runners';
+import {
+  MAX_WORKSPACE_SEED_BYTES,
+  type StepHandover,
+  type StepHandoverResult,
+} from '@openagentix/runners';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import { connections, eventSources, runNodeSessions, runs, tenants } from '../db/schema.js';
@@ -342,7 +346,8 @@ export class RunNodesService {
   async revoke(sessionId: string, reason: RevokeReason): Promise<void> {
     const [row] = await this.ctx.db
       .update(runNodeSessions)
-      .set({ revokedAt: this.ctx.now(), revokeReason: reason, handover: null })
+      // The handover (the step's input) and an unfetched workspace seed are dropped with the token.
+      .set({ revokedAt: this.ctx.now(), revokeReason: reason, handover: null, workspaceSeed: null })
       .where(and(eq(runNodeSessions.id, sessionId), isNull(runNodeSessions.revokedAt)))
       .returning();
     if (!row) return;
@@ -410,7 +415,102 @@ export class RunNodesService {
     return row.result as StepHandoverResult;
   }
 
+  /**
+   * Stores the workspace seed the worker built for a step (DOG-4, ADR 0008 Amendment 5). The
+   * digest is computed here, not taken from the caller. Audited with ids, sizes and digests only.
+   */
+  async storeSeed(
+    sessionId: string,
+    orchestratorId: string,
+    seed: { archive: Buffer; target: string; commit: string; files: number; agentId: string },
+  ): Promise<{ sha256: string; bytes: number }> {
+    const bytes = seed.archive.length;
+    if (bytes === 0 || bytes > MAX_WORKSPACE_SEED_BYTES)
+      throw new HttpError(413, 'workspace_seed_too_large', 'the workspace seed exceeds its limit');
+    const sha256 = createHash('sha256').update(seed.archive).digest('hex');
+    const [row] = await this.ctx.db
+      .update(runNodeSessions)
+      .set({
+        workspaceSeed: seed.archive.toString('base64'),
+        workspaceSeedSha256: sha256,
+        workspaceSeedFetchedAt: null,
+      })
+      .where(
+        and(
+          eq(runNodeSessions.id, sessionId),
+          eq(runNodeSessions.orchestratorId, orchestratorId),
+          isNull(runNodeSessions.revokedAt),
+        ),
+      )
+      .returning();
+    if (!row)
+      throw new HttpError(409, 'invalid_state', 'the session is not active for this worker');
+    await this.audit.append({
+      actor: `worker:${orchestratorId}`,
+      tenantId: row.tenantId,
+      action: 'workspace.prepared',
+      target: row.nodeId,
+      runId: row.runId,
+      payload: {
+        runId: row.runId,
+        nodeId: row.nodeId,
+        agentId: seed.agentId,
+        target: seed.target,
+        sha: seed.commit,
+        bytes,
+        files: seed.files,
+        digest: sha256,
+      },
+    });
+    return { sha256, bytes };
+  }
+
   // ---------- node side (step-scoped token; every call checks the session) ----------
+
+  /**
+   * The workspace seed of the node's own step, exactly once per session: the bytes are dropped in
+   * the same statement that marks them fetched. A node cannot fetch another step's or run's seed
+   * (the session is bound to the token), and a second fetch is refused.
+   */
+  async takeSeed(
+    claims: RunTokenClaims,
+    runId: string,
+    agentId: string,
+  ): Promise<{ archive: Buffer; sha256: string }> {
+    const s = await this.checkSession(claims, runId);
+    this.assertStep(claims, agentId);
+    const [row] = await this.ctx.db
+      .update(runNodeSessions)
+      .set({ workspaceSeed: null, workspaceSeedFetchedAt: this.ctx.now() })
+      .where(
+        and(
+          eq(runNodeSessions.id, s.id),
+          isNull(runNodeSessions.revokedAt),
+          isNull(runNodeSessions.workspaceSeedFetchedAt),
+          sql`${runNodeSessions.workspaceSeed} is not null`,
+        ),
+      )
+      .returning({ id: runNodeSessions.id });
+    if (!row) {
+      if (s.workspaceSeedFetchedAt)
+        throw new HttpError(409, 'workspace_seed_already_fetched', 'the seed was already fetched');
+      throw notFound('workspace seed');
+    }
+    // `s` was read before the update; the bytes are only in that snapshot now.
+    const b64 = s.workspaceSeed;
+    const sha256 = s.workspaceSeedSha256;
+    if (!b64 || !sha256) throw notFound('workspace seed');
+    const archive = Buffer.from(b64, 'base64');
+    await this.audit.append({
+      actor: `node:${s.nodeId}`,
+      tenantId: s.tenantId,
+      action: 'workspace.fetched',
+      target: agentId,
+      runId,
+      payload: { runId, nodeId: s.nodeId, agentId, bytes: archive.length, digest: sha256 },
+    });
+    return { archive, sha256 };
+  }
 
   /** The active session behind a step-scoped token; throws when it is revoked, expired or foreign. */
   async checkSession(claims: RunTokenClaims, runId: string): Promise<SessionRow> {
@@ -488,7 +588,10 @@ export class RunNodesService {
     const s = await this.checkSession(claims, runId);
     this.assertStep(claims, result.agentId);
     // Scrub what a node says before it is stored (and later shown): content, JSON and the message.
-    const clean = await this.scrub(runId, result);
+    // The patch is NOT rewritten: a changed byte would only break its digest. The worker scans it
+    // (credential patterns, known secrets) and refuses delivery instead.
+    const { patch, ...rest } = result;
+    const clean = { ...(await this.scrub(runId, rest)), ...(patch ? { patch } : {}) };
     const [row] = await this.ctx.db
       .update(runNodeSessions)
       .set({ result: clean })

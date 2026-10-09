@@ -393,6 +393,14 @@ export const runNodeSessions = pgTable(
     handover: jsonb('handover'),
     /** The result the node posted; the orchestrator validates it again. */
     result: jsonb('result'),
+    /**
+     * Workspace seed of the step (DOG-4, ADR 0008 Amendment 5): the base64 of the archive the worker
+     * built from the target repository. Fetchable once with the step token, dropped at revoke.
+     */
+    workspaceSeed: text('workspace_seed'),
+    /** SHA-256 (hex) of the archive; kept after the bytes are dropped. */
+    workspaceSeedSha256: text('workspace_seed_sha256'),
+    workspaceSeedFetchedAt: ts('workspace_seed_fetched_at'),
     createdAt: created(),
   },
   (t) => [

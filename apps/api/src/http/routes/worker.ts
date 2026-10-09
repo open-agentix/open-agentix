@@ -216,6 +216,36 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
     },
   );
 
+  app.get(
+    '/v1/worker/runs/:id/workspace',
+    {
+      config: { access: 'run-token' },
+      schema: {
+        tags,
+        summary:
+          'Run node: the workspace seed of its own step (ustar archive; once per step and session)',
+        description:
+          'Returns the archive prepared by the worker (`application/x-tar`) with its SHA-256 in `x-oax-seed-sha256`. The node verifies the digest and unpacks the archive with its own checks. A second request is refused with 409; the bytes are deleted when the session ends.',
+        security: sec,
+        params: RunIdParams,
+        querystring: StepHandoverQuery,
+        response: { 401: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      const claims = await control.authorizeNodeStep(token(req), req.params.id, req.query.agentId);
+      const seed = await services.runNodes.takeSeed(claims, req.params.id, req.query.agentId);
+      return (
+        reply
+          .header('cache-control', 'no-store')
+          .header('x-oax-seed-sha256', seed.sha256)
+          .type('application/x-tar')
+          // raw bytes: no response schema is declared for 200, so no serializer touches them
+          .send(seed.archive as never)
+      );
+    },
+  );
+
   app.post(
     '/v1/worker/runs/:id/handover/result',
     {
