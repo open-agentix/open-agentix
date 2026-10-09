@@ -17,5 +17,6 @@ are immutable; a later ADR may supersede one.
 | [0010](0010-agent-authoring-builder-and-git-sync.md) | Authoring agents: no-code form builder, code view and Git-synced agent repositories | Proposed |
 | [0011](0011-outbound-network-proxies-and-private-endpoints.md) | Outbound network: central proxy configuration and private model endpoints | Proposed |
 | [0012](0012-connections-instances-scopes-and-data-protection.md) | Connections: MCP servers and model providers as separate areas, multiple instances per tenant, central vs tenant scope, data protection | Proposed |
+| [0013](0013-hierarchical-tenants-and-setup-modes.md) | Hierarchical tenants (inherited, narrowing-only settings, shared budget caps across the tree) and setup modes (single-tenant, multi-tenant) | Proposed |
 
 Template: Context, Decision, Consequences (positive/negative), Alternatives considered.

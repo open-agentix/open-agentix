@@ -61,7 +61,9 @@ Git-synced agent repositories ([ADR 0010](adr/0010-agent-authoring-builder-and-g
 outbound network configuration for proxies, trust stores, mTLS and private model endpoints
 ([ADR 0011](adr/0011-outbound-network-proxies-and-private-endpoints.md)), and connection types and
 instances with default-deny central grants and data protection rules
-([ADR 0012](adr/0012-connections-instances-scopes-and-data-protection.md)).
+([ADR 0012](adr/0012-connections-instances-scopes-and-data-protection.md)), and hierarchical tenants
+with inherited, narrowing-only settings and shared budget caps plus a first-run wizard with
+single-tenant and multi-tenant modes ([ADR 0013](adr/0013-hierarchical-tenants-and-setup-modes.md)).
 
 ## Data model (PostgreSQL)
 
