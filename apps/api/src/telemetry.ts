@@ -18,11 +18,14 @@ import {
 } from '@opentelemetry/api';
 import type { BufferConfig, IdGenerator } from '@opentelemetry/sdk-trace-base';
 import {
+  type CompiledNetwork,
   type ContextGuard,
+  type EgressPolicy,
   OaxError,
   DefaultSecretResolver,
   type SecretResolver,
   describeError,
+  getEgressPolicy,
   isSpanId,
   isTraceId,
   MAX_INPUT_CHARS,
@@ -30,6 +33,8 @@ import {
   newTraceId,
   type SpanKind,
 } from '@openagentix/core';
+import type { OutboundDispatcher } from '@openagentix/providers';
+import { getNetworkSettings } from './airgap.js';
 import type { OtelConfig } from './telemetry-config.js';
 import { parseHeaderList } from './telemetry-config.js';
 import {
@@ -323,6 +328,19 @@ export interface TelemetryInit {
   /** Overrides `config.serviceName` (the worker has its own default). */
   serviceName?: string;
   secrets?: SecretResolver;
+  /**
+   * The air-gapped egress policy. The process entry points activate it (`activateAirgap`) before
+   * `initTelemetry`, so an endpoint outside the allowlist refuses start-up before the header secret
+   * is resolved and before an exporter exists (#220). Default: the process-wide policy.
+   */
+  egress?: Pick<EgressPolicy, 'airgapped' | 'isAllowed'>;
+  /**
+   * Network configuration of the exporter's dispatcher (ADR 0011). Default: the one loaded by
+   * `activateAirgap`, or the legacy proxy environment when none was loaded.
+   */
+  network?: CompiledNetwork;
+  /** Replaces the exporter's outbound dispatcher (tests). Not closed by `shutdown`. */
+  outbound?: OutboundDispatcher;
   warn?: (fields: Record<string, string | number>, message: string) => void;
 }
 
@@ -391,6 +409,41 @@ function refuseForeignProvider(own?: TracerProvider): void {
   );
 }
 
+/**
+ * Air-gapped mode: the endpoint must be on `OAX_AIRGAPPED_ALLOW`. A pure check (no attempt is
+ * recorded, since nothing is contacted); the dispatcher and the network guard apply on top.
+ */
+function assertEndpointAllowed(
+  endpoint: string,
+  policy: Pick<EgressPolicy, 'airgapped' | 'isAllowed'>,
+): void {
+  if (!policy.airgapped) return;
+  let host: string;
+  let port: number | null;
+  try {
+    const u = new URL(endpoint);
+    host = u.hostname;
+    port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
+  } catch {
+    throw new OaxError(
+      'airgap_violation',
+      'air-gapped mode: the OpenTelemetry endpoint is invalid',
+    );
+  }
+  if (!policy.isAllowed(host, port))
+    throw new OaxError(
+      'airgap_violation',
+      `air-gapped mode: the OpenTelemetry exporter endpoint ${host}:${port} is not on OAX_AIRGAPPED_ALLOW (no exporter was created)`,
+    );
+}
+
+/** A start-up refusal from the dispatcher's route check: its code, a fixed prefix, no details. */
+function startupRefusal(e: unknown): OaxError {
+  if (e instanceof OaxError)
+    return new OaxError(e.code, `OpenTelemetry exporter endpoint refused: ${e.message}`);
+  return new OaxError('config_invalid', 'OpenTelemetry exporter endpoint could not be routed');
+}
+
 export async function initTelemetry(
   config: OtelConfig,
   init: TelemetryInit = {},
@@ -402,7 +455,29 @@ export async function initTelemetry(
   });
   const attachStats = (stats: TelemetryStats) => configureTelemetryRuntime({ stats });
   if (!config.endpoint) return { enabled: false, attachStats, shutdown: async () => undefined };
-  const headers = await resolveHeaders(config, init.secrets ?? new DefaultSecretResolver());
+  // Fail closed before anything is resolved or created: the air-gapped allowlist first (no secret
+  // is read, no exporter or socket exists when it refuses), then the route of the dispatcher.
+  assertEndpointAllowed(config.endpoint, init.egress ?? getEgressPolicy());
+  const { DispatcherSpanExporter, createTelemetryDispatcher, loadNetworkSecrets } =
+    await import('./telemetry-transport.js');
+  const secrets = init.secrets ?? new DefaultSecretResolver();
+  const net = init.network ?? getNetworkSettings()?.net;
+  const netSecrets = net
+    ? await loadNetworkSecrets(net, secrets)
+    : { read: (): undefined => undefined, values: [] as string[] };
+  const dispatcher =
+    init.outbound ?? createTelemetryDispatcher(net, netSecrets.read, config.exportTimeoutMs);
+  const url = `${config.endpoint.replace(/\/$/, '')}/v1/traces`;
+  try {
+    // Resolves the route (deny, metadata veto, proxy rules, trust, client certificate) now, so a
+    // refused or unusable destination stops start-up instead of failing every export later.
+    dispatcher.plan(url, { purpose: 'telemetry' });
+  } catch (e) {
+    if (!init.outbound) void dispatcher.close().catch(() => undefined);
+    throw startupRefusal(e);
+  }
+  for (const v of netSecrets.values) telemetryRuntime().guard.addSecret(v);
+  const headers = await resolveHeaders(config, secrets);
   const [
     { NodeTracerProvider },
     { AlwaysOnSampler, BatchSpanProcessor, ParentBasedSampler },
@@ -416,20 +491,17 @@ export async function initTelemetry(
     import('./telemetry-export.js'),
     import('./telemetry-sampling.js'),
   ]);
-  const url = `${config.endpoint.replace(/\/$/, '')}/v1/traces`;
-  const exporterConfig = {
-    url,
-    timeoutMillis: config.exportTimeoutMs,
-    ...(headers ? { headers } : {}),
-  };
-  const exporter =
-    config.protocol === 'http/json'
-      ? new (await import('@opentelemetry/exporter-trace-otlp-http')).OTLPTraceExporter(
-          exporterConfig,
-        )
-      : new (await import('@opentelemetry/exporter-trace-otlp-proto')).OTLPTraceExporter(
-          exporterConfig,
-        );
+  const exporter = new DispatcherSpanExporter(
+    {
+      dispatcher,
+      url,
+      protocol: config.protocol,
+      headers,
+      compression: config.compression,
+      timeoutMs: config.exportTimeoutMs,
+    },
+    !init.outbound,
+  );
   // Every option is passed explicitly, so none of the SDK's OTEL_BSP_* fallbacks applies.
   // `selfObsMeterProvider` is an option of the underlying processor that the BufferConfig type of
   // the env shim does not declare; it carries the queue-full drops to our counter.

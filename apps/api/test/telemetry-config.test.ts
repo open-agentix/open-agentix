@@ -10,6 +10,7 @@ describe('OpenTelemetry configuration (ADR 0015 section 14)', () => {
     expect(otel()).toEqual({
       endpoint: undefined,
       protocol: 'http/protobuf',
+      compression: 'none',
       serviceName: 'openagentix-api',
       resourceAttributes: {},
       headersSecret: undefined,

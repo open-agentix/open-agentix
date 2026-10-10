@@ -99,6 +99,8 @@ export function classifyExportFailure(error: unknown): ExportFailureReason {
   const code = (error as { code?: unknown } | null)?.code;
   const name = (error as { name?: unknown } | null)?.name;
   if (name === 'AbortError' || code === 'ETIMEDOUT' || code === 'ECONNABORTED') return 'timeout';
+  if (code === 'EXPORT_TOO_LARGE') return 'too_large';
+  if (code === 'EXPORT_DENIED') return 'denied';
   if (typeof code === 'number' || name === 'OTLPExporterError') return 'http';
   if (typeof code === 'string' && SYSTEM_NETWORK_CODES.test(code)) return 'network';
   return 'other';

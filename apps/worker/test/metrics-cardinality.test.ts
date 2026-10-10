@@ -129,7 +129,9 @@ const ALLOWED: Record<string, Record<string, Set<string> | RegExp>> = {
   model_proxy_reservations_active: {},
   model_proxy_streams_active: {},
   otel_spans_dropped_total: {},
-  otel_export_failures_total: { reason: oneOf('timeout', 'network', 'http', 'other') },
+  otel_export_failures_total: {
+    reason: oneOf('timeout', 'network', 'http', 'too_large', 'denied', 'other'),
+  },
   otel_attributes_dropped_total: {
     key_class: oneOf('unknown', 'content', 'wrong_span', 'invalid', 'overflow'),
   },
