@@ -14,6 +14,7 @@ import {
   VerifyResultSchema,
   pageOf,
 } from '../schemas.js';
+import { assertNotBoth, rowTenants } from '../subtree.js';
 import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
@@ -37,15 +38,20 @@ export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
       schema: {
         tags,
         summary: 'List audit entries (newest first)',
+        description:
+          'With scope=subtree: the entries of the acting tenant and of every descendant where the caller holds audit:read (entries without a tenant partition are never included).',
         security: sec,
         querystring: AuditQuery,
         response: { 200: pageOf(AuditEntrySchema) },
       },
     },
-    async (req) =>
-      audit.list(
+    async (req) => {
+      assertNotBoth(req.query);
+      const principal = principalOf(req);
+      const subtree = await services.subtree.resolve(principal, 'audit:read', req.query);
+      const r = await audit.list(
         {
-          tenantId: auditScope(principalOf(req), req.query.allTenants),
+          tenantId: subtree ? principal.tenantId : auditScope(principal, req.query.allTenants),
           runId: req.query.runId,
           action: req.query.action,
           from: date(req.query.from),
@@ -53,7 +59,22 @@ export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
         },
         req.query.limit,
         req.query.cursor,
-      ),
+        subtree,
+      );
+      if (!subtree) return r;
+      const tenantOf = await rowTenants(
+        services.subtree,
+        subtree,
+        r.items.flatMap((e) => (e.tenantId ? [{ tenantId: e.tenantId }] : [])),
+      );
+      return {
+        nextCursor: r.nextCursor,
+        items: r.items.map(({ tenantId, ...entry }) => {
+          const tenant = tenantId ? tenantOf({ tenantId }) : undefined;
+          return tenant ? { ...entry, tenant } : entry;
+        }),
+      };
+    },
   );
 
   app.post(

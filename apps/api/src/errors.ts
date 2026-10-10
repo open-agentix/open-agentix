@@ -26,6 +26,7 @@ const STATUS: Record<string, number> = {
   egress_denied: 422,
   tenant_depth_exceeded: 422,
   tenant_node_limit_exceeded: 422,
+  subtree_too_large: 422,
   invalid_tenant_path: 400,
   not_implemented: 501,
   team_budget_exceeded: 402,

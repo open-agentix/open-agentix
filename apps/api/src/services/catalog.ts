@@ -37,12 +37,14 @@ import {
   type ModelEntry,
 } from '@openagentix/providers';
 import { legacyNetwork } from '@openagentix/providers';
-import { and, asc, eq, or } from 'drizzle-orm';
+import { and, asc, eq, gt, or } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import { DEFAULT_TENANT_ID, agents, connections, policies, teams, tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
+import { decodeNameCursor, encodeNameCursor, page } from '../pagination.js';
 import type { AuditService } from './audit.js';
+import type { ResolvedScope } from './subtree-scope.js';
 
 export type ConnectionRow = typeof connections.$inferSelect;
 export type PolicyRow = typeof policies.$inferSelect;
@@ -110,6 +112,33 @@ export class CatalogService {
       .from(connections)
       .where(this.visible(actor.tenantId))
       .orderBy(asc(connections.name));
+  }
+
+  /**
+   * Connections owned by the nodes of a `scope=subtree` list, ordered by name and id and
+   * keyset-paged by them. Platform connections owned by a node outside the scope are not listed:
+   * their owner would name a node the caller may not see.
+   */
+  async listConnectionsIn(subtree: ResolvedScope, limit: number, cursor?: string) {
+    if (subtree.isEmpty) return { items: [] as ConnectionRow[], nextCursor: null };
+    const after = decodeNameCursor(cursor);
+    const rows = await this.ctx.db
+      .select()
+      .from(connections)
+      .where(
+        and(
+          subtree.nodePredicate(connections.tenantId),
+          after === null
+            ? undefined
+            : or(
+                gt(connections.name, after.key),
+                and(eq(connections.name, after.key), gt(connections.id, after.id)),
+              ),
+        ),
+      )
+      .orderBy(asc(connections.name), asc(connections.id))
+      .limit(limit + 1);
+    return page(rows, limit, (r) => encodeNameCursor(r.name, r.id));
   }
 
   async getConnection(actor: TenantActor, id: string): Promise<ConnectionRow> {

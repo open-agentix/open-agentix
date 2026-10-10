@@ -12,8 +12,10 @@ import {
   SourceIdParams,
   SourcePatchBody,
   SourceSchema,
+  SubtreePageQuery,
   pageOf,
 } from '../schemas.js';
+import { SUBTREE_DEFAULT_PAGE, assertPagingNeedsSubtree, rowTenants } from '../subtree.js';
 import type { ZApp } from '../zapp.js';
 import { z } from 'zod';
 
@@ -31,12 +33,32 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
         tags: ['events'],
         summary: 'List event sources',
         security: sec,
-        response: { 200: z.object({ items: z.array(SourceSchema) }) },
+        querystring: SubtreePageQuery,
+        response: {
+          200: z.object({
+            items: z.array(SourceSchema),
+            nextCursor: z.string().nullable().optional(),
+          }),
+        },
       },
     },
-    async (req) => ({
-      items: (await ingest.listSources(principalOf(req))).map((s) => sourceDto(s, url)),
-    }),
+    async (req) => {
+      assertPagingNeedsSubtree(req.query);
+      const principal = principalOf(req);
+      const subtree = await services.subtree.resolve(principal, 'sources:read', req.query);
+      if (!subtree)
+        return { items: (await ingest.listSources(principal)).map((s) => sourceDto(s, url)) };
+      const r = await ingest.listSourcesIn(
+        subtree,
+        req.query.limit ?? SUBTREE_DEFAULT_PAGE,
+        req.query.cursor,
+      );
+      const tenantOf = await rowTenants(services.subtree, subtree, r.items);
+      return {
+        items: r.items.map((s) => ({ ...sourceDto(s, url), tenant: tenantOf(s) })),
+        nextCursor: r.nextCursor,
+      };
+    },
   );
 
   app.post(
@@ -118,13 +140,23 @@ export function registerEventRoutes(app: ZApp, { ctx, services }: Deps): void {
       },
     },
     async (req) => {
+      const principal = principalOf(req);
+      const subtree = await services.subtree.resolve(principal, 'events:read', req.query);
       const r = await ingest.listEvents(
-        principalOf(req),
+        principal,
         { sourceId: req.query.sourceId },
         req.query.limit,
         req.query.cursor,
+        subtree,
       );
-      return { items: r.items.map(eventDto), nextCursor: r.nextCursor };
+      const tenantOf = subtree ? await rowTenants(services.subtree, subtree, r.items) : undefined;
+      return {
+        items: r.items.map((e) => {
+          const tenant = tenantOf?.(e);
+          return { ...eventDto(e), ...(tenant ? { tenant } : {}) };
+        }),
+        nextCursor: r.nextCursor,
+      };
     },
   );
 

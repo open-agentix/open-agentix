@@ -799,13 +799,17 @@ export interface paths {
         };
         /**
          * List agents
-         * @description Agents the caller may read, newest first. Filters narrow that set and combine with AND. Each item carries tenant, use case, owner team, status, last run, month spend and budget.
+         * @description Agents the caller may read, newest first. Filters narrow that set and combine with AND. Each item carries tenant, use case, owner team, status, last run, month spend and budget. With scope=subtree the list spans the acting tenant and its descendants, each node judged by the roles the caller holds there.
          */
         get: {
             parameters: {
                 query?: {
                     limit?: number;
                     cursor?: string;
+                    /** @description node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant` */
+                    scope?: "node" | "subtree";
+                    /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
+                    tenantId?: string;
                     /** @description case-insensitive substring of name, description or use case */
                     q?: string;
                     /** @description only agents owned by this team */
@@ -840,7 +844,7 @@ export interface paths {
                                 draftUpdatedAt: string;
                                 /** @description ISO 8601 timestamp */
                                 createdAt: string;
-                                /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                                /** @description tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree) */
                                 tenant: {
                                     /** Format: uuid */
                                     id: string;
@@ -954,7 +958,7 @@ export interface paths {
                             draftUpdatedAt: string;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
-                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            /** @description tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree) */
                             tenant: {
                                 /** Format: uuid */
                                 id: string;
@@ -1178,7 +1182,7 @@ export interface paths {
                             draftUpdatedAt: string;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
-                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            /** @description tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree) */
                             tenant: {
                                 /** Format: uuid */
                                 id: string;
@@ -1317,7 +1321,7 @@ export interface paths {
                             draftUpdatedAt: string;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
-                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            /** @description tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree) */
                             tenant: {
                                 /** Format: uuid */
                                 id: string;
@@ -1573,7 +1577,7 @@ export interface paths {
                             draftUpdatedAt: string;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
-                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            /** @description tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree) */
                             tenant: {
                                 /** Format: uuid */
                                 id: string;
@@ -1732,7 +1736,7 @@ export interface paths {
                             draftUpdatedAt: string;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
-                            /** @description tenant the agent belongs to (always the tenant the request acts in) */
+                            /** @description tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree) */
                             tenant: {
                                 /** Format: uuid */
                                 id: string;
@@ -2303,6 +2307,15 @@ export interface paths {
                             errorCode: string | null;
                             errorMessage: string | null;
                             outputs: unknown;
+                            /** @description with scope=subtree: the tenant the run belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -2351,7 +2364,16 @@ export interface paths {
         /** List event sources */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant` */
+                    scope?: "node" | "subtree";
+                    /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
+                    tenantId?: string;
+                    /** @description with scope=subtree: page size (default 200) */
+                    limit?: number;
+                    /** @description with scope=subtree: `nextCursor` of the previous page */
+                    cursor?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -2382,7 +2404,17 @@ export interface paths {
                                 /** @description ISO 8601 timestamp */
                                 createdAt: string;
                                 ingestUrl: string | null;
+                                /** @description with scope=subtree: the tenant the row belongs to */
+                                tenant?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                    slugPath: string;
+                                    name: string;
+                                };
                             }[];
+                            nextCursor?: string | null;
                         };
                     };
                 };
@@ -2456,6 +2488,15 @@ export interface paths {
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                             ingestUrl: string | null;
+                            /** @description with scope=subtree: the tenant the row belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -2540,6 +2581,15 @@ export interface paths {
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                             ingestUrl: string | null;
+                            /** @description with scope=subtree: the tenant the row belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -2672,6 +2722,15 @@ export interface paths {
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                             ingestUrl: string | null;
+                            /** @description with scope=subtree: the tenant the row belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -2719,6 +2778,10 @@ export interface paths {
                 query?: {
                     limit?: number;
                     cursor?: string;
+                    /** @description node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant` */
+                    scope?: "node" | "subtree";
+                    /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
+                    tenantId?: string;
                     sourceId?: string;
                 };
                 header?: never;
@@ -2744,6 +2807,15 @@ export interface paths {
                                 /** @description ISO 8601 timestamp */
                                 receivedAt: string;
                                 payload: unknown;
+                                /** @description with scope=subtree: the tenant the row belongs to */
+                                tenant?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                    slugPath: string;
+                                    name: string;
+                                };
                             }[];
                             nextCursor: string | null;
                         };
@@ -2812,6 +2884,15 @@ export interface paths {
                             /** @description ISO 8601 timestamp */
                             receivedAt: string;
                             payload: unknown;
+                            /** @description with scope=subtree: the tenant the row belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -2865,6 +2946,10 @@ export interface paths {
                 query?: {
                     limit?: number;
                     cursor?: string;
+                    /** @description node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant` */
+                    scope?: "node" | "subtree";
+                    /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
+                    tenantId?: string;
                     agentId?: string;
                     status?: "queued" | "running" | "awaiting_approval" | "succeeded" | "failed" | "cancelled" | "blocked_by_policy";
                     teamId?: string;
@@ -2913,6 +2998,15 @@ export interface paths {
                                 errorCode: string | null;
                                 errorMessage: string | null;
                                 outputs: unknown;
+                                /** @description with scope=subtree: the tenant the run belongs to */
+                                tenant?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                    slugPath: string;
+                                    name: string;
+                                };
                             }[];
                             nextCursor: string | null;
                         };
@@ -3069,6 +3163,15 @@ export interface paths {
                             errorCode: string | null;
                             errorMessage: string | null;
                             outputs: unknown;
+                            /** @description with scope=subtree: the tenant the run belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                             /** @description W3C trace id of the run (random, server-generated); null for runs created before the trace identity existed */
                             traceId: string | null;
                             /** @description Link to the trace in the operator's trace backend (OAX_OTEL_TRACE_URL_TEMPLATE); null when no template is configured or the run has no trace */
@@ -3396,6 +3499,15 @@ export interface paths {
                             errorCode: string | null;
                             errorMessage: string | null;
                             outputs: unknown;
+                            /** @description with scope=subtree: the tenant the run belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -3460,6 +3572,10 @@ export interface paths {
                 query?: {
                     limit?: number;
                     cursor?: string;
+                    /** @description node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant` */
+                    scope?: "node" | "subtree";
+                    /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
+                    tenantId?: string;
                     status?: "pending" | "approved" | "rejected" | "timeout";
                     runId?: string;
                 };
@@ -3498,6 +3614,15 @@ export interface paths {
                                 decidedBy: string | null;
                                 decidedAt: string | null;
                                 comment: string | null;
+                                /** @description with scope=subtree: the tenant the row belongs to */
+                                tenant?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                    slugPath: string;
+                                    name: string;
+                                };
                             }[];
                             nextCursor: string | null;
                         };
@@ -3588,6 +3713,15 @@ export interface paths {
                             decidedBy: string | null;
                             decidedAt: string | null;
                             comment: string | null;
+                            /** @description with scope=subtree: the tenant the row belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -3710,10 +3844,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Costs grouped by run, agent, team, month, provider or model */
+        /**
+         * Costs grouped by run, agent, team, tenant, use case, month, provider or model
+         * @description With scope=subtree the ledger of the acting tenant and its descendants is aggregated, each node judged by the roles the caller holds there; groupBy=tenant then labels every group with its slug path.
+         */
         get: {
             parameters: {
                 query?: {
+                    /** @description node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant` */
+                    scope?: "node" | "subtree";
+                    /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
+                    tenantId?: string;
                     groupBy?: "run" | "agent" | "team" | "tenant" | "use_case" | "month" | "provider" | "model";
                     /** @description start of the period, inclusive: YYYY-MM-DD or ISO 8601 timestamp, rounded down to the first day of its month (UTC) */
                     from?: string;
@@ -3784,10 +3925,22 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List connections (MCP servers) */
+        /**
+         * List connections (MCP servers)
+         * @description With scope=subtree: the connections owned by the acting tenant and its descendants the caller may read (paged with limit and cursor); platform connections owned by a tenant outside that set are not listed.
+         */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant` */
+                    scope?: "node" | "subtree";
+                    /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
+                    tenantId?: string;
+                    /** @description with scope=subtree: page size (default 200) */
+                    limit?: number;
+                    /** @description with scope=subtree: `nextCursor` of the previous page */
+                    cursor?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -3821,7 +3974,17 @@ export interface paths {
                                 createdAt: string;
                                 /** @description ISO 8601 timestamp */
                                 updatedAt: string;
+                                /** @description with scope=subtree: the tenant the row belongs to */
+                                tenant?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                    slugPath: string;
+                                    name: string;
+                                };
                             }[];
+                            nextCursor?: string | null;
                         };
                     };
                 };
@@ -3905,6 +4068,15 @@ export interface paths {
                             createdAt: string;
                             /** @description ISO 8601 timestamp */
                             updatedAt: string;
+                            /** @description with scope=subtree: the tenant the row belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -3992,6 +4164,15 @@ export interface paths {
                                     createdAt: string;
                                     /** @description ISO 8601 timestamp */
                                     updatedAt: string;
+                                    /** @description with scope=subtree: the tenant the row belongs to */
+                                    tenant?: {
+                                        /** Format: uuid */
+                                        id: string;
+                                        slug: string;
+                                        /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                        slugPath: string;
+                                        name: string;
+                                    };
                                 };
                                 issues: {
                                     code: string;
@@ -4283,6 +4464,15 @@ export interface paths {
                             createdAt: string;
                             /** @description ISO 8601 timestamp */
                             updatedAt: string;
+                            /** @description with scope=subtree: the tenant the row belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -4361,6 +4551,15 @@ export interface paths {
                             createdAt: string;
                             /** @description ISO 8601 timestamp */
                             updatedAt: string;
+                            /** @description with scope=subtree: the tenant the row belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
                         };
                     };
                 };
@@ -5069,12 +5268,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List audit entries (newest first) */
+        /**
+         * List audit entries (newest first)
+         * @description With scope=subtree: the entries of the acting tenant and of every descendant where the caller holds audit:read (entries without a tenant partition are never included).
+         */
         get: {
             parameters: {
                 query?: {
                     limit?: number;
                     cursor?: string;
+                    /** @description node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant` */
+                    scope?: "node" | "subtree";
+                    /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
+                    tenantId?: string;
                     /** @description platform operators only: span every tenant instead of the acting tenant */
                     allTenants?: boolean;
                     runId?: string;
@@ -5107,6 +5313,15 @@ export interface paths {
                                 payloadDigest: string;
                                 prevHash: string;
                                 hash: string;
+                                /** @description with scope=subtree: the tenant the row belongs to */
+                                tenant?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                    slugPath: string;
+                                    name: string;
+                                };
                             }[];
                             nextCursor: string | null;
                         };
@@ -6981,10 +7196,22 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Monthly budgets of the tenant with spend and alerts raised this month */
+        /**
+         * Monthly budgets of the tenant with spend and alerts raised this month
+         * @description With scope=subtree `nodes` lists the budgets of every node of the subtree the caller may read costs of (paged by slug path with limit and cursor).
+         */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant` */
+                    scope?: "node" | "subtree";
+                    /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
+                    tenantId?: string;
+                    /** @description with scope=subtree: page size (default 200) */
+                    limit?: number;
+                    /** @description with scope=subtree: `nextCursor` of the previous page */
+                    cursor?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -7039,6 +7266,56 @@ export interface paths {
                                 /** @description alert thresholds (50, 80, 100) raised this month */
                                 alerts: number[];
                             }[];
+                            /** @description with scope=subtree: the budgets of every readable node of the subtree (the acting node included), ordered by slug path */
+                            nodes?: {
+                                node: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slugPath: string;
+                                    name: string;
+                                };
+                                tenant: {
+                                    /** @enum {string} */
+                                    scope: "tenant" | "use_case" | "team";
+                                    /** @description tenant slug, use case label or team slug */
+                                    key: string | null;
+                                    /** @description monthly limit, null when no budget is set */
+                                    limitUsd: number | null;
+                                    /** @description spend of the current UTC month */
+                                    spentUsd: number;
+                                    percentUsed: number | null;
+                                    /** @description alert thresholds (50, 80, 100) raised this month */
+                                    alerts: number[];
+                                };
+                                useCases: {
+                                    /** @enum {string} */
+                                    scope: "tenant" | "use_case" | "team";
+                                    /** @description tenant slug, use case label or team slug */
+                                    key: string | null;
+                                    /** @description monthly limit, null when no budget is set */
+                                    limitUsd: number | null;
+                                    /** @description spend of the current UTC month */
+                                    spentUsd: number;
+                                    percentUsed: number | null;
+                                    /** @description alert thresholds (50, 80, 100) raised this month */
+                                    alerts: number[];
+                                }[];
+                                teams: {
+                                    /** @enum {string} */
+                                    scope: "tenant" | "use_case" | "team";
+                                    /** @description tenant slug, use case label or team slug */
+                                    key: string | null;
+                                    /** @description monthly limit, null when no budget is set */
+                                    limitUsd: number | null;
+                                    /** @description spend of the current UTC month */
+                                    spentUsd: number;
+                                    percentUsed: number | null;
+                                    /** @description alert thresholds (50, 80, 100) raised this month */
+                                    alerts: number[];
+                                }[];
+                            }[];
+                            /** @description with scope=subtree: cursor of the next page of `nodes` */
+                            nextCursor?: string | null;
                         };
                     };
                 };

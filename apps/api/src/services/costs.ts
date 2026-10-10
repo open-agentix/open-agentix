@@ -2,8 +2,10 @@ import { visibleAgents, visibleTeams, type Principal } from '@openagentix/core';
 import { and, desc, eq, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
-import { agents, costLedger, teams } from '../db/schema.js';
+import { agents, costLedger, teams, tenants } from '../db/schema.js';
 import { forbidden } from '../errors.js';
+import type { ResolvedScope } from './subtree-scope.js';
+import { TenantTree } from './tenant-tree.js';
 
 export const COST_GROUPS = [
   'run',
@@ -113,6 +115,16 @@ export class CostsService {
     return new Map();
   }
 
+  /** Slug paths of the grouped tenants of a subtree summary (only nodes inside the scope). */
+  private async tenantLabels(subtree: ResolvedScope, keys: string[]): Promise<Map<string, string>> {
+    const allowed = new Set(subtree.nodeIds());
+    const ids = keys.filter((k) => allowed.has(k));
+    if (ids.length === 0) return new Map();
+    const rows = await this.ctx.db.select().from(tenants).where(inArray(tenants.id, ids));
+    const paths = await new TenantTree(this.ctx).slugPaths(rows);
+    return new Map(rows.map((r) => [r.id, paths.get(r.id)!]));
+  }
+
   /** Platform operators may aggregate across tenants; everybody else stays inside their own. */
   private tenantFilter(principal: Principal, allTenants: boolean): SQL | undefined {
     if (allTenants) {
@@ -184,12 +196,23 @@ export class CostsService {
     to?: string,
     limit = 100,
     allTenants = false,
+    subtree?: ResolvedScope,
   ): Promise<CostRow[]> {
-    const tenantFilter = this.tenantFilter(principal, allTenants);
+    const tenantFilter = subtree ? undefined : this.tenantFilter(principal, allTenants);
     const scope = visibleTeams(principal, 'costs:read');
     const scopedAgents = visibleAgents(principal, 'costs:read');
-    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return [];
-    const key = `costs:${allTenants ? 'all' : principal.tenantId}:${groupBy}:${from ?? ''}:${to ?? ''}:${limit}:${scope === 'all' ? 'all' : [...scope, ...scopedAgents.map((a) => `agent:${a}`)].sort().join(',')}`;
+    if (
+      subtree
+        ? subtree.isEmpty
+        : Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0
+    )
+      return [];
+    // Aggregates are cached per scope: the digest of a subtree scope covers every node and role
+    // the predicate is built from, so two callers share an entry only if they may read the same rows.
+    const who = subtree
+      ? `subtree:${subtree.digest()}`
+      : `${allTenants ? 'all' : principal.tenantId}:${scope === 'all' ? 'all' : [...scope, ...scopedAgents.map((a) => `agent:${a}`)].sort().join(',')}`;
+    const key = `costs:${who}:${groupBy}:${from ?? ''}:${to ?? ''}:${limit}`;
     return cached(this.ctx.cache, key, 30_000, async () => {
       const col = COLUMN[groupBy];
       const rows = await this.ctx.db
@@ -203,23 +226,30 @@ export class CostsService {
         .where(
           and(
             tenantFilter,
+            subtree
+              ? subtree.predicate({
+                  tenantId: costLedger.tenantId,
+                  teamId: costLedger.teamId,
+                  agent: costLedger.agentId,
+                })
+              : scope === 'all'
+                ? undefined
+                : or(
+                    scope.length ? inArray(costLedger.teamId, scope) : undefined,
+                    scopedAgents.length ? inArray(costLedger.agentId, scopedAgents) : undefined,
+                  ),
             from ? gte(costLedger.month, from) : undefined,
             to ? lte(costLedger.month, to) : undefined,
-            scope === 'all'
-              ? undefined
-              : or(
-                  scope.length ? inArray(costLedger.teamId, scope) : undefined,
-                  scopedAgents.length ? inArray(costLedger.agentId, scopedAgents) : undefined,
-                ),
           ),
         )
         .groupBy(col)
         .orderBy(desc(sql`4`))
         .limit(limit);
-      const labels = await this.labels(
-        groupBy,
-        rows.map((r) => r.key).filter((k): k is string => !!k),
-      );
+      const keys = rows.map((r) => r.key).filter((k): k is string => !!k);
+      const labels =
+        subtree && groupBy === 'tenant'
+          ? await this.tenantLabels(subtree, keys)
+          : await this.labels(groupBy, keys);
       return rows.map((r) => ({
         key: r.key,
         label: (r.key && labels.get(r.key)) ?? null,

@@ -15,15 +15,22 @@ import {
   type ReplayGuard,
   type WebhookScheme,
 } from '@openagentix/events';
-import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import { agents, changeChecks, eventSources, events, webhookDeliveries } from '../db/schema.js';
 import { createProxyAwareFetch } from '@openagentix/providers';
 import { HttpError, conflict, notFound } from '../errors.js';
-import { decodeTimeCursor, encodeTimeCursor, page } from '../pagination.js';
+import {
+  decodeNameCursor,
+  decodeTimeCursor,
+  encodeNameCursor,
+  encodeTimeCursor,
+  page,
+} from '../pagination.js';
 import type { AuditService } from './audit.js';
 import type { RunsService } from './runs.js';
+import type { ResolvedScope } from './subtree-scope.js';
 
 export type SourceRow = typeof eventSources.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
@@ -94,6 +101,32 @@ export class IngestService {
       .from(eventSources)
       .where(eq(eventSources.tenantId, actor.tenantId))
       .orderBy(eventSources.name);
+  }
+
+  /**
+   * Sources of the nodes of a `scope=subtree` list, ordered by name and id and keyset-paged by
+   * them (a name is unique per tenant only, so the id breaks ties).
+   */
+  async listSourcesIn(subtree: ResolvedScope, limit: number, cursor?: string) {
+    if (subtree.isEmpty) return { items: [] as SourceRow[], nextCursor: null };
+    const after = decodeNameCursor(cursor);
+    const rows = await this.ctx.db
+      .select()
+      .from(eventSources)
+      .where(
+        and(
+          subtree.nodePredicate(eventSources.tenantId),
+          after === null
+            ? undefined
+            : or(
+                gt(eventSources.name, after.key),
+                and(eq(eventSources.name, after.key), gt(eventSources.id, after.id)),
+              ),
+        ),
+      )
+      .orderBy(eventSources.name, eventSources.id)
+      .limit(limit + 1);
+    return page(rows, limit, (r) => encodeNameCursor(r.name, r.id));
   }
 
   /** Every source of every tenant: for the worker's schedulers only, never for request handlers. */
@@ -359,14 +392,16 @@ export class IngestService {
     filter: { sourceId?: string | undefined },
     limit: number,
     cursor?: string,
+    subtree?: ResolvedScope,
   ) {
     const c = decodeTimeCursor(cursor);
+    if (subtree?.isEmpty) return { items: [], nextCursor: null };
     const rows = await this.ctx.db
       .select()
       .from(events)
       .where(
         and(
-          eq(events.tenantId, actor.tenantId),
+          subtree ? subtree.nodePredicate(events.tenantId) : eq(events.tenantId, actor.tenantId),
           filter.sourceId ? eq(events.sourceId, filter.sourceId) : undefined,
           c
             ? or(lt(events.receivedAt, c.t), and(eq(events.receivedAt, c.t), lt(events.id, c.id)))
