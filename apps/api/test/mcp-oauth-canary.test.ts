@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { OaxError } from '@openagentix/core';
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createLogger, logDestination } from '../src/context.js';
 import { connections, DEFAULT_TENANT_ID } from '../src/db/schema.js';
@@ -15,8 +15,8 @@ import { testNode, type TestNode } from './helpers.js';
  * error bodies, audit entries, API responses or what a run node is given. Step records, model
  * requests and spans are covered next to the executor (apps/worker/test/mcp-oauth-canary.test.ts).
  */
-const CANARY = 'CANARY-oauth-access-9f3a7c1e5b2d4a60';
-const REFRESH_CANARY = 'CANARY-oauth-refresh-1d8e6b4f2a9c7350';
+const CANARY = 'CANARY-9f3a7cQ1e5b2dZ4a60xKm8';
+const REFRESH_CANARY = 'CANARY-1d8e6bH4f2a9cW7350pTn2';
 const RESOURCE = 'https://mcp.example.org/mcp';
 
 let n: TestNode;
@@ -58,6 +58,14 @@ afterAll(async () => {
   processSecrets.clear();
   await n.close();
 });
+
+/** A principal of the token's tenant on every request, as the auth hook of the real app sets it. */
+const signedIn = (app: FastifyInstance) =>
+  app.addHook('onRequest', async (req) => {
+    (req as unknown as { principal: { tenantId: string } }).principal = {
+      tenantId: DEFAULT_TENANT_ID,
+    };
+  });
 
 const lines = (): { sink: { write(l: string): void }; out: string[] } => {
   const out: string[] = [];
@@ -115,6 +123,7 @@ describe('errors', () => {
     const { sink, out } = lines();
     const app = Fastify({ logger: { level: 'info', stream: logDestination(sink) as never } });
     registerErrorHandler(app);
+    signedIn(app);
     scrubResponses(app, processSecrets);
     app.get('/domain', async () => {
       throw new OaxError('mcp_upstream', `server said: ${CANARY}`, { echoed: CANARY });
@@ -193,6 +202,7 @@ describe('API responses', () => {
 describe('the detector itself', () => {
   it('goes red for a deliberately leaking handler while the redactor is empty, and the net catches it when armed', async () => {
     const app = Fastify({ logger: false });
+    signedIn(app);
     scrubResponses(app, processSecrets);
     app.get('/leak', async () => {
       const stored = await n.services.mcpOauth.tokens.open(DEFAULT_TENANT_ID, connectionId, 1);
@@ -206,5 +216,25 @@ describe('the detector itself', () => {
     expect(armed.body).not.toContain(CANARY);
     expect(JSON.parse(armed.body)).toEqual({ value: '[REDACTED]' });
     await app.close();
+  });
+});
+
+describe('scoping and wiring', () => {
+  it('a response served to another tenant is not rewritten with the token of this one', async () => {
+    const app = Fastify({ logger: false });
+    app.addHook('onRequest', async (req) => {
+      (req as unknown as { principal: { tenantId: string } }).principal = {
+        tenantId: 'other-tenant',
+      };
+    });
+    scrubResponses(app, processSecrets);
+    app.get('/x', async () => ({ note: CANARY }));
+    await arm();
+    expect((await app.inject({ method: 'GET', url: '/x' })).body).toContain(CANARY);
+    await app.close();
+  });
+
+  it('warns when the registry drops a still-valid token (handler wired at start-up)', () => {
+    expect(typeof processSecrets.onLiveEviction).toBe('function');
   });
 });

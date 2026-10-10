@@ -18,7 +18,7 @@ import { executorTelemetry } from '../src/executor-spans.js';
  * exported spans. The canary has no known token shape, so only the exact-value registration can
  * remove it: this proves the registration happens before use.
  */
-const CANARY = 'CANARY-worker-access-77b1d4e9a3c5f208';
+const CANARY = 'CANARY-77b1d4Ye9a3c5Rf208vLq6';
 const RESOURCE = 'https://mcp.example.org/mcp';
 
 let t: ReturnType<typeof startTracing>;
@@ -78,7 +78,7 @@ async function storeAndFetchToken(guard: ContextGuard) {
     scopes: ['read'],
     accessToken: CANARY,
   });
-  const token = await oauth.credentials.accessToken(
+  const { token } = await oauth.credentials.accessToken(
     { id, tenantId: schema.DEFAULT_TENANT_ID },
     ['read'],
     { guard },

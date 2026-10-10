@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { ContextGuard } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { loadConfig, telemetryRuntime } from '../src/index.js';
+import { loadConfig } from '../src/index.js';
 import {
   connections,
   DEFAULT_TENANT_ID,
@@ -26,9 +26,9 @@ const KEK = randomBytes(32).toString('base64');
 const RESOURCE = 'https://mcp.example.org/mcp';
 const ISSUER = 'https://auth.example.org';
 const OTHER_TENANT = '00000000-0000-4000-8000-0000000000aa';
-const ACCESS = 'canary-access-token-0123456789';
-const REFRESH = 'canary-refresh-token-9876543210';
-const SECOND = 'second-access-token-q8Zr2Lm';
+const ACCESS = 'Zk29xQ7mLp3Vw8Rn5TbY1uHsJd4Ge';
+const REFRESH = 'Hb41yUe6Cd0Fs5AjXq8NmW2tKr7Pv';
+const SECOND = 'Qw93kLm2Xz7Pa4RtYc6NhB1vSe8Df';
 
 let n: TestNode;
 let oauth: McpOauthStores;
@@ -101,22 +101,17 @@ describe('encrypted token store', () => {
     await write(id);
     const guard = guardOf();
     const fresh = new SecretRegistry();
-    const creds = new McpCredentials(
-      oauth.tokens,
-      fresh,
-      () => now,
-      'api',
-      () => [telemetryRuntime().guard],
-    );
+    const creds = new McpCredentials(oauth.tokens, fresh, () => now, 'api');
     expect(fresh.size).toBe(0);
-    const token = await creds.accessToken(ref(id), ['read'], { guard });
-    expect(token).toBe(ACCESS);
+    const granted = await creds.accessToken(ref(id), ['read'], { guard });
+    expect(granted).toEqual({ token: ACCESS, resource: RESOURCE });
     // registered with the run's guard and the log redactor
     expect(fresh.has(ACCESS)).toBe(true);
     expect(guard.text(`echo ${ACCESS}`).text).not.toContain(ACCESS);
     expect(fresh.scrub(`x ${ACCESS} y`)).toBe('x [REDACTED] y');
-    // ... and with the telemetry guard that sanitises span attributes
-    expect(telemetryRuntime().guard.text(`x ${ACCESS}`).text).not.toContain(ACCESS);
+    // scoped to the connection's tenant: another tenant's text is left alone
+    expect(fresh.scrub(`x ${ACCESS}`, DEFAULT_TENANT_ID)).toBe('x [REDACTED]');
+    expect(fresh.scrub(`x ${ACCESS}`, OTHER_TENANT)).toBe(`x ${ACCESS}`);
     // metadata never carries a value
     expect(JSON.stringify(await oauth.tokens.meta(DEFAULT_TENANT_ID, id, 1))).not.toContain(
       'canary',
@@ -228,7 +223,7 @@ describe('encrypted token store', () => {
   });
 
   it('seals dynamically registered client secrets per tenant and issuer', async () => {
-    const secret = 'client-secret-canary-0000111';
+    const secret = 'Xq72LmZk9PaRt4YcWe8NhB1v';
     const id = await oauth.clients.put({
       tenantId: DEFAULT_TENANT_ID,
       issuer: 'https://dcr.example.org',
@@ -298,7 +293,7 @@ describe('McpCredentials.accessToken', () => {
       code: 'mcp_auth_required',
     });
     await write(id);
-    expect(await creds().accessToken(ref(id), ['read', 'write'], { guard })).toBe(ACCESS);
+    expect((await creds().accessToken(ref(id), ['read', 'write'], { guard })).token).toBe(ACCESS);
     now = new Date(now.getTime() + 2 * 3_600_000);
     await expect(creds().accessToken(ref(id), [], { guard })).rejects.toMatchObject({
       code: 'mcp_auth_required',
@@ -438,6 +433,24 @@ describe('key service configuration', () => {
     expect(config.mcp.oauth.source).toBe('env');
   });
 
+  it('refuses a key file inside the secrets directory (its files are served as secrets)', () => {
+    const base = { NODE_ENV: 'test', OAX_DATABASE_URL: 'memory://' };
+    expect(() =>
+      loadConfig({
+        ...base,
+        OAX_SECRETS_DIR: '/run/secrets',
+        OAX_MCP_OAUTH_KEK_FILE: '/run/secrets/kek',
+      }),
+    ).toThrow(/inside OAX_SECRETS_DIR/);
+    expect(() =>
+      loadConfig({
+        ...base,
+        OAX_SECRETS_DIR: '/run/secrets',
+        OAX_MCP_OAUTH_KEK_FILE: '/run/secrets-kek/kek',
+      }),
+    ).toThrow(/cannot be read/); // a sibling path is outside; it fails only because it does not exist
+  });
+
   it('removes the key from process.env once it is loaded', () => {
     const saved = { ...process.env };
     try {
@@ -477,7 +490,7 @@ describe('what put() accepts', () => {
       '1","b":"2-padding-padding-padding',
       'a"b\\c-padding-padding-padding1',
       randomUUID(),
-      randomUUID().replace(/-/g, ''),
+      `runs/${randomUUID()}`,
       `prefix-${DEFAULT_TENANT_ID}-suffix`,
       `x${id}x-padding-more`,
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -486,6 +499,14 @@ describe('what put() accepts', () => {
       'x'.repeat(5000),
       'short-one',
       'new\nline-token-value-12345678',
+      // text that would blank ordinary log lines, paths and error codes of other tenants
+      '/api/v1/connections/',
+      'github.com/open-agentix/open-agentix',
+      'api.anthropic.com/v1/messages',
+      'node_modules/fastify/lib',
+      'ERR_STREAM_PREMATURE_CLOSE',
+      // long and periodic: slow to match, not random
+      `${'abcdefghij'.repeat(40)}Zq8`,
     ];
     for (const accessToken of hostile)
       await expect(write(id, { accessToken }), accessToken.slice(0, 30)).rejects.toMatchObject({
@@ -497,11 +518,15 @@ describe('what put() accepts', () => {
     ).rejects.toMatchObject({
       code: 'token_invalid',
     });
-    // realistic shapes pass: opaque, base64, JWT
+    // realistic shapes pass: opaque, base64, base64url, hex of 20 and 32 characters, JWT
     for (const accessToken of [
       'ya29.a0AfH6SMBx9-Qk2Lr7pVwT3zYc8Nd5Fg1HjKm',
-      Buffer.from(randomBytes(32)).toString('base64'),
-      'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTQyIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU',
+      randomBytes(32).toString('base64'),
+      randomBytes(32).toString('base64url'),
+      randomBytes(16).toString('hex'),
+      randomBytes(10).toString('hex'),
+      `${randomBytes(18).toString('base64url')}.${randomBytes(40).toString('base64url')}.${randomBytes(48).toString('base64url')}`,
+      'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQyIiwiYXVkIjoiaHR0cHM6Ly9tY3AifQ.c2lnbmF0dXJlLWJ5dGVzLWhlcmUtMTIzNDU2',
     ])
       await write(id, { accessToken });
   });

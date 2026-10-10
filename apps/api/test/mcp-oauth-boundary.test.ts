@@ -1,4 +1,13 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -11,10 +20,11 @@ import { describe, expect, it } from 'vitest';
 const ROOT = join(import.meta.dirname, '../../..');
 const FORBIDDEN_NAMES =
   /mcp-oauth|mcpOauthTokens|mcpOauthClients|tenantDataKeys|McpCredentials|KeyService/;
-const API_IMPORT = /(?:from|import)\s*\(?\s*['"]@openagentix\/api['"]/;
+/** The api package by its bare name, any subpath of it, and the same through `require` or `import()`. */
+const API_IMPORT = /(?:from|import|require)\s*\(?\s*['"]@openagentix\/api(?:\/[^'"]*)?['"]/;
 const FORBIDDEN = { test: (text: string) => FORBIDDEN_NAMES.test(text) || API_IMPORT.test(text) };
 
-const IMPORT = /(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g;
+const IMPORT = /(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]/g;
 
 /** Source file behind an import specifier, or null for node builtins and third-party packages. */
 function resolveImport(from: string, spec: string): string | null {
@@ -63,11 +73,27 @@ describe('token boundary', () => {
     expect(hits).toEqual([]);
   });
 
-  it('the walker would see a violation (self-test with a planted import)', () => {
-    const planted = new Map([
-      ['x.ts', `import { McpCredentials } from '../api/src/mcp-oauth/index.js';`],
-    ]);
-    expect([...planted].filter(([, t]) => FORBIDDEN.test(t))).toHaveLength(1);
+  it('the walker follows a planted chain and flags every way of reaching the api package', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oax-boundary-'));
+    try {
+      const flagged = (name: string, body: string) => {
+        writeFileSync(join(dir, `${name}-leaf.ts`), body);
+        writeFileSync(join(dir, `${name}.ts`), `import './${name}-leaf.js';\n`);
+        return [...reachable(join(dir, `${name}.ts`))].filter(([, t]) => FORBIDDEN.test(t));
+      };
+      expect(flagged('bare', `import { x } from '@openagentix/api';`)).toHaveLength(1);
+      expect(
+        flagged('subpath', `import { x } from '@openagentix/api/dist/mcp-oauth/index.js';`),
+      ).toHaveLength(1);
+      expect(
+        flagged('require', `const x = require('@openagentix/api/dist/index.js');`),
+      ).toHaveLength(1);
+      expect(flagged('dynamic', `const x = await import('@openagentix/api');`)).toHaveLength(1);
+      expect(flagged('named', `export const k = new McpCredentials();`)).toHaveLength(1);
+      expect(flagged('clean', `import { y } from '@openagentix/core';`)).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it.each(['packages', 'apps/ui', 'toolboxes'])(

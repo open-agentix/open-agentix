@@ -13,7 +13,7 @@ import { mergeCredentials } from '../src/run-node.js';
  * its handover, its credentials and its step records from the control node, and its environment is
  * built from those. A stored OAuth token of a connection the step uses must be in none of them.
  */
-const CANARY = 'CANARY-node-access-4c2e8a1f7d3b9065';
+const CANARY = 'CANARY-4c2e8aJ1f7d3bK9065wZs3';
 const IMAGE = `ghcr.io/open-agentix/open-agentix-worker@sha256:${'a'.repeat(64)}`;
 const SOURCE = `---
 apiVersion: openagentix.io/v1alpha1
@@ -114,6 +114,10 @@ afterAll(async () => {
   await n.close();
 });
 
+// NOTE: until the OAuth flows (S6) attach stored tokens to run-node input, nothing in the control
+// node reads the token tables on the node's behalf, so these checks pass by construction. They pin
+// the contract for S6 and fail as soon as a token-bearing value reaches the node; the live
+// container variant is tracked in #305.
 describe('token leak canary: run node', () => {
   it('session, handover, credentials, steps and audit carry no token', async () => {
     const res = await n.req({

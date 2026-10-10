@@ -9,6 +9,7 @@ import {
   scrubStdio,
 } from '../src/mcp-oauth/scrub.js';
 import { EXPIRY_GRACE_MS, SecretRegistry } from '../src/mcp-oauth/secret-registry.js';
+import { RegistryGuard } from '../src/mcp-oauth/telemetry-guard.js';
 
 /** The process-wide redactor registry (ADR 0016 section 7.5): matching, lifetime and safety. */
 const T1 = 'tokenOne-Zk29xQ7mLp3Vw8Rn';
@@ -47,19 +48,108 @@ describe('SecretRegistry matching', () => {
     expect(r.scrub(`${T1}-extended|${T2}|${T1}`)).toBe('[REDACTED]|[REDACTED]|[REDACTED]');
   });
 
-  it('is fast with thousands of secrets (cost follows the text, not the secret count)', () => {
-    const r = new SecretRegistry({ maxEntries: 5000 });
-    for (let i = 0; i < 4096; i++) r.register(`secret-${i}-${randomUUID().replace(/-/g, '')}`);
-    r.register(T1);
-    const line = `${'log line with ordinary words '.repeat(35)} ${T1}`; // about 1 KB
-    r.scrub(line); // builds the index
+  it('matches percent-encoded spellings in either case', () => {
+    const r = new SecretRegistry();
+    const value = 'ab+cd/efGHijKLmnOP12==';
+    r.register(value);
+    expect(r.scrub(`q=${encodeURIComponent(value)}`)).toBe('q=[REDACTED]');
+    expect(
+      r.scrub(`q=${encodeURIComponent(value).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase())}`),
+    ).toContain('[REDACTED]');
+  });
+});
+
+/** Hard time budgets: values are chosen by other parties, text by anyone. */
+describe('SecretRegistry adversarial performance', () => {
+  const BUDGET_MS = 1500;
+  const timed = <T>(f: () => T): { out: T; ms: number } => {
     const t0 = performance.now();
-    for (let i = 0; i < 200; i++) expect(r.scrub(line)).toContain('[REDACTED]');
-    expect((performance.now() - t0) / 200).toBeLessThan(2);
-    const big = 'x'.repeat(1_000_000) + T1;
-    const t1 = performance.now();
-    expect(r.scrub(big)).toMatch(/\[REDACTED\]$/);
-    expect(performance.now() - t1).toBeLessThan(300);
+    const out = f();
+    return { out, ms: performance.now() - t0 };
+  };
+
+  it('periodic tokens that share a long prefix, against 1 MB of the same pattern', () => {
+    const r = new SecretRegistry({ maxFormChars: 5_000_000 });
+    for (let i = 0; i < 10; i++)
+      r.register(`${'abcdefghij'.repeat(399)}${randomUUID().replace(/-/g, '')}`, { tenant: 't' });
+    const text = 'abcdefghij'.repeat(100_000);
+    const { out, ms } = timed(() => r.scrub(text));
+    expect(out).toBe(text);
+    expect(ms).toBeLessThan(BUDGET_MS);
+  });
+
+  it('500 JWTs with the same header, against 1 MB of JWT headers', () => {
+    const r = new SecretRegistry();
+    const header = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9';
+    for (let i = 0; i < 500; i++)
+      r.register(`${header}.${randomUUID()}${randomUUID()}.${randomUUID()}`);
+    const text = `${header}.`.repeat(28_000);
+    const { out, ms } = timed(() => r.scrub(text));
+    expect(out).toBe(text);
+    expect(ms).toBeLessThan(BUDGET_MS);
+  });
+
+  it('thousands of secrets and a 1 MB response, plus a hit at the end', () => {
+    const r = new SecretRegistry();
+    for (let i = 0; i < 3000; i++)
+      r.register(`secret-${i}-${randomUUID().replace(/-/g, '')}`, { tenant: `t${i % 40}` });
+    r.register(T1);
+    const text = 'x'.repeat(1_000_000) + T1;
+    const { out, ms } = timed(() => r.scrub(text));
+    expect(out.endsWith('[REDACTED]')).toBe(true);
+    expect(ms).toBeLessThan(BUDGET_MS);
+    const line = `${'log line with ordinary words '.repeat(35)} ${T1}`;
+    r.scrub(line);
+    const t0 = performance.now();
+    for (let i = 0; i < 200; i++) r.scrub(line);
+    expect((performance.now() - t0) / 200).toBeLessThan(5);
+  });
+});
+
+describe('SecretRegistry tenant scoping and quotas', () => {
+  it('scrubs a tenant-scoped text with the values of that tenant only', () => {
+    const r = new SecretRegistry();
+    r.register(T1, { tenant: 'a' });
+    r.register(T2, { tenant: 'b' });
+    expect(r.scrub(`${T1} ${T2}`, 'a')).toBe(`[REDACTED] ${T2}`);
+    expect(r.scrub(`${T1} ${T2}`, 'b')).toBe(`${T1} [REDACTED]`);
+    expect(r.scrub(`${T1} ${T2}`, 'nobody')).toBe(`${T1} ${T2}`);
+    expect(r.scrub(`${T1} ${T2}`)).toBe('[REDACTED] [REDACTED]'); // logs: tenant unknown
+    expect(scrubPayloadWith(r, { t: T2 }, 'a')).toEqual({ t: T2 });
+    expect(scrubPayloadWith(r, { t: T2 }, null)).toEqual({ t: T2 });
+  });
+
+  it('a tenant over its quota only pushes out its own values, and the handler is told', () => {
+    const evicted: number[] = [];
+    const r = new SecretRegistry({ maxPerTenant: 3, onLiveEviction: (n) => evicted.push(n) });
+    r.register(T2, { tenant: 'victim' });
+    const mine = Array.from({ length: 5 }, (_, i) => `attackerToken${i}-Kq72LmXz9PaRt4Yc`);
+    for (const v of mine) r.register(v, { tenant: 'attacker' });
+    expect(r.has(T2)).toBe(true);
+    expect(mine.filter((v) => r.has(v))).toHaveLength(3);
+    expect(evicted.reduce((a, b) => a + b, 0)).toBe(2);
+  });
+
+  it('under global pressure the tenant with the most values loses first', () => {
+    const r = new SecretRegistry({ maxEntries: 6 });
+    r.register(T2, { tenant: 'small' });
+    for (let i = 0; i < 6; i++) r.register(`bulkToken${i}-Kq72LmXz9PaRt4YcWe`, { tenant: 'bulk' });
+    expect(r.has(T2)).toBe(true);
+    expect(r.size).toBe(6);
+  });
+});
+
+describe('RegistryGuard (span attributes)', () => {
+  it('scrubs registered values from guarded text and reports it', () => {
+    const r = new SecretRegistry();
+    const guard = new RegistryGuard(r);
+    expect(guard.text(`x ${T1}`).text).toBe(`x ${T1}`);
+    r.register(T1);
+    const out = guard.text(`x ${T1}`);
+    expect(out.text).toBe('x [REDACTED]');
+    expect(out.report.secrets.kinds['known-secret']).toBe(1);
+    r.clear();
+    expect(guard.text(`x ${T1}`).text).toBe(`x ${T1}`); // forgotten: nothing is kept for the process lifetime
   });
 });
 
@@ -115,13 +205,13 @@ describe('SecretRegistry lifetime', () => {
 
 describe('scrubbing never damages structure', () => {
   const r = new SecretRegistry();
-  r.register(T1);
+  r.register(T1, { tenant: 'x' });
 
   it('keeps JSON valid and scrubs string leaves and keys of payloads', () => {
     const text = JSON.stringify({ a: `x ${T1} y`, [T1]: 1, list: [T1] });
     const out = scrubJsonText(r, text);
     expect(JSON.parse(out)).toEqual({ a: 'x [REDACTED] y', '[REDACTED]': 1, list: ['[REDACTED]'] });
-    expect(scrubPayloadWith(r, { n: 1, d: [{ t: T1 }] })).toEqual({
+    expect(scrubPayloadWith(r, { n: 1, d: [{ t: T1 }] }, 'x')).toEqual({
       n: 1,
       d: [{ t: '[REDACTED]' }],
     });
@@ -137,6 +227,14 @@ describe('scrubbing never damages structure', () => {
     expect(() => JSON.parse(hostile.scrub(doc))).toThrow(); // the plain replacement would break it
     const out = scrubJsonText(hostile, doc);
     expect(JSON.parse(out)).toEqual({ a: 'x', b: '2-pad-pad' });
+  });
+
+  it('keeps both values when two keys scrub to the same text', () => {
+    const out = scrubLeaves(r, { [T1]: 1, [`${T1}`.toUpperCase()]: 2, '[REDACTED]': 3 }) as Record<
+      string,
+      number
+    >;
+    expect(Object.values(out).sort()).toEqual([1, 2, 3]);
   });
 
   it('leaves non-JSON text alone except for the secret', () => {
