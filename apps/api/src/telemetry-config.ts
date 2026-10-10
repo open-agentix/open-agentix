@@ -134,7 +134,9 @@ function validateEndpoint(endpoint: string, insecure: boolean): string {
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:')
     bad('OTEL_EXPORTER_OTLP_ENDPOINT', 'must be an http(s) URL');
-  if (url.username || url.password || url.search || url.hash)
+  // `/[?#]/` also catches an empty query or fragment marker, which URL reports as '' but which would
+  // turn the appended `/v1/traces` into a query or fragment.
+  if (url.username || url.password || url.search || url.hash || /[?#]/.test(endpoint))
     bad(
       'OTEL_EXPORTER_OTLP_ENDPOINT',
       'must not contain credentials, a query or a fragment (use OAX_OTEL_HEADERS_SECRET for credentials)',

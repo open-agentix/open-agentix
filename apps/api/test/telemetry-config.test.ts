@@ -204,6 +204,11 @@ describe('endpoint rules', () => {
       expect(() => endpoint(url)).toThrow(/OAX_OTEL_INSECURE/);
   });
 
+  it('refuses an empty query or fragment marker (it would swallow the /v1/traces path)', () => {
+    for (const url of ['https://collector.example.org?', 'https://collector.example.org#'])
+      expect(() => endpoint(url)).toThrow(/OAX_OTEL_HEADERS_SECRET/);
+  });
+
   it('refuses non-http schemes and garbage', () => {
     expect(() => endpoint('file:///etc/passwd')).toThrow(/http\(s\)/);
     expect(() => endpoint('not a url')).toThrow(/valid URL/);
