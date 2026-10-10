@@ -22,15 +22,15 @@ const EMAIL = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})
 // follows the number is never absorbed because every group after the first is exactly four characters
 // except the last one.
 const IBAN_CANDIDATE =
-  /\b[A-Z]{2}\d{2}(?:(?:[ -][A-Za-z0-9]{4}){2,7}(?:[ -][A-Za-z0-9]{1,4})?|[A-Za-z0-9]{11,30})\b/g;
-const CARD_CANDIDATE = /\b\d(?:[ -]?\d){12,18}\b/g;
+  /\b[A-Za-z]{2}\d{2}(?:(?:[\s-][A-Za-z0-9]{4}){2,7}(?:[\s-][A-Za-z0-9]{1,4})?|[A-Za-z0-9]{11,30})\b/g;
+const CARD_CANDIDATE = /\b\d(?:[\s-]?\d){12,18}\b/g;
 const IPV4 = /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g;
 // Eight groups, or a compressed form with at least one `::`; hex groups of 1-4 digits.
 const IPV6 =
   /(?<![0-9A-Fa-f:])(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,7}:(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6})?|::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6}))(?![0-9A-Fa-f:])/g;
 // International (+CC ...) or national numbers with a leading 0 and separators; 8-15 digits in all.
 const PHONE =
-  /(?<![\w.])(?:\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?|0)\d{1,4}(?:[ .-]?\d{2,5}){1,4}(?!\w)/g;
+  /(?<![\w.])(?:(?:\+\d{1,3}[\s.-]?(?:\(\d{1,4}\)[\s.-]?)?|0)\d{1,4}(?:[\s./-]?\d{2,5}){1,4}|\(0\d{1,4}\)[\s./-]?\d{2,5}(?:[\s./-]?\d{2,5}){0,3})(?!\w)/g;
 
 function digitsOf(s: string): string {
   return s.replace(/\D/g, '');
@@ -74,10 +74,12 @@ export function redactPii(input: string): PiiResult {
     counts[kind] = (counts[kind] ?? 0) + 1;
     return `[pii:${kind}]`;
   };
-  let out = input;
+  // NFKC first: fullwidth digits and letters, no-break spaces, U+2024 and similar look-alikes become
+  // their ASCII forms, so the patterns below see what a reader sees.
+  let out = input.normalize('NFKC');
   out = out.replace(EMAIL, () => hit('email'));
   out = out.replace(IBAN_CANDIDATE, (m) =>
-    ibanValid(m.replace(/[ -]/g, '').toUpperCase()) ? hit('iban') : m,
+    ibanValid(m.replace(/[\s-]/g, '').toUpperCase()) ? hit('iban') : m,
   );
   out = out.replace(CARD_CANDIDATE, (m) => {
     const d = digitsOf(m);

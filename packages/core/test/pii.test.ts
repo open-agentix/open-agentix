@@ -40,6 +40,21 @@ describe('personal data redactor (ADR 0012 7.3)', () => {
     );
   });
 
+  it('finds look-alike spellings: fullwidth digits, no-break spaces, U+2024, lowercase IBAN, national formats', () => {
+    // fullwidth card digits, no-break spaces between groups
+    expect(redactPii('card \uFF14\uFF11\uFF11\uFF11 1111\u00A01111 1111').counts.card).toBe(1);
+    // IBAN with no-break spaces and in lower case
+    expect(redactPii('de89\u00A03704\u00A00044\u00A00532\u00A00130\u00A000').counts.iban).toBe(1);
+    expect(redactPii('de89370400440532013000').counts.iban).toBe(1);
+    // one dot leader instead of a dot in an address and a mail
+    expect(redactPii('ip 203\u20240\u2024113\u20249').counts.ip).toBe(1);
+    expect(redactPii('mail a\u2024b@example\u2024org').counts.email).toBe(1);
+    // national phone formats
+    expect(redactPii('call (0170) 1234567').counts.phone).toBe(1);
+    expect(redactPii('call 0170/1234567').counts.phone).toBe(1);
+    expect(redactPii('call 0170\u00A01234567').counts.phone).toBe(1);
+  });
+
   it('leaves ordinary text unchanged and returns the same string', () => {
     const t = 'Summarise the incident report and list the open action items.';
     expect(redactPii(t)).toEqual({ text: t, counts: {} });
