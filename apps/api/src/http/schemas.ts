@@ -1,4 +1,5 @@
 import {
+  BINDING_ROLES,
   CLASSIFICATIONS,
   GRANTABLE_ROLES,
   PERMISSIONS,
@@ -680,8 +681,10 @@ export const CostRowSchema = z.object({
   costUsd: z.number(),
 });
 
-/** Roles accepted for grants; `pentest` is not grantable before ADR 0014 slice S6. */
+/** Roles accepted for user, team and agent grants; `pentest` only through role bindings. */
 export const RoleSchema = z.enum(GRANTABLE_ROLES);
+/** Roles of a role binding: the legacy six and the time-boxed `pentest` (ADR 0014 S6). */
+export const BindingRoleSchema = z.enum(BINDING_ROLES);
 export const PermissionSchema = z.enum(PERMISSIONS);
 export const UserSchema = z.object({
   id: Id,
@@ -827,11 +830,17 @@ export const RoleBindingListQuery = z.object({
 });
 export const RoleBindingCreateBody = z.object({
   userId: Id,
-  role: RoleSchema,
+  role: BindingRoleSchema,
   inherit: z
     .boolean()
     .describe('required: `false` = this tenant only, `true` = this tenant and all sub-tenants'),
-  expiresAt: z.string().datetime({ offset: true }).nullish(),
+  expiresAt: z
+    .string()
+    .datetime({ offset: true })
+    .nullish()
+    .describe(
+      'required for `pentest` (at most `OAX_PENTEST_MAX_DAYS` ahead, default 30); optional otherwise',
+    ),
   useCase: z
     .string()
     .min(1)
@@ -841,13 +850,23 @@ export const RoleBindingCreateBody = z.object({
 });
 export const RoleBindingPatchBody = z
   .object({
-    role: RoleSchema.optional(),
+    role: BindingRoleSchema.optional(),
     inherit: z.boolean().optional(),
     expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
   })
   .refine((b) => b.role !== undefined || b.inherit !== undefined || b.expiresAt !== undefined, {
     message: 'nothing to change',
   });
+export const NoticeSchema = z.object({
+  id: Id,
+  kind: z.enum(['pentest_granted', 'pentest_expiring', 'pentest_expired']),
+  tenantId: Id.describe('the tenant the notice is about (the node the binding is bound on)'),
+  createdAt: Iso,
+  payload: z
+    .record(z.string(), z.unknown())
+    .describe('ids, role, inherit and expiry of the binding; never secrets'),
+});
+export const NoticeQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) });
 export const EnableInheritanceBody = z.object({
   roles: z.array(RoleSchema).min(1).max(GRANTABLE_ROLES.length),
   dryRun: z

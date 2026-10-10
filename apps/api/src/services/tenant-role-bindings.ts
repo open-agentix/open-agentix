@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  GRANTABLE_ROLES,
+  BINDING_ROLES as ALL_BINDING_ROLES,
   ROLE_PERMISSIONS,
   type Permission,
   type GrantableRole,
@@ -19,12 +19,15 @@ import type { IdentityService, TenantRow } from './identity.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 import {
   assertNotLastAdmin,
+  assertPentestGrant,
   coversSubtree,
+  isTenantAdminAt,
   loadActor,
   permissionsAt,
   visibleUser,
   type Actor,
 } from './grant-authority.js';
+import { PENTEST_WARNING_MS, type PentestService } from './pentest.js';
 import { TenantAccess } from './tenant-access.js';
 import { TenantTree } from './tenant-tree.js';
 
@@ -69,14 +72,14 @@ export interface BindingView {
 
 export interface BindingInput {
   userId: string;
-  role: GrantableRole;
+  role: Role;
   inherit: boolean;
   expiresAt?: Date | null | undefined;
   useCase?: string | null | undefined;
 }
 
 export interface BindingPatch {
-  role?: GrantableRole | undefined;
+  role?: Role | undefined;
   inherit?: boolean | undefined;
   expiresAt?: Date | null | undefined;
 }
@@ -115,6 +118,7 @@ export class TenantRoleBindingsService {
     private readonly ctx: AppContext,
     private readonly audit: AuditService,
     private readonly identity: IdentityService,
+    private readonly pentest: PentestService,
   ) {
     this.access = new TenantAccess(ctx);
     this.tree = new TenantTree(ctx);
@@ -153,6 +157,50 @@ export class TenantRoleBindingsService {
         'inheritance_required',
         'an inheriting binding needs an inheriting binding of at least the same role on this ' +
           'tenant or an ancestor',
+      );
+  }
+
+  /** `pentest` only takes effect on the resolver read path; elsewhere a grant would do nothing. */
+  private assertPentestReadable(): void {
+    if (this.ctx.config.auth.roleBindingsRead !== 'bindings')
+      throw new HttpError(
+        409,
+        'pentest_requires_bindings_read',
+        'pentest needs OAX_ROLE_BINDINGS_READ=bindings; with the legacy read path it would have no effect',
+      );
+  }
+
+  /** The notice, audit-free (the grant is already audited): who is told about a new pentest grant. */
+  private async noticeGranted(
+    tx: Db,
+    node: TenantRow,
+    b: { id: string; userId: string; inherit: boolean; expiresAt: Date | null },
+    grantedBy: string,
+    reason: 'granted' | 'changed',
+  ): Promise<void> {
+    await this.pentest.notify(
+      tx,
+      node,
+      'pentest_granted',
+      {
+        bindingId: b.id,
+        userId: b.userId,
+        role: 'pentest',
+        inherit: b.inherit,
+        expiresAt: b.expiresAt?.toISOString() ?? null,
+        grantedBy,
+        reason,
+      },
+      [grantedBy],
+    );
+  }
+
+  /** Revoking or changing a pentest binding needs the authority to grant it (rule 9 with rule 7). */
+  private assertPentestAuthority(actor: Actor, node: RoleNode): void {
+    if (!isTenantAdminAt(actor, node, this.ctx.now()))
+      throw deny(
+        'pentest_grant_forbidden',
+        'only a tenant administrator of this tenant or above, or a platform operator, may change pentest',
       );
   }
 
@@ -284,6 +332,17 @@ export class TenantRoleBindingsService {
           throw deny('self_grant', 'you cannot grant a role to yourself');
         // Rules 1 and 2.
         this.assertMayHold(actor, perms, node, input.role, input.inherit);
+        // Rule 7: pentest is time-boxed and granted by tenant administrators only.
+        if (input.role === 'pentest') {
+          this.assertPentestReadable();
+          assertPentestGrant(
+            actor,
+            node,
+            input.expiresAt,
+            this.ctx.now(),
+            this.ctx.config.tenancy.pentestMaxDays,
+          );
+        }
         this.checkExpiry(input.expiresAt);
         // Rules 4 and 5.
         const user = await this.grantee(tx, actor, node, input.userId);
@@ -298,6 +357,7 @@ export class TenantRoleBindingsService {
             `a user can hold at most ${max} role bindings`,
           );
         const id = randomUUID();
+        const expiresAt = input.expiresAt ?? null;
         await tx.insert(tenantRoleBindings).values({
           id,
           userId: user.id,
@@ -305,7 +365,14 @@ export class TenantRoleBindingsService {
           role: input.role,
           useCase: null,
           inherit: input.inherit,
-          expiresAt: input.expiresAt ?? null,
+          expiresAt,
+          // A grant that ends within the notice period is its own notice: no second one.
+          expiryWarnedAt:
+            input.role === 'pentest' &&
+            expiresAt !== null &&
+            expiresAt.getTime() - this.ctx.now().getTime() <= PENTEST_WARNING_MS
+              ? this.ctx.now()
+              : null,
           grantedBy: actor.userId,
           source: 'grant',
         });
@@ -327,6 +394,14 @@ export class TenantRoleBindingsService {
           },
           tx,
         );
+        if (input.role === 'pentest')
+          await this.noticeGranted(
+            tx,
+            node,
+            { id, userId: user.id, inherit: input.inherit, expiresAt },
+            actor.userId,
+            'granted',
+          );
         return this.viewOf(tx, id);
       })
       .catch((e: unknown) => {
@@ -395,11 +470,39 @@ export class TenantRoleBindingsService {
         // both must be within the grantor's authority, so a PATCH is never a way around rules 1 to 6.
         this.assertMayHold(actor, perms, node, row.role as Role, row.inherit);
         this.assertMayHold(actor, perms, node, next.role, next.inherit);
+        // Rule 7 for every change that touches a pentest binding, in its old or new state. An
+        // expiry may be moved within the maximum from now (audited, noticed again); going beyond
+        // it is a new grant.
+        if (next.role === 'pentest') {
+          this.assertPentestReadable();
+          assertPentestGrant(
+            actor,
+            node,
+            next.expiresAt,
+            this.ctx.now(),
+            this.ctx.config.tenancy.pentestMaxDays,
+          );
+        } else if (row.role === 'pentest') this.assertPentestAuthority(actor, node);
         if (changes.some((c) => c.field === 'expiresAt')) this.checkExpiry(next.expiresAt);
         await assertNotLastAdmin(tx, actor, node, row, next);
+        const expiryChanged = changes.some((c) => c.field === 'expiresAt' || c.field === 'role');
         await tx
           .update(tenantRoleBindings)
-          .set({ role: next.role, inherit: next.inherit, expiresAt: next.expiresAt })
+          .set({
+            role: next.role,
+            inherit: next.inherit,
+            expiresAt: next.expiresAt,
+            ...(expiryChanged
+              ? {
+                  expiryWarnedAt:
+                    next.role === 'pentest' &&
+                    next.expiresAt !== null &&
+                    next.expiresAt.getTime() - this.ctx.now().getTime() <= PENTEST_WARNING_MS
+                      ? this.ctx.now()
+                      : null,
+                }
+              : {}),
+          })
           .where(eq(tenantRoleBindings.id, row.id));
         for (const c of changes)
           await this.audit.append(
@@ -411,6 +514,14 @@ export class TenantRoleBindingsService {
               payload: { bindingId: row.id, field: c.field, from: c.from, to: c.to },
             },
             tx,
+          );
+        if (next.role === 'pentest' && changes.length > 0)
+          await this.noticeGranted(
+            tx,
+            node,
+            { id: row.id, userId: row.userId, inherit: next.inherit, expiresAt: next.expiresAt },
+            actor.userId,
+            row.role === 'pentest' ? 'changed' : 'granted',
           );
         return this.viewOf(tx, row.id);
       })
@@ -446,6 +557,7 @@ export class TenantRoleBindingsService {
           'this binding mirrors the global roles of the user; change the global roles instead',
         );
       if (!own) this.assertMayHold(actor, perms, node, found.role as Role, found.inherit);
+      if (!own && found.role === 'pentest') this.assertPentestAuthority(actor, node);
       await assertNotLastAdmin(tx, actor, node, found, null);
       await tx.delete(tenantRoleBindings).where(eq(tenantRoleBindings.id, found.id));
       await this.audit.append(
@@ -612,5 +724,5 @@ export class TenantRoleBindingsService {
   }
 }
 
-/** Roles the API accepts (the six grantable ones until `pentest` arrives with S6). */
-export const BINDING_ROLES = GRANTABLE_ROLES;
+/** Roles the role-binding API accepts: the six legacy ones and the time-boxed `pentest` (S6). */
+export const BINDING_ROLES = ALL_BINDING_ROLES;

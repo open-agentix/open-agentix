@@ -90,6 +90,16 @@ export const EnvSchema = z.object({
     ),
   /** Role bindings one user may hold (ADR 0014 3.1); more is `422 binding_limit_exceeded`. */
   OAX_MAX_BINDINGS_PER_USER: z.coerce.number().int().min(1).max(10_000).default(200),
+  /**
+   * Longest validity of a `pentest` binding in days (ADR 0014 section 7, rule 7). A grant needs an
+   * `expiresAt` at most this far ahead; a longer period means a new grant.
+   */
+  OAX_PENTEST_MAX_DAYS: z.coerce.number().int().min(1).max(30).default(30),
+  /**
+   * Seconds between two passes of the expiry reaper (deletes expired bindings, 24 h and expiry
+   * notices). `0` switches the timer off (expiry itself is always evaluated per request).
+   */
+  OAX_BINDING_REAPER_INTERVAL_SECONDS: z.coerce.number().int().min(0).max(86_400).default(60),
   OAX_AUTH_CACHE_TTL_SECONDS: int(30),
   /**
    * Which source authorises (ADR 0014 S2): `legacy` = users.global_roles, team memberships and
@@ -337,6 +347,8 @@ export interface Config {
     maxDepth: number;
     maxNodesPerRoot: number;
     maxBindingsPerUser: number;
+    pentestMaxDays: number;
+    bindingReaperIntervalSeconds: number;
     reservedSlugs: string[];
   };
   auth: {
@@ -570,6 +582,8 @@ function buildConfig(
       maxNodesPerRoot: e.OAX_TENANT_MAX_NODES_PER_ROOT,
       reservedSlugs: e.OAX_TENANT_RESERVED_SLUGS,
       maxBindingsPerUser: e.OAX_MAX_BINDINGS_PER_USER,
+      pentestMaxDays: e.OAX_PENTEST_MAX_DAYS,
+      bindingReaperIntervalSeconds: e.OAX_BINDING_REAPER_INTERVAL_SECONDS,
     },
     auth: {
       bootstrapAdmin:
