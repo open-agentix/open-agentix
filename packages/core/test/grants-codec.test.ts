@@ -181,7 +181,83 @@ describe('raw grants cache representation', () => {
     });
   });
 
+  describe('an entry belongs to exactly one user and home node', () => {
+    const OTHER = '33333333-3333-4333-8333-333333333333';
+    const w = () =>
+      viaJson(serializeGrants(loaded([grant('admin')]))) as {
+        raw: Record<string, unknown>;
+        home: Record<string, unknown>;
+      };
+
+    it('is accepted for its owner, and refused for any other user or home tenant', () => {
+      expect(reviveGrants(w(), { userId: 'u1' })).toBeDefined();
+      expect(reviveGrants(w(), { userId: 'u1', homeTenantId: CHILD })).toBeDefined();
+      expect(reviveGrants(w(), { userId: 'u2' })).toBeUndefined();
+      expect(reviveGrants(w(), { userId: 'u1', homeTenantId: OTHER })).toBeUndefined();
+    });
+
+    it.each([
+      ['home node is not homeTenantId', (v: ReturnType<typeof w>) => (v.raw.homeTenantId = OTHER)],
+      ['home root is not homeRootId', (v: ReturnType<typeof w>) => (v.raw.homeRootId = OTHER)],
+      [
+        'path ends at another node',
+        (v: ReturnType<typeof w>) => (v.home.path = `/${ROOT}/${OTHER}/`),
+      ],
+      [
+        'path starts at another root',
+        (v: ReturnType<typeof w>) => (v.home.path = `/${OTHER}/${CHILD}/`),
+      ],
+    ])('an inconsistent entry is a miss: %s', (_name, f) => {
+      const v = w();
+      f(v);
+      expect(reviveGrants(v)).toBeUndefined();
+    });
+
+    it('JSON "__proto__" keys neither pollute prototypes nor fill missing fields', () => {
+      const v = w();
+      delete v.raw.platformAdmin;
+      const text = JSON.stringify(v).replace(
+        '"raw":{',
+        '"raw":{"__proto__":{"platformAdmin":true},',
+      );
+      expect(reviveGrants(JSON.parse(text))).toBeUndefined();
+      const ok = JSON.stringify(w()).replace('"raw":{', '"raw":{"__proto__":{"isAdmin":true},');
+      const back = reviveGrants(JSON.parse(ok));
+      expect(back).toBeDefined();
+      expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
+      expect(Object.keys(back!.raw)).not.toContain('__proto__');
+    });
+  });
+
   describe('date helpers', () => {
+    it('round-trip expiries outside the four-digit years (toISOString writes them signed)', () => {
+      for (const d of [
+        new Date('+010000-01-01T00:00:00.000Z'),
+        new Date('+275760-09-13T00:00:00.000Z'),
+        new Date('0000-01-01T00:00:00.000Z'),
+        new Date('9999-12-31T23:59:59.999Z'),
+      ]) {
+        const s = dateToWire(d)!;
+        expect(dateFromWire(s)).toEqual(d);
+      }
+      const far = loaded([
+        grant('auditor', { expiresAt: new Date('+010000-01-01T00:00:00.000Z') }),
+      ]);
+      const back = reviveGrants(viaJson(serializeGrants(far)));
+      expect(back).toEqual(far); // the user stays cacheable and keeps the binding
+      expect(rolesAt(back!, NOW)).toContain('auditor');
+    });
+
+    it('refuses leap seconds, a signed "-000000" year and non-canonical signed years', () => {
+      for (const s of [
+        '2026-12-31T23:59:60.000Z',
+        '-000000-01-01T00:00:00.000Z',
+        '+002026-10-10T12:00:00.000Z', // a four-digit year written in the long form
+        '10000-01-01T00:00:00.000Z',
+      ])
+        expect(dateFromWire(s)).toBeUndefined();
+    });
+
     it('are strict inverses', () => {
       const d = new Date('2026-10-10T12:00:00.123Z');
       expect(dateFromWire(dateToWire(d))).toEqual(d);

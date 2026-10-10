@@ -1,5 +1,5 @@
 import { isRole, type Role } from '../rbac.js';
-import { isValidPath } from './path.js';
+import { isValidPath, pathIds } from './path.js';
 import type { AgentRoleGrant, NodeRoleGrant, RawGrants, RoleNode, TeamRoleGrant } from './roles.js';
 
 /**
@@ -45,7 +45,12 @@ export interface GrantsAndHome {
   home: RoleNode;
 }
 
-const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+/**
+ * Exactly what `Date.prototype.toISOString` writes: four-digit years, or the six-digit signed
+ * form it uses outside 0000 to 9999 (an expiry far in the future must survive the cache too, or
+ * the entry could never be read back and the user would never be served from the cache).
+ */
+const ISO_UTC = /^(?:\d{4}|[+-]\d{6})-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 /** `Date` to its canonical wire string; `undefined` for an invalid date (never `"Invalid Date"`). */
 export function dateToWire(d: Date): string | undefined {
@@ -149,12 +154,24 @@ function reviveAgent(v: unknown): AgentRoleGrant | undefined {
   };
 }
 
+/** Who the caller expects the cache entry to belong to (see {@link reviveGrants}). */
+export interface GrantsOwner {
+  userId: string;
+  /** The user's current home tenant, when the caller knows it (e.g. from the user row). */
+  homeTenantId?: string;
+}
+
 /**
  * Parses a value read from a JSON cache back into loaded grants, or `undefined` (treat as a cache
  * miss and reload) when it is not exactly a current {@link WireGrants}. Revived `expiresAt` values
  * are real `Date`s again, so a binding that expires later still applies until then.
+ *
+ * The entry must also be internally consistent (home node = `homeTenantId`, its root = `homeRootId`,
+ * its path from that root to that node) and, when `owner` is given, belong to that user (and home
+ * tenant): an entry written under the wrong key, or by a bug, is a miss and never another user's
+ * grants. Callers should always pass `owner`.
  */
-export function reviveGrants(value: unknown): GrantsAndHome | undefined {
+export function reviveGrants(value: unknown, owner?: GrantsOwner): GrantsAndHome | undefined {
   if (!isObj(value) || value.v !== GRANTS_WIRE_VERSION) return undefined;
   const r = value.raw;
   const h = value.home;
@@ -162,6 +179,11 @@ export function reviveGrants(value: unknown): GrantsAndHome | undefined {
   if (!isStr(r.userId) || !isStr(r.homeTenantId) || !isStr(r.homeRootId)) return undefined;
   if (typeof r.platformAdmin !== 'boolean') return undefined;
   if (!isStr(h.id) || !isStr(h.rootId) || typeof h.path !== 'string' || !isValidPath(h.path))
+    return undefined;
+  if (h.id !== r.homeTenantId || h.rootId !== r.homeRootId) return undefined;
+  const ids = pathIds(h.path);
+  if (ids[0] !== h.rootId || ids[ids.length - 1] !== h.id) return undefined;
+  if (owner && (r.userId !== owner.userId || (owner.homeTenantId ?? h.id) !== h.id))
     return undefined;
   const nodeBindings = reviveAll(r.nodeBindings, reviveNode);
   const teamBindings = reviveAll(r.teamBindings, reviveTeam);
