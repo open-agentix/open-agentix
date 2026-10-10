@@ -202,6 +202,7 @@ export class NodeDispatcher implements StepDispatcher {
           limits: { ...this.opts.limits, timeoutSeconds },
           egress,
           ...(harness ? { harness } : {}),
+          ...(session.traceparent ? { traceparent: session.traceparent } : {}),
         },
         { signal: cancel.signal },
       );

@@ -205,7 +205,19 @@ export class Metrics {
       labelNames: ['result'],
       registers: [this.registry],
     });
+    const otelNodeEventsDropped = new Counter({
+      name: `${prefix}otel_node_events_dropped_total`,
+      help: 'Run node reports not exported as span events because the per-session cap was reached',
+      registers: [this.registry],
+    });
+    const otelNodeContextMismatch = new Counter({
+      name: `${prefix}otel_node_context_mismatch_total`,
+      help: 'Run node requests whose traceparent header is not the stored context of the session (ignored)',
+      registers: [this.registry],
+    });
     this.otel = {
+      nodeEventsDropped: (n) => otelNodeEventsDropped.inc(n),
+      nodeContextMismatch: (n) => otelNodeContextMismatch.inc(n),
       inboundContext: (result, n) => otelInboundContext.inc({ result }, n),
       attributesDropped: (keyClass: DropClass, n) =>
         otelAttributesDropped.inc({ key_class: keyClass }, n),

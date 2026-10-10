@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import {
   OaxError,
   estimateInputUpperBound,
+  genAiProviderName,
   getEgressPolicy,
   issueModelToken,
   mayFlow,
@@ -65,6 +66,8 @@ import type {
 } from './model-accounting.js';
 import type { ModelsService } from './models.js';
 import type { RunNodesService } from './run-nodes.js';
+import { noteInboundContext, spanIdentity, storedParent } from './node-telemetry.js';
+import { startGuardedSpan, type OpenSpan } from '../telemetry.js';
 
 /** Output bound when neither the request, the agent nor the catalog names one. */
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
@@ -160,6 +163,8 @@ export interface CallAuth {
   tenantId: string;
   /** When the session (the step) started: step timeouts are measured from here. */
   sessionCreatedAt: Date;
+  /** Stored `traceparent` of the session (the parent of this call's `chat` span), or null. */
+  traceContext: string | null;
 }
 
 export interface StreamSink {
@@ -225,6 +230,8 @@ interface Admitted {
   pass: PassCtx | undefined;
   /** Pass-through: the upstream body built from the client's validated request. */
   upstreamBody: Record<string, unknown> | undefined;
+  /** The `chat` span of this call (ADR 0015 3.3); absent while the session has no trace context. */
+  span?: OpenSpan | undefined;
 }
 
 type SessionRow = NonNullable<Awaited<ReturnType<RunNodesService['sessionById']>>>;
@@ -275,11 +282,13 @@ export class ModelProxyService {
     bearer: string | null,
     runId: string,
     surface: 'native' | 'harness' = 'native',
+    /** `traceparent` header of the request: compared with the stored context, never used. */
+    inboundTraceparent?: unknown,
   ): Promise<CallAuth> {
     const secret = this.ctx.config.runToken.secret;
     const now = this.ctx.now().getTime();
     if (!bearer) throw new ModelProxyError('unauthenticated', 'valid model or run token required');
-    let auth: Omit<CallAuth, 'tenantId' | 'sessionCreatedAt'>;
+    let auth: Omit<CallAuth, 'tenantId' | 'sessionCreatedAt' | 'traceContext'>;
     let modelClaims: ModelTokenClaims | null = null;
     try {
       if (bearer.startsWith(`${MODEL_TOKEN_PREFIX}.`)) {
@@ -333,14 +342,23 @@ export class ModelProxyService {
     if (state) throw dead(state);
     if (modelClaims && session.modelTokenJti !== modelClaims.jti)
       throw new ModelProxyError('unauthenticated', 'model token is not the one issued');
-    return { ...auth, tenantId: session.tenantId, sessionCreatedAt: session.createdAt };
+    noteInboundContext(session.traceContext, inboundTraceparent);
+    return {
+      ...auth,
+      tenantId: session.tenantId,
+      sessionCreatedAt: session.createdAt,
+      traceContext: session.traceContext,
+    };
   }
 
   /**
    * Authentication of the pass-through surfaces: the model token only (a run token never opens
    * them), and the run comes from the token because the path has no run id.
    */
-  async authenticatePassthrough(credential: string | null): Promise<CallAuth> {
+  async authenticatePassthrough(
+    credential: string | null,
+    inboundTraceparent?: unknown,
+  ): Promise<CallAuth> {
     if (!credential?.startsWith(`${MODEL_TOKEN_PREFIX}.`))
       throw new ModelProxyError('unauthenticated', 'a valid model token is required');
     let claims: ModelTokenClaims;
@@ -353,7 +371,7 @@ export class ModelProxyService {
     } catch {
       throw new ModelProxyError('unauthenticated', 'a valid model token is required');
     }
-    return this.authenticate(credential, claims.runId, 'harness');
+    return this.authenticate(credential, claims.runId, 'harness', inboundTraceparent);
   }
 
   /** The one model of the token's step (`GET .../models` lists exactly this). */
@@ -517,6 +535,7 @@ export class ModelProxyService {
     extra: { provider?: string; model?: string } = {},
   ): Promise<ModelProxyError> {
     const err = new ModelProxyError(code, message);
+    await this.refusalSpan(auth, code, extra.model);
     const key = `${auth.sid}:${code}`;
     const now = Date.now();
     const prev = this.denied.get(key);
@@ -549,6 +568,68 @@ export class ModelProxyService {
       this.ctx.logger.warn({ err: (e as Error).name }, 'could not write model.denied');
     }
     return err;
+  }
+
+  /**
+   * `chat` span of an admitted call (ADR 0015 3.3): a child of the context stored for the node's
+   * session, built from what the proxy itself knows (the published step, the reservation, the
+   * provider family). Nothing of the node's request is exported. Undefined without a stored context.
+   */
+  private async startChatSpan(adm: Admitted): Promise<OpenSpan | undefined> {
+    try {
+      const parent = storedParent(adm.auth.traceContext);
+      if (!parent) return undefined;
+      return startGuardedSpan(
+        { name: `chat ${adm.agent.model}`, kind: 'chat', parent },
+        {
+          ...(await spanIdentity(this.ctx, adm.auth.runId, adm.auth.tenantId)),
+          'gen_ai.operation.name': 'chat',
+          'gen_ai.provider.name': genAiProviderName(adm.provider.kind, adm.provider.family),
+          'gen_ai.request.model': adm.agent.model,
+          'oax.provider.instance': adm.provider.name,
+          'oax.model.via': 'proxy',
+          'oax.model.surface': adm.pass?.surface ?? 'native',
+          'oax.reservation.result': 'reserved',
+          'gen_ai.request.max_tokens': adm.reservation.reservedOutputTokens,
+        },
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** A refused call (`model_not_allowed`, `classification_denied`, budget codes, ...) ends as an error span. */
+  private async refusalSpan(
+    auth: CallAuth,
+    code: string,
+    publishedModel: string | undefined,
+  ): Promise<void> {
+    try {
+      const parent = storedParent(auth.traceContext);
+      if (!parent) return;
+      const open = startGuardedSpan(
+        { name: publishedModel ? `chat ${publishedModel}` : 'chat', kind: 'chat', parent },
+        {
+          ...(await spanIdentity(this.ctx, auth.runId, auth.tenantId)),
+          'gen_ai.operation.name': 'chat',
+          ...(publishedModel ? { 'gen_ai.request.model': publishedModel } : {}),
+          'oax.model.via': 'proxy',
+          'oax.reservation.result': 'refused',
+        },
+      );
+      open.end(Object.assign(new Error(code), { code }));
+    } catch {
+      // Telemetry never changes a refusal.
+    }
+  }
+
+  /** Ends the call's span once: ok, or failed with the proxy's own outcome code. */
+  private endSpan(adm: Pick<Admitted, 'span'> | undefined, code: string): void {
+    try {
+      adm?.span?.end(code === 'ok' ? undefined : Object.assign(new Error(code), { code }));
+    } catch {
+      // Telemetry never changes the outcome of a call.
+    }
   }
 
   /** Sliding window per run (per replica; the database-backed concurrency limits span replicas). */
@@ -845,7 +926,7 @@ export class ModelProxyService {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, 50 * 3 ** attempt));
       try {
-        return await this.accounting.settle(
+        const settled = await this.accounting.settle(
           { tenantId: adm.auth.tenantId },
           adm.reservation.reservationId,
           {
@@ -853,6 +934,8 @@ export class ModelProxyService {
             ...req,
           },
         );
+        this.measured(adm, settled);
+        return settled;
       } catch (e) {
         last = e;
       }
@@ -863,6 +946,26 @@ export class ModelProxyService {
       'model call settlement failed; the reservation will expire',
     );
     throw new ModelProxyError('model_proxy_unavailable', 'the call could not be settled');
+  }
+
+  /** The proxy's own numbers on the `chat` span (never the provider's or the node's claims). */
+  private measured(adm: Admitted, s: Settlement): void {
+    try {
+      adm.span?.span.setAttributes({
+        'gen_ai.usage.input_tokens': s.tokensIn,
+        'gen_ai.usage.output_tokens': s.tokensOut,
+        'oax.cost.micro_usd': s.costMicros,
+        'oax.cost.priced': adm.priced,
+        'oax.usage.source':
+          s.usageSource === 'provider'
+            ? 'provider'
+            : s.usageSource === 'estimated'
+              ? 'estimate'
+              : 'floor',
+      });
+    } catch {
+      // Telemetry never changes the settlement.
+    }
   }
 
   private released(adm: Admitted): void {
@@ -954,9 +1057,10 @@ export class ModelProxyService {
 
   private count(
     code: string,
-    adm: Pick<Admitted, 'provider' | 'pass'> | undefined,
+    adm: Pick<Admitted, 'provider' | 'pass' | 'span'> | undefined,
     surface?: string,
   ): void {
+    this.endSpan(adm, code);
     this.ctx.metrics.modelProxyRequests.inc({
       surface: adm?.pass?.surface ?? surface ?? 'native',
       // Bounded label: the provider family, never a tenant-chosen connection name.
@@ -968,7 +1072,7 @@ export class ModelProxyService {
   /** Counts a failed request once, however many catch blocks it passes. */
   private countError(
     err: ModelProxyError,
-    adm: Pick<Admitted, 'provider' | 'pass'> | undefined,
+    adm: Pick<Admitted, 'provider' | 'pass' | 'span'> | undefined,
     surface?: string,
   ): void {
     if (err.counted) return;
@@ -976,7 +1080,15 @@ export class ModelProxyService {
     this.count(err.code, adm, surface);
   }
 
-  private tokens(s: Settlement, usage: { cacheRead: number; cacheWrite: number }): void {
+  private tokens(
+    s: Settlement,
+    usage: { cacheRead: number; cacheWrite: number },
+    adm?: Pick<Admitted, 'span'>,
+  ): void {
+    adm?.span?.span.setAttributes({
+      'gen_ai.usage.cache_read.input_tokens': usage.cacheRead,
+      'gen_ai.usage.cache_write.input_tokens': usage.cacheWrite,
+    });
     const m = this.ctx.metrics.modelProxyTokens;
     m.inc(
       { direction: 'input', source: s.usageSource },
@@ -1082,6 +1194,7 @@ export class ModelProxyService {
     let adm: Admitted | undefined;
     try {
       adm = await this.admit(auth, body, pass);
+      adm.span = await this.startChatSpan(adm);
       const out = adm.plan
         ? await this.runCollected(adm, adm.plan, clientGone)
         : await this.runJson(adm, clientGone);
@@ -1093,6 +1206,8 @@ export class ModelProxyService {
       throw err;
     } finally {
       this.inflight--;
+      // Safety net: a path that never reached a counter still ends the span.
+      this.endSpan(adm, 'model_proxy_unavailable');
     }
   }
 
@@ -1165,7 +1280,7 @@ export class ModelProxyService {
         auditExtra: this.auditExtra(adm, res.stopReason, ms),
       });
       this.released(adm);
-      this.tokens(s, cache);
+      this.tokens(s, cache, adm);
       this.ctx.metrics.modelProxyDuration.observe({ phase: 'total' }, ms / 1000);
       const out = this.response(adm, res, s, cache);
       this.log(adm, 'ok', s, ms);
@@ -1293,6 +1408,7 @@ export class ModelProxyService {
     let adm: Admitted | undefined;
     try {
       adm = await this.admit(auth, body, pass);
+      adm.span = await this.startChatSpan(adm);
       if (!adm.plan) {
         // No streaming transport (simulated, Bedrock non-Anthropic): complete, then replay.
         const res = await this.runJson(adm, io.signal);
@@ -1314,6 +1430,8 @@ export class ModelProxyService {
       throw err;
     } finally {
       this.inflight--;
+      // Safety net: a path that never reached a counter still ends the span.
+      this.endSpan(adm, 'model_proxy_unavailable');
     }
   }
 
@@ -1605,7 +1723,7 @@ export class ModelProxyService {
       return;
     }
     this.released(adm);
-    this.tokens(s, cache);
+    this.tokens(s, cache, adm);
     this.ctx.metrics.modelProxyDuration.observe({ phase: 'total' }, ms / 1000);
     if (reason) {
       this.ctx.metrics.modelProxyAborts.inc({ reason });

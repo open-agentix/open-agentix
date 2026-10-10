@@ -186,6 +186,12 @@ export interface RunNodeSpec {
   egress: string[];
   /** Set for a harness step (`runtime.harness`): selects the harness image and its limits. */
   harness?: HarnessKind;
+  /**
+   * W3C `traceparent` of the dispatching span, for the node's log correlation only (ADR 0015 6.1).
+   * Passed as `TRACEPARENT` when it has exactly the W3C shape; the node has no exporter, and a
+   * `traceparent` it sends back is ignored by the control node.
+   */
+  traceparent?: string;
 }
 
 export type RunNodeStopReason = 'step_end' | 'cancelled' | 'timeout' | 'lease_lost';

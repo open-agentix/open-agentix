@@ -16,6 +16,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Control node spans for isolated steps (ADR 0015 slice S4, #209)**: the worker stores the
+  dispatching `invoke_agent` span as `run_node_sessions.trace_context` (migration
+  `0022_run_node_otel_session`, additive, down script and snapshot included, adds the bounded
+  `otel_session` column) and the control node parents everything it makes for the node from that
+  stored context: the model proxy emits `chat {model}` from its own measurement (also for the
+  harness pass-through, `oax.model.surface`; refusals end as `ERROR` with the proxy code), the gate
+  route wraps its decision in `oax.policy.check` (the tool name is the grant's, `_unknown` when no
+  grant covers the call), and `oax.node.session` is emitted when the session ends with the node's
+  reports as bounded **events** (`oax.claim=node`, receipt time, status from a fixed set, claimed
+  duration capped at 1 h, tool name only if granted, no code, message or free text), at most
+  `OAX_OTEL_NODE_EVENTS_MAX` per session. The node gets `TRACEPARENT` (strict W3C shape) for log
+  correlation only; a `traceparent` it sends is ignored and counted in
+  `oax_otel_node_context_mismatch_total`; dropped events in `oax_otel_node_events_dropped_total`.
+  No span is ever created from node data; nothing changes without an SDK. Golden tests for isolated
+  and harness steps and node threat tests (forged context, flood of 10 000 reports, ungranted tool,
+  absurd duration, model-call report) cover it. See `docs/observability.md`.
 - **Executor spans with GenAI conventions (ADR 0015 slice S3, #208)**: the step executor now emits
   `oax.handover {step}`, `invoke_agent {step}`, `chat {model}` (CLIENT), `oax.policy.check
   {server}/{tool}`, `oax.approval.wait {server}/{tool}` and `execute_tool {tool}` under the

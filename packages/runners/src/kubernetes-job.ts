@@ -21,6 +21,7 @@ import type {
   RunNodeStopReason,
 } from './isolating.js';
 import type { KubeClient, KubeObject, OwnerReference } from './kube-client.js';
+import { nodeTraceparent } from './node-env.js';
 import { KubernetesJobRunnerConfigSchema } from './stubs.js';
 import type { PreparedRun, RunResult, RunnerContext } from './types.js';
 
@@ -416,6 +417,9 @@ export function buildJob(spec: RunNodeSpec, cfg: KubernetesJobRunnerConfig): Kub
                 { name: 'OAX_STEP_IDS', value: spec.steps.join(',') },
                 { name: 'OAX_RUN_TOKEN_FILE', value: RUN_TOKEN_FILE },
                 { name: 'OAX_EGRESS_ALLOW', value: plan.hosts.join(',') },
+                ...(nodeTraceparent(spec.traceparent)
+                  ? [{ name: 'TRACEPARENT', value: nodeTraceparent(spec.traceparent)! }]
+                  : []),
               ],
               securityContext: {
                 allowPrivilegeEscalation: false,

@@ -30,6 +30,15 @@ import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
+import {
+  appendNodeEvent,
+  dispatchTraceContext,
+  emitNodeSessionSpan,
+  nodeEventOf,
+  noteInboundContext,
+  readNodeSession,
+  type StoredNodeSession,
+} from './node-telemetry.js';
 
 const ACTIVE = ['running', 'awaiting_approval'];
 
@@ -50,6 +59,11 @@ export interface CreatedSession {
   /** Step-scoped run token for the node. Only ever delivered as a file. */
   token: string;
   expiresAt: Date;
+  /**
+   * W3C `traceparent` of the dispatching span, for the node's log correlation only (ADR 0015
+   * 6.1). Absent while tracing is off.
+   */
+  traceparent?: string;
 }
 
 type SessionRow = typeof runNodeSessions.$inferSelect;
@@ -328,6 +342,10 @@ export class RunNodesService {
         : {}),
       http: { tenantServers: tenantHttp },
     };
+    const traceContext = dispatchTraceContext(run);
+    const otelSession: StoredNodeSession | null = traceContext
+      ? { runner: req.runner, harness: agent.runtime?.harness ?? null, dropped: 0, events: [] }
+      : null;
     await this.ctx.db.insert(runNodeSessions).values({
       id: sessionId,
       runId,
@@ -337,6 +355,7 @@ export class RunNodesService {
       steps: [agent.id],
       expiresAt,
       handover: { [agent.id]: handover },
+      ...(traceContext ? { traceContext, otelSession } : {}),
       createdAt: now,
     });
     const token = issueRunToken(
@@ -352,7 +371,13 @@ export class RunNodesService {
       runId,
       payload: { runId, nodeId, steps: [agent.id], runner: req.runner, image: req.image },
     });
-    return { sessionId, nodeId, token, expiresAt };
+    return {
+      sessionId,
+      nodeId,
+      token,
+      expiresAt,
+      ...(traceContext ? { traceparent: traceContext } : {}),
+    };
   }
 
   /**
@@ -367,6 +392,7 @@ export class RunNodesService {
       .where(and(eq(runNodeSessions.id, sessionId), isNull(runNodeSessions.revokedAt)))
       .returning();
     if (!row) return;
+    await emitNodeSessionSpan(this.ctx, row);
     const handles = row.credentialHandles;
     // A failing backend must not keep the session alive: it is revoked in the database first.
     for (const h of handles) await this.source.revoke?.(h).catch(() => undefined);
@@ -529,7 +555,12 @@ export class RunNodesService {
   }
 
   /** The active session behind a step-scoped token; throws when it is revoked, expired or foreign. */
-  async checkSession(claims: RunTokenClaims, runId: string): Promise<SessionRow> {
+  async checkSession(
+    claims: RunTokenClaims,
+    runId: string,
+    /** The `traceparent` header of the request: compared with the stored context, never used. */
+    inboundTraceparent?: unknown,
+  ): Promise<SessionRow> {
     const [s] = await this.ctx.db
       .select()
       .from(runNodeSessions)
@@ -552,6 +583,7 @@ export class RunNodesService {
     // run over, every session of the old attempt is dead (a restarted attempt gets new sessions).
     if (!run || !ACTIVE.includes(run.status) || run.lockedBy !== s.orchestratorId)
       throw new HttpError(409, 'invalid_state', 'run is not active for this session');
+    noteInboundContext(s.traceContext, inboundTraceparent);
     return s;
   }
 
@@ -594,6 +626,44 @@ export class RunNodesService {
     if (!claims.sid) return;
     if (!claims.steps?.includes(agentId))
       throw new HttpError(403, 'credential_scope', `run token is not valid for agent "${agentId}"`);
+  }
+
+  /**
+   * Keeps an accepted node report as a bounded event of the session's telemetry state (ADR 0015
+   * 6.2). Does nothing for a session without telemetry state, so nothing is read, written or
+   * counted while tracing is off. `step` is the sanitised, scrubbed report. Never throws.
+   */
+  async noteReport(
+    sessionId: string,
+    agentId: string,
+    step: Parameters<typeof nodeEventOf>[0],
+  ): Promise<void> {
+    try {
+      const [row] = await this.ctx.db
+        .select({
+          events: sql<number | null>`jsonb_array_length(${runNodeSessions.otelSession}->'events')`,
+          grants: sql<unknown>`${runNodeSessions.handover} #> array[${agentId}::text, 'agent', 'tools']`,
+        })
+        .from(runNodeSessions)
+        .where(eq(runNodeSessions.id, sessionId));
+      if (!row || row.events === null) return;
+      const ev = nodeEventOf(step, row.grants, this.ctx.now().getTime());
+      if (!ev) return;
+      await appendNodeEvent(
+        this.ctx,
+        sessionId,
+        ev,
+        this.ctx.config.otel.nodeEventsMax,
+        Number(row.events),
+      );
+    } catch {
+      // Telemetry never affects a report.
+    }
+  }
+
+  /** The telemetry state of a session row (tests and the span emitter read it through this). */
+  static telemetryOf(row: Pick<SessionRow, 'otelSession'>): StoredNodeSession | null {
+    return readNodeSession(row.otelSession);
   }
 
   async submitResult(
