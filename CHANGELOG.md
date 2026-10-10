@@ -24,7 +24,9 @@ All notable changes to this project are documented here. The format follows
   `mcp.oauth.discovered | authorized | refreshed | refresh_failed | revoked | denied` (names and ids only);
   metric `oax_mcp_oauth_refresh_total{outcome}`; migration `0027_mcp_oauth_client_credentials` (additive).
   Tokens stay in the api and the trusted worker: the relay attaches them on the control node and run nodes
-  never receive them (the run-node canary now exercises a real token flow, #305). See
+  never receive them (the run-node canary now exercises a real token flow, #305). `client_secret_basic`
+  needs `auth.issuer` (the secret goes to the token endpoint the metadata names); a pinned issuer survives a
+  failed renewal; client-credentials connections never use refresh tokens. See
   [docs/mcp.md](docs/mcp.md#oauth-for-http-mcp-connections).
 - **Tenant-owned telemetry exporters** (ADR 0015 S10, #215): the new connection type `telemetry`
   (ADR 0012) lets a tenant admin (`settings:write`) send a copy of its own tenant's spans to its own
