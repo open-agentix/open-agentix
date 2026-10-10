@@ -109,7 +109,11 @@ export async function withSpan<T>(
     try {
       return await fn(guardedSpan(span, spec.kind, spec.guard));
     } catch (e) {
-      recordFailure(span, spec.kind, spec.guard, e);
+      try {
+        recordFailure(span, spec.kind, spec.guard, e);
+      } catch {
+        // Telemetry must never replace or hide the caller's error (e.g. a throwing message getter).
+      }
       throw e;
     } finally {
       span.end();

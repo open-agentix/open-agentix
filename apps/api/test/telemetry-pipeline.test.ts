@@ -8,7 +8,7 @@ import {
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { OaxError, StaticSecretResolver } from '@openagentix/core';
+import { ContextGuard, OaxError, StaticSecretResolver } from '@openagentix/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { Metrics } from '../src/metrics.js';
@@ -279,6 +279,92 @@ describe('withSpan (in-memory export)', () => {
       async () => undefined,
     );
     expect(m.getFinishedSpans()[0]!.attributes).toEqual({ 'oax.tenant.id': TENANT });
+  });
+});
+
+describe('a failing telemetry pipeline never breaks the run', () => {
+  const register = () => {
+    const memory = new InMemorySpanExporter();
+    new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(memory)] }).register();
+    return memory;
+  };
+  const brokenGuard = () => {
+    const g = new ContextGuard();
+    g.text = () => {
+      throw new Error('guard failure');
+    };
+    return g;
+  };
+  const throwingStats = {
+    attributesDropped: () => {
+      throw new Error('stats failure');
+    },
+    redactions: () => {
+      throw new Error('stats failure');
+    },
+    spansDropped: () => {
+      throw new Error('stats failure');
+    },
+    exportFailed: () => {
+      throw new Error('stats failure');
+    },
+  };
+
+  it('a throwing guard drops attributes and names, the run completes', async () => {
+    const m = register();
+    const guard = brokenGuard();
+    const result = await withSpan(
+      { name: 'chat m', kind: 'chat', guard },
+      { 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 1 },
+      async (span) => {
+        span.setAttributes({ 'gen_ai.response.model': 'm' });
+        span.addEvent('custom.event', { 'gen_ai.request.model': 'm' });
+        return 42;
+      },
+    );
+    expect(result).toBe(42);
+    const span = m.getFinishedSpans()[0]!;
+    expect(span.name).toBe('oax.span');
+    expect(span.attributes).toEqual({ 'gen_ai.usage.input_tokens': 1 });
+  });
+
+  it('a throwing guard never replaces the error of the run', async () => {
+    register();
+    await expect(
+      withSpan({ name: 'chat m', kind: 'chat', guard: brokenGuard() }, {}, failWith('real')),
+    ).rejects.toMatchObject({ code: 'provider_failed', message: 'real' });
+  });
+
+  it('throwing counters break neither the span operations nor span.end()', async () => {
+    register();
+    configureTelemetryRuntime({ stats: throwingStats });
+    const result = await withSpan(
+      { name: 'oax.run', kind: 'run' },
+      { 'unknown.key': 1, 'gen_ai.input.messages': 'x' },
+      async (span) => {
+        span.setAttributes({ 'another.unknown': PROVIDER_TOKEN });
+        return 'done';
+      },
+    );
+    expect(result).toBe('done');
+    await expect(withSpan({ name: 'oax.run', kind: 'run' }, {}, failWith('x'))).rejects.toThrow(
+      'x',
+    );
+  });
+
+  it('an error whose message getter throws is rethrown unchanged in guarded mode', async () => {
+    register();
+    configureTelemetryRuntime({ exceptionDetail: 'guarded' });
+    const hostile = new Error('placeholder');
+    Object.defineProperty(hostile, 'message', {
+      get: () => {
+        throw new Error('getter');
+      },
+    });
+    const outcome = await withSpan({ name: 'oax.run', kind: 'run' }, {}, async () => {
+      throw hostile;
+    }).catch((e: unknown) => e);
+    expect(outcome).toBe(hostile);
   });
 });
 
