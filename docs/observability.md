@@ -10,8 +10,9 @@ documents what is implemented; it grows with each slice.
 > identity, the audit links and the first spans: `oax.run.admit` at admission, one
 > `invoke_workflow {name}` per worker attempt and one HTTP server span per API request. The spans
 > below the workflow follow in later slices: slice S3 adds the executor spans of in-process steps
-> (handover, agent, model call, policy check, approval wait, tool call); the spans of isolated
-> steps (run nodes, model proxy) come with S4.
+> (handover, agent, model call, policy check, approval wait, tool call); slice S4 adds the spans of
+> isolated steps (run nodes and harnesses: model proxy `chat`, gate `oax.policy.check`,
+> `oax.node.session` with bounded node events, `TRACEPARENT` for log correlation).
 
 ## Convention version
 
@@ -209,6 +210,77 @@ to 63 characters and guarded; it is never a span name, an event attribute or a m
 tenant-defined (BYOK) connection that name is chosen by the tenant: a shared collector shows it to
 whoever can read the tenant's traces.
 
+## Isolated steps (run nodes and harnesses)
+
+A step that runs on a run node (container or Kubernetes job, with or without a harness) is
+executed by an **untrusted process**. The worker still creates the step's `oax.handover` and
+`invoke_agent` spans; everything below them is created by the **control node** (the API), never
+from what the node says:
+
+```text
+invoke_agent {step}                          worker, dispatching span
+ ├─ chat {model}                             API, model proxy (also the harness pass-through)
+ ├─ oax.policy.check {server}/{tool}         API, gate route
+ └─ oax.node.session                         API, lifetime of the session, node claims as events
+```
+
+**Stored context.** When the worker creates the session it writes the active `invoke_agent` span
+as a `traceparent` to `run_node_sessions.trace_context` (only while an SDK is registered and only
+when that span belongs to the run's own trace; otherwise the column stays empty and nothing below
+happens). Every span the API makes for the session is a child of that stored context.
+
+**`TRACEPARENT` for the node.** The node gets the same value as `TRACEPARENT` in its environment
+(container and Kubernetes runner), and only when it has exactly the W3C shape. It is for **log
+correlation only**: the node tags its own log lines with `trace_id` and `span_id`. The node has no
+exporter and no route to a collector; harness telemetry stays disabled and the harness child does
+not receive the variable. The value carries two random ids, no tenant data, `tracestate` or
+`baggage`.
+
+**A `traceparent` the node sends back is ignored.** On every node route (gate, steps, handover,
+credentials, model token, model, pass-through) a `traceparent` header that is not the stored trace is
+counted in `oax_otel_node_context_mismatch_total` and otherwise ignored: it is not a parent, not a
+link, not a trace id.
+
+**`chat {model}`** is made by the model proxy from its own numbers: provider family, the published
+step's model, the reservation, the settled tokens, cost, price status and usage source
+(`provider`, `estimate`, `floor`). `oax.model.via=proxy`, and `oax.model.surface` is `native`,
+`anthropic` or `openai`. A refused call (`model_not_allowed`, `classification_denied`,
+`egress_denied`, budget codes) ends as an `ERROR` span with the proxy's code as `error.type`. The
+model a node *asked for* is not exported when it differs from the published one. This replaces the
+`oax.model.call` / `gen_ai.system` of ADR 0009 section 12.
+
+**`oax.policy.check`** wraps the control node's own decision. The tool name comes from the step's
+**grant list**, not from the node: a call that matches a grant is named after the grant (a wildcard
+grant `list_*` is exported as `list_*`, not as the name the node used), a call that matches none is
+`oax.policy.check _unknown` with no tool or server attribute.
+
+**`oax.node.session`** is emitted once, when the session ends (any revoke path), from creation to
+revocation, with `oax.node.runner`, `oax.node.harness`, `oax.node.revoke_reason` and
+`oax.node.events_dropped`. Accepted node reports are its **events**, never spans:
+
+| Event | From the report | Attributes |
+| --- | --- | --- |
+| `oax.node.tool_call` | `tool_call` | `oax.claim=node`, `oax.claimed.status`, `oax.claimed.duration_ms`, `gen_ai.tool.name` and `oax.mcp.server` only if a grant of the step covers the call |
+| `oax.node.output` | `output` | `oax.claim=node`, `oax.claimed.status`, `oax.claimed.duration_ms` |
+| `oax.node.error` | `error` | `oax.claim=node`, `oax.claimed.status`, `oax.claimed.duration_ms` (no code, no message) |
+| `oax.node.guard` | the input-guard report | `oax.claim=node`, `oax.guard.source`, `oax.guard.invisible`, `oax.guard.secrets`, `oax.guard.secret_kinds` (counts and the guard's closed kind names) |
+
+What a node claims is bounded and never trusted:
+
+- **Time.** An event is stamped when the control node *received* the report; a duration the node
+  claims is only an attribute (capped at 1 hour), never a span time.
+- **Count.** At most `OAX_OTEL_NODE_EVENTS_MAX` events per session (default 128; values above 1000 are refused at start-up);
+  further reports are counted in `oax.node.events_dropped` and `oax_otel_node_events_dropped_total`.
+  The cap is enforced in the database statement, so concurrent reports cannot exceed it. The
+  ordinary step rows and audit entries of the reports are unaffected.
+- **Content.** No message, code, argument, result, name or free text of a report is exported.
+  Statuses come from a fixed set, counts are numbers with a ceiling, the tool name is the grant's.
+  A model-call report is still refused (`step_kind_refused`) and never becomes an event.
+- **Existence.** The events are kept in `run_node_sessions.otel_session` (migration
+  `0022_run_node_otel_session`, written by the control node only, bounded by a check constraint)
+  and read once when the session ends. Without a stored context (no SDK when the session was
+  created) the column stays `NULL`, nothing is written and no span is emitted.
+
 ### Inbound `traceparent`
 
 An inbound `traceparent` on an API request (webhook or authenticated) is never trusted: it is not
@@ -259,8 +331,9 @@ Every log line written inside a span carries `trace_id` and `span_id` (hex, ids 
 ## Configuration
 
 See [`configuration.md`](configuration.md#observability) for the table of variables. Keys whose
-feature lands in a later slice (sampling, keep classes, node events, MCP propagation, GenAI
-metrics) are parsed and validated now and have no effect yet.
+feature lands in a later slice (sampling, keep classes, MCP propagation) are parsed and validated
+now and have no effect yet; `OAX_OTEL_NODE_EVENTS_MAX` is in use since slice S4 and
+`OAX_OTEL_GENAI_METRICS` since slice S5.
 
 ## Metrics
 
@@ -281,7 +354,7 @@ before it is recorded, so a caller that passes a free text by mistake produces t
 | `oax_tokens_total` | counter | `direction` (`input`, `output`, `cache_read`, `cache_write`), `provider` (family), `via` (`in-process`, `proxy`) | Tokens settled by the control node; `input` excludes cache tokens. `via="proxy"` counts the same tokens as `oax_model_proxy_tokens_total`, so one dashboard covers both paths. |
 | `oax_budget_exhausted_total` | counter | `scope` (`run`, `step`, `team`, `use_case`, `tenant`), `limit` (`tokens`, `usd`, `steps`, `tool_calls`, `timeout`) | A model call refused at reservation, or a run killed by the control agent, because of a budget or the run timeout. |
 | `oax_guard_replacements_total` | counter | `source` (`input`, `tool_result`, `tool_error`), `class` (`secret`, `invisible`) | Values the context guard removed or replaced (the number of values, never the values), also for run nodes. |
-| `oax_node_reports_total` | counter | `kind` (step kinds), `result` (`accepted`, `refused`, `dropped`) | Step reports from untrusted run nodes: `refused` was answered with an error (a `model_call`), `dropped` was ignored (a kind a node may not report). The node *event* counters of slice S4 (`oax_otel_node_events_dropped_total`, `oax_otel_node_context_mismatch_total`) come with that slice. |
+| `oax_node_reports_total` | counter | `kind` (step kinds), `result` (`accepted`, `refused`, `dropped`) | Step reports from untrusted run nodes: `refused` was answered with an error (a `model_call`), `dropped` was ignored (a kind a node may not report). The node *event* counters of slice S4 are `oax_otel_node_events_dropped_total` and `oax_otel_node_context_mismatch_total`. |
 | `oax_cost_micro_usd_total` | counter | `provider` (family: `anthropic`, `aws.bedrock`, `azure.ai.openai`, `openai`, `openrouter`, `ollama`, `lmstudio`, `vllm`, `simulated`; `tool` for tool cost; `other`) | Model and tool cost. Resolved from the provider **instance** in the run's scope; the instance (connection) name is never a label. |
 | `oax_events_ingested_total` | counter | `kind` (`webhook`, `mail`, `kafka`, `cron`), `outcome` | Ingested and refused events. |
 | `oax_runs_created_total`, `oax_runs_refused_total` | counter | `trigger` (as above), `reason` | Admission. |
@@ -290,6 +363,8 @@ before it is recorded, so a caller that passes a free text by mistake produces t
 | `oax_otel_attributes_dropped_total` | counter | `key_class` | Attributes the allowlist refused. |
 | `oax_otel_redactions_total` | counter | `kind` | Values the ContextGuard changed (secret kinds, `invisible`). |
 | `oax_otel_inbound_context_total` | counter | `result` (`ignored`, `linked`, `invalid`) | Inbound `traceparent` headers on API requests. |
+| `oax_otel_node_events_dropped_total` | counter | – | Node reports that did not become a span event because the session reached `OAX_OTEL_NODE_EVENTS_MAX`. |
+| `oax_otel_node_context_mismatch_total` | counter | – | Run node requests whose `traceparent` is not the session's stored trace (ignored; a cheap signal for a tampered node). |
 
 The older families (`oax_http_request_duration_seconds`, `oax_runs_by_status`, `oax_policy_decisions_total`,
 `oax_model_proxy_*`, `oax_worker_active_runs`, ...) are unchanged. The model proxy's `provider` label is the

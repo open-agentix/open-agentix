@@ -135,6 +135,8 @@ const ALLOWED: Record<string, Record<string, Set<string> | RegExp>> = {
   },
   otel_redactions_total: { kind: /^[a-z0-9_-]+$/ },
   otel_inbound_context_total: { result: oneOf('ignored', 'linked', 'invalid') },
+  otel_node_events_dropped_total: {},
+  otel_node_context_mismatch_total: {},
   role_bindings_shadow_total: { outcome: slug, authoritative: oneOf('legacy', 'bindings') },
   authz_epoch_rejected_total: { reason: oneOf('stale', 'invalid') },
   mcp_stdio_violations: {},

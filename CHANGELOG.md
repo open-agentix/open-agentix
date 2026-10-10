@@ -30,6 +30,22 @@ All notable changes to this project are documented here. The format follows
   catalog-bounded model label (anything else is `_OTHER`). `scripts/bench.mjs --otel` runs the
   benchmark with the exporter on against a local fake collector, and `deploy/grafana/` ships a
   dashboard. No migration. See `docs/observability.md`.
+- **Control node spans for isolated steps (ADR 0015 slice S4, #209)**: the worker stores the
+  dispatching `invoke_agent` span as `run_node_sessions.trace_context` (migration
+  `0022_run_node_otel_session`, additive, down script and snapshot included, adds the bounded
+  `otel_session` column) and the control node parents everything it makes for the node from that
+  stored context: the model proxy emits `chat {model}` from its own measurement (also for the
+  harness pass-through, `oax.model.surface`; refusals end as `ERROR` with the proxy code), the gate
+  route wraps its decision in `oax.policy.check` (the tool name is the grant's, `_unknown` when no
+  grant covers the call), and `oax.node.session` is emitted when the session ends with the node's
+  reports as bounded **events** (`oax.claim=node`, receipt time, status from a fixed set, claimed
+  duration capped at 1 h, tool name only if granted, no code, message or free text), at most
+  `OAX_OTEL_NODE_EVENTS_MAX` per session. The node gets `TRACEPARENT` (strict W3C shape) for log
+  correlation only; a `traceparent` it sends is ignored and counted in
+  `oax_otel_node_context_mismatch_total`; dropped events in `oax_otel_node_events_dropped_total`.
+  No span is ever created from node data; nothing changes without an SDK. Golden tests for isolated
+  and harness steps and node threat tests (forged context, flood of 10 000 reports, ungranted tool,
+  absurd duration, model-call report) cover it. See `docs/observability.md`.
 - **Subtree reads (ADR 0014 slice S3, #188)**: `?scope=node|subtree` (default `node`, unchanged) and `?tenantId=`
   (narrowing only) on `GET /v1/agents`, `/v1/runs`, `/v1/approvals`, `/v1/events`, `/v1/event-sources`,
   `/v1/connections`, `/v1/costs/summary`, `/v1/budgets` and `/v1/audit`. The server builds the node list from

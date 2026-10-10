@@ -23,3 +23,4 @@ export * from './kubernetes-job.js';
 export * from './egress-rules.js';
 export * from './executor-telemetry.js';
 export * from './executor-observer.js';
+export * from './node-env.js';

@@ -498,10 +498,18 @@ export const runNodeSessions = pgTable(
     workspaceSeedSha256: text('workspace_seed_sha256'),
     workspaceSeedFetchedAt: ts('workspace_seed_fetched_at'),
     /**
-     * W3C `traceparent` of the dispatching span (ADR 0015 section 6.1). Reserved: written by a later
-     * slice (S4); the platform, never the node, sets it.
+     * W3C `traceparent` of the dispatching `invoke_agent` span (ADR 0015 section 6.1), written when
+     * the session is created and only while tracing is on. Every span the control node creates for
+     * the session is parented from it; the platform, never the node, sets it.
      */
     traceContext: text('trace_context'),
+    /**
+     * Bounded telemetry state of the session (ADR 0015 section 6.2): the runner and harness kind,
+     * the node reports kept as events (`events`, at most `OAX_OTEL_NODE_EVENTS_MAX`) and how many
+     * were not kept (`dropped`). Created with the session only while tracing is on (null otherwise),
+     * appended to by the control node after it accepted a report, read once when the session ends.
+     */
+    otelSession: jsonb('otel_session'),
     createdAt: created(),
   },
   (t) => [
@@ -510,6 +518,10 @@ export const runNodeSessions = pgTable(
     check(
       'run_node_sessions_trace_context_shape',
       sql`${t.traceContext} is null or ${t.traceContext} ~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$'`,
+    ),
+    check(
+      'run_node_sessions_otel_session_shape',
+      sql`${t.otelSession} is null or coalesce(jsonb_typeof(${t.otelSession}) = 'object' and jsonb_typeof(${t.otelSession}->'events') = 'array' and jsonb_array_length(case when jsonb_typeof(${t.otelSession}->'events') = 'array' then ${t.otelSession}->'events' else '[]'::jsonb end) <= 1000 and jsonb_typeof(${t.otelSession}->'dropped') = 'number', false)`,
     ),
   ],
 );

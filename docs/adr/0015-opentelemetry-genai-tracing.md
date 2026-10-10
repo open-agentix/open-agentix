@@ -1,7 +1,7 @@
 # ADR 0015: Observability with OpenTelemetry GenAI semantic conventions
 
-- Status: Proposed. Slices S1, S2, S3 and S5 are implemented (see "Implementation notes S2/S3/S5" below and
-  [`observability.md`](../observability.md)); S4, S6 to S10 are open.
+- Status: Proposed. Slices S1 to S5 are implemented (see "Implementation notes S2/S3/S4/S5"
+  below and [`observability.md`](../observability.md)); S6 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W3-5 (#37, "Observability completion: step, model and tool spans and the missing
   metrics"); RM-53 of the roadmap gap list; replaces the span list in the W3-5 acceptance
@@ -677,6 +677,42 @@ Decisions taken while implementing slice S3 (#208) where the text above left roo
   are slice S4.
 - No migration.
 
+## Implementation notes S4
+
+Decisions taken while implementing slice S4 (#209) where the text above left room:
+
+- **Where the node events live.** The API process that receives a node report is not the process
+  that sees the session end (the worker revokes it, or the run completes elsewhere), so a span held
+  open in memory could not collect them. Accepted reports are therefore appended to a bounded
+  column `run_node_sessions.otel_session` (migration `0022_run_node_otel_session`: runner, harness,
+  `dropped`, `events`; check constraint, at most 1000 events) and `revoke()` turns it into the
+  `oax.node.session` span once, with the session's creation and revocation as span times and each
+  event at its receipt time. The cap is a conditional `UPDATE`, so concurrent reports cannot exceed
+  it. A session created without a stored context has no state (`NULL`): nothing is read or written
+  for it.
+- **The stored context** is written by `createSession` from the active span, only when that span is
+  in the run's own trace (`invoke_agent` of the dispatching step). The same value goes to the
+  runner as `RunNodeSpec.traceparent` and becomes `TRACEPARENT` (container and Kubernetes) after a
+  strict W3C shape check. The node tags its log lines with it; the harness child environment is an
+  allowlist and does not contain it.
+- **Tool names come from the grant list, not from the node.** A reported or gated call is matched
+  against the step's concrete tool grants (stored in the handover). The span carries the *grant's*
+  strings: for a wildcard grant `list_*` the node's own suffix is never exported. A call without a
+  matching grant is `oax.policy.check _unknown` (gate) or an event without a tool name (report).
+- **Node-claimed statuses and durations.** New allowlist key `oax.claimed.status` (fixed set);
+  `oax.claimed.duration_ms` was already capped at 1 hour by the allowlist, the event builder
+  additionally drops non-finite and negative values. Error reports carry neither code nor message.
+- **`chat` span timing.** Started when the call is admitted, ended where the proxy counts the
+  outcome; a refused call (`deny`) is an instantly ended `ERROR` span named after the *published*
+  model (never the model the node asked for). Tokens, cost, price status and usage source are set
+  from the settlement. Pass-through surfaces add `oax.model.surface`.
+- **Mismatch counter.** `traceparent` of node requests is compared in `checkSession` /
+  `authenticate` with the stored context; a missing, malformed or different trace id increments
+  `oax_otel_node_context_mismatch_total`. Nothing else is done with the header.
+- **Not part of S4:** `oax_node_reports_total{kind,result}` (slice S5), `oax.policy.bundle_digests`,
+  audit `payload.otel.spanId` pointing at the node spans (`policy.decision` and `step.model_call`
+  entries of nodes link to the run's root span as before).
+
 ## Implementation notes S5
 
 Decisions taken while implementing slice S5 (#210) where the text above left room:
@@ -705,10 +741,9 @@ Decisions taken while implementing slice S5 (#210) where the text above left roo
   `oax_policy_decisions_total`. The `step` budget scope is emitted by the reservation check
   (step budgets of `budget:` in the definition). `oax_budget_exhausted_total{limit="tool_calls"}`
   and `{limit="timeout"}` come from the control agent's kill rules.
-- **`oax_node_reports_total`** counts the node *step* reports that exist today (accepted, refused,
-  dropped). The node *event* path of slice S4 (PR #283) is not on `main` yet; its two counters
-  `oax_otel_node_events_dropped_total` and `oax_otel_node_context_mismatch_total` stay with S4,
-  and its events can be added to `oax_node_reports_total` (a new `kind`) when that slice merges.
+- **`oax_node_reports_total`** counts the node *step* reports (accepted, refused, dropped). The
+  node *event* path of slice S4 keeps its own counters `oax_otel_node_events_dropped_total` and
+  `oax_otel_node_context_mismatch_total`.
 - **GenAI metrics** use one histogram per operation (`execute_tool`, `invoke_agent`,
   `invoke_workflow`) with the labels operation and `error_type`; the inference series carry the
   provider family and the catalog-bounded model. The durations of run-node tool reports are not

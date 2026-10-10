@@ -2,6 +2,7 @@ import { HARNESS_KINDS, OaxError, type HarnessKind, type RunnerKind } from '@ope
 import { z } from 'zod';
 import type { EngineHijack } from './container-hijack.js';
 import { egressAccount, mintEgressGrant } from './egress-proxy.js';
+import { nodeTraceparent } from './node-env.js';
 import { assertWithinCeiling, parseEgressEntry } from './egress-rules.js';
 import {
   EngineClient,
@@ -478,6 +479,9 @@ export class ContainerRunner implements IsolatingRunner {
         `OAX_NODE_DEADLINE_SECONDS=${Math.ceil(spec.limits.timeoutSeconds) + 30}`,
         'NODE_ENV=production',
         'HOME=/tmp',
+        ...(nodeTraceparent(spec.traceparent)
+          ? [`TRACEPARENT=${nodeTraceparent(spec.traceparent)}`]
+          : []),
       ],
       Labels: {
         [NODE_LABEL]: 'true',

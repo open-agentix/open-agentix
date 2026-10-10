@@ -38,6 +38,9 @@ import {
 } from '../schemas.js';
 import type { ZApp } from '../zapp.js';
 
+/** The `traceparent` header of a request: compared with a node's stored context, never used. */
+const inbound = (req: FastifyRequest): unknown => req.headers['traceparent'];
+
 const sec = [{ runToken: [] }];
 const tags = ['worker'];
 export { modelRateKey };
@@ -67,8 +70,13 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req) => {
-      await control.authorizeStep(token(req), req.params.id, req.body.agentId);
-      const d = await control.decide(req.params.id, req.body.agentId, req.body.call);
+      const claims = await control.authorizeStep(
+        token(req),
+        req.params.id,
+        req.body.agentId,
+        inbound(req),
+      );
+      const d = await control.decideForNode(claims, req.params.id, req.body.agentId, req.body.call);
       return { effect: d.effect, reasons: d.reasons };
     },
   );
@@ -86,11 +94,16 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req, reply) => {
-      const claims = await control.authorizeStep(token(req), req.params.id, req.body.agentId);
+      const claims = await control.authorizeStep(
+        token(req),
+        req.params.id,
+        req.body.agentId,
+        inbound(req),
+      );
       await control.recordStep(
         req.params.id,
         req.body,
-        claims.sid ? { id: claims.workerId } : undefined,
+        claims.sid ? { id: claims.workerId, sid: claims.sid } : undefined,
       );
       return reply.status(204).send();
     },
@@ -110,7 +123,7 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req, reply) => {
-      await control.authorizeStep(token(req), req.params.id, req.body.agentId);
+      await control.authorizeStep(token(req), req.params.id, req.body.agentId, inbound(req));
       const approvalId = await control.requestApproval(
         req.params.id,
         req.body.agentId,
@@ -134,7 +147,7 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req) => {
-      await control.authorize(token(req), req.params.id);
+      await control.authorize(token(req), req.params.id, inbound(req));
       return { status: await control.approvalStatus(req.params.id, req.params.approvalId) };
     },
   );
@@ -152,7 +165,7 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req) => {
-      await control.authorize(token(req), req.params.id);
+      await control.authorize(token(req), req.params.id, inbound(req));
       return { cancelled: await control.isCancelled(req.params.id) };
     },
   );
@@ -170,7 +183,7 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req) => {
-      await control.authorize(token(req), req.params.id);
+      await control.authorize(token(req), req.params.id, inbound(req));
       return services.budgets.verdictForRun(req.params.id);
     },
   );
@@ -210,7 +223,12 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req, reply) => {
-      const claims = await control.authorizeNodeStep(token(req), req.params.id, req.query.agentId);
+      const claims = await control.authorizeNodeStep(
+        token(req),
+        req.params.id,
+        req.query.agentId,
+        inbound(req),
+      );
       reply.header('cache-control', 'no-store');
       return services.runNodes.handover(claims, req.params.id, req.query.agentId);
     },
@@ -233,7 +251,12 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req, reply) => {
-      const claims = await control.authorizeNodeStep(token(req), req.params.id, req.query.agentId);
+      const claims = await control.authorizeNodeStep(
+        token(req),
+        req.params.id,
+        req.query.agentId,
+        inbound(req),
+      );
       const seed = await services.runNodes.takeSeed(claims, req.params.id, req.query.agentId);
       return (
         reply
@@ -259,7 +282,12 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req, reply) => {
-      const claims = await control.authorizeNodeStep(token(req), req.params.id, req.body.agentId);
+      const claims = await control.authorizeNodeStep(
+        token(req),
+        req.params.id,
+        req.body.agentId,
+        inbound(req),
+      );
       await services.runNodes.submitResult(claims, req.params.id, req.body);
       return reply.status(204).send();
     },
@@ -280,7 +308,12 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
       },
     },
     async (req, reply) => {
-      const claims = await control.authorizeNodeStep(token(req), req.params.id, req.body.agentId);
+      const claims = await control.authorizeNodeStep(
+        token(req),
+        req.params.id,
+        req.body.agentId,
+        inbound(req),
+      );
       // Values must never be cached by an intermediary or end up in a log.
       reply.header('cache-control', 'no-store');
       return services.runNodes.issueCredentials(claims, req.params.id, req.body.agentId);
@@ -435,7 +468,12 @@ function registerModelRoutes(app: ZApp, deps: Deps): void {
         },
       },
       async (req, reply) => {
-        const auth = await modelProxy.authenticate(bearerOf(req), req.params.id);
+        const auth = await modelProxy.authenticate(
+          bearerOf(req),
+          req.params.id,
+          'native',
+          inbound(req),
+        );
         // Values must never be cached by an intermediary or end up in a log.
         reply.header('cache-control', 'no-store');
         return modelProxy.issueToken(auth, req.body.agentId, req.body.harness);
@@ -467,7 +505,12 @@ function registerModelRoutes(app: ZApp, deps: Deps): void {
         },
       },
       async (req, reply) => {
-        const auth = await modelProxy.authenticate(bearerOf(req), req.params.id);
+        const auth = await modelProxy.authenticate(
+          bearerOf(req),
+          req.params.id,
+          'native',
+          inbound(req),
+        );
         reply.header('cache-control', 'no-store');
         const gone = new AbortController();
         reply.raw.once('close', () => {

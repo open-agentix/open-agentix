@@ -203,6 +203,7 @@ export class NodeDispatcher implements StepDispatcher {
           egress,
           ...(session.mcpEgress.length > 0 ? { mcpEgress: session.mcpEgress } : {}),
           ...(harness ? { harness } : {}),
+          ...(session.traceparent ? { traceparent: session.traceparent } : {}),
         },
         { signal: cancel.signal },
       );
