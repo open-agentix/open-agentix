@@ -28,7 +28,9 @@ export const RELAY_PLACEHOLDER_URL = 'https://mcp-relay.invalid/';
  * node reaches the server through the relay and needs none of them.
  */
 export function relayConfigFor(cfg: HttpConfig): HttpConfig {
-  const { egress: _egress, ...rest } = cfg;
+  // `auth` names secret references of the OAuth client (id, key): the node needs none of them, and
+  // it never holds a token (the relay attaches it on the control node).
+  const { egress: _egress, auth: _auth, ...rest } = cfg;
   return { ...rest, url: RELAY_PLACEHOLDER_URL, headers: {}, headerSecrets: {} };
 }
 

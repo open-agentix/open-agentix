@@ -1,8 +1,19 @@
 import { CLASSIFICATIONS, TOOL_ACCESS } from '@openagentix/core';
 import { z } from 'zod';
 
-/** Access class of one tool: `write` is the default for every tool that is not declared. */
-export const McpToolAccessSchema = z.strictObject({ access: z.enum(TOOL_ACCESS) });
+/** An OAuth scope token (RFC 6749 section 3.3): printable ASCII without space, quote and backslash. */
+export const OAUTH_SCOPE = /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/;
+const scopeToken = z.string().regex(OAUTH_SCOPE, 'invalid OAuth scope');
+
+/**
+ * Access class of one tool: `write` is the default for every tool that is not declared. `scopes`
+ * are the OAuth scopes the tool needs (ADR 0016 section 7.7); a connection with
+ * `auth.scopes: "from-profiles"` requests the union over the tools its profiles contain.
+ */
+export const McpToolAccessSchema = z.strictObject({
+  access: z.enum(TOOL_ACCESS),
+  scopes: z.array(scopeToken).max(16).optional(),
+});
 export type McpToolAccess = z.infer<typeof McpToolAccessSchema>;
 
 const toolName = z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/, 'invalid tool name (no wildcards)');
@@ -27,6 +38,92 @@ const accessFields = {
   /** Opt-in trace context propagation; absent means off. */
   telemetry: McpTelemetrySchema.optional(),
 };
+
+const secretRef = z.string().min(1).max(128);
+
+/**
+ * How a streamable-HTTP connection authenticates (ADR 0016 section 7.1). `static` is the
+ * `headerSecrets` of earlier versions and the meaning of an absent `auth`; `none` sends no
+ * credential; `oauth` obtains audience-bound access tokens (OAuth 2.1 per the MCP authorization
+ * specification). This slice implements `client_credentials` with a pre-registered client; the
+ * client id, the client secret and the private key are secret references, never values.
+ */
+export const McpOauthAuthSchema = z
+  .strictObject({
+    kind: z.literal('oauth'),
+    grant: z.literal('client_credentials'),
+    client: z.strictObject({
+      registration: z.literal('preregistered').default('preregistered'),
+      clientIdSecret: secretRef,
+      clientAuth: z.enum(['private_key_jwt', 'client_secret_basic']),
+      /** `private_key_jwt`: the PEM private key (RSA, P-256 or Ed25519). */
+      keySecret: secretRef.optional(),
+      /** `kid` header of the client assertion, when the authorization server needs one. */
+      keyId: z
+        .string()
+        .regex(/^[\x21-\x7e]{1,128}$/)
+        .optional(),
+      /** `client_secret_basic`: the client secret. */
+      clientSecretSecret: secretRef.optional(),
+    }),
+    /** `from-profiles`: derived from the tools of the connection's profiles (section 7.7). */
+    scopes: z
+      .union([z.literal('from-profiles'), z.array(scopeToken).max(32)])
+      .default('from-profiles'),
+    /** Optional pin of the authorization server; filled at the first authorization otherwise. */
+    issuer: z.string().url().max(2048).optional(),
+  })
+  .superRefine((a, ctx) => {
+    const c = a.client;
+    const need = c.clientAuth === 'private_key_jwt' ? 'keySecret' : 'clientSecretSecret';
+    const forbid = c.clientAuth === 'private_key_jwt' ? 'clientSecretSecret' : 'keySecret';
+    if (!c[need])
+      ctx.addIssue({
+        code: 'custom',
+        path: ['client', need],
+        message: `${c.clientAuth} needs ${need}`,
+      });
+    if (c[forbid])
+      ctx.addIssue({
+        code: 'custom',
+        path: ['client', forbid],
+        message: `${c.clientAuth} does not use ${forbid}`,
+      });
+    if (c.keyId && c.clientAuth !== 'private_key_jwt')
+      ctx.addIssue({
+        code: 'custom',
+        path: ['client', 'keyId'],
+        message: 'keyId needs private_key_jwt',
+      });
+    if (a.issuer) {
+      let u: URL | undefined;
+      try {
+        u = new URL(a.issuer);
+      } catch {
+        // reported by the url check above
+      }
+      if (u && (u.protocol !== 'https:' || u.username || u.password || u.hash || u.search))
+        ctx.addIssue({
+          code: 'custom',
+          path: ['issuer'],
+          message: 'the issuer must be an https URL without credentials, query or fragment',
+        });
+    }
+  });
+export type McpOauthAuth = z.infer<typeof McpOauthAuthSchema>;
+
+export const McpAuthSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('none') }),
+  z.strictObject({ kind: z.literal('static') }),
+  McpOauthAuthSchema,
+]);
+export type McpAuth = z.infer<typeof McpAuthSchema>;
+
+/** The authentication kind of an HTTP connection; an absent `auth` is `static` (earlier versions). */
+export const authKindOf = (cfg: {
+  auth?: { kind: string } | undefined;
+}): 'none' | 'static' | 'oauth' =>
+  (cfg.auth?.kind as 'none' | 'static' | 'oauth' | undefined) ?? 'static';
 
 /** An MCP server connection (stored as a "connection" in the control node). */
 /**
@@ -91,6 +188,12 @@ export const McpServerConfigSchema = z
       headers: z.record(z.string(), z.string()).default({}),
       /** Header name -> secret reference (e.g. `authorization`). */
       headerSecrets: z.record(z.string(), z.string()).default({}),
+      /**
+       * Authentication of the connection (ADR 0016 section 7.1). Absent means `static`: the
+       * credentials are the `headerSecrets`. `oauth` together with an `authorization` header is
+       * refused (`auth_conflict`).
+       */
+      auth: McpAuthSchema.optional(),
       /**
        * Hosts the server needs. An HTTP server is contacted at its `url` only, so this may list
        * the host of the url and nothing else (ADR 0016 section 4.1); `checkHttpConfig` enforces it.

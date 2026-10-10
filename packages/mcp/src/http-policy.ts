@@ -11,7 +11,11 @@ import { OaxError, normalizeTarget } from '@openagentix/core';
  * headers or the `egress` list.
  */
 
-export type HttpIssueCode = 'mcp_header_forbidden' | 'mcp_url_invalid' | 'mcp_egress_invalid';
+export type HttpIssueCode =
+  | 'mcp_header_forbidden'
+  | 'mcp_url_invalid'
+  | 'mcp_egress_invalid'
+  | 'auth_conflict';
 
 export interface HttpIssue {
   code: HttpIssueCode;
@@ -26,6 +30,8 @@ export interface HttpFields {
   headers?: Readonly<Record<string, string>> | undefined;
   headerSecrets?: Readonly<Record<string, string>> | undefined;
   egress?: readonly string[] | undefined;
+  /** Authentication of the connection (ADR 0016 section 7.1); absent means `static`. */
+  auth?: { kind: string } | undefined;
 }
 
 /**
@@ -168,6 +174,31 @@ function egressIssues(cfg: HttpFields, out: HttpIssue[]): void {
   });
 }
 
+/**
+ * `auth.kind: oauth` and `none` own the `Authorization` header: a configured one (plain or secret
+ * reference, any spelling of the name) would be overridden or sent next to the token, so the
+ * combination is refused (`auth_conflict`). OAuth also needs https: tokens and client credentials
+ * never travel over plain http.
+ */
+function authIssues(cfg: HttpFields, url: URL | undefined, out: HttpIssue[]): void {
+  const kind = cfg.auth?.kind;
+  if (kind !== 'oauth' && kind !== 'none') return;
+  for (const field of ['headers', 'headerSecrets'] as const)
+    for (const name of Object.keys(cfg[field] ?? {}))
+      if (name.toLowerCase() === 'authorization')
+        out.push({
+          code: 'auth_conflict',
+          path: `${field}.authorization`,
+          message: `auth.kind "${kind}" cannot be combined with an authorization header`,
+        });
+  if (kind === 'oauth' && url && url.protocol !== 'https:')
+    out.push({
+      code: 'mcp_url_invalid',
+      path: 'url',
+      message: 'an oauth connection needs an https url',
+    });
+}
+
 /** Issues of an HTTP connection config (`[]` = fine). Pure: no DNS, no network. */
 export function checkHttpConfig(cfg: HttpFields): HttpIssue[] {
   const out: HttpIssue[] = [];
@@ -199,6 +230,7 @@ export function checkHttpConfig(cfg: HttpFields): HttpIssue[] {
   const seen = new Set<string>();
   headerIssues('headers', cfg.headers, out, seen);
   headerIssues('headerSecrets', cfg.headerSecrets, out, seen);
+  authIssues(cfg, url, out);
   egressIssues(cfg, out);
   return out;
 }
