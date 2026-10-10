@@ -1,4 +1,4 @@
-import { type Principal } from '@openagentix/core';
+import { ContextGuard, type Principal } from '@openagentix/core';
 import {
   McpServerConfigSchema,
   isTestableMcpConfig,
@@ -12,6 +12,7 @@ import type { AppContext } from '../context.js';
 import { HttpError, notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService, ConnectionRow } from './catalog.js';
+import type { McpOauthService } from './mcp-oauth.js';
 import type { RunNodesService } from './run-nodes.js';
 
 /** Tests per user and window: the test dials a destination that a tenant chose. */
@@ -36,6 +37,7 @@ export class McpTestService {
     private readonly catalog: CatalogService,
     private readonly runNodes: RunNodesService,
     private readonly audit: AuditService,
+    private readonly oauth?: McpOauthService,
   ) {}
 
   private limit(userId: string): void {
@@ -123,6 +125,9 @@ export class McpTestService {
     const platform = row.scope === 'platform';
     const base = platform ? this.ctx.secrets : await this.runNodes.resolverFor(actor.tenantId);
     const secrets: string[] = [];
+    // The probe sees the token like a run does; a snapshot that contains it is refused by the caller.
+    const guard = new ContextGuard();
+    const tokenSource = this.oauth?.tokensFor(new Map([[cfg.name, { row, cfg }]]), guard);
     let probed: Awaited<ReturnType<typeof probeMcpServer>>;
     try {
       probed = await probeMcpServer(cfg, {
@@ -134,6 +139,23 @@ export class McpTestService {
           },
         },
         outbound,
+        ...(tokenSource
+          ? {
+              tokens: (server: string) => {
+                const src = tokenSource(server);
+                return (
+                  src && {
+                    ...src,
+                    accessToken: async () => {
+                      const t = await src.accessToken();
+                      secrets.push(t.token);
+                      return t;
+                    },
+                  }
+                );
+              },
+            }
+          : {}),
         originFor: () => (platform ? 'platform' : 'tenant'),
         ...(this.ctx.hostLookup ? { lookup: this.ctx.hostLookup } : {}),
       });

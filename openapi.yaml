@@ -6581,6 +6581,451 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/connections/{id}/oauth:
+    get:
+      summary: "OAuth state of an HTTP MCP connection: status, pinned issuer, scopes, expiry (never a token)"
+      tags:
+        - connections
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - not_authorized
+                      - active
+                      - refresh_failed
+                      - reauthorization_required
+                      - revoked
+                  grant:
+                    type: string
+                  issuer:
+                    description: Authorization server pinned for this connection
+                    type:
+                      - string
+                      - "null"
+                  pinnedIssuer:
+                    description: "`auth.issuer` of the configuration, if set"
+                    type:
+                      - string
+                      - "null"
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+                  expiresAt:
+                    type:
+                      - string
+                      - "null"
+                  authorizedAt:
+                    type:
+                      - string
+                      - "null"
+                  authorizedBy:
+                    type:
+                      - string
+                      - "null"
+                  lastError:
+                    description: Closed code of the last failed renewal
+                    type:
+                      - string
+                      - "null"
+                  endpointHosts:
+                    type: array
+                    items:
+                      type: string
+                    description: Authorization server hosts the connection contacts (purpose identity)
+                  scopesWider:
+                    type: boolean
+                    description: The granted scopes exceed what the profiles need
+                required:
+                  - status
+                  - grant
+                  - issuer
+                  - pinnedIssuer
+                  - scopes
+                  - expiresAt
+                  - authorizedAt
+                  - authorizedBy
+                  - lastError
+                  - endpointHosts
+                  - scopesWider
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/connections/{id}/oauth/authorize:
+    post:
+      summary: "Authorize an OAuth connection (client_credentials): discover the authorization server, pin its issuer and endpoints, obtain a token (audited, rate limited)"
+      tags:
+        - connections
+      description: Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. The answer carries the state only, never a token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                issuer:
+                  description: Authorization server to use when the resource names several
+                  type: string
+                  format: uri
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - not_authorized
+                      - active
+                      - refresh_failed
+                      - reauthorization_required
+                      - revoked
+                  grant:
+                    type: string
+                  issuer:
+                    description: Authorization server pinned for this connection
+                    type:
+                      - string
+                      - "null"
+                  pinnedIssuer:
+                    description: "`auth.issuer` of the configuration, if set"
+                    type:
+                      - string
+                      - "null"
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+                  expiresAt:
+                    type:
+                      - string
+                      - "null"
+                  authorizedAt:
+                    type:
+                      - string
+                      - "null"
+                  authorizedBy:
+                    type:
+                      - string
+                      - "null"
+                  lastError:
+                    description: Closed code of the last failed renewal
+                    type:
+                      - string
+                      - "null"
+                  endpointHosts:
+                    type: array
+                    items:
+                      type: string
+                    description: Authorization server hosts the connection contacts (purpose identity)
+                  scopesWider:
+                    type: boolean
+                    description: The granted scopes exceed what the profiles need
+                required:
+                  - status
+                  - grant
+                  - issuer
+                  - pinnedIssuer
+                  - scopes
+                  - expiresAt
+                  - authorizedAt
+                  - authorizedBy
+                  - lastError
+                  - endpointHosts
+                  - scopesWider
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/connections/{id}/oauth/disconnect:
+    post:
+      summary: "Disconnect an OAuth connection: delete the stored tokens and revoke them at the authorization server (RFC 7009, best effort, audited)"
+      tags:
+        - connections
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - not_authorized
+                      - active
+                      - refresh_failed
+                      - reauthorization_required
+                      - revoked
+                  grant:
+                    type: string
+                  issuer:
+                    description: Authorization server pinned for this connection
+                    type:
+                      - string
+                      - "null"
+                  pinnedIssuer:
+                    description: "`auth.issuer` of the configuration, if set"
+                    type:
+                      - string
+                      - "null"
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+                  expiresAt:
+                    type:
+                      - string
+                      - "null"
+                  authorizedAt:
+                    type:
+                      - string
+                      - "null"
+                  authorizedBy:
+                    type:
+                      - string
+                      - "null"
+                  lastError:
+                    description: Closed code of the last failed renewal
+                    type:
+                      - string
+                      - "null"
+                  endpointHosts:
+                    type: array
+                    items:
+                      type: string
+                    description: Authorization server hosts the connection contacts (purpose identity)
+                  scopesWider:
+                    type: boolean
+                    description: The granted scopes exceed what the profiles need
+                required:
+                  - status
+                  - grant
+                  - issuer
+                  - pinnedIssuer
+                  - scopes
+                  - expiresAt
+                  - authorizedAt
+                  - authorizedBy
+                  - lastError
+                  - endpointHosts
+                  - scopesWider
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/connections/{id}/tools/refresh:
     post:
       summary: Fetch the tool definitions of an HTTP MCP connection and store them as a pending snapshot (audited; shares the rate limit of the connection test)

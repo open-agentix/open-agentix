@@ -11,6 +11,7 @@ import {
   GUARD_CLASSES,
   GUARD_SOURCES,
   NODE_REPORT_RESULTS,
+  OAUTH_REFRESH_OUTCOMES,
   RELAY_METHOD_LABELS,
   RELAY_OUTCOMES,
   RUNNER_LABELS,
@@ -76,6 +77,7 @@ export class Metrics {
   readonly mcpToolsChanged: Counter<string>;
   readonly mcpRelayRequests: Counter<'method' | 'outcome'>;
   readonly mcpRelaySessions: Gauge<string>;
+  readonly mcpOauthRefresh: Counter<'outcome'>;
   readonly roleBindingsReconcileFixes: Counter<'kind' | 'trigger'>;
   readonly roleBindingsReconcileRuns: Counter<'trigger' | 'outcome'>;
   // ADR 0015 S5: every label value is a member of a closed set (`metric-labels.ts`) and is
@@ -153,6 +155,14 @@ export class Metrics {
         '(initialize, tools_list, tools_call, other) and outcome (ok, refused, denied, ' +
         'approval_required, tools_changed, unsupported, rate_limited, busy, timeout, error)',
       labelNames: ['method', 'outcome'],
+      registers: [this.registry],
+    });
+    this.mcpOauthRefresh = new Counter({
+      name: `${prefix}mcp_oauth_refresh_total`,
+      help:
+        'Renewals of MCP OAuth access tokens by outcome (ok, invalid_grant, reauthorization_required, ' +
+        'failed, skipped); no tenant or connection label (ADR 0016 section 8)',
+      labelNames: ['outcome'],
       registers: [this.registry],
     });
     this.mcpRelaySessions = new Gauge({
@@ -467,6 +477,10 @@ export class Metrics {
   }
 
   /** One request of a run node to the MCP relay; both values are normalised to closed sets. */
+  oauthRefresh(outcome: string): void {
+    this.mcpOauthRefresh.inc({ outcome: closed(OAUTH_REFRESH_OUTCOMES, outcome, 'failed') });
+  }
+
   mcpRelayRequest(method: string, outcome: string): void {
     this.mcpRelayRequests.inc({
       method: closed(RELAY_METHOD_LABELS, method),

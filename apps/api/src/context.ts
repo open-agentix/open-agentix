@@ -18,7 +18,7 @@ import {
   failClosed,
   getNetworkSettings,
 } from './airgap.js';
-import { connections } from './db/schema.js';
+import { connections, mcpOauthTokens } from './db/schema.js';
 import { findStdioViolations } from './stdio.js';
 import { createCache, type Cache } from './cache.js';
 import type { Config } from './config.js';
@@ -163,7 +163,22 @@ export async function createContext(
   }
   if (egress.airgapped) {
     const rows = await database.db.select().from(connections);
-    const problems = checkStoredConnections(rows, egress, stdioAirgapContext(config));
+    const pins = await database.db
+      .select({ id: mcpOauthTokens.connectionId, endpoints: mcpOauthTokens.endpoints })
+      .from(mcpOauthTokens);
+    const names = new Map(rows.map((r) => [r.id, r.name]));
+    const problems = checkStoredConnections(
+      [
+        ...rows,
+        ...pins.map((p) => ({
+          name: names.get(p.id) ?? p.id,
+          kind: 'mcp-oauth-pin',
+          config: { endpoints: p.endpoints },
+        })),
+      ],
+      egress,
+      stdioAirgapContext(config),
+    );
     if (problems.length > 0) failClosed(problems);
     logger.info(
       { allowlist: egress.status().allowlist },

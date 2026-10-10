@@ -36,6 +36,7 @@ import { HttpError, mcpRelayRefusal } from '../errors.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService, ConnectionRow } from './catalog.js';
 import type { ControlPlaneService } from './control-plane.js';
+import type { McpOauthService } from './mcp-oauth.js';
 import type { McpToolsService } from './mcp-tools.js';
 import { RelaySessions, relaySessionKey, type RelaySession } from './mcp-relay-sessions.js';
 import { initializeResult, toolCallResult, toolsListResult } from './mcp-relay-results.js';
@@ -154,6 +155,7 @@ export class McpRelayService {
     private readonly control: ControlPlaneService,
     private readonly runNodes: RunNodesService,
     private readonly mcpTools: McpToolsService,
+    private readonly oauth?: McpOauthService,
   ) {
     const relay = ctx.config.mcp.relay;
     this.sessions = new RelaySessions(
@@ -633,17 +635,29 @@ export class McpRelayService {
 
   /** The in-process gateway for this one connection: pins, guard, SSRF rules are all its own. */
   private async createGateway(t: Target, secrets: SecretResolver): Promise<ToolGateway> {
+    // One guard for the gateway and the token source: the token is registered with it before the
+    // first request, so a server that echoes it in a result gets it redacted. The token is
+    // attached here, on the control node, per request; the answer to the node is guarded.
+    const guard = relayGuard(t.cfg);
     const gateway = new ToolGateway(
       [t.cfg],
       {
         secrets,
+        ...(this.oauth
+          ? {
+              tokens: this.oauth.tokensFor(
+                new Map([[t.server, { row: t.row, cfg: t.cfg }]]),
+                guard,
+              ),
+            }
+          : {}),
         outbound: this.dispatcher(),
         originFor: () => (t.platform ? 'platform' : 'tenant'),
         // ADR 0015 S8: the platform switch; the connection must opt in too.
         tracePropagation: this.ctx.config.otel.mcpPropagation,
         ...(this.ctx.hostLookup ? { lookup: this.ctx.hostLookup } : {}),
       },
-      relayGuard(t.cfg),
+      guard,
     );
     const scope = { tenantId: t.run.tenantId, teamId: t.run.teamId, agentId: t.run.agentId };
     const pins = await this.runNodes.pinResolver?.(t.definition, scope, new Set([t.server]));

@@ -112,6 +112,13 @@ export function resolveConnections<T extends ConnectionRow>(
 
 /** Connections (MCP servers with secret references) and policy bundles, tenant-scoped. */
 export class CatalogService {
+  /** Set by the OAuth service: revocation at the authorization server around connection changes. */
+  oauth?: {
+    prepareRevoke(
+      row: Pick<ConnectionRow, 'id' | 'tenantId' | 'scope' | 'config' | 'kind'>,
+    ): Promise<{ run(reason: string, actor?: string, keepRows?: boolean): Promise<void> } | null>;
+  };
+
   constructor(
     private readonly ctx: AppContext,
     private readonly audit: AuditService,
@@ -216,13 +223,30 @@ export class CatalogService {
    * deletes a connection that shadows a platform one in between, and the worker would then start
    * the tenant's command as if it were the operator's.
    */
-  async mcpRunConfigs(
-    scope: RunScope,
-  ): Promise<{ configs: McpServerConfig[]; platformNames: Set<string> }> {
+  async mcpRunConfigs(scope: RunScope): Promise<{
+    configs: McpServerConfig[];
+    platformNames: Set<string>;
+    /** The OAuth connections among them, by server name (rows for the credentials service). */
+    oauth: Map<
+      string,
+      { row: ConnectionRow; cfg: Extract<McpServerConfig, { transport: 'streamable-http' }> }
+    >;
+  }> {
     const rows = await this.connectionsForRun('mcp', scope);
+    const configs = rows.map((c) => McpServerConfigSchema.parse(c.config));
+    const oauth = new Map<
+      string,
+      { row: ConnectionRow; cfg: Extract<McpServerConfig, { transport: 'streamable-http' }> }
+    >();
+    rows.forEach((row, i) => {
+      const cfg = configs[i]!;
+      if (cfg.transport === 'streamable-http' && cfg.auth?.kind === 'oauth')
+        oauth.set(cfg.name, { row, cfg });
+    });
     return {
-      configs: rows.map((c) => McpServerConfigSchema.parse(c.config)),
+      configs,
       platformNames: new Set(rows.filter((c) => c.scope === 'platform').map((c) => c.name)),
+      oauth,
     };
   }
 
@@ -346,6 +370,7 @@ export class CatalogService {
         ...Object.values(
           (parsed as { headerSecrets?: Record<string, string> }).headerSecrets ?? {},
         ),
+        ...oauthRefs(parsed),
       ];
     } else {
       const parsed = ProviderSettingsSchema.parse(config);
@@ -756,7 +781,13 @@ export class CatalogService {
     // A new server URL is a new OAuth resource (ADR 0016 section 7.4): bump the credential
     // version and delete the stored tokens, which were issued for the old one, in one transaction
     // (a token write racing the bump waits for the row lock and then sees the new version).
-    const moved = resourceOf(current.config) !== resourceOf(parsed);
+    // A changed OAuth client or issuer pin is a new authorization server relationship: same rule.
+    const moved =
+      resourceOf(current.config) !== resourceOf(parsed) ||
+      authOf(current.config) !== authOf(parsed);
+    // Taken before the change, while the rows and the old client configuration still exist; the
+    // authorization server is told after the change has been committed.
+    const revocation = moved ? await this.oauth?.prepareRevoke(current) : null;
     const row = await this.ctx.db.transaction(async (tx) => {
       const [updated] = await tx
         .update(connections)
@@ -793,6 +824,7 @@ export class CatalogService {
       throw conflict(`connection "${current.name}" was changed meanwhile; reload and try again`);
     }
     if (moved) processSecrets.forgetOwnerPrefix(`${id}:`);
+    await revocation?.run('config_changed', `user:${actor.userId}`, true);
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,
@@ -805,12 +837,14 @@ export class CatalogService {
   }
 
   async deleteConnection(actor: Principal, id: string): Promise<void> {
-    await this.getOwnConnection(actor, id);
+    const existing = await this.getOwnConnection(actor, id);
+    const revocation = await this.oauth?.prepareRevoke(existing);
     await this.ctx.db
       .delete(connections)
       .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)));
     // The token rows went with the connection (foreign key); forget the values in memory too.
     processSecrets.forgetOwnerPrefix(`${id}:`);
+    await revocation?.run('connection_deleted', `user:${actor.userId}`, true);
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,
@@ -960,6 +994,34 @@ export class CatalogService {
       bundles: [...(await this.enabledBundles(tenantId)), ...extraBundles],
     });
   }
+}
+
+/** Secret references of an OAuth client (id, secret, key): tenant prefix rules apply to them too. */
+function oauthRefs(cfg: unknown): string[] {
+  const c = (cfg as { auth?: { kind?: string; client?: Record<string, unknown> } }).auth;
+  if (c?.kind !== 'oauth' || !c.client) return [];
+  return [c.client.clientIdSecret, c.client.keySecret, c.client.clientSecretSecret].filter(
+    (r): r is string => typeof r === 'string',
+  );
+}
+
+/** The `auth` block of a connection config as a stable string (key order does not matter). */
+function authOf(config: unknown): string {
+  const stable = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(stable)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.entries(v as Record<string, unknown>)
+              .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+              .map(([k, x]) => [k, stable(x)]),
+          )
+        : v;
+  const auth = (config as { auth?: { kind?: string } } | null)?.auth;
+  // Scopes are not part of the relationship: a change of scopes surfaces as insufficient_scope.
+  if (auth?.kind !== 'oauth') return '';
+  const { scopes: _scopes, ...rest } = auth as Record<string, unknown>;
+  return JSON.stringify(stable(rest));
 }
 
 /** Canonical resource of an HTTP MCP connection config, or null (stdio, in-memory, malformed). */

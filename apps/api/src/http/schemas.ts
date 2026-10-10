@@ -531,6 +531,34 @@ export const ToolRefreshResultSchema = z.object({
     .describe('false when a snapshot with this digest already existed'),
   matchesCurrent: z.boolean().optional(),
 });
+export const OauthStatusSchema = z.object({
+  status: z.enum([
+    'not_authorized',
+    'active',
+    'refresh_failed',
+    'reauthorization_required',
+    'revoked',
+  ]),
+  grant: z.string(),
+  issuer: z.string().nullable().describe('Authorization server pinned for this connection'),
+  pinnedIssuer: z.string().nullable().describe('`auth.issuer` of the configuration, if set'),
+  scopes: z.array(z.string()),
+  expiresAt: z.string().nullable(),
+  authorizedAt: z.string().nullable(),
+  authorizedBy: z.string().nullable(),
+  lastError: z.string().nullable().describe('Closed code of the last failed renewal'),
+  endpointHosts: z
+    .array(z.string())
+    .describe('Authorization server hosts the connection contacts (purpose identity)'),
+  scopesWider: z.boolean().describe('The granted scopes exceed what the profiles need'),
+});
+export const OauthAuthorizeBody = z.object({
+  issuer: z
+    .string()
+    .url()
+    .optional()
+    .describe('Authorization server to use when the resource names several'),
+});
 export const ToolSnapshotApproveBody = z.object({
   scope: z
     .enum(['new-versions', 'existing-versions'])
