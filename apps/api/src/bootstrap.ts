@@ -18,6 +18,13 @@ export async function createControlNode(
 ): Promise<ControlNode> {
   const ctx = await createContext(config, overrides);
   const services = createServices(ctx);
+  // ADR 0014 S2: which source authorises. `legacy` unless an operator switched after a clean reconcile.
+  ctx.logger.info(
+    { roleBindingsRead: config.auth.roleBindingsRead },
+    config.auth.roleBindingsRead === 'bindings'
+      ? 'role authorisation reads tenant_role_bindings (OAX_ROLE_BINDINGS_READ=bindings)'
+      : 'role authorisation reads users.global_roles (OAX_ROLE_BINDINGS_READ=legacy)',
+  );
   await services.identity.ensureBootstrapAdmin();
   if (config.demo.enabled) {
     const r = await seedDemo(ctx, services, { password: config.demo.password });

@@ -23,7 +23,8 @@ export class Metrics {
   readonly modelProxyStreamsActive: Gauge<string>;
   /** Counters of the tracing pipeline itself (ADR 0015 section 8); label values are closed sets. */
   readonly otel: TelemetryStats;
-  readonly roleBindingsShadow: Counter<'outcome'>;
+  readonly roleBindingsShadow: Counter<'outcome' | 'authoritative'>;
+  readonly authzEpochRejected: Counter<'reason'>;
   readonly roleBindingsReconcileFixes: Counter<'kind' | 'trigger'>;
   readonly roleBindingsReconcileRuns: Counter<'trigger' | 'outcome'>;
 
@@ -45,9 +46,19 @@ export class Metrics {
     this.roleBindingsShadow = new Counter({
       name: `${prefix}role_bindings_shadow_total`,
       help:
-        'Shadow comparison of the tenant role resolver with the legacy bindings (ADR 0014 S1): ' +
-        'outcome match, mismatch or error; the legacy result stays authoritative',
-      labelNames: ['outcome'],
+        'Shadow comparison of the tenant role resolver with the legacy bindings (ADR 0014 S1, S2): ' +
+        'outcome match, mismatch, error or skipped; `authoritative` names the source that decides ' +
+        '(legacy, or bindings once OAX_ROLE_BINDINGS_READ=bindings) and the other one is compared',
+      labelNames: ['outcome', 'authoritative'],
+      registers: [this.registry],
+    });
+    this.authzEpochRejected = new Counter({
+      name: `${prefix}authz_epoch_rejected_total`,
+      help:
+        'Cached principals rejected because the authz epoch of their organisation moved (ADR 0014 ' +
+        'S2, #227): reason stale (the epoch changed since the entry was built) or invalid (the ' +
+        'entry did not belong to the token, was malformed or its owner check failed)',
+      labelNames: ['reason'],
       registers: [this.registry],
     });
     this.roleBindingsReconcileFixes = new Counter({

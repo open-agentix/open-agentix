@@ -124,6 +124,38 @@ export async function mirrorGlobalRoles(
   return { added: inserted.length, removed: removed.length, blocked };
 }
 
+/**
+ * The authz epoch of the organisation a tenant belongs to (ADR 0014 section 6.1; bumped by the
+ * database triggers of migration 0020 and the application). `undefined` when the tenant does not
+ * exist. Read **before** the grants it guards: an entry built from an epoch read first can only be
+ * rejected too early, never accepted too late.
+ */
+export async function loadAuthzEpoch(
+  db: Db,
+  tenantId: string,
+): Promise<{ rootId: string; epoch: number } | undefined> {
+  const res = (await db.execute(sql`
+    select r.id as root_id, r.authz_epoch::text as epoch
+    from ${tenants} t join ${tenants} r on r.id = t.root_id
+    where t.id = ${tenantId}
+  `)) as unknown as { rows: { root_id: string; epoch: string }[] };
+  const row = res.rows[0];
+  if (!row) return undefined;
+  const epoch = Number(row.epoch);
+  return Number.isSafeInteger(epoch) ? { rootId: String(row.root_id), epoch } : undefined;
+}
+
+/** The current epoch of one organisation root: the cheap per-request check of a cached principal. */
+export async function currentAuthzEpoch(db: Db, rootId: string): Promise<number | undefined> {
+  const res = (await db.execute(
+    sql`select authz_epoch::text as epoch from ${tenants} where id = ${rootId}`,
+  )) as unknown as { rows: { epoch: string }[] };
+  const row = res.rows[0];
+  if (!row) return undefined;
+  const epoch = Number(row.epoch);
+  return Number.isSafeInteger(epoch) ? epoch : undefined;
+}
+
 /** What the resolver needs for one user, plus the placement of the user's home node. */
 export interface LoadedGrants {
   raw: RawGrants;

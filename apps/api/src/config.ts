@@ -74,6 +74,12 @@ export const EnvSchema = z.object({
   OAX_TENANT_MAX_DEPTH: z.coerce.number().int().min(1).max(32).default(32),
   OAX_TENANT_MAX_NODES_PER_ROOT: z.coerce.number().int().min(1).default(1000),
   OAX_AUTH_CACHE_TTL_SECONDS: int(30),
+  /**
+   * Which source authorises (ADR 0014 S2): `legacy` = users.global_roles, team memberships and
+   * agent bindings at the home node (today's behaviour); `bindings` = the tenant role resolver over
+   * tenant_role_bindings at the acting node. Any other value refuses to start.
+   */
+  OAX_ROLE_BINDINGS_READ: z.enum(['legacy', 'bindings']).default('legacy'),
   OAX_ROLE_BINDINGS_SHADOW: bool.default(true),
   OAX_ROLE_BINDINGS_RECONCILE: bool.default(true),
   OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS: int(3600),
@@ -264,6 +270,7 @@ export interface Config {
     tokenMaxTtlDays: number;
     cacheTtlSeconds: number;
     /** Compare the tenant role resolver with the legacy bindings (ADR 0014 S1); result unused. */
+    roleBindingsRead: 'legacy' | 'bindings';
     roleBindingsShadow: boolean;
     /** Reconcile the bindings mirror at start-up and periodically (ADR 0014 S1, #216). */
     roleBindingsReconcile: boolean;
@@ -457,6 +464,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       sessionTtlSeconds: e.OAX_SESSION_TTL_SECONDS,
       tokenMaxTtlDays: e.OAX_TOKEN_MAX_TTL_DAYS,
       cacheTtlSeconds: e.OAX_AUTH_CACHE_TTL_SECONDS,
+      roleBindingsRead: e.OAX_ROLE_BINDINGS_READ,
       roleBindingsShadow: e.OAX_ROLE_BINDINGS_SHADOW,
       roleBindingsReconcile: e.OAX_ROLE_BINDINGS_RECONCILE,
       roleBindingsReconcileIntervalSeconds: e.OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS,
