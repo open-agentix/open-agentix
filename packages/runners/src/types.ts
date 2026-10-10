@@ -15,6 +15,7 @@ import type {
   BudgetVerdict,
 } from '@openagentix/core';
 import type { ToolGateway } from '@openagentix/mcp';
+import type { ExecutorTelemetry } from './executor-telemetry.js';
 import type { ProviderRegistry } from '@openagentix/providers';
 
 /** Everything a runner needs to execute one run (handed over by the control node). */
@@ -149,6 +150,11 @@ export interface RunnerContext {
    * Defaults to the tool gateway's guard, which is on unless an operator turned it off.
    */
   guard?: ContextGuard;
+  /**
+   * Span hooks (ADR 0015 slice S3). Absent when no tracing is configured: the executor then runs
+   * exactly as before.
+   */
+  telemetry?: ExecutorTelemetry;
   signal?: AbortSignal;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
