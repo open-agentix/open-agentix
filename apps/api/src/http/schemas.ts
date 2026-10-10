@@ -30,6 +30,53 @@ export const PageQuery = z.object({
 export const pageOf = <T extends z.ZodTypeAny>(item: T) =>
   z.object({ items: z.array(item), nextCursor: z.string().nullable() });
 
+/** The tenant a row of a `scope=subtree` list belongs to (ADR 0014 3.5). */
+export const RowTenantSchema = z.object({
+  id: Id,
+  slug: z.string(),
+  slugPath: z
+    .string()
+    .describe('slugs from the organisation root to the tenant, e.g. acme/security'),
+  name: z.string(),
+});
+
+/**
+ * `scope` and `tenantId` of the list routes that can span the tenant tree (ADR 0014 3.5). The node
+ * list is built on the server from the caller's roles; `tenantId` can only narrow it.
+ */
+export const SubtreeQuery = z.object({
+  scope: z
+    .enum(['node', 'subtree'])
+    .default('node')
+    .describe(
+      'node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`',
+    ),
+  tenantId: z
+    .string()
+    .min(1)
+    .max(2048)
+    .optional()
+    .describe(
+      "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404",
+    ),
+});
+
+/** Optional paging for lists that have none today; honoured with `scope=subtree` only. */
+export const SubtreePageQuery = SubtreeQuery.extend({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .optional()
+    .describe('with scope=subtree: page size (default 200)'),
+  cursor: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('with scope=subtree: `nextCursor` of the previous page'),
+});
+
 export const IssueSchema = z.object({ path: z.string(), message: z.string() });
 export const ValidationResultSchema = z.object({
   valid: z.boolean(),
@@ -59,7 +106,9 @@ export const AgentSchema = z.object({
         .describe('slugs from the organisation root to the tenant, e.g. acme/security'),
       name: z.string(),
     })
-    .describe('tenant the agent belongs to (always the tenant the request acts in)'),
+    .describe(
+      'tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree)',
+    ),
   useCase: z
     .string()
     .nullable()
@@ -167,6 +216,7 @@ export const RunSchema = z.object({
   errorCode: z.string().nullable(),
   errorMessage: z.string().nullable(),
   outputs: Json,
+  tenant: RowTenantSchema.optional().describe('with scope=subtree: the tenant the run belongs to'),
 });
 /** `GET /v1/runs/{id}`: the run plus its trace identity (ADR 0015 section 11). */
 export const RunDetailSchema = RunSchema.extend({
@@ -184,14 +234,20 @@ export const RunDetailSchema = RunSchema.extend({
       "Link to the trace in the operator's trace backend (OAX_OTEL_TRACE_URL_TEMPLATE); null when no template is configured or the run has no trace",
     ),
 });
-export const RunListQuery = PageQuery.extend({
+export const RunListQuery = PageQuery.extend(SubtreeQuery.shape).extend({
   agentId: Id.optional(),
   status: RunStatusSchema.optional(),
   teamId: Id.optional(),
   from: z.string().datetime().optional().describe('created at or after (ISO 8601)'),
   to: z.string().datetime().optional().describe('created before (ISO 8601)'),
 });
-export const RunStatsQuery = RunListQuery.omit({ limit: true, cursor: true, status: true });
+export const RunStatsQuery = RunListQuery.omit({
+  limit: true,
+  cursor: true,
+  status: true,
+  scope: true,
+  tenantId: true,
+});
 export const RunStatsSchema = z.object({
   total: z.number().int(),
   byStatus: z.record(z.string(), z.number().int()),
@@ -248,8 +304,9 @@ export const ApprovalSchema = z.object({
   decidedBy: Id.nullable(),
   decidedAt: Iso.nullable(),
   comment: z.string().nullable(),
+  tenant: RowTenantSchema.optional().describe('with scope=subtree: the tenant the row belongs to'),
 });
-export const ApprovalQuery = PageQuery.extend({
+export const ApprovalQuery = PageQuery.extend(SubtreeQuery.shape).extend({
   status: z.enum(['pending', 'approved', 'rejected', 'timeout']).default('pending'),
   runId: Id.optional(),
 });
@@ -269,6 +326,7 @@ export const SourceSchema = z.object({
   enabled: z.boolean(),
   createdAt: Iso,
   ingestUrl: z.string().nullable(),
+  tenant: RowTenantSchema.optional().describe('with scope=subtree: the tenant the row belongs to'),
 });
 export const SourceCreateBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
@@ -299,8 +357,11 @@ export const EventSchema = z.object({
   subject: z.string().nullable(),
   receivedAt: Iso,
   payload: Json,
+  tenant: RowTenantSchema.optional().describe('with scope=subtree: the tenant the row belongs to'),
 });
-export const EventListQuery = PageQuery.extend({ sourceId: Id.optional() });
+export const EventListQuery = PageQuery.extend(SubtreeQuery.shape).extend({
+  sourceId: Id.optional(),
+});
 
 export const ConnectionScopeSchema = z.enum(['platform', 'tenant', 'team', 'agent']);
 export const ConnectionSchema = z.object({
@@ -318,6 +379,7 @@ export const ConnectionSchema = z.object({
     ),
   createdAt: Iso,
   updatedAt: Iso,
+  tenant: RowTenantSchema.optional().describe('with scope=subtree: the tenant the row belongs to'),
 });
 export const StdioViolationsSchema = z.object({
   items: z.array(
@@ -444,6 +506,7 @@ export const AuditEntrySchema = z.object({
   payloadDigest: z.string(),
   prevHash: z.string(),
   hash: z.string(),
+  tenant: RowTenantSchema.optional().describe('with scope=subtree: the tenant the row belongs to'),
 });
 export const AllTenantsQuery = z.object({
   allTenants: z.coerce
@@ -451,14 +514,19 @@ export const AllTenantsQuery = z.object({
     .default(false)
     .describe('platform operators only: span every tenant instead of the acting tenant'),
 });
-export const AuditQuery = PageQuery.extend({
+export const AuditQuery = PageQuery.extend(SubtreeQuery.shape).extend({
   allTenants: AllTenantsQuery.shape.allTenants,
   runId: Id.optional(),
   action: z.string().optional(),
   from: z.string().datetime().optional(),
   to: z.string().datetime().optional(),
 });
-export const AuditExportQuery = AuditQuery.omit({ limit: true, cursor: true });
+export const AuditExportQuery = AuditQuery.omit({
+  limit: true,
+  cursor: true,
+  scope: true,
+  tenantId: true,
+});
 export const VerifyBody = z.object({
   fromSeq: z.number().int().min(1).optional(),
   toSeq: z.number().int().min(1).optional(),
@@ -500,7 +568,7 @@ export const MonthBound = z
   .refine((v) => toMonthStart(v) !== null, 'not a valid date')
   .transform((v) => toMonthStart(v) as string);
 
-export const CostQuery = z.object({
+export const CostQuery = SubtreeQuery.extend({
   groupBy: z
     .enum(['run', 'agent', 'team', 'tenant', 'use_case', 'month', 'provider', 'model'])
     .default('agent'),
@@ -926,7 +994,26 @@ export const BudgetOverviewSchema = z.object({
   tenant: BudgetLineSchema,
   useCases: z.array(BudgetLineSchema),
   teams: z.array(BudgetLineSchema),
+  nodes: z
+    .array(
+      z.object({
+        node: z.object({ id: Id, slugPath: z.string(), name: z.string() }),
+        tenant: BudgetLineSchema,
+        useCases: z.array(BudgetLineSchema),
+        teams: z.array(BudgetLineSchema),
+      }),
+    )
+    .optional()
+    .describe(
+      'with scope=subtree: the budgets of every readable node of the subtree (the acting node included), ordered by slug path',
+    ),
+  nextCursor: z
+    .string()
+    .nullable()
+    .optional()
+    .describe('with scope=subtree: cursor of the next page of `nodes`'),
 });
+export const BudgetQuery = SubtreePageQuery;
 export const UseCaseParams = z.object({ useCase: z.string().min(1).max(200) });
 export const UseCaseBudgetBody = z.object({ monthlyBudgetUsd: z.number().min(0).max(1e9) });
 export const BudgetVerdictSchema = z.object({

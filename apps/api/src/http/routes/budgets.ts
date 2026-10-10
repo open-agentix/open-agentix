@@ -1,7 +1,14 @@
 import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
-import { BudgetOverviewSchema, ErrorSchema, UseCaseBudgetBody, UseCaseParams } from '../schemas.js';
+import {
+  BudgetOverviewSchema,
+  ErrorSchema,
+  SubtreePageQuery,
+  UseCaseBudgetBody,
+  UseCaseParams,
+} from '../schemas.js';
+import { SUBTREE_DEFAULT_PAGE, assertPagingNeedsSubtree } from '../subtree.js';
 import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
@@ -21,11 +28,25 @@ export function registerBudgetRoutes(app: ZApp, { services }: Deps): void {
       schema: {
         tags,
         summary: 'Monthly budgets of the tenant with spend and alerts raised this month',
+        description:
+          'With scope=subtree `nodes` lists the budgets of every node of the subtree the caller may read costs of (paged by slug path with limit and cursor).',
         security: sec,
+        querystring: SubtreePageQuery,
         response: { 200: BudgetOverviewSchema },
       },
     },
-    async (req) => budgets.overview(principalOf(req)),
+    async (req) => {
+      assertPagingNeedsSubtree(req.query);
+      const principal = principalOf(req);
+      const subtree = await services.subtree.resolve(principal, 'costs:read', req.query);
+      const overview = await budgets.overview(principal);
+      if (!subtree) return overview;
+      const r = await budgets.overviewNodes(subtree, {
+        limit: req.query.limit ?? SUBTREE_DEFAULT_PAGE,
+        cursor: req.query.cursor,
+      });
+      return { ...overview, nodes: r.items, nextCursor: r.nextCursor };
+    },
   );
 
   app.put(

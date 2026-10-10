@@ -15,6 +15,7 @@ import { ModelProxyService } from './model-proxy.js';
 import { ModelsService } from './models.js';
 import { RunNodesService } from './run-nodes.js';
 import { RunsService } from './runs.js';
+import { SubtreeScopes } from './subtree-scope.js';
 import { TenantsService } from './tenants.js';
 
 export interface Services {
@@ -35,6 +36,7 @@ export interface Services {
   tenants: TenantsService;
   models: ModelsService;
   agentCheck: AgentCheckService;
+  subtree: SubtreeScopes;
 }
 
 export function createServices(ctx: AppContext): Services {
@@ -96,6 +98,7 @@ export function createServices(ctx: AppContext): Services {
     tenants,
     models,
     agentCheck,
+    subtree: new SubtreeScopes(ctx),
   };
 }
 
@@ -116,5 +119,6 @@ export {
   ModelsService,
   RunNodesService,
   RunsService,
+  SubtreeScopes,
   TenantsService,
 };
