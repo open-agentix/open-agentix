@@ -11,6 +11,19 @@ All notable changes to this project are documented here. The format follows
 - **Publishing against an HTTP MCP connection needs an approved tool snapshot** (ADR 0016 S3): refresh
   and approve the connection's tools once, then publish. Existing published versions are not
   affected. `stdio` and `in-memory` connections publish as before.
+- Docs: ADR 0017 records the owner's answers to its eight follow-up questions: Agent Developers are not
+  approvers by default; `agent-engineer` is planned to be renamed to `agent-maintainer` without an alias
+  (breaking, before 1.0, with migration of existing bindings in S10 #290); no nested groups and no Entra ID
+  overage lookup in v1 with a 15-minute maximum age of directory bindings for approvals; root-node secrets
+  default to `allowOverride: false`; strict tenant Git trust; signed commits required for review via Git
+  (relaxable only for non-production use cases); loosening or deleting agent rules is admin only. New ADR 0018
+  (Proposed, #296) records "tenant structure as code" as a design direction. Design only, nothing is
+  implemented yet.
+- Docs: ADR 0017 (agent lifecycle governance) is accepted with the owner decisions of 2026-10-10 on all 18 open
+  questions: Agent Developer and Agent Maintainer roles with directory group mapping per tenant node,
+  protected-branch-like agent rules, review via Git with development and publish branches over plain Git,
+  tenant secrets inherited top-down with override and pinned resolution, no break-glass and no minimum
+  approver-binding age; new slices S10 to S13 (#290 to #293). Design only, nothing is implemented yet.
 - The role-binding reconcile no longer reports `blocked` (mirror rows and explicit grants cannot collide any
   more); `oax_role_bindings_reconcile_fixes_total` keeps `kind=added|removed`.
 - Docs: the ROADMAP now records `v0.2.0-alpha.1` as released (alpha, GitHub pre-release) with signed images; the
