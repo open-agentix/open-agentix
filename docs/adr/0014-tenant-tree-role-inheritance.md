@@ -235,6 +235,12 @@ S5 (write inheritance and sub-tenant creation; #190):
   listable secret backends, limits before slug, pre-check and lock order (tree, authorise, creation lock),
   platform-operator targets of the access endpoint evaluated at the path node, the legacy read path in the
   access endpoint, node re-read inside the rename transaction, `authority` on `tenant.updated`.
+- **Second review.** Any change of another account (including re-enabling and renaming) is managing it; the
+  target's team and agent nodes are checked like its node bindings; the last-admin count excludes the leaving
+  user's own other rows when they are disabled and counts them when only one row goes. Accepted:
+  `403 budget_capped` reveals one bit to a descendant admin (some ancestor has a cap); a secrets directory that
+  cannot be listed refuses the slug; secrets staged outside the API are covered by `OAX_TENANT_RESERVED_SLUGS`
+  only; the old single-key and new two-key advisory locks do not exclude each other during a rolling deploy.
 - Not in S5: the `parent_admins_do_not_inherit` warning for operators, `actions` on detail responses (A6 #160
   builds on the access endpoints), node deletion and moves (S10).
 

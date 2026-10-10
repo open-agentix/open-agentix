@@ -411,6 +411,10 @@ the basis for the `actions` block of #160. A node the caller cannot see is `404 
 see `404 user` (the grantee visibility of the grant API), token scopes are applied and reported as
 `limitedByToken`.
 
+**Rolling deploy.** Old pods lock with the single-key `hashtext(rootId)`, new pods with the two-key form, so
+they do not exclude each other: drain the old pods before switching `OAX_ROLE_BINDINGS_READ=bindings` and before
+creating nodes or grants.
+
 **Locks.** The tree lock and the binding lock now use the two-key form `(namespace, hashtext(rootId))`
 (`apps/api/src/services/tree-lock.ts`, #288 item 4). Replicas of the old and the new version do not
 exclude each other during a rolling deploy for the duration of the rollout; do not create nodes and
@@ -418,10 +422,11 @@ grants at the same time as deploying.
 
 **User lifecycle across the tree (review of #302).** A user is managed through the node they live on, but
 their grants can sit on nodes above the manager. With `OAX_ROLE_BINDINGS_READ=bindings`, a non-operator who
-disables a user (`PATCH /v1/users/{id} { disabled: true }`), changes their `globalRoles`, or revokes or lists
-their API tokens is checked in a transaction under the tree lock (shared) and the binding lock, from grants
+changes another user's account in any way (`PATCH /v1/users/{id}`: disable, **re-enable**, rename, `globalRoles`), or
+revokes or lists their API tokens, is checked in a transaction under the tree lock (shared) and the binding lock, from grants
 re-read there: for **every** unexpired node binding of the target the caller needs `users:write` on that node,
-the permissions of the role, and (when the binding inherits) coverage of the subtree, otherwise `403`. A
+the permissions of the role, and (when the binding inherits) coverage of the subtree, otherwise `403`; the
+nodes of the target's team memberships and agent bindings need `users:write` as well. A
 platform operator account is managed by operators only (`403`), the last-admin rule (`409 last_admin`)
 covers disabling and removing the mirror admin role (closes #288 item 1 for these paths; deleting users is
 not an API). Operators and a user acting on their own account are exempt from the first check (the last
@@ -438,7 +443,9 @@ admin cannot claim a slug that an operator reserved (`OAX_TENANT_RESERVED_SLUGS`
 in canonical form like slugs do) or whose prefix already holds secrets in a backend that can be listed (the
 default env and file resolver can; for other backends use the reserved list). The answer is the same
 `409 this slug is not available`. **Never pre-stage secrets under a prefix you do not want claimed, and delete
-the secrets of removed tenants.**
+the secrets of removed tenants.** If the secrets directory cannot be listed the slug is refused (fail closed).
+Secrets staged outside the API's view (run nodes, worker environments, resolvers without `hasEntriesUnder`)
+are protected **only** by `OAX_TENANT_RESERVED_SLUGS`.
 
 **Order of checks (creation).** Pre-check from the cached grants (no lock, no transaction), then in the
 transaction: tree lock (shared), parent re-read, authorisation from re-read grants, installation-wide

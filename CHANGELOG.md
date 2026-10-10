@@ -16,6 +16,10 @@ All notable changes to this project are documented here. The format follows
   Tenant admins cannot create sub-tenants below a node with a monthly budget (`403 budget_capped`) or claim
   reserved slugs or slugs with staged secrets. Unauthorised callers no longer take the creation lock, limits
   answer before slug conflicts, and the access endpoint no longer names the home node of a platform operator.
+  Re-enabling and renaming another account, and users bound through teams or agents above the manager, are
+  covered by the same guard; the last-admin count handles a user holding two admin rows. **Rolling deploy:**
+  old pods use the single-key tree lock, new pods the two-key form; drain old pods before switching
+  `OAX_ROLE_BINDINGS_READ=bindings`.
 - **Write inheritance (ADR 0014 slice S5, #190)**: the read-only clamp on inherited bindings is removed. An
   inheriting binding (`inherit = true`, opt-in per binding, default off) now gives its whole role at every node
   below it, so an inheriting tenant admin administers its subtree. Clamp rules that stay, documented in

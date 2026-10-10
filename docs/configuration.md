@@ -77,7 +77,7 @@ Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
 | `OAX_SESSION_TTL_SECONDS` | `28800` | Lifetime of session tokens from login. |
 | `OAX_TOKEN_MAX_TTL_DAYS` | `365` | Upper bound for API token lifetimes. |
 | `OAX_TENANT_MAX_DEPTH` | `32` | Levels allowed below an organisation (root = 0), 1 to 32. 32 is the technical safety maximum of the tenant tree (ADR 0013); lower it only to forbid deep trees. |
-| `OAX_TENANT_RESERVED_SLUGS` | empty | Comma separated slugs a tenant admin cannot claim when creating a sub-tenant (operators can). Use it for names whose secrets are staged in a backend that cannot be listed; env and file secrets are checked automatically (`docs/tenancy.md`). |
+| `OAX_TENANT_RESERVED_SLUGS` | empty | Comma separated slugs a tenant admin cannot claim when creating a sub-tenant (operators can). Use it for names whose secrets are staged in a backend that cannot be listed; env and file secrets are checked automatically, an unreadable secrets directory refuses (fail closed). Secrets staged outside the API (run nodes, worker env, other resolvers) are protected only by this list (`docs/tenancy.md`). |
 | `OAX_TENANT_MAX_NODES_PER_ROOT` | `1000` | Guard against runaway automation: tenants (nodes) per organisation. |
 | `OAX_MAX_BINDINGS_PER_USER` | `200` | Role bindings one user may hold across the organisation (ADR 0014 3.1, S4); more is `422 binding_limit_exceeded`. |
 | `OAX_RATE_LIMIT_MAX` | `600` | Requests per minute per token/IP. |
