@@ -20,7 +20,9 @@ All notable changes to this project are documented here. The format follows
   (`OAX_MCP_RELAY_CONCURRENCY`, 4), rate (`OAX_MCP_RELAY_RATE_PER_MINUTE`, 120), call timeout, result and
   request caps (`OAX_MCP_RELAY_MAX_REQUEST_BYTES`), open sessions (`OAX_MCP_RELAY_MAX_SESSIONS`,
   `OAX_MCP_RELAY_IDLE_SECONDS`, `OAX_MCP_RELAY_BODY_READ_SECONDS`); sessions are keyed `(tenant, connection, credential version, run)`, so a
-  rotated secret opens a new session. Sampling, elicitation and roots are not relayed
+  rotated secret opens a new session. Relay answers are always secret-redacted (also with
+  `OAX_REDACT_MODEL_CONTEXT` off), and the query values and user info of a connection url count as
+  secrets. Sampling, elicitation and roots are not relayed
   (`mcp_capability_unsupported`, also in process). New metrics `oax_mcp_relay_requests_total{method,outcome}`
   and `oax_mcp_relay_sessions`; audit `mcp.relay.call`, `mcp.relay.denied`, `mcp.relay.refused`. Migration
   `0025_approvals_consumed_at` (down script included). Decides ADR 0012 open question 2.

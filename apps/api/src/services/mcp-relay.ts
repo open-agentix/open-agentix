@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, count, eq, sql } from 'drizzle-orm';
 import {
+  ContextGuard,
   OaxError,
   auditShapeOfReport,
   contextGuardFromEnv,
@@ -100,6 +101,28 @@ const deadline = async <T>(work: Promise<T>, ms: number): Promise<T> => {
     clearTimeout(timer);
   }
 };
+
+/**
+ * The guard of a relay session. Every answer leaves the control node for an untrusted run node, so
+ * secret redaction is on whatever `OAX_REDACT_MODEL_CONTEXT` says (that switch is about the model
+ * context of trusted processes, not about handing a node the credentials of a connection). Besides
+ * the header secrets the gateway registers when it resolves them, the credentials a connection url
+ * can carry (query values, user info) are known secrets: the node is never told the url.
+ */
+export function relayGuard(cfg: HttpConfig, env: NodeJS.ProcessEnv = process.env): ContextGuard {
+  const guard = new ContextGuard({
+    stripInvisible: contextGuardFromEnv(env).stripInvisible,
+    redactSecrets: true,
+  });
+  try {
+    const url = new URL(cfg.url);
+    for (const v of url.searchParams.values()) guard.addSecret(v);
+    for (const v of [url.username, url.password]) if (v) guard.addSecret(decodeURIComponent(v));
+  } catch {
+    // the stored url was validated on write; an unparsable one never connects anyway
+  }
+  return guard;
+}
 
 /**
  * The control-node MCP relay (ADR 0016 section 6, decides ADR 0012 open question 2).
@@ -541,7 +564,7 @@ export class McpRelayService {
         originFor: () => (t.platform ? 'platform' : 'tenant'),
         ...(this.ctx.hostLookup ? { lookup: this.ctx.hostLookup } : {}),
       },
-      contextGuardFromEnv(process.env),
+      relayGuard(t.cfg),
     );
     const scope = { tenantId: t.run.tenantId, teamId: t.run.teamId, agentId: t.run.agentId };
     const pins = await this.runNodes.pinResolver?.(t.definition, scope, new Set([t.server]));

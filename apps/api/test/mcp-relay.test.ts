@@ -56,6 +56,7 @@ agents:
     tools:
       - { server: jira, tool: get_issue, allowAdditionalArgs: true }
       - { server: jira, tool: echo_auth }
+      - { server: jira, tool: echo_url }
       - { server: jira, tool: limited, maxCallsPerRun: 2 }
       - { server: jira, tool: slow }
       - { server: jira, tool: big }
@@ -110,6 +111,7 @@ async function boot(env: Record<string, string> = {}): Promise<Booted> {
   });
   const seen: Booted['seen'] = [];
   let lastAuth: string | undefined;
+  let lastUrl: string | undefined;
   let failing = false;
   const tool = (name: string, extra: Partial<MockTool> = {}): MockTool => ({
     name,
@@ -122,6 +124,7 @@ async function boot(env: Record<string, string> = {}): Promise<Booted> {
     tool('get_issue'),
     tool('other'),
     tool('echo_auth', { handler: () => `the header was ${lastAuth}` }),
+    tool('echo_url', { handler: () => `the url was ${lastUrl}` }),
     tool('slow', { delayMs: 3000 }),
     tool('big', { handler: () => 'a'.repeat(100_000) }),
     tool('risky'),
@@ -130,6 +133,7 @@ async function boot(env: Record<string, string> = {}): Promise<Booted> {
   ];
   const http: Server = createServer((req, res) => {
     lastAuth = req.headers.authorization;
+    lastUrl = req.url;
     if (failing) {
       // an error page that quotes the credential it was sent
       res.writeHead(401, { 'content-type': 'text/plain' });
@@ -143,7 +147,8 @@ async function boot(env: Record<string, string> = {}): Promise<Booted> {
   const local = {
     fetch: (url: string | URL, init?: RequestInit, ctx?: unknown) => {
       seen.push({ auth: new Headers(init?.headers).get('authorization') ?? undefined, ctx });
-      return fetch(`http://127.0.0.1:${port}${new URL(String(url)).pathname}`, init);
+      const u = new URL(String(url));
+      return fetch(`http://127.0.0.1:${port}${u.pathname}${u.search}`, init);
     },
     close: async () => undefined,
   } as unknown as OutboundDispatcher;
@@ -351,6 +356,7 @@ describe('POST /v1/worker/runs/{id}/mcp/{server}', () => {
     expect(list.json.result.tools.map((t: { name: string }) => t.name).sort()).toEqual([
       'big',
       'echo_auth',
+      'echo_url',
       'get_issue',
       'limited',
       'risky',
@@ -389,6 +395,32 @@ describe('POST /v1/worker/runs/{id}/mcp/{server}', () => {
     expect(echo.json.result.content[0].text).toContain('the header was');
     noCanary(echo.body);
     noCanary(await auditText(b.n));
+  });
+
+  it('redacts an echoed url credential, and secrets even with OAX_REDACT_MODEL_CONTEXT=off', async () => {
+    const runId = await b.newRun();
+    const s = await b.session(runId);
+    // the url query of the stored connection carries a key: the server sees it, the node must not
+    const url = await b.rpc(runId, s.token, 'tools/call', { name: 'echo_url', arguments: {} });
+    expect(url.status, url.body).toBe(200);
+    expect(url.json.result.content[0].text).toContain('the url was /mcp?api_key=');
+    noCanary(url.body);
+    // switching model-context redaction off is about trusted processes; a relay answer leaves the
+    // control node for an untrusted node and stays redacted (a fresh run opens a fresh session)
+    const second = await b.newRun();
+    const s2 = await b.session(second);
+    process.env.OAX_REDACT_MODEL_CONTEXT = 'off';
+    try {
+      const echo = await b.rpc(second, s2.token, 'tools/call', {
+        name: 'echo_auth',
+        arguments: {},
+      });
+      expect(echo.status, echo.body).toBe(200);
+      expect(echo.json.result.content[0].text).toContain('the header was');
+      noCanary(echo.body);
+    } finally {
+      delete process.env.OAX_REDACT_MODEL_CONTEXT;
+    }
   });
 
   it('serves a tenant connection with the tenant allowlist and the tenant origin', async () => {

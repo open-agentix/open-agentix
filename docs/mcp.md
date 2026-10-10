@@ -321,11 +321,14 @@ node MCP client -- POST /v1/worker/runs/{id}/mcp/{server} (step-scoped run token
 - **`tools/call`** is checked again on the control node, because a node is not trusted to have asked:
   the step must hold a grant (`policy_denied` otherwise); the policy gate decides with the same rules as
   `POST /v1/worker/runs/{id}/gate`; a `require_approval` decision passes only with an **approved
-  approval for exactly this call** (run, step, tool and arguments), used **once**
+  approval for exactly this call** (run, step, tool and the arguments as the approver saw them, that
+  is with secret values redacted), used **once**
   (`approvals.consumed_at`, `approval_required` otherwise); the pin is verified; the call leaves through
   the S1 dispatcher (purpose `mcp`, tenant rules, pinned DNS, no redirects, response cap) with the
   connection's own origin class; the result is guarded with the secret values the connection resolved,
-  so a server that echoes its token back is redacted before the node sees it.
+  so a server that echoes its token back is redacted before the node sees it. The values a connection
+  url can carry (query parameters, user info) count as secrets too, and this redaction stays on when
+  `OAX_REDACT_MODEL_CONTEXT` is off (that switch is about the model context of trusted processes).
 - **Refusals look alike.** No or a bad token, an expired or revoked node session, a token of another
   run or of the orchestrator, a run that ended or lost its lease, a server the step holds no grant on,
   a connection of another tenant, an unknown name: always `404 {"error":"not_found","message":"MCP server not
