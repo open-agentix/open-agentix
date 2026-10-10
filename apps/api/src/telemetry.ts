@@ -4,9 +4,11 @@ import {
   trace,
   type Span,
   type SpanContext,
+  type MeterProvider,
   type Tracer,
   type TracerProvider,
 } from '@opentelemetry/api';
+import type { BufferConfig } from '@opentelemetry/sdk-trace-base';
 import {
   type ContextGuard,
   OaxError,
@@ -219,7 +221,7 @@ export async function initTelemetry(
     { NodeTracerProvider },
     { AlwaysOnSampler, BatchSpanProcessor, ParentBasedSampler },
     { resourceFromAttributes },
-    { GuardedSpanExporter, DropCountingProcessor },
+    { GuardedSpanExporter, dropCountingMeterProvider },
   ] = await Promise.all([
     import('@opentelemetry/sdk-trace-node'),
     import('@opentelemetry/sdk-trace-base'),
@@ -241,13 +243,20 @@ export async function initTelemetry(
           exporterConfig,
         );
   // Every option is passed explicitly, so none of the SDK's OTEL_BSP_* fallbacks applies.
-  const batch = new BatchSpanProcessor(new GuardedSpanExporter(exporter, config.exportTimeoutMs), {
+  // `selfObsMeterProvider` is an option of the underlying processor that the BufferConfig type of
+  // the env shim does not declare; it carries the queue-full drops to our counter.
+  const bufferConfig: BufferConfig & { selfObsMeterProvider: MeterProvider } = {
     maxQueueSize: config.maxQueue,
     maxExportBatchSize: Math.min(512, config.maxQueue),
     scheduledDelayMillis: SCHEDULE_DELAY_MS,
     // A backstop behind the exporter's own timeout and the counting wrapper's (both exportTimeoutMs).
     exportTimeoutMillis: config.exportTimeoutMs + BATCH_TIMEOUT_MARGIN_MS,
-  });
+    selfObsMeterProvider: dropCountingMeterProvider(),
+  };
+  const batch = new BatchSpanProcessor(
+    new GuardedSpanExporter(exporter, config.exportTimeoutMs),
+    bufferConfig,
+  );
   // Static resource only: no detectors, so nothing calls a cloud metadata endpoint or reads host
   // details (ADR 0015 section 8). `resourceFromAttributes` does not read OTEL_RESOURCE_ATTRIBUTES.
   // Sampler and limits are explicit too: the SDK would otherwise build them from OTEL_TRACES_SAMPLER
@@ -263,7 +272,7 @@ export async function initTelemetry(
       attributeValueLengthLimit: SPAN_LIMITS.attributeValueLengthLimit,
       attributeCountLimit: SPAN_LIMITS.attributeCountLimit,
     },
-    spanProcessors: [new DropCountingProcessor(batch, config.maxQueue)],
+    spanProcessors: [batch],
   });
   // No global propagator: nothing injects or extracts `traceparent`/`baggage` until a slice names
   // the place deliberately (ADR 0015 sections 2, 6.1 and 6.4).

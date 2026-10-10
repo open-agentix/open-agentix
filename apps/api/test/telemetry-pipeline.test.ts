@@ -13,9 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { Metrics } from '../src/metrics.js';
 import {
-  DropCountingProcessor,
   GuardedSpanExporter,
   classifyExportFailure,
+  dropCountingMeterProvider,
 } from '../src/telemetry-export.js';
 import {
   configureTelemetryRuntime,
@@ -626,16 +626,38 @@ describe('an unavailable exporter never blocks a run', () => {
     await c.close();
   });
 
-  it('counts spans a full queue drops', async () => {
+  it('counts spans a full queue drops (SDK self-observability meter, no private fields)', async () => {
     const metrics = new Metrics('t_');
     configureTelemetryRuntime({ stats: metrics.otel });
     const stuck = { export: () => undefined, shutdown: async () => undefined };
-    const batch = new BatchSpanProcessor(stuck, { maxQueueSize: 3, maxExportBatchSize: 3 });
-    new NodeTracerProvider({ spanProcessors: [new DropCountingProcessor(batch, 3)] }).register();
+    const config = {
+      maxQueueSize: 3,
+      maxExportBatchSize: 3,
+      selfObsMeterProvider: dropCountingMeterProvider(),
+    };
+    const batch = new BatchSpanProcessor(stuck, config);
+    new NodeTracerProvider({ spanProcessors: [batch] }).register();
     for (let i = 0; i < 10; i++)
       await withSpan({ name: 'oax.run', kind: 'run' }, {}, async () => i);
     // 3 spans are in the (never finishing) export, 3 wait in the queue, the other 4 are dropped.
     expect(await metrics.registry.metrics()).toContain('t_otel_spans_dropped_total 4');
+  });
+
+  it('counts queue drops end to end through initTelemetry', async () => {
+    const c = await collector('hang');
+    const metrics = new Metrics('t_');
+    const t = await initTelemetry(
+      otel({
+        OTEL_EXPORTER_OTLP_ENDPOINT: c.url,
+        OAX_OTEL_MAX_QUEUE: '3',
+        OAX_OTEL_EXPORT_TIMEOUT_MS: '600000',
+      }),
+    );
+    t.attachStats(metrics.otel);
+    expect(await run(10)).toBeLessThan(1000);
+    expect(await metrics.registry.metrics()).toContain('t_otel_spans_dropped_total 4');
+    trace.disable();
+    await c.close();
   });
 });
 

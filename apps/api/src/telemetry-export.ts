@@ -1,12 +1,14 @@
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
-import type { Context, SpanContext } from '@opentelemetry/api';
-import type {
-  BatchSpanProcessor,
-  ReadableSpan,
-  Span,
-  SpanExporter,
-  SpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+import {
+  createNoopMeter,
+  type Attributes,
+  type Counter,
+  type Meter,
+  type MeterProvider,
+  type MetricOptions,
+  type SpanContext,
+} from '@opentelemetry/api';
+import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { ERROR_CODE_PATTERN, sanitizeAttributes, spanKindFromName } from '@openagentix/core';
 import {
   recordSanitized,
@@ -156,36 +158,28 @@ export class GuardedSpanExporter implements SpanExporter {
   }
 }
 
+/** The SDK's self-observability counter (OpenTelemetry semantic conventions for SDK metrics). */
+const PROCESSED_SPANS_METRIC = 'otel.sdk.processor.span.processed';
+const QUEUE_FULL = 'queue_full';
+
 /**
- * Counts the spans a full export queue drops. The batch processor drops silently; the queue
- * length is read from its buffer (a private field of the pinned SDK, covered by a test that fails
- * when the field disappears, in which case drops are no longer counted but nothing else changes).
+ * Counts the spans a full export queue drops. The batch processor reports every finished span on
+ * its self-observability meter (`selfObsMeterProvider`, a public option) and marks dropped ones
+ * with `error.type=queue_full`; this provider turns exactly those into
+ * `oax_otel_spans_dropped_total`. Every other instrument is a no-op, nothing is exported.
  */
-export class DropCountingProcessor implements SpanProcessor {
-  constructor(
-    private readonly inner: BatchSpanProcessor,
-    private readonly maxQueue: number,
-  ) {}
-
-  private queued(): number {
-    const buffer = (this.inner as unknown as { _finishedSpans?: unknown })._finishedSpans;
-    return Array.isArray(buffer) ? buffer.length : 0;
-  }
-
-  onStart(span: Span, parentContext: Context): void {
-    this.inner.onStart(span, parentContext);
-  }
-
-  onEnd(span: ReadableSpan): void {
-    if (this.queued() >= this.maxQueue) telemetryRuntime().stats.spansDropped(1);
-    this.inner.onEnd(span);
-  }
-
-  forceFlush(): Promise<void> {
-    return this.inner.forceFlush();
-  }
-
-  shutdown(): Promise<void> {
-    return this.inner.shutdown();
-  }
+export function dropCountingMeterProvider(): MeterProvider {
+  const noop = createNoopMeter();
+  const meter: Meter = Object.assign(Object.create(noop) as Meter, {
+    createCounter(name: string, options?: MetricOptions): Counter {
+      if (name !== PROCESSED_SPANS_METRIC) return noop.createCounter(name, options);
+      return {
+        add(value: number, attributes?: Attributes) {
+          if (attributes?.['error.type'] === QUEUE_FULL)
+            telemetryRuntime().stats.spansDropped(value);
+        },
+      };
+    },
+  });
+  return { getMeter: () => meter };
 }
