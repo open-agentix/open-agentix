@@ -92,6 +92,13 @@
       "when": 1791700000000,
       "tag": "0018_tenant_role_bindings",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791800000000,
+      "tag": "0019_trb_home_move",
+      "breakpoints": true
     }
   ]
 }

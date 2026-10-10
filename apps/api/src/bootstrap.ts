@@ -24,5 +24,12 @@ export async function createControlNode(
     ctx.logger.info(r, 'demo mode: seed checked');
   }
   const app = await buildApp({ ctx, services });
+  // ADR 0014 S1 (#216): repair the bindings mirror of rows an older application version wrote
+  // without it, once now and then periodically; stopped with the app.
+  if (config.auth.roleBindingsReconcile) {
+    await services.identity.reconciler.runAll('startup');
+    services.identity.reconciler.start(config.auth.roleBindingsReconcileIntervalSeconds * 1000);
+  }
+
   return { ctx, services, app };
 }

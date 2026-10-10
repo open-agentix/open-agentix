@@ -23,7 +23,7 @@ describe('migration 0018 files', () => {
   it('is the next free number after 0017 and has a snapshot and a down script', () => {
     const tags = journal.entries.map((e) => e.tag);
     expect(tags.indexOf(TAG)).toBe(tags.indexOf('0017_approvals_tenant_status_idx') + 1);
-    expect(tags.at(-1)).toBe(TAG);
+    expect(tags[tags.indexOf(TAG) + 1]).toBe('0019_trb_home_move');
     const whens = journal.entries.map((e) => e.when);
     expect([...whens].sort((a, b) => a - b)).toEqual(whens);
     expect(existsSync(join(MIGRATIONS_FOLDER, 'meta/0018_snapshot.json'))).toBe(true);
@@ -265,9 +265,13 @@ describe.each(sqlTargets)('migration 0018 on existing data (%s)', (_kind, enable
       // once the bindings are gone, the user may leave
       await c.query(`delete from tenant_role_bindings where user_id = $1`, [u.admin]);
       await c.query(`update users set tenant_id = $1 where id = $2`, [orgB, u.admin]);
+      // (0019) the roles of global_roles follow the user to the new home tenant, so the way back
+      // needs the bindings of orgB gone again, exactly like the way out
+      expect(await bindings(`where user_id = '${u.admin}'`)).toHaveLength(2);
+      await c.query(`delete from tenant_role_bindings where user_id = $1`, [u.admin]);
       await c.query(`update users set tenant_id = $1 where id = $2`, [root, u.admin]);
       await c.query(
-        `insert into tenant_role_bindings (id, user_id, tenant_id, role) values ($1, $2, $3, 'admin'), ($4, $2, $3, 'viewer')`,
+        `insert into tenant_role_bindings (id, user_id, tenant_id, role) values ($1, $2, $3, 'admin'), ($4, $2, $3, 'viewer') on conflict do nothing`,
         [randomUUID(), u.admin, root, randomUUID()],
       );
     });

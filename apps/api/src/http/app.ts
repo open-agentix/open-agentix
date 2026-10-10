@@ -310,6 +310,10 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   registerBudgetRoutes(typed, deps);
   registerWorkerRoutes(typed, deps);
   registerPlanRoutes(typed, deps);
+  // Stops the role binding reconcile (timer and running targeted runs) before the database closes.
+  app.addHook('onClose', async () => {
+    await deps.services.identity.reconciler.stop();
+  });
   await app.ready();
   return app;
 }

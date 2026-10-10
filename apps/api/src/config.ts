@@ -76,6 +76,8 @@ export const EnvSchema = z.object({
   OAX_TENANT_MAX_NODES_PER_ROOT: z.coerce.number().int().min(1).default(1000),
   OAX_AUTH_CACHE_TTL_SECONDS: int(30),
   OAX_ROLE_BINDINGS_SHADOW: bool.default(true),
+  OAX_ROLE_BINDINGS_RECONCILE: bool.default(true),
+  OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS: int(3600),
 
   OAX_OIDC_ISSUER: z.string().url().optional(),
   OAX_OIDC_CLIENT_ID: z.string().optional(),
@@ -271,6 +273,10 @@ export interface Config {
     cacheTtlSeconds: number;
     /** Compare the tenant role resolver with the legacy bindings (ADR 0014 S1); result unused. */
     roleBindingsShadow: boolean;
+    /** Reconcile the bindings mirror at start-up and periodically (ADR 0014 S1, #216). */
+    roleBindingsReconcile: boolean;
+    /** Seconds between periodic reconciles; 0 = at start-up only. */
+    roleBindingsReconcileIntervalSeconds: number;
     oidc: {
       issuer: string;
       clientId: string;
@@ -464,6 +470,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       tokenMaxTtlDays: e.OAX_TOKEN_MAX_TTL_DAYS,
       cacheTtlSeconds: e.OAX_AUTH_CACHE_TTL_SECONDS,
       roleBindingsShadow: e.OAX_ROLE_BINDINGS_SHADOW,
+      roleBindingsReconcile: e.OAX_ROLE_BINDINGS_RECONCILE,
+      roleBindingsReconcileIntervalSeconds: e.OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS,
       oidc: oidcConfigured
         ? {
             issuer: e.OAX_OIDC_ISSUER!,

@@ -27,6 +27,8 @@ export class Metrics {
   /** Stored tenant stdio MCP connections that break the ADR 0016 S0 rules (no tenant labels). */
   readonly mcpStdioViolations: Gauge<string>;
   readonly mcpStdioRefused: Counter<'code'>;
+  readonly roleBindingsReconcileFixes: Counter<'kind' | 'trigger'>;
+  readonly roleBindingsReconcileRuns: Counter<'trigger' | 'outcome'>;
 
   constructor(prefix = 'oax_') {
     collectDefaultMetrics({ register: this.registry, prefix });
@@ -60,6 +62,24 @@ export class Metrics {
       name: `${prefix}mcp_stdio_refused_total`,
       help: 'Stdio MCP servers refused at run time (code: error code)',
       labelNames: ['code'],
+      registers: [this.registry],
+    });
+    this.roleBindingsReconcileFixes = new Counter({
+      name: `${prefix}role_bindings_reconcile_fixes_total`,
+      help:
+        'Rows the reconcile of tenant_role_bindings against users.global_roles changed (ADR 0014 ' +
+        'S1, #216): kind added or removed; blocked = a wanted role whose key is held by a ' +
+        'non-managed row (kept, needs a look). A non-zero rate outside a deploy means an old ' +
+        'application version or a manual change writes global_roles without the mirror',
+      labelNames: ['kind', 'trigger'],
+      registers: [this.registry],
+    });
+    this.roleBindingsReconcileRuns = new Counter({
+      name: `${prefix}role_bindings_reconcile_runs_total`,
+      help:
+        'Reconcile runs of the role binding mirror by trigger (startup, periodic, mismatch, cli) ' +
+        'and outcome (ok, error, skipped)',
+      labelNames: ['trigger', 'outcome'],
       registers: [this.registry],
     });
     this.runsCreated = new Counter({
