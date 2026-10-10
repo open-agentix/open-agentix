@@ -7,6 +7,7 @@ import {
   auditLog,
   tenantRoleBindings,
   tenants as tenantsTable,
+  teamMembers,
   users as usersTable,
 } from '../src/db/schema.js';
 import { sqlTargets } from './db-targets.js';
@@ -137,6 +138,26 @@ describe.each(sqlTargets)('hierarchy hardening (%s)', (_kind, enabled, open) => 
       .update(tenantRoleBindings)
       .set({ inherit: true })
       .where(eq(tenantRoleBindings.userId, uid['d-mirror']!));
+    for (const slug of ['org-e'])
+      id[slug] = (await n.services.tenants.create(op(), { slug, name: slug })).id;
+    // org-e: one user holds the admin role twice (mirror row made inheriting, and a grant)
+    await mkUser('e-both', 'org-e', ['admin']);
+    await n.ctx.db
+      .update(tenantRoleBindings)
+      .set({ inherit: true })
+      .where(eq(tenantRoleBindings.userId, uid['e-both']!));
+    await bind('e-both', 'org-e', 'admin', true);
+    await mkUser('e-temp', 'org-e');
+    await bind('e-temp', 'org-e', 'admin', true, { expiresAt: new Date(Date.now() + 3_600_000) });
+    // a user homed in team-1 who is a member of a team owned by the organisation root
+    await mkUser('root-team-member', 'team-1');
+    const rootTeam = await n.services.identity.createTeam(
+      { userId: op().userId, tenantId: id['org-a']! },
+      { slug: 'ops', name: 'Ops' },
+    );
+    await n.ctx.db
+      .insert(teamMembers)
+      .values({ teamId: rootTeam.id, userId: uid['root-team-member']!, role: 'viewer' });
     await mkUser('d-temp', 'org-d');
     await bind('d-temp', 'org-d', 'admin', true, { expiresAt: new Date(Date.now() + 3_600_000) });
   }, 180_000);
@@ -251,6 +272,80 @@ describe.each(sqlTargets)('hierarchy hardening (%s)', (_kind, enabled, open) => 
       );
       expect(r.statusCode).toBe(403);
       expect(await alive('plat')).toBe(true);
+    });
+
+    it('any change of another account is managing it: re-enabling and renaming a superior is refused (PoC)', async () => {
+      await mkUser('ra2', 'team-1');
+      await bind('ra2', 'org-a', 'admin', true);
+      expect(
+        (await call(null, 'PATCH', `/v1/users/${uid['ra2']}`, { disabled: true }, 'team-1'))
+          .statusCode,
+      ).toBe(200);
+      const on = await call(
+        'div-admin',
+        'PATCH',
+        `/v1/users/${uid['ra2']}`,
+        { disabled: false },
+        'team-1',
+      );
+      expect(on.statusCode).toBe(403);
+      const name = await call(
+        'div-admin',
+        'PATCH',
+        `/v1/users/${uid['ra2']}`,
+        { displayName: 'renamed' },
+        'team-1',
+      );
+      expect(name.statusCode).toBe(403);
+      const row = (
+        await n.ctx.db.select().from(usersTable).where(eq(usersTable.id, uid['ra2']!))
+      )[0]!;
+      expect(row.disabled).toBe(true);
+      expect(row.displayName).toBe('ra2');
+      expect(
+        (await call(null, 'PATCH', `/v1/users/${uid['ra2']}`, { disabled: false }, 'team-1'))
+          .statusCode,
+      ).toBe(200);
+    });
+
+    it("team memberships count: a member of a team owned above the manager is not the manager's to change", async () => {
+      const r = await call(
+        'div-admin',
+        'PATCH',
+        `/v1/users/${uid['root-team-member']}`,
+        { disabled: true },
+        'team-1',
+      );
+      expect(r.statusCode).toBe(403);
+      expect(await alive('root-team-member')).toBe(true);
+    });
+
+    it("last admin counts the user once: two admin rows of one user are not each other's co-admin", async () => {
+      const dis = await call('e-temp', 'PATCH', `/v1/users/${uid['e-both']}`, { disabled: true });
+      expect(dis.statusCode).toBe(409);
+      expect(await alive('e-both')).toBe(true);
+      // deleting the grant row leaves the mirror row, so the user stays an admin: allowed
+      const grant = (
+        await n.ctx.db
+          .select()
+          .from(tenantRoleBindings)
+          .where(eq(tenantRoleBindings.userId, uid['e-both']!))
+      ).find((b) => b.source === 'grant')!;
+      const del = await call(
+        'e-temp',
+        'DELETE',
+        `/v1/tenants/${id['org-e']}/role-bindings/${grant.id}`,
+      );
+      expect(del.statusCode).toBe(204);
+      // now the mirror row is the only one: removing it through the roles, or disabling, is refused
+      const roles = await call('e-temp', 'PATCH', `/v1/users/${uid['e-both']}`, {
+        globalRoles: [],
+      });
+      expect(roles.statusCode).toBe(409);
+      expect(
+        (await call('e-temp', 'PATCH', `/v1/users/${uid['e-both']}`, { disabled: true }))
+          .statusCode,
+      ).toBe(409);
     });
 
     it('operators are exempt', async () => {
