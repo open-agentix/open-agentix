@@ -128,6 +128,25 @@ export interface TokenBundle {
   token: string;
   /** `http://<node>:<password>@proxy:port/`: the node's account at the egress proxy. */
   proxyUrl?: string;
+  /**
+   * Account of each stdio MCP server that has egress (ADR 0016 section 4.2), by connection name.
+   * A server that is not listed gets no proxy variables and therefore no network.
+   */
+  serverProxies: Map<string, string>;
+}
+
+const MAX_SERVER_PROXIES = 16;
+
+function httpUrlOf(raw: string, what: string): string {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new OaxError('config_invalid', `${what} is not a URL`);
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:')
+    throw new OaxError('config_invalid', `${what} must be http(s)`);
+  return raw;
 }
 
 /**
@@ -153,13 +172,21 @@ async function readBundle(
           ).unref(),
         ),
       ]);
-      const [token = '', proxy = ''] = text.split('\n').map((l) => l.trim());
+      // Line 1: token. Line 2: the step's proxy account (may be empty). Then `<server> <url>`.
+      const [token = '', proxy = '', ...rest] = text.split('\n').map((l) => l.trim());
       if (token.startsWith('oaxrt.')) {
-        if (!proxy) return { token };
-        const u = new URL(proxy);
-        if (u.protocol !== 'http:' && u.protocol !== 'https:')
-          throw new OaxError('config_invalid', 'the egress proxy URL must be http(s)');
-        return { token, proxyUrl: proxy };
+        const serverProxies = new Map<string, string>();
+        for (const line of rest.filter(Boolean)) {
+          const m = /^([a-z][a-z0-9-]{0,62}) (\S+)$/.exec(line);
+          if (!m || serverProxies.has(m[1]!) || serverProxies.size >= MAX_SERVER_PROXIES)
+            throw new OaxError('config_invalid', 'the MCP server proxy list is malformed');
+          serverProxies.set(m[1]!, httpUrlOf(m[2]!, 'an MCP server proxy URL'));
+        }
+        return {
+          token,
+          ...(proxy ? { proxyUrl: httpUrlOf(proxy, 'the egress proxy URL') } : {}),
+          serverProxies,
+        };
       }
     } catch (e) {
       if (e instanceof OaxError) throw e;
@@ -182,21 +209,37 @@ export function httpOriginFor(
   return (server) => (tenant && !tenant.has(server) ? 'platform' : 'tenant');
 }
 
+/** Proxy variables of one process, in the spellings the common HTTP stacks read. */
+export function proxyEnvOf(url: string | undefined): Record<string, string> {
+  return url ? { HTTPS_PROXY: url, https_proxy: url, HTTP_PROXY: url, http_proxy: url } : {};
+}
+
+const PROXY_VARIABLES = /^(https?_proxy|all_proxy|ftp_proxy|socks_proxy|no_proxy)$/i;
+
 /**
  * Merges the broker's values into the MCP connections of the step: stdio servers get their
  * `env` values plus the step's declared credentials, HTTP servers their header values. Secret
  * references were stripped by the control node already, so no resolver is needed.
+ *
+ * Network access of a stdio server (ADR 0016 section 4.2): `proxyFor(server)` is that server's own
+ * egress account, or `undefined` when it has none. Whatever the connection, the broker or the
+ * step's credentials say about proxy variables is dropped and replaced, so a server gets exactly
+ * its own account and nothing else; a server without one gets no proxy variable at all. The
+ * step's own account never reaches a server.
  */
 export function mergeCredentials(
   configs: readonly McpServerConfig[],
   creds: StepCredentials,
-  proxyEnv: Record<string, string>,
+  proxyFor: (server: string) => string | undefined = () => undefined,
 ): McpServerConfig[] {
   const declared = Object.fromEntries(creds.credentials.map((c) => [c.env, c.value]));
   return configs.map((cfg) => {
     const c = creds.connections.find((x) => x.server === cfg.name);
-    if (cfg.transport === 'stdio')
-      return { ...cfg, env: { ...cfg.env, ...proxyEnv, ...declared, ...c?.env }, envSecrets: {} };
+    if (cfg.transport === 'stdio') {
+      const merged = { ...cfg.env, ...declared, ...c?.env };
+      for (const k of Object.keys(merged)) if (PROXY_VARIABLES.test(k)) delete merged[k];
+      return { ...cfg, env: { ...merged, ...proxyEnvOf(proxyFor(cfg.name)) }, envSecrets: {} };
+    }
     if (cfg.transport === 'streamable-http')
       return { ...cfg, headers: { ...cfg.headers, ...c?.headers }, headerSecrets: {} };
     return cfg;
@@ -429,11 +472,13 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
   let env: NodeEnv;
   let control: HttpControlPlane;
   let proxyUrl: string | undefined;
+  let serverProxies = new Map<string, string>();
   let runToken: string | undefined;
   try {
     env = parseNodeEnv(opts.env ?? process.env);
     const bundle = await readBundle(env.tokenFile, read, sleep, opts.tokenWaitMs ?? 30_000);
     proxyUrl = bundle.proxyUrl;
+    serverProxies = bundle.serverProxies;
     runToken = bundle.token;
     // The token lives in memory from here on (it is never re-read: there is no refresh), so a
     // file on disk only helps a harness child that learns its path. Best effort: a container
@@ -474,13 +519,16 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
         opts,
         opts.env ?? process.env,
       );
-    const proxyEnv: Record<string, string> = proxyUrl
-      ? { HTTPS_PROXY: proxyUrl, https_proxy: proxyUrl, HTTP_PROXY: proxyUrl, http_proxy: proxyUrl }
-      : {};
+    // The step's account serves this process only (HTTP MCP servers until the relay of S4); stdio
+    // children get their own account from `serverProxies`, never this one.
+    const proxyEnv = proxyEnvOf(proxyUrl);
     // Everything this node holds in secret form is known to the guard: brokered credentials, the
     // step's run token. The model token never reaches the node process itself (harness only).
     const guard = contextGuardFromEnv(opts.env ?? process.env, [
       ...(runToken ? [runToken] : []),
+      // The proxy accounts are credentials too: a tool result must never echo them.
+      ...(proxyUrl ? [proxyUrl] : []),
+      ...serverProxies.values(),
       ...creds.credentials.map((c) => c.value),
       ...creds.connections.flatMap((c) => [
         ...Object.values(c.env ?? {}),
@@ -491,7 +539,7 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
     // Fail before any server starts, with the offending connection named.
     for (const cfg of handover.mcp) if (cfg.transport === 'stdio') stdioGuard(cfg);
     tools = new ToolGateway(
-      mergeCredentials(handover.mcp, creds, proxyEnv),
+      mergeCredentials(handover.mcp, creds, (server) => serverProxies.get(server)),
       {
         secrets: new StaticSecretResolver({}),
         env: proxyEnv,

@@ -253,7 +253,8 @@ The `container` runner is implemented and opt-in (see [runners.md](runners.md)).
 | `OAX_K8S_TOOLBOX_IMAGES` | `{}` | JSON map toolbox name -> digest-pinned image (must be in `OAX_TOOLBOX_ALLOWLIST`); an unknown toolbox fails closed (`toolbox_image_unknown`). |
 | `OAX_K8S_CONTROL_PLANE_POD_SELECTOR` / `OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR` | – | JSON label selectors (non-empty) of the control node Pods that run Pods may reach; prefer `{"kubernetes.io/metadata.name":"<ns>"}` for the namespace. At least one of the two selectors or `OAX_K8S_CONTROL_PLANE_CIDRS` is **required** when `kubernetes-job` is enabled. |
 | `OAX_K8S_CONTROL_PLANE_CIDRS` / `OAX_K8S_CONTROL_PLANE_PORTS` | – / `443` | Comma lists: control node CIDRs (no broader than `/24` IPv4 or `/64` IPv6, never inside IMDS/link-local/loopback; denied ranges inside are excluded) and TCP ports (at least one) a run Pod may reach. |
-| `OAX_K8S_DNS_EGRESS` | `true` | Allow DNS to kube-dns (needed to resolve the control node). |
+| `OAX_K8S_DNS_EGRESS` | `false` | Allow DNS to kube-dns. **Off by default**: the cluster resolver forwards any name, which lets a compromised step carry data out in query names. With it off, `OAX_NODE_CONTROL_URL` must use an IP address (for example a ClusterIP) or an egress gateway that resolves names. `true` requires `OAX_K8S_DNS_EGRESS_ACK=true`. |
+| `OAX_K8S_DNS_EGRESS_ACK` | `false` | Acknowledges the DNS exfiltration channel of `OAX_K8S_DNS_EGRESS=true`; without it, `true` fails start-up. Alone it opens nothing. |
 | `OAX_K8S_AUTOMOUNT_SA_TOKEN` | `false` | Mount the ServiceAccount API token into run Pods (a step never needs it). |
 | `OAX_K8S_DEFAULT_DENY_POLICY` | `default-deny-all` | Name of the namespace-wide default-deny NetworkPolicy that must exist; a step does not start without it. The worker Role grants `get` on this name only (`resourceNames` in `docs/examples/kubernetes-job-runner-rbac.yaml`), so change both together. |
 | `OAX_K8S_NAMESPACE` | `openagentix-runs` | Namespace for run Jobs. |
@@ -352,6 +353,7 @@ endpoint set, `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER` other than `otl
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `OAX_MCP_STDIO_EGRESS` | – (none) | JSON object `{"/opt/mcp/bin/jira-mcp": ["*.atlassian.net"]}`: the network a tenant-defined stdio program may be given, by program (the command, or the program file of an interpreter). A program without an entry gets none; a tenant's connection `egress` must lie inside its grant (it can only narrow). Entries use the `runtime.egress` grammar; the program must be listed in `OAX_MCP_STDIO_COMMANDS`; a typo fails start-up. Bounded further by `OAX_CONTAINER_EGRESS_ALLOW` and, air-gapped, `OAX_AIRGAPPED_ALLOW`. See [`mcp.md`](mcp.md#egress-of-stdio-servers). |
 | `OAX_MCP_STDIO_COMMANDS` | – (none) | Comma list of absolute paths (or `dir/*`, direct children only) that tenant, team and agent `stdio` MCP connections may start, in run nodes only. Empty means no tenant stdio command. Shells, installers and inline-code interpreters are refused even when listed; unsafe entries fail start-up. See [`mcp.md`](mcp.md#stdio-mcp-servers). |
 
 ## Air-gapped mode

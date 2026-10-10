@@ -6,13 +6,20 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import * as net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OaxError, type StepCredentials } from '@openagentix/core';
 import { McpServerConfigSchema, type McpServerConfig } from '@openagentix/mcp';
-import type { FetchFn } from '@openagentix/runners';
-import { describe, expect, it } from 'vitest';
+import {
+  EgressProxy,
+  egressAccount,
+  mintEgressGrant,
+  proxyUrlWithCredentials,
+  type FetchFn,
+} from '@openagentix/runners';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   httpOriginFor,
   mergeCredentials,
@@ -82,19 +89,53 @@ describe('mergeCredentials', () => {
     ],
   };
   it('puts values where the step needs them and strips every reference', () => {
-    const [j, c, d] = mergeCredentials([stdio, http, mem], creds, { HTTPS_PROXY: 'http://p' }) as [
+    const [j, c, d] = mergeCredentials([stdio, http, mem], creds, (s) =>
+      s === 'jira' ? 'http://p' : undefined,
+    ) as [
       Extract<McpServerConfig, { transport: 'stdio' }>,
       Extract<McpServerConfig, { transport: 'streamable-http' }>,
       McpServerConfig,
     ];
-    expect(j.env).toEqual({ A: '1', HTTPS_PROXY: 'http://p', GH_TOKEN: 'v1', JIRA_TOKEN: 'v2' });
+    expect(j.env).toEqual({
+      A: '1',
+      GH_TOKEN: 'v1',
+      JIRA_TOKEN: 'v2',
+      HTTPS_PROXY: 'http://p',
+      https_proxy: 'http://p',
+      HTTP_PROXY: 'http://p',
+      http_proxy: 'http://p',
+    });
     expect(j.envSecrets).toEqual({});
     expect(c.headers).toEqual({ 'x-a': '1', authorization: 'Bearer v3' });
     expect(c.headerSecrets).toEqual({});
     expect(d).toEqual(mem);
   });
+  it('a server gets its own proxy account and never one it was not given (ADR 0016 S2)', () => {
+    const wild = McpServerConfigSchema.parse({
+      name: 'wild',
+      transport: 'stdio',
+      command: 'x',
+      // proxy variables smuggled in through the connection, the broker and the step's credentials
+      env: { https_proxy: 'http://attacker.example:3128', NO_PROXY: '*', A: '1' },
+    });
+    const out = mergeCredentials(
+      [stdio, wild],
+      {
+        ...creds,
+        credentials: [{ secret: 's', env: 'ALL_PROXY', value: 'socks5://attacker.example' }],
+        connections: [{ server: 'wild', env: { HTTP_PROXY: 'http://attacker.example' } }],
+      },
+      (server) => (server === 'jira' ? 'http://own' : undefined),
+    ) as Extract<McpServerConfig, { transport: 'stdio' }>[];
+    expect(out[0]!.env.HTTPS_PROXY).toBe('http://own');
+    // `wild` has no grant: no proxy variable of any spelling survives, other variables do
+    expect(out[1]!.env).toEqual({ A: '1' });
+    // the default (no function) gives nobody a proxy
+    const none = mergeCredentials([stdio], { ...creds, connections: [] }) as typeof out;
+    expect(Object.keys(none[0]!.env).some((k) => /proxy/i.test(k))).toBe(false);
+  });
   it('a connection the broker sent nothing for gets no values', () => {
-    const [j] = mergeCredentials([stdio], { ...creds, credentials: [], connections: [] }, {}) as [
+    const [j] = mergeCredentials([stdio], { ...creds, credentials: [], connections: [] }) as [
       Extract<McpServerConfig, { transport: 'stdio' }>,
     ];
     expect(j.env).toEqual({ A: '1' });
@@ -585,5 +626,170 @@ describe('the run node never touches the database', () => {
       'utf8',
     );
     expect(cli).not.toContain('@openagentix/api');
+  });
+});
+
+describe('per-server egress inside a run node (ADR 0016 S2)', () => {
+  const probe = fileURLToPath(
+    new URL('../../../packages/mcp/test/fixtures/egress-probe-server.mjs', import.meta.url),
+  );
+  const NODE_ID = 'node-egress-1';
+  let proxy: EgressProxy | undefined;
+  let target: net.Server | undefined;
+  let dir: string | undefined;
+  afterEach(async () => {
+    await proxy?.close();
+    await new Promise((r) => (target ? target.close(r) : r(null)));
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    proxy = target = dir = undefined;
+  });
+
+  const modelReply = (toolCalls: unknown[], text: string) =>
+    Response.json({
+      callId: `call-${Math.random()}`,
+      response: {
+        text,
+        toolCalls,
+        usage: { inputTokens: 1, outputTokens: 1 },
+        stopReason: toolCalls.length ? 'tool_use' : 'end_turn',
+        model: 'sim-1',
+      },
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        source: 'provider',
+      },
+      costMicros: 1,
+      priced: true,
+      remaining: {},
+    });
+
+  it('each server gets only its own account; the step account and a server without egress get nothing', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'oax-egress-'));
+    const secret = 'k'.repeat(40);
+    target = net.createServer((sock) => sock.end('hi'));
+    await new Promise<void>((r) => target!.listen(0, '127.0.0.1', r));
+    const targetPort = (target.address() as net.AddressInfo).port;
+    proxy = new EgressProxy({
+      secret,
+      ceiling: ['a.example.com', 'b.example.org'],
+      resolve: async () => ['93.184.216.34'],
+      connect: () => net.connect({ host: '127.0.0.1', port: targetPort }),
+    });
+    const { port } = await proxy.listen(0, '127.0.0.1');
+    const base0 = `http://127.0.0.1:${port}`;
+    const account = (egress: string[], server?: string) =>
+      proxyUrlWithCredentials(
+        base0,
+        egressAccount(NODE_ID, server),
+        mintEgressGrant(secret, {
+          nodeId: NODE_ID,
+          ...(server ? { server } : {}),
+          egress,
+          ttlSeconds: 60,
+        }),
+      );
+    // line 2 is the STEP's account: wide on purpose, it must not reach any server
+    const bundle = [
+      'oaxrt.a.b',
+      account(['a.example.com', 'b.example.org']),
+      `srv-a ${account(['a.example.com'], 'srv-a')}`,
+      `srv-b ${account(['b.example.org'], 'srv-b')}`,
+    ].join('\n');
+
+    const cfg = (name: string, extra: Record<string, unknown> = {}) =>
+      McpServerConfigSchema.parse({
+        name,
+        transport: 'stdio',
+        command: process.execPath,
+        args: [probe, join(dir!, `${name}.jsonl`), name],
+        tools: { probe: { access: 'read' } },
+        ...extra,
+      });
+    let calls = 0;
+    const c = control({
+      'POST /v1/worker/runs/:id/model': () =>
+        calls++ === 0
+          ? modelReply(
+              [
+                { id: 't1', name: 'srv-a__probe', args: { host: 'a.example.com' } },
+                { id: 't2', name: 'srv-a__probe', args: { host: 'b.example.org' } },
+                { id: 't3', name: 'srv-b__probe', args: { host: 'b.example.org' } },
+                { id: 't4', name: 'srv-c__probe', args: { host: 'a.example.com' } },
+              ],
+              '',
+            )
+          : modelReply([], '{"ok":true}'),
+    });
+    Object.assign(c.handover, {
+      // srv-c has no grant and tries to bring its own proxy through its configuration
+      mcp: [
+        cfg('srv-a'),
+        cfg('srv-b'),
+        cfg('srv-c', { env: { https_proxy: 'http://attacker.example:3128' } }),
+      ],
+    });
+    (c.handover.agent as Record<string, unknown>).tools = ['srv-a', 'srv-b', 'srv-c'].map(
+      (server) => ({
+        server,
+        tool: 'probe',
+      }),
+    );
+    expect(await runNode({ ...base(c.fetchImpl), readFile: async () => bundle })).toBe(0);
+    expect(results(c.calls)[0]!.failure).toBeUndefined();
+
+    const read = (name: string) =>
+      readFileSync(join(dir!, `${name}.jsonl`), 'utf8')
+        .trim()
+        .split('\n')
+        .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const names = ['HTTPS_PROXY', 'HTTP_PROXY', 'http_proxy', 'https_proxy'];
+    const [a1, a2] = read('srv-a');
+    expect(a1).toMatchObject({
+      vars: names.slice().sort(),
+      account: egressAccount(NODE_ID, 'srv-a'),
+      host: 'a.example.com',
+      status: 'HTTP/1.1 200 Connection Established',
+    });
+    // its own grant does not cover the other server's host
+    expect(a2).toMatchObject({ host: 'b.example.org', status: 'HTTP/1.1 403 Forbidden' });
+    expect(read('srv-b')).toEqual([
+      expect.objectContaining({
+        account: egressAccount(NODE_ID, 'srv-b'),
+        host: 'b.example.org',
+        status: 'HTTP/1.1 200 Connection Established',
+      }),
+    ]);
+    // no grant: not a single proxy variable, so no way to reach the proxy at all
+    expect(read('srv-c')).toEqual([
+      expect.objectContaining({ vars: [], account: null, status: null }),
+    ]);
+    // the proxy saw exactly the expected connections, and never the step's account
+    expect(Object.fromEntries(proxy.connectionCounts())).toEqual({
+      [egressAccount(NODE_ID, 'srv-a')]: 1,
+      [egressAccount(NODE_ID, 'srv-b')]: 1,
+    });
+    expect(proxy.recentDenials()).toEqual([
+      expect.objectContaining({
+        nodeId: egressAccount(NODE_ID, 'srv-a'),
+        target: 'b.example.org:443',
+        reason: 'not_allowed',
+      }),
+    ]);
+  }, 60_000);
+
+  it('refuses a malformed server proxy list instead of guessing', async () => {
+    for (const bad of [
+      'oaxrt.a.b\n\nsrv-a not-a-url',
+      'oaxrt.a.b\n\nSrv_A http://p',
+      'oaxrt.a.b\n\nsrv-a http://p\nsrv-a http://q',
+      'oaxrt.a.b\n\nsrv-a file:///etc/passwd',
+    ]) {
+      const { calls, fetchImpl } = control();
+      expect(await runNode({ ...base(fetchImpl), readFile: async () => bad })).toBe(2);
+      expect(calls).toHaveLength(0); // nothing was fetched with a half-understood bundle
+    }
   });
 });

@@ -1,7 +1,7 @@
 import * as net from 'node:net';
 import { EgressPolicy, parseAllowlist } from '@openagentix/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EgressProxy, mintEgressGrant, verifyEgressGrant } from '../src/index.js';
+import { EgressProxy, egressAccount, mintEgressGrant, verifyEgressGrant } from '../src/index.js';
 
 const SECRET = 's'.repeat(40);
 let proxy: EgressProxy;
@@ -329,5 +329,71 @@ describe('egress proxy', () => {
     await expect(proxy.listen(0, '127.0.0.1')).rejects.toThrow(/already listening/);
     await proxy.close();
     await proxy.close();
+  });
+});
+
+describe('per-server egress accounts (ADR 0016 S2)', () => {
+  const server = (egress: string[], srv: string, nodeId = 'node-1') => ({
+    user: egressAccount(nodeId, srv),
+    pass: mintEgressGrant(SECRET, { nodeId, server: srv, egress, ttlSeconds: 60 }),
+  });
+
+  it('a server grant is valid only under its own account', () => {
+    const g = mintEgressGrant(SECRET, {
+      nodeId: 'n1',
+      server: 'jira',
+      egress: ['a.example.com'],
+      ttlSeconds: 60,
+    });
+    expect(verifyEgressGrant(SECRET, 'n1.jira', g)).toMatchObject({ n: 'n1', s: 'jira' });
+    // not under the step's account, another server's account, or another node's
+    expect(verifyEgressGrant(SECRET, 'n1', g)).toBeNull();
+    expect(verifyEgressGrant(SECRET, 'n1.crm', g)).toBeNull();
+    expect(verifyEgressGrant(SECRET, 'n2.jira', g)).toBeNull();
+    // and the step's grant is not valid under a server account
+    const step = grant(['a.example.com'], 'n1');
+    expect(verifyEgressGrant(SECRET, 'n1.jira', step)).toBeNull();
+  });
+
+  it('refuses a server name that is not a slug when minting', () => {
+    for (const bad of ['', 'A', 'a.b', 'a b', '1a', '../x'])
+      expect(() =>
+        mintEgressGrant(SECRET, { nodeId: 'n', server: bad, egress: [], ttlSeconds: 1 }),
+      ).toThrow(/slug/);
+  });
+
+  it('two servers of one node reach only their own hosts, and the proxy counts per account', async () => {
+    await start();
+    const a = server(['a.example.com'], 'srv-a');
+    const b = server(['svc.example.org'], 'srv-b');
+    expect((await connect('a.example.com:443', a)).status).toBe(
+      'HTTP/1.1 200 Connection Established',
+    );
+    expect((await connect('svc.example.org:443', b)).status).toBe(
+      'HTTP/1.1 200 Connection Established',
+    );
+    // crossed: each is refused the other's host
+    expect((await connect('svc.example.org:443', a)).status).toBe(FORBIDDEN);
+    expect((await connect('a.example.com:443', b)).status).toBe(FORBIDDEN);
+    // a server grant presented as the step's account is refused (407), whatever it lists
+    expect((await connect('a.example.com:443', { user: 'node-1', pass: a.pass })).status).toMatch(
+      /407/,
+    );
+    expect(Object.fromEntries(proxy.connectionCounts())).toEqual({
+      'node-1.srv-a': 1,
+      'node-1.srv-b': 1,
+    });
+    expect(proxy.recentDenials().map((d) => d.nodeId)).toEqual([
+      'node-1.srv-a',
+      'node-1.srv-b',
+      '?',
+    ]);
+  });
+
+  it('the operator ceiling still bounds a server grant', async () => {
+    await start();
+    const wide = server(['*.com'], 'srv-a');
+    expect((await connect('evil.com:443', wide)).status).toBe(FORBIDDEN);
+    expect(proxy.recentDenials().at(-1)?.reason).toBe('outside_ceiling');
   });
 });

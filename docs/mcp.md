@@ -101,7 +101,7 @@ connection decides how strict that is:
 | Connection scope | Destination rules |
 | --- | --- |
 | `platform` (operator) | the operator's network configuration: proxies, `deny` routes, air-gapped allowlist. Plain `http://` and private addresses stay possible (in-cluster servers). |
-| `tenant`, `team`, `agent` | **https only**; no `localhost`, no loopback, link-local, private, CGNAT, multicast or cloud-metadata address in any spelling (`169.254.169.254`, `2852039166`, `0xa9fea9fe`, `0251.0376.0251.0376`, `[::ffff:169.254.169.254]`, `[fd00:ec2::254]`, ...), no metadata host name. Only the platform can open a private range, with `privateAllow` in the network configuration (never loopback, link-local or metadata). |
+| `tenant`, `team`, `agent` | **https only**; no `localhost`, no loopback, link-local, private, CGNAT, multicast or cloud-metadata address in any spelling (`169.254.169.254`, `2852039166`, `0xa9fea9fe`, `0251.0376.0251.0376`, `[::ffff:169.254.169.254]`, `[fd00:ec2::254]`, ...), no metadata host name. Only the platform can open a private range, with `privateAllow` in the network configuration (never loopback, link-local or metadata). Run nodes are different: the egress proxy of the node network applies its own `OAX_CONTAINER_EGRESS_PRIVATE_ALLOW`, not the network configuration's `privateAllow`. |
 
 **When saving** (`POST`/`PUT /v1/connections`): the URL of a tenant connection is checked by the
 resolver without any DNS lookup (a refused connection answers `422 egress_denied` with the rule code
@@ -139,7 +139,11 @@ ADR 0016 S4 will take HTTP servers out of nodes altogether.
 { "ok": false, "category": "egress_denied", "latency": "<100ms" }
 ```
 
-Categories: `ok`, `config_invalid`, `egress_denied`, `dns_failed`, `connect_failed`,
+For tenant, team and agent connections `dns_failed` is reported as `egress_denied`: a name that does
+not resolve and a name that resolves to a private address read the same, so the test is no oracle
+for internal names (split-horizon DNS). The operator's platform connections keep `dns_failed`.
+
+Categories: `ok`, `config_invalid`, `egress_denied`, `dns_failed` (platform connections only), `connect_failed`,
 `proxy_refused`, `tls_untrusted`, `tls_hostname_mismatch`, `auth_failed` (401/403), `http_error`
 (with `httpClass` `4xx` or `5xx`), `protocol_error`, `timeout`, `error`. On success `toolCount` is
 the number of listed tools. There is no response body, header, address, error text of the server,
@@ -258,17 +262,87 @@ unless `OAX_AIRGAPPED_STDIO=trusted` acknowledges that those servers share the w
 refuses tenant stdio connections unless an isolating runner (`container`, `kubernetes-job`) is
 enabled, because those run only in nodes. What a node's network is, precisely: with the container
 runner the node sits on an `internal` Docker network without a gateway, so TCP and UDP to other
-destinations fail and HTTPS leaves only through the egress proxy with the **step's** grant (every
-stdio server of the step shares it, and in air-gapped mode the proxy ceiling must lie within
-`OAX_AIRGAPPED_ALLOW`); name resolution is not locked down yet (Docker's embedded resolver may
-forward queries, a possible DNS exfiltration channel, ADR 0016 section 4.5, slice S2). With the
-Kubernetes runner the per-node NetworkPolicy applies, and `dnsEgress: true` opens kube-dns.
+destinations fail and HTTPS leaves only through the egress proxy. Each stdio server has its own
+grant there (see "Egress of stdio servers"), whose entries must be plain hosts on
+`OAX_AIRGAPPED_ALLOW` (wildcards and CIDRs are refused in air-gapped mode), and the proxy ceiling
+must lie within the allowlist. Names are not resolved by the node (see "DNS"). With the Kubernetes
+runner the per-node NetworkPolicy applies to the whole Pod, and `OAX_K8S_DNS_EGRESS=true` opens
+kube-dns only with `OAX_K8S_DNS_EGRESS_ACK=true`.
 
 **Upgrading.** The step handover carries a new field `stdio` when a tenant stdio server is
 involved. Run-node images older than this change reject the unknown field (strict schema) and fail
 such steps closed; update the worker and run-node images together. Steps without tenant stdio
 servers are unaffected.
 
-**Not covered yet** (ADR 0016 slices S2 and later): per-server egress rules (every stdio server of a
-step shares the step's egress grant), the shared UID of a node's children, and signed toolbox
+## Egress of stdio servers
+
+A stdio server has **no network** unless its connection says otherwise (ADR 0016 section 4.1, slice
+S2). The optional `egress` list (the grammar of `runtime.egress`: `host`, `host:port`, `*.suffix`,
+address or CIDR) names the hosts the server itself needs:
+
+```json
+{ "transport": "stdio", "command": "/opt/mcp/bin/jira-mcp", "egress": ["acme.atlassian.net"] }
+```
+
+**Who may widen it.** For tenant, team and agent connections the entries must lie inside the
+operator's grant for the program, `OAX_MCP_STDIO_EGRESS` (JSON object, program path to entries; the
+program is the command, or for an interpreter the program file it runs). A program without a grant
+gets no network, whatever a tenant writes (`422 egress_denied`), and an update can only narrow.
+The operator's own (platform) connections choose freely. Further bounds, from the inside out: the
+runner ceiling `OAX_CONTAINER_EGRESS_ALLOW` (applied by the runner **and** again by the egress
+proxy), the proxy's address check (private, loopback and metadata addresses stay closed unless the
+operator opened a range with `OAX_CONTAINER_EGRESS_PRIVATE_ALLOW`) and, air-gapped, the
+allowlist. A malformed entry is `400 mcp_egress_invalid`. The control node checks the list when
+the connection is saved **and again before every step** (a stored connection that no longer passes
+fails the step with `422 egress_denied`, audit `mcp.egress.refused`, no node is started).
+
+**What the container runner does.** It mints one egress grant per (node, connection), signed and
+bound to the account `<node id>.<connection name>`, and the run node gives that URL to that server's
+process only (`HTTPS_PROXY` and the other spellings). The step's own account is never passed to an
+MCP server; a server without `egress` receives no proxy variable at all; proxy variables that a
+connection, the credential broker or the step's credentials try to set are dropped. A grant is
+valid only under its own account, so a server cannot use another server's or the step's account,
+and the proxy counts connections per account (`EgressProxy.connectionCounts()`).
+
+**Kubernetes.** A NetworkPolicy applies to a whole Pod, so the runner cannot give one server its
+own network. It accepts a server's `egress` only if the step's `runtime.egress` already lists each
+entry (otherwise the step is refused) and does not widen the Pod's policy. Per-server isolation
+needs the container runner (or, later, one Pod per server, ADR 0016 section 3.3).
+
+**DNS.** The container runner starts every node with `Dns: ["127.0.0.1"]`, where nothing listens, and
+`assertSafeCreateBody` refuses any other resolver, search domain or option. Container names on the
+internal network still resolve through the engine's embedded resolver, but nothing is forwarded
+upstream: a node cannot resolve an external name, so names cannot carry data out, and the egress
+proxy resolves the host of a `CONNECT`. The control node and the proxy must therefore be reachable by
+container name/alias or IP address. On Kubernetes DNS egress is off by default (see above).
+Checked by hand on a Docker host (an `internal` network, alpine): an external name failed
+(`SERVFAIL`) with and without the setting, and container names and aliases resolved in both cases,
+so on that engine the setting makes explicit what the internal network already did; it does not
+depend on that engine behaviour or on how the network was created (the runner also refuses a
+network that is not `internal`).
+
+**Lint.** `POST /v1/agents/validate` reports the warning `egress_unused` for a host in a step's
+`runtime.egress` that only serves a stdio server with its own `egress`: the step's account no
+longer reaches it. Hosts of HTTP MCP servers are not reported, because until the control-node relay
+(slice S4) the node still reaches them with the step's account.
+
+**What this does not do.**
+
+- Children of one node run as the same UID and can read each other's environment through
+  `/proc/<pid>/environ`, including the proxy account (#140). The per-server grant stops honest and
+  buggy servers and simple supply-chain payloads, not a determined attacker inside the node; run
+  untrusted servers in containers of their own (ADR 0016 section 3.3, not implemented yet).
+- Platform stdio servers that run in the worker process (in-process steps) share the worker's
+  network; `egress` has no effect there (operator responsibility; air-gapped mode needs
+  `OAX_AIRGAPPED_STDIO=trusted`).
+- A grant is a **host-level** allowance on port 443 (or the given port): the proxy relays TLS
+  bytes and cannot see what a server sends to an allowed host.
+- There is no connection-type catalog yet (ADR 0012), so the floor of a catalog type is the
+  operator's `OAX_MCP_STDIO_EGRESS` per program. The proxy ceiling and the air-gapped allowlist are
+  enforced as described; a signed-image check of toolbox binaries is separate (#29).
+- The real-engine test (zero unexpected connections, raw socket and DNS from a node refused) is
+  opt-in (`OAX_TEST_DOCKER=1`, `packages/runners/test/container.integration.test.ts`); the
+  unit tests cover the proxy accounts and the run node, not the kernel's network namespace.
+
+**Not covered yet** (later ADR 0016 slices): the shared UID of a node's children and signed toolbox
 images.

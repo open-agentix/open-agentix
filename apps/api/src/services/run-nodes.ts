@@ -50,6 +50,12 @@ export interface CreatedSession {
   /** Step-scoped run token for the node. Only ever delivered as a file. */
   token: string;
   expiresAt: Date;
+  /**
+   * Egress of the stdio MCP servers of the step that need a network (ADR 0016 section 4.1), by
+   * connection name, already bounded by the operator's grants. For the worker, which passes it to
+   * the runner; the node never receives it.
+   */
+  mcpEgress: { server: string; egress: string[] }[];
 }
 
 type SessionRow = typeof runNodeSessions.$inferSelect;
@@ -305,6 +311,7 @@ export class RunNodesService {
       configs: stepMcp,
       tenantStdio,
       tenantHttp,
+      mcpEgress,
     } = await this.catalog.stepMcpConfigs(stdioScope, this.serversOf(agent), {
       runId,
       actor: `worker:${orchestratorId}`,
@@ -350,9 +357,16 @@ export class RunNodesService {
       action: 'runnode.started',
       target: nodeId,
       runId,
-      payload: { runId, nodeId, steps: [agent.id], runner: req.runner, image: req.image },
+      payload: {
+        runId,
+        nodeId,
+        steps: [agent.id],
+        runner: req.runner,
+        image: req.image,
+        ...(mcpEgress.length > 0 ? { mcpEgress } : {}),
+      },
     });
-    return { sessionId, nodeId, token, expiresAt };
+    return { sessionId, nodeId, token, expiresAt, mcpEgress };
   }
 
   /**

@@ -51,6 +51,28 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **Per-connection egress for stdio MCP servers, per-server proxy grants and DNS lockdown (ADR 0016
+  slice S2, #232)**: every stdio child of a run node used the step's egress account, so any one
+  server (or a compromised update of it) could reach every host the step may reach, and Docker's
+  resolver was left unrestricted as a data channel. Stdio connections now carry `egress` (default:
+  none, no network). The container runner mints one egress grant per (node, connection) under its
+  own proxy account and hands it to that server's process only: the step's account never reaches
+  an MCP child, a server without `egress` gets no proxy variables at all, and proxy variables a
+  connection, the broker or the step's credentials try to set are dropped. For tenant connections
+  `egress` is bounded by the operator's per-program grant `OAX_MCP_STDIO_EGRESS` (deny by default;
+  tenants can only narrow), by the runner ceiling and by the air-gapped allowlist (wildcards and
+  CIDRs are refused there); the control node re-checks it before every step (`422 egress_denied`,
+  audit `mcp.egress.refused`). Run nodes of the container runner get `Dns: ["127.0.0.1"]` (nothing
+  listens there; no external name resolves, the egress proxy resolves) and `assertSafeCreateBody`
+  refuses any other DNS setting. Kubernetes: `OAX_K8S_DNS_EGRESS` is off by default and `true`
+  needs `OAX_K8S_DNS_EGRESS_ACK=true`; a Pod cannot give one server a network of its own, so
+  server egress there must already be listed in the step's `runtime.egress`. Agent Check reports
+  `egress_unused` for hosts that only serve a stdio server with its own grant. Tenant HTTP
+  connection tests no longer tell `dns_failed` from `egress_denied` (#278 item 1). Limits that
+  remain: children of one node share a UID and can read each other's environment (#140), and HTTP
+  MCP servers are still reached with the step's account until the relay of slice S4. See
+  `docs/mcp.md` ("Egress of stdio servers").
+
 - **HTTP MCP servers go through the outbound dispatcher with tenant destination checks (ADR 0016
   slice S1, #231)**: the MCP streamable-HTTP transport used a bare proxy-aware `fetch`, so a tenant
   MCP URL could reach cloud metadata, private ranges and localhost, follow redirects to internal
@@ -76,6 +98,19 @@ All notable changes to this project are documented here. The format follows
   stdio config could reach a node unchecked.
 
 ### Breaking
+
+- **Stdio MCP egress and Kubernetes DNS (ADR 0016 S2, #232)**: (1) stdio MCP servers of a run node
+  no longer inherit the step's egress: a server that needs a host must list it in its connection's
+  `egress` (and, for tenant connections, the operator must grant it with `OAX_MCP_STDIO_EGRESS`);
+  hosts left in `runtime.egress` for that purpose are reported as `egress_unused`. (2) The
+  run-node stdin gains further lines (`<server> <proxy url>`); run-node images older than this
+  change ignore them and keep giving the step's account to every server, so update the worker and
+  run-node images together. (3) `OAX_K8S_DNS_EGRESS` now defaults to `false`; `true` needs
+  `OAX_K8S_DNS_EGRESS_ACK=true`, and with DNS off `OAX_NODE_CONTROL_URL` must use an IP address or
+  start-up fails. (4) The container runner sets the DNS of run nodes to a resolver where nothing
+  listens: host names outside the internal network no longer resolve from a node (the control node
+  and the egress proxy must be reachable by container name/alias or IP). (5) `createSession`
+  returns `mcpEgress`; the Helm chart needs the new variables (mirror issue to follow).
 
 - **HTTP MCP connections (ADR 0016 S1, #231)**: tenant, team and agent `streamable-http` connections
   must use `https://` and a public destination (`422 egress_denied` on create/update, and at run
