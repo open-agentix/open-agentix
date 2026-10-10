@@ -246,6 +246,118 @@ describe('cardinality and bounds', () => {
   });
 });
 
+describe('hostile inputs: never throws, bounded cost', () => {
+  const throwingGuard = () => {
+    const g = new ContextGuard();
+    g.text = () => {
+      throw new Error('guard failure');
+    };
+    return g;
+  };
+
+  it('drops a value whose getter throws instead of throwing', () => {
+    const raw = { 'oax.worker': 'w-1' } as Record<string, unknown>;
+    Object.defineProperty(raw, 'oax.run.status', {
+      enumerable: true,
+      get: () => {
+        throw new Error('getter');
+      },
+    });
+    const r = sanitizeAttributes('run', raw, guard());
+    expect(r.attributes).toEqual({ 'oax.worker': 'w-1' });
+    expect(r.dropped).toEqual({ invalid: 1 });
+  });
+
+  it('drops everything when the keys cannot be listed (hostile proxy)', () => {
+    const raw = new Proxy(
+      {},
+      {
+        ownKeys: () => {
+          throw new Error('ownKeys');
+        },
+      },
+    );
+    const r = sanitizeAttributes('run', raw, guard());
+    expect(r.attributes).toEqual({});
+    expect(r.dropped).toEqual({ invalid: 1 });
+  });
+
+  it('drops the value (fail closed) when the guard throws', () => {
+    const r = sanitizeAttributes(
+      'chat',
+      { 'gen_ai.request.model': 'm', 'gen_ai.usage.input_tokens': 3 },
+      throwingGuard(),
+    );
+    expect(r.attributes).toEqual({ 'gen_ai.usage.input_tokens': 3 });
+    expect(r.dropped).toEqual({ invalid: 1 });
+    expect(sanitizeName('chat m', throwingGuard(), 'fallback')).toEqual({
+      name: 'fallback',
+      redactions: {},
+    });
+  });
+
+  it('ignores prototype keys and treats __proto__ / constructor as unknown keys', () => {
+    const raw = JSON.parse(
+      '{"__proto__":{"oax.worker":"x"},"constructor":"y","oax.worker":"w"}',
+    ) as Record<string, unknown>;
+    const inherited = Object.create({ 'oax.run.status': 'ok' }) as Record<string, unknown>;
+    expect(sanitizeAttributes('run', raw, guard())).toMatchObject({
+      attributes: { 'oax.worker': 'w' },
+      dropped: { unknown: 2 },
+    });
+    expect(sanitizeAttributes('run', inherited, guard()).attributes).toEqual({});
+    expect(Object.getPrototypeOf(sanitizeAttributes('run', raw, guard()).attributes)).toBe(
+      Object.prototype,
+    );
+  });
+
+  it('rejects BigInt, unsafe integers, infinities, nested arrays and homoglyph keys', () => {
+    const r = sanitizeAttributes(
+      'chat',
+      {
+        'gen_ai.usage.input_tokens': 10n,
+        'gen_ai.usage.output_tokens': Number.MAX_SAFE_INTEGER + 2,
+        'gen_ai.request.temperature': Number.NEGATIVE_INFINITY,
+        'gen_ai.request.mоdel': 'cyrillic o in the key',
+        'gen_ai.response.finish_reasons': [['stop'], { 0: 'stop' }, 'stop'],
+      },
+      guard(),
+    );
+    expect(r.attributes).toEqual({ 'gen_ai.response.finish_reasons': ['stop'] });
+    expect(r.dropped).toEqual({ invalid: 3, unknown: 1 });
+  });
+
+  it('costs a bounded time per value, whatever its length (1 MiB inputs)', () => {
+    const MiB = 1 << 20;
+    const inputs = [
+      '\t'.repeat(MiB),
+      ' \u0001'.repeat(MiB / 2),
+      '-----BEGIN PRIVATE KEY-----'.repeat(MiB / 27),
+      `${TOKEN} `.repeat(MiB / 45),
+      '​'.repeat(MiB),
+      'a'.repeat(MiB),
+    ];
+    const g = guard();
+    for (const v of inputs) {
+      const started = performance.now();
+      sanitizeAttributes(
+        'chat',
+        {
+          'gen_ai.request.model': v,
+          'gen_ai.response.model': v,
+          'oax.provider.instance': v,
+          'gen_ai.provider.name': v,
+          'gen_ai.response.finish_reasons': Array.from({ length: 10_000 }, () => v),
+        },
+        g,
+      );
+      sanitizeName(v, g, 'x');
+      // A full scan of 1 MiB per value took 20-30 ms each (13 values); the cap keeps it at ~1 ms.
+      expect(performance.now() - started).toBeLessThan(100);
+    }
+  });
+});
+
 describe('sanitizeName and spanKindFromName', () => {
   it('guards and caps span names', () => {
     expect(sanitizeName(`chat ${TOKEN}`, guard(), 'x').name).toBe('chat [redacted:github-token]');

@@ -3,6 +3,7 @@ import {
   ALLOWED_KEYS,
   ATTRIBUTE_SPECS,
   CONTENT_KEY_PATTERN,
+  type AttributeKey,
   type AttributeSpec,
   type SpanKind,
   type StringSpec,
@@ -47,13 +48,21 @@ class Tally {
     this.dropped[c] = (this.dropped[c] ?? 0) + n;
   }
   guarded(guard: ContextGuard, input: string): string {
-    const { text, report } = guard.text(input.slice(0, MAX_INPUT_CHARS));
+    const { text, report } = guard.text(input);
     if (report.invisible.total > 0)
       this.redactions.invisible = (this.redactions.invisible ?? 0) + report.invisible.total;
     for (const [kind, n] of Object.entries(report.secrets.kinds))
       this.redactions[kind] = (this.redactions[kind] ?? 0) + n;
     return text;
   }
+}
+
+/**
+ * Cuts to {@link MAX_INPUT_CHARS} first, then removes control characters: the cost of a value is
+ * bounded by the cap, not by its length (a 1 MiB run of control characters is not scanned).
+ */
+function clean(v: string): string {
+  return v.slice(0, MAX_INPUT_CHARS).replace(CONTROL_CHARS, '');
 }
 
 function sanitizeString(
@@ -65,7 +74,7 @@ function sanitizeString(
   if (typeof v !== 'string') return null;
   // A fixed value set needs no guard: only the members themselves pass.
   if (spec.enum) return spec.enum.includes(v) ? v : null;
-  let s = tally.guarded(guard, v.replace(CONTROL_CHARS, ''));
+  let s = tally.guarded(guard, clean(v));
   if (spec.freeText) s = s.slice(0, spec.max);
   else if (s.length > spec.max) return null;
   if (spec.pattern && !spec.pattern.test(s)) return null;
@@ -114,9 +123,32 @@ function isAllowed(key: string, kind: SpanKind, options: SanitizeOptions): boole
   return key !== 'exception.message' || options.allowExceptionMessage === true;
 }
 
+function ownKeys(raw: Readonly<Record<string, unknown>>): string[] | null {
+  try {
+    return Object.keys(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** One allowlisted value; a throwing getter, guard or hostile value is dropped, never rethrown. */
+function sanitizeEntry(
+  key: string,
+  raw: Readonly<Record<string, unknown>>,
+  guard: ContextGuard,
+  tally: Tally,
+): AttributeValue | null {
+  try {
+    return sanitizeValue(ATTRIBUTE_SPECS[key as AttributeKey], raw[key], guard, tally);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Filters `raw` through the allowlist of `kind`. Never throws: whatever cannot be accepted is
- * dropped and counted. When the guard replaced anything, `oax.redacted=true` is added.
+ * dropped and counted (also a throwing getter or guard, or an object whose keys cannot be listed).
+ * When the guard replaced anything, `oax.redacted=true` is added.
  */
 export function sanitizeAttributes(
   kind: SpanKind,
@@ -126,8 +158,10 @@ export function sanitizeAttributes(
 ): SanitizedAttributes {
   const tally = new Tally();
   const attributes: Record<string, AttributeValue> = {};
+  const keys = ownKeys(raw);
+  if (keys === null) tally.drop('invalid');
   let seen = 0;
-  for (const key of Object.keys(raw)) {
+  for (const key of keys ?? []) {
     if (++seen > MAX_ATTRIBUTES_PER_CALL) {
       tally.drop('overflow');
       continue;
@@ -136,12 +170,7 @@ export function sanitizeAttributes(
       tally.drop(classify(key));
       continue;
     }
-    const value = sanitizeValue(
-      ATTRIBUTE_SPECS[key as keyof typeof ATTRIBUTE_SPECS],
-      raw[key],
-      guard,
-      tally,
-    );
+    const value = sanitizeEntry(key, raw, guard, tally);
     if (value === null) tally.drop('invalid');
     else attributes[key] = value;
   }
@@ -151,17 +180,25 @@ export function sanitizeAttributes(
 
 const MAX_NAME_CHARS = 128;
 
-/** Span and event names are text too: control characters out, guarded, capped. */
+/**
+ * Span and event names are text too: control characters out, guarded, capped. Never throws: a
+ * failing guard yields the fallback name.
+ */
 export function sanitizeName(
   name: string,
   guard: ContextGuard,
   fallback: string,
 ): { name: string; redactions: Record<string, number> } {
   const tally = new Tally();
-  const s = tally
-    .guarded(guard, typeof name === 'string' ? name.replace(CONTROL_CHARS, '') : '')
-    .slice(0, MAX_NAME_CHARS)
-    .trim();
+  let s: string;
+  try {
+    s = tally
+      .guarded(guard, typeof name === 'string' ? clean(name) : '')
+      .slice(0, MAX_NAME_CHARS)
+      .trim();
+  } catch {
+    return { name: fallback, redactions: {} };
+  }
   return { name: s.length > 0 ? s : fallback, redactions: tally.redactions };
 }
 
