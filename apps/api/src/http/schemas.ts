@@ -318,6 +318,9 @@ export const ApprovalSchema = z.object({
   agentId: z.string(),
   tool: z.string(),
   args: Json,
+  argsRedacted: z
+    .boolean()
+    .describe('secrets in the arguments were replaced by [REDACTED]: the call has more than shown'),
   reasons: Json,
   approverRoles: z.array(z.string()),
   status: z.enum(['pending', 'approved', 'rejected', 'timeout']),
@@ -1062,15 +1065,19 @@ export const StepHandoverSchema = z.object({
   }),
   mcp: z
     .array(z.record(z.string(), z.unknown()))
-    .describe('MCP connections of the step with all secret references stripped'),
+    .describe(
+      'MCP connections of the step with all secret references stripped; HTTP servers carry no url or headers (relay)',
+    ),
   stdio: z
     .object({ tenantServers: z.array(z.string()), allowlist: z.array(z.string()) })
     .optional()
     .describe('tenant-defined stdio servers of the step and the command allowlist (ADR 0016)'),
   http: z
-    .object({ tenantServers: z.array(z.string()) })
+    .object({ relay: z.literal(true) })
     .optional()
-    .describe('tenant-defined streamable-http servers of the step (ADR 0016)'),
+    .describe(
+      'streamable-http servers of the step are reached through the control-node MCP relay (ADR 0016 section 6)',
+    ),
   toolPins: z
     .record(z.string(), z.object({ granted: z.array(z.string()), accepted: z.array(Sha256Hex) }))
     .optional()
@@ -1088,6 +1095,34 @@ export const ToolsChangedBody = z.object({
     .optional()
     .describe('the tool list the node read (bounded and re-checked); absent when it is too large'),
 });
+export const McpRelayParams = z.object({
+  id: Id,
+  server: z.string().min(1).max(128).describe('name of an HTTP MCP connection of the step'),
+});
+export const McpRelayMessage = z.looseObject({
+  jsonrpc: z.literal('2.0'),
+  id: z.union([z.string(), z.number()]).optional().describe('absent for notifications'),
+  method: z
+    .string()
+    .describe(
+      'initialize, ping, tools/list, tools/call, notifications/initialized, notifications/cancelled',
+    ),
+  params: z.record(z.string(), z.unknown()).optional(),
+});
+export const McpRelayAnswer = z
+  .looseObject({
+    jsonrpc: z.literal('2.0'),
+    id: z.union([z.string(), z.number()]),
+    result: z.unknown().optional(),
+    error: z
+      .object({
+        code: z.number(),
+        message: z.string(),
+        data: z.object({ oaxCode: z.string() }).optional(),
+      })
+      .optional(),
+  })
+  .describe('JSON-RPC 2.0 response');
 export const StepHandoverResultBody = z.object({
   agentId: z.string(),
   format: z.string().max(64),
@@ -1123,7 +1158,6 @@ export const StepCredentialsSchema = z.object({
     z.object({
       server: z.string(),
       env: z.record(z.string(), z.string()).optional(),
-      headers: z.record(z.string(), z.string()).optional(),
     }),
   ),
 });

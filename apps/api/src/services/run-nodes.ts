@@ -16,7 +16,7 @@ import {
   type RunTokenClaims,
   type StepCredentials,
 } from '@openagentix/core';
-import type { McpServerConfig } from '@openagentix/mcp';
+import { relayConfigFor, type McpServerConfig } from '@openagentix/mcp';
 import {
   MAX_WORKSPACE_SEED_BYTES,
   type StepHandover,
@@ -80,7 +80,6 @@ interface StepNeeds {
   connections: {
     server: string;
     env: Record<string, string>;
-    headers: Record<string, string>;
   }[];
   refs: string[];
 }
@@ -104,6 +103,13 @@ export class RunNodesService {
     private readonly catalog: CatalogService,
     private readonly source: CredentialSource = new StaticCredentialSource(ctx.secrets),
   ) {}
+
+  private readonly revokeListeners: ((s: { sessionId: string; runId: string }) => void)[] = [];
+
+  /** Called (best effort, same replica) after a node session was revoked. */
+  onRevoked(listener: (s: { sessionId: string; runId: string }) => void): void {
+    this.revokeListeners.push(listener);
+  }
 
   /**
    * Values of the secrets this run's nodes were given, for scrubbing step records, audit payloads
@@ -266,13 +272,19 @@ export class RunNodesService {
     };
   }
 
+  /**
+   * What a run node learns of a connection: stdio servers lose their secret references (the values
+   * arrive through the broker); HTTP servers lose url, headers and references too, because the node
+   * reaches them through the relay (ADR 0016 section 6) and must not know where they are.
+   */
   private stripSecrets(cfg: McpServerConfig): McpServerConfig {
     if (cfg.transport === 'stdio') return { ...cfg, envSecrets: {} };
-    if (cfg.transport === 'streamable-http') return { ...cfg, headerSecrets: {} };
+    if (cfg.transport === 'streamable-http') return relayConfigFor(cfg);
     return cfg;
   }
 
-  private serversOf(agent: AgentSpec): Set<string> {
+  /** The servers a step holds grants on (tools and profile grants). */
+  serversOf(agent: AgentSpec): Set<string> {
     return new Set([
       ...agent.tools.map((t) => t.server),
       ...(agent.profileGrants ?? []).map((p) => p.server),
@@ -299,12 +311,11 @@ export class RunNodesService {
     }));
     const connections = configs.map((c) => ({
       server: c.name,
+      // HTTP header secrets are not brokered: the relay resolves them on the control node.
       env: c.transport === 'stdio' ? { ...c.envSecrets } : {},
-      headers: c.transport === 'streamable-http' ? { ...c.headerSecrets } : {},
     }));
     const refs = new Set<string>(declared.map((d) => d.secret));
-    for (const c of connections)
-      for (const ref of [...Object.values(c.env), ...Object.values(c.headers)]) refs.add(ref);
+    for (const c of connections) for (const ref of Object.values(c.env)) refs.add(ref);
     return { declared, connections, refs: [...refs].sort() };
   }
 
@@ -350,7 +361,6 @@ export class RunNodesService {
     const {
       configs: stepMcp,
       tenantStdio,
-      tenantHttp,
       mcpEgress,
     } = await this.catalog.stepMcpConfigs(stdioScope, this.serversOf(agent), {
       runId,
@@ -373,7 +383,7 @@ export class RunNodesService {
       ...(tenantStdio.length > 0
         ? { stdio: { tenantServers: tenantStdio, allowlist: cfg.mcp.stdioCommands } }
         : {}),
-      http: { tenantServers: tenantHttp },
+      http: { relay: true },
       ...(await this.toolPinsOf(definition, stdioScope, agent)),
     };
     const traceContext = dispatchTraceContext(run);
@@ -434,6 +444,12 @@ export class RunNodesService {
       .where(and(eq(runNodeSessions.id, sessionId), isNull(runNodeSessions.revokedAt)))
       .returning();
     if (!row) return;
+    for (const listener of this.revokeListeners)
+      try {
+        listener({ sessionId: row.id, runId: row.runId });
+      } catch {
+        // a listener must never keep a session alive
+      }
     await emitNodeSessionSpan(this.ctx, row);
     const handles = row.credentialHandles;
     // A failing backend must not keep the session alive: it is revoked in the database first.
@@ -833,19 +849,10 @@ export class RunNodesService {
         value: val(d.secret),
       })),
       connections: needs.connections
-        .filter((c) => Object.keys(c.env).length + Object.keys(c.headers).length > 0)
+        .filter((c) => Object.keys(c.env).length > 0)
         .map((c) => ({
           server: c.server,
-          ...(Object.keys(c.env).length
-            ? { env: Object.fromEntries(Object.entries(c.env).map(([k, ref]) => [k, val(ref)])) }
-            : {}),
-          ...(Object.keys(c.headers).length
-            ? {
-                headers: Object.fromEntries(
-                  Object.entries(c.headers).map(([k, ref]) => [k, val(ref)]),
-                ),
-              }
-            : {}),
+          env: Object.fromEntries(Object.entries(c.env).map(([k, ref]) => [k, val(ref)])),
         })),
     };
     await this.audit.append({

@@ -41,12 +41,22 @@ async function run(opts: {
   telemetry: unknown;
   platform: McpPropagationPolicy | undefined;
   tracing?: boolean;
+  hostile?: boolean;
 }) {
   const received: unknown[] = [];
   const server = () =>
     createMockMcpServer('cve-db', [
       {
         name: 'lookup_cve',
+        ...(opts.hostile
+          ? {
+              resultMeta: {
+                traceparent: `00-${'f'.repeat(32)}-${'e'.repeat(16)}-01`,
+                tracestate: 'x=y',
+                baggage: 'k=v',
+              },
+            }
+          : {}),
         handler: (_args, meta) => {
           received.push(meta ?? null);
           return 'ok';
@@ -82,7 +92,7 @@ async function run(opts: {
   });
   expect(status).toBe('succeeded');
   const spans = t.exporter.getFinishedSpans();
-  const tool = spans.find((x) => x.name.startsWith('execute_tool'))!;
+  const tool = spans.find((x) => x.name.startsWith('execute_tool'));
   return { received, tool, spans };
 }
 
@@ -92,9 +102,9 @@ describe('MCP trace propagation from the executor', () => {
       telemetry: { propagate: true },
       platform: 'allow',
     });
-    const c = tool.spanContext();
+    const c = tool!.spanContext();
     expect(received).toEqual([{ traceparent: `00-${c.traceId}-${c.spanId}-01` }]);
-    expect(tool.attributes).toMatchObject({
+    expect(tool!.attributes).toMatchObject({
       'mcp.method.name': 'tools/call',
       'oax.mcp.propagated': true,
     });
@@ -110,20 +120,40 @@ describe('MCP trace propagation from the executor', () => {
     const { received, tool } = await run({ telemetry, platform });
     expect(received).toEqual([null]);
     expect(
-      Object.keys(tool.attributes).filter(
+      Object.keys(tool!.attributes).filter(
         (k) => k.startsWith('mcp.') || k === 'oax.mcp.propagated',
       ),
     ).toEqual([]);
   });
 
-  it('without a tracing SDK nothing is sent even with both opt-ins', async () => {
-    await t.stop();
-    t = startTracing();
+  it('an executor without telemetry offers no traceparent even with both opt-ins', async () => {
     const { received } = await run({
       telemetry: { propagate: true },
       platform: 'allow',
       tracing: false,
     });
     expect(received).toEqual([null]);
+  });
+
+  it('with no SDK registered there is no span and nothing is sent', async () => {
+    await t.stop();
+    expect(executorTelemetry({ runId: 'r', tenantId: 't' })).toBeUndefined();
+    const { received, tool } = await run({ telemetry: { propagate: true }, platform: 'allow' });
+    expect(received).toEqual([null]);
+    expect(tool).toBeUndefined();
+  });
+
+  it('a server that answers with trace-context lookalikes changes nothing: every call carries the span own id', async () => {
+    const { received, tool, spans } = await run({
+      telemetry: { propagate: true },
+      platform: 'allow',
+      hostile: true,
+    });
+    const c = tool!.spanContext();
+    expect(received).toEqual([{ traceparent: `00-${c.traceId}-${c.spanId}-01` }]);
+    // Nothing of the lookalikes reached a span.
+    expect(JSON.stringify(spans.map((x) => [x.attributes, x.events, x.links]))).not.toContain(
+      'eeeeeeeeeeeeeeee',
+    );
   });
 });

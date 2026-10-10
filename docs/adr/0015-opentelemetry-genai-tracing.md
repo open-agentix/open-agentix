@@ -807,11 +807,13 @@ Decisions taken while implementing slice S7 (#212, with #220) where the text abo
 Decisions taken while implementing slice S8 (#213) where the text above left room:
 
 - **One propagation point.** `traceMetaFor` (`packages/mcp/src/trace-context.ts`) decides, and
-  `ToolGateway.call` is the only caller: platform `allow` AND `telemetry.propagate: true` AND a
+  `ToolGateway.execute` is its only caller: platform `allow` AND `telemetry.propagate: true` AND a
   well-formed caller-supplied traceparent, else nothing is added. `McpConnection.callTool` rebuilds
   `_meta` as `{ traceparent }` from that one validated field, so nothing else (tracestate, baggage,
-  other keys) can reach the wire. Because the control-node relay (ADR 0016 S4) calls the same
-  gateway method, it inherits the rule; it only has to pass `trace` (see below).
+  other keys) can reach the wire. The inline executor reaches `execute` through `ToolGateway.call`
+  (which only passes `trace` on); the control-node relay (ADR 0016 S4) calls `execute` directly and
+  passes its own trace, so both paths are covered by the same code. A node's gateway (relay mode)
+  never adds anything.
 - **Where the value comes from.** The executor asks its `execute_tool` span for `traceparent()`
   (ids this process generated; flags are `00` or `01`, never anything else) and offers it in
   `call(..., { trace })`. It is never read from an input, a node or a server response. A server's
@@ -828,10 +830,23 @@ Decisions taken while implementing slice S8 (#213) where the text above left roo
 - **Attributes.** `mcp.method.name` (`tools/call`), `mcp.protocol.version` (closed list, only when the
   transport reports a known version) and `oax.mcp.propagated` (`true`) are added to the `execute_tool`
   span only for calls that carried a traceparent. `mcp.session.id` is not exported.
-- **Not covered yet.** Run nodes and harness steps create no `execute_tool` span, so they offer no
-  traceparent and send nothing. The relay (ADR 0016 S4, PR #299) must open an `execute_tool` span
-  for the relayed call and pass `trace: { traceparent }` to `ToolGateway.call`, with
-  `tracePropagation` set from `OAX_OTEL_MCP_PROPAGATION` on its gateway.
+- **Relay.** The relay opens an `execute_tool` span per relayed `tools/call` (`oax.mcp.relay=true`,
+  a child of the position stored for the node's session) and passes only that span's
+  `traceparent()`. It never uses the node's `traceparent` header, `params._meta` (accepted by the
+  relay's parameter check, then dropped: the call is rebuilt from name and arguments) or any value
+  of the node request. Its gateway gets `tracePropagation` from `OAX_OTEL_MCP_PROPAGATION`.
+- **Not covered.** Harness steps and run nodes that bypass the relay (stdio servers in a node) offer
+  no traceparent and send nothing.
+- **Flags.** The sampled flag of the span is passed on as it is: a not-sampled span (`-00`, kept
+  only for an always-keep class) is propagated with `00`, so a downstream sampler will not sample it.
+- **Trust.** Once a connection opts in, the server sees the run's trace id and can correlate calls.
+  If the server's own spans reach a shared collector, a hostile server can attach spans to your
+  trace id (trace poisoning), and set a tenant id attribute of its own (`oax.tenant.id`
+  spoofing); a shared collector must route by the resource it authenticated, not by span
+  attributes of foreign spans (section 7.2). Nothing the server returns is read here.
+- **Edits.** A running run keeps the connection config it started with. Turning `propagate` on needs
+  the admin again when the destination (transport, url, command, args) changes, and
+  `updateConnection` is a compare-and-swap on the stored config (409 when it changed meanwhile).
 - No new metric, no migration.
 
 ## Open questions (owner decisions needed)

@@ -53,6 +53,8 @@ declare module 'fastify' {
     access?: RouteAccess;
     /** Accept a short-lived stream token in `?access_token=` (EventSource cannot set headers). */
     streamToken?: boolean;
+    /** MCP relay route: a bad run token is refused like an unknown server, not with a 401. */
+    relay?: boolean;
   }
   interface FastifyRequest {
     principal?: Principal;
@@ -242,6 +244,9 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
         throw forbidden(`missing permission ${access}`);
       return;
     }
+    // The MCP relay verifies the token in a hook of its own scope (routes/worker.ts), so that its
+    // refusals leave through the same response pipeline, with the same headers, as every other one.
+    if (access === 'run-token' && req.routeOptions.config?.relay) return;
     if (access === 'run-token') {
       // Signature and expiry are checked before the body is parsed; the run binding in the handler.
       try {

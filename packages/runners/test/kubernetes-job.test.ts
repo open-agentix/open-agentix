@@ -251,10 +251,11 @@ describe('manifests', () => {
     expect(() => buildJob(spec({ nodeId: 'ABC_def' }), cfg())).toThrow(/UUID/);
   });
 
-  it('builds a Secret with the run token only', () => {
+  it('builds a Secret with the run token and the bundle marker only', () => {
     const s = buildSecret(spec(), 'runs') as any;
     expect(Object.keys(s.data)).toEqual(['token']);
-    expect(Buffer.from(s.data.token, 'base64').toString()).toBe(TOKEN);
+    // the token and the bundle marker: a node of an image from before the relay refuses the marker
+    expect(Buffer.from(s.data.token, 'base64').toString()).toBe(`${TOKEN}\noax-bundle:v3\n`);
     expect(s.immutable).toBe(true);
   });
 

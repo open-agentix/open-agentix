@@ -12,6 +12,7 @@ import { IdentityService } from './identity.js';
 import { IngestService } from './ingest.js';
 import { ModelAccountingService } from './model-accounting.js';
 import { ModelProxyService } from './model-proxy.js';
+import { McpRelayService } from './mcp-relay.js';
 import { McpTestService } from './mcp-test.js';
 import { McpToolsService } from './mcp-tools.js';
 import { ModelsService } from './models.js';
@@ -41,6 +42,7 @@ export interface Services {
   models: ModelsService;
   mcpTest: McpTestService;
   mcpTools: McpToolsService;
+  mcpRelay: McpRelayService;
   agentCheck: AgentCheckService;
   subtree: SubtreeScopes;
 }
@@ -91,6 +93,7 @@ export function createServices(ctx: AppContext): Services {
   const mcpTools = new McpToolsService(ctx, audit, catalog, mcpTest, runNodes);
   runNodes.pinResolver = (definition, scope, servers) =>
     mcpTools.pinsFor(definition, scope, servers);
+  const mcpRelay = new McpRelayService(ctx, audit, catalog, control, runNodes, mcpTools);
   return {
     audit,
     budgets,
@@ -111,6 +114,7 @@ export function createServices(ctx: AppContext): Services {
     models,
     mcpTest,
     mcpTools,
+    mcpRelay,
     agentCheck,
     subtree: new SubtreeScopes(ctx),
   };
@@ -130,6 +134,7 @@ export {
   IngestService,
   ModelAccountingService,
   ModelProxyService,
+  McpRelayService,
   McpToolsService,
   ModelsService,
   RunNodesService,

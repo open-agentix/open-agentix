@@ -21,6 +21,7 @@ import type {
   RunNodeStopReason,
 } from './isolating.js';
 import type { KubeClient, KubeObject, OwnerReference } from './kube-client.js';
+import { BUNDLE_MARKER } from './container.js';
 import { nodeTraceparent } from './node-env.js';
 import { KubernetesJobRunnerConfigSchema } from './stubs.js';
 import type { PreparedRun, RunResult, RunnerContext } from './types.js';
@@ -317,8 +318,9 @@ export function buildSecret(spec: RunNodeSpec, namespace: string): KubeObject {
     metadata: { name: nodeObjectName(spec.nodeId), namespace, labels: commonLabels(spec) },
     type: 'Opaque',
     immutable: true,
-    // Only the step-scoped run token. Step credentials are pulled by the node (credential broker).
-    data: { token: Buffer.from(spec.runToken, 'utf8').toString('base64') },
+    // The step-scoped run token and the bundle marker (a node of an older image refuses it and
+    // fails closed, ADR 0016 S4). Step credentials are pulled by the node (credential broker).
+    data: { token: Buffer.from(`${spec.runToken}\n${BUNDLE_MARKER}\n`, 'utf8').toString('base64') },
   };
 }
 

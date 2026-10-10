@@ -357,6 +357,17 @@ changing `otel` in a stored entry breaks the chain like any other payload change
 principals that may read the run (same tenant and permission as the rest of the run); the run
 list, the trigger response and the other run endpoints do not contain them.
 
+## MCP trace context and shared collectors
+
+With [MCP trace context propagation](mcp.md#trace-context-propagation-opt-in) switched on for a
+connection, the MCP server learns the run's trace id (and the span id of each `execute_tool` span; an
+unsampled span goes out with flags `00`). The platform never ingests the server's spans, but a
+server that can reach your collector could send spans with that trace id (trace poisoning) and set
+attributes of its own, including `oax.tenant.id` (tenant spoofing). In a collector shared by tenants,
+route and separate by the authenticated resource or ingestion endpoint, not by `oax.tenant.id` of
+spans you did not produce, and keep the collector unreachable from MCP servers. A running run keeps
+the connection config it started with, so switching `propagate` off takes effect for new runs.
+
 ## Sampling
 
 Volume is driven by the number of runs, so the default is `OAX_OTEL_SAMPLE_RATIO=1` (every run

@@ -2,9 +2,10 @@
  * Opt-in W3C trace context for MCP tool calls (ADR 0015 section 6.4, slice S8).
  *
  * This file is the ONE place that decides whether, and with what, a `tools/call` request is
- * enriched. Every path that makes a call on behalf of a run goes through `ToolGateway.call`, which
- * asks {@link traceMetaFor}; the in-process executor does so today, and the control-node relay
- * (ADR 0016 S4) calls the same gateway method, so both inherit the same rules.
+ * enriched. Every path that makes a call on behalf of a run ends in `ToolGateway.execute`, which
+ * asks {@link traceMetaFor}: the in-process executor reaches it through `ToolGateway.call` (which
+ * only passes the `trace` option on), the control-node relay (ADR 0016 S4) calls `execute` itself.
+ * A node's own gateway (relay mode) never adds anything; the relay decides on the control node.
  *
  * Rules, all enforced here and not by the callers:
  *  - Both switches must be on: the platform (`OAX_OTEL_MCP_PROPAGATION=allow`, default `deny`) and the

@@ -463,6 +463,10 @@ export const approvals = pgTable(
     decidedBy: uuid('decided_by'),
     decidedAt: ts('decided_at'),
     comment: text('comment'),
+    /** Set when the MCP relay used the approval for one call (ADR 0016 S4): single use. */
+    consumedAt: ts('consumed_at'),
+    /** The scrubber changed the arguments (`[REDACTED]`): the approver sees less than the call has. */
+    argsRedacted: boolean('args_redacted').notNull().default(false),
   },
   (t) => [
     index('approvals_status_idx').on(t.status, t.requestedAt.desc(), t.id.desc()),

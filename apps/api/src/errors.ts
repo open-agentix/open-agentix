@@ -46,6 +46,12 @@ export class HttpError extends OaxError {
 }
 
 export const notFound = (what: string) => new HttpError(404, 'not_found', `${what} not found`);
+/**
+ * The one refusal of the MCP relay (ADR 0016 section 6) for everything a run node must not learn
+ * the reason of: no or a bad token, a revoked, expired or foreign session, a server it has no
+ * grant on, a connection of another tenant, an unknown name. Always this status and this body.
+ */
+export const mcpRelayRefusal = () => new HttpError(404, 'not_found', 'MCP server not found');
 export const forbidden = (msg = 'insufficient permissions') => new HttpError(403, 'forbidden', msg);
 export const conflict = (msg: string) => new HttpError(409, 'conflict', msg);
 

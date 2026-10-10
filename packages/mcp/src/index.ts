@@ -11,3 +11,4 @@ export * from './stdio-env.js';
 export * from './http-policy.js';
 export * from './mcp-test.js';
 export * from './trace-context.js';
+export * from './relay.js';

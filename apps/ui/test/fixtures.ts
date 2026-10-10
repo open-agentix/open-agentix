@@ -344,6 +344,7 @@ export const approval: Approval = {
   agentId: ids.agent,
   tool: 'tickets/update_ticket',
   args: { key: 'SEC-42', status: 'triaged', token: 'should-not-show' },
+  argsRedacted: false,
   reasons: [{ code: 'approval_required', message: 'update_ticket requires approval' }],
   approverRoles: ['operator', 'admin'],
   status: 'pending',

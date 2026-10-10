@@ -630,6 +630,7 @@
     "output": "Output"
   },
   "approvals": {
+    "argsRedacted": "Secrets in these arguments were hidden as [REDACTED]. The call contains more than is shown.",
     "approve": "Approve",
     "deny": "Deny",
     "comment": "Comment (optional)",

@@ -134,6 +134,13 @@
       "when": 1792300000000,
       "tag": "0024_mcp_tool_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792400000000,
+      "tag": "0025_approvals_consumed_at",
+      "breakpoints": true
     }
   ]
 }

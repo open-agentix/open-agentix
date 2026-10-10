@@ -59,8 +59,10 @@ describe('route access declarations', () => {
         token: null,
         payload: r.method === 'GET' || r.method === 'DELETE' ? undefined : {},
       });
-      // Webhook routes authenticate by signature: unknown sources are 404, bad signatures 401.
-      const expected = r.access === 'webhook' ? [401, 404] : [401];
+      // Webhook routes authenticate by signature: unknown sources are 404, bad signatures 401. The MCP
+      // relay refuses a bad token like an unknown server (ADR 0016 section 6): 404, never a 401.
+      const relay = r.url === '/v1/worker/runs/:id/mcp/:server';
+      const expected = r.access === 'webhook' ? [401, 404] : relay ? [404] : [401];
       expect(expected, `${r.method} ${r.url} -> ${res.statusCode}`).toContain(res.statusCode);
     }
   });

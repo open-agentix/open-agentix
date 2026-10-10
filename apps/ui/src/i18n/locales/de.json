@@ -637,6 +637,7 @@
     "output": "Output"
   },
   "approvals": {
+    "argsRedacted": "Secrets in diesen Argumenten wurden als [REDACTED] verborgen. Der Aufruf enthält mehr, als angezeigt wird.",
     "approve": "Freigeben",
     "deny": "Ablehnen",
     "comment": "Kommentar (optional)",

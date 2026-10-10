@@ -125,6 +125,8 @@ export const ATTRIBUTE_SPECS = {
     '2025-11-25',
   ),
   'oax.mcp.propagated': bool,
+  // The call was relayed by the control node for a run node (ADR 0016 section 8).
+  'oax.mcp.relay': bool,
   'oax.policy.effect': choice('allow', 'deny', 'require_approval'),
   'oax.policy.reason_codes': {
     t: 'string[]',
@@ -303,6 +305,7 @@ const PER_KIND: Record<Exclude<SpanKind, 'unknown'>, readonly AttributeKey[]> = 
     'mcp.method.name',
     'mcp.protocol.version',
     'oax.mcp.propagated',
+    'oax.mcp.relay',
     'oax.tool.result_bytes',
     'oax.tool.truncated',
     'oax.tool.is_error',

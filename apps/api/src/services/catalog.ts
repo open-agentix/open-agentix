@@ -43,7 +43,7 @@ import {
   type ModelEntry,
 } from '@openagentix/providers';
 import { legacyNetwork } from '@openagentix/providers';
-import { and, asc, desc, eq, gt, inArray, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import {
@@ -557,14 +557,12 @@ export class CatalogService {
   ): Promise<{
     configs: McpServerConfig[];
     tenantStdio: string[];
-    tenantHttp: string[];
     mcpEgress: { server: string; egress: string[] }[];
   }> {
     const rows = (await this.connectionsForRun('mcp', scope, { fresh: true })).filter((c) =>
       servers.has(c.name),
     );
     const tenantStdio: string[] = [];
-    const tenantHttp: string[] = [];
     const mcpEgress: { server: string; egress: string[] }[] = [];
     for (const c of rows) {
       // ADR 0016 S2: what a stdio server may reach is decided here, from the stored connection, at
@@ -600,7 +598,6 @@ export class CatalogService {
       }
       if (!isTenantScope(c.scope)) continue;
       const transport = (c.config as { transport?: string } | null)?.transport;
-      if (transport === 'streamable-http') tenantHttp.push(c.name);
       if (transport !== 'stdio') continue;
       tenantStdio.push(c.name);
       const bad = findStdioViolations([c], this.ctx.config.mcp.stdioCommands)[0];
@@ -626,7 +623,6 @@ export class CatalogService {
     return {
       configs: rows.map((c) => McpServerConfigSchema.parse(c.config)),
       tenantStdio,
-      tenantHttp,
       mcpEgress,
     };
   }
@@ -708,7 +704,14 @@ export class CatalogService {
     if (kind !== 'mcp' || scope === 'platform') return;
     const on = (c: unknown) =>
       (c as { telemetry?: { propagate?: unknown } } | null)?.telemetry?.propagate === true;
-    if (!on(next) || on(previous)) return;
+    if (!on(next)) return;
+    // Already on and still pointing at the same destination: nothing new is exposed. A changed
+    // transport, url, command or args sends the trace id somewhere else, which needs the admin again.
+    const target = (c: unknown) => {
+      const o = (c ?? {}) as Record<string, unknown>;
+      return JSON.stringify([o.transport, o.url, o.command, o.args]);
+    };
+    if (on(previous) && target(previous) === target(next)) return;
     if (!hasPermission(actor, 'settings:write', null))
       throw forbidden('enabling telemetry.propagate needs a tenant admin');
   }
@@ -736,8 +739,18 @@ export class CatalogService {
     const [row] = await this.ctx.db
       .update(connections)
       .set({ config: parsed, updatedAt: this.ctx.now() })
-      .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)))
+      .where(
+        and(
+          eq(connections.id, id),
+          eq(connections.tenantId, actor.tenantId),
+          // Compare and swap: the checks above were made against the config read at the start. If
+          // someone changed it meanwhile, nothing is written (409) instead of skipping the checks.
+          sql`${connections.config} = ${JSON.stringify(current.config)}::jsonb`,
+        ),
+      )
       .returning();
+    if (!row)
+      throw conflict(`connection "${current.name}" was changed meanwhile; reload and try again`);
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,
