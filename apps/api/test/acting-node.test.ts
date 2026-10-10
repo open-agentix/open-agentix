@@ -13,6 +13,7 @@ import {
   tenantRoleBindings,
   tenants as tenantsTable,
   teamMembers,
+  teams as teamsTable,
   users as usersTable,
 } from '../src/db/schema.js';
 import { routeIndex } from '../src/index.js';
@@ -579,6 +580,33 @@ describe.each(sqlTargets)('acting node and read path (%s)', (_kind, enabled, ope
         .where(eq(usersTable.id, uid['to-disable']!));
       expect((await get(tok['to-disable']!, '/v1/users')).statusCode).toBe(401);
     });
+
+    it.each<Mode>(['legacy', 'bindings'])(
+      'refuses after a team is deleted by SQL (memberships go with it by cascade), mode %s',
+      async (mode) => {
+        setMode(mode);
+        try {
+          const key = `team-del-${mode}`;
+          await mkUser(key, 'div-2', []);
+          const team = await n.services.identity.createTeam(
+            { userId: op().userId, tenantId: id['div-2']! },
+            { slug: `gone-${mode}`, name: 'Gone' },
+          );
+          await n.ctx.db
+            .insert(teamMembers)
+            .values({ teamId: team.id, userId: uid[key]!, role: 'operator' });
+          const fresh = await n.login(`${key}@example.org`, PW);
+          expect((await get(fresh, '/v1/agents')).statusCode).toBe(200); // cached now
+          const e0 = await epochOf('org-a');
+          // no invalidateUserTokens: only the trigger on teams can notice the cascade
+          await n.ctx.db.delete(teamsTable).where(eq(teamsTable.id, team.id));
+          expect(await epochOf('org-a')).toBeGreaterThan(e0);
+          expect((await get(fresh, '/v1/agents')).statusCode).toBe(403);
+        } finally {
+          setMode('bindings');
+        }
+      },
+    );
 
     it('sees a node created, renamed or removed after the snapshot was cached', async () => {
       expect((await get(tok['inh-viewer']!, '/v1/agents', 'org-a/div-2/late')).statusCode).toBe(

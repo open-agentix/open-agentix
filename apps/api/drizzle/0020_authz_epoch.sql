@@ -10,6 +10,9 @@
 --   users                  update of tenant_id, global_roles, platform_admin, disabled; delete
 --   team_members           insert, update, delete
 --   agent_role_bindings    insert, update, delete
+--   teams, agents          delete; update of tenant_id (teams), tenant_id or team_id (agents): a
+--                          cascaded delete of team_members / agent_role_bindings cannot find its
+--                          team or agent any more, so the owner bumps for it
 --   tenants                insert / delete of a child; update of slug, parent_id, root_id, path
 --                          (the cached tree snapshot is keyed by the epoch)
 CREATE OR REPLACE FUNCTION "authz_bump_roots"(roots uuid[]) RETURNS void LANGUAGE plpgsql AS $$
@@ -118,4 +121,41 @@ CREATE TRIGGER "authz_epoch_tenants_ins" AFTER INSERT ON "tenants" FOR EACH ROW 
 DROP TRIGGER IF EXISTS "authz_epoch_tenants_del" ON "tenants";--> statement-breakpoint
 CREATE TRIGGER "authz_epoch_tenants_del" AFTER DELETE ON "tenants" FOR EACH ROW EXECUTE FUNCTION "authz_bump_tenant"();--> statement-breakpoint
 DROP TRIGGER IF EXISTS "authz_epoch_tenants_upd" ON "tenants";--> statement-breakpoint
-CREATE TRIGGER "authz_epoch_tenants_upd" AFTER UPDATE ON "tenants" FOR EACH ROW EXECUTE FUNCTION "authz_bump_tenant"();
+CREATE TRIGGER "authz_epoch_tenants_upd" AFTER UPDATE ON "tenants" FOR EACH ROW EXECUTE FUNCTION "authz_bump_tenant"();--> statement-breakpoint
+-- Deleting a team or an agent cascades to team_members / agent_role_bindings, whose row triggers then
+-- no longer find the (already deleted) team or agent to look up its organisation. The owner row
+-- bumps instead, from OLD.tenant_id (and NEW.tenant_id when it moves). Conditions in the function,
+-- like the tenants trigger above.
+CREATE OR REPLACE FUNCTION "authz_bump_team_owner"() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF TG_OP = 'UPDATE' AND OLD."tenant_id" IS NOT DISTINCT FROM NEW."tenant_id" THEN
+		RETURN NULL;
+	END IF;
+	IF TG_OP = 'UPDATE' THEN
+		PERFORM "authz_bump_roots"(ARRAY(
+			SELECT DISTINCT "root_id" FROM "tenants" WHERE "id" IN (OLD."tenant_id", NEW."tenant_id")));
+	ELSE
+		PERFORM "authz_bump_roots"(ARRAY(SELECT "root_id" FROM "tenants" WHERE "id" = OLD."tenant_id"));
+	END IF;
+	RETURN NULL;
+END;
+$$;--> statement-breakpoint
+DROP TRIGGER IF EXISTS "authz_epoch_teams_trg" ON "teams";--> statement-breakpoint
+CREATE TRIGGER "authz_epoch_teams_trg" AFTER UPDATE OR DELETE ON "teams" FOR EACH ROW EXECUTE FUNCTION "authz_bump_team_owner"();--> statement-breakpoint
+CREATE OR REPLACE FUNCTION "authz_bump_agent_owner"() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF TG_OP = 'UPDATE' AND OLD."tenant_id" IS NOT DISTINCT FROM NEW."tenant_id"
+		AND OLD."team_id" IS NOT DISTINCT FROM NEW."team_id" THEN
+		RETURN NULL;
+	END IF;
+	IF TG_OP = 'UPDATE' THEN
+		PERFORM "authz_bump_roots"(ARRAY(
+			SELECT DISTINCT "root_id" FROM "tenants" WHERE "id" IN (OLD."tenant_id", NEW."tenant_id")));
+	ELSE
+		PERFORM "authz_bump_roots"(ARRAY(SELECT "root_id" FROM "tenants" WHERE "id" = OLD."tenant_id"));
+	END IF;
+	RETURN NULL;
+END;
+$$;--> statement-breakpoint
+DROP TRIGGER IF EXISTS "authz_epoch_agents_trg" ON "agents";--> statement-breakpoint
+CREATE TRIGGER "authz_epoch_agents_trg" AFTER UPDATE OR DELETE ON "agents" FOR EACH ROW EXECUTE FUNCTION "authz_bump_agent_owner"();

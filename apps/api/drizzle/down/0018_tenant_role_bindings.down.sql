@@ -16,6 +16,10 @@ DROP TRIGGER IF EXISTS "authz_epoch_agent_role_bindings_trg" ON "agent_role_bind
 DROP TRIGGER IF EXISTS "authz_epoch_tenants_ins" ON "tenants";
 DROP TRIGGER IF EXISTS "authz_epoch_tenants_del" ON "tenants";
 DROP TRIGGER IF EXISTS "authz_epoch_tenants_upd" ON "tenants";
+DROP TRIGGER IF EXISTS "authz_epoch_teams_trg" ON "teams";
+DROP TRIGGER IF EXISTS "authz_epoch_agents_trg" ON "agents";
+DROP FUNCTION IF EXISTS "authz_bump_agent_owner"();
+DROP FUNCTION IF EXISTS "authz_bump_team_owner"();
 DROP FUNCTION IF EXISTS "authz_bump_tenant"();
 DROP FUNCTION IF EXISTS "authz_bump_agent_binding"();
 DROP FUNCTION IF EXISTS "authz_bump_team_member"();
