@@ -141,6 +141,22 @@ const ALLOWED: Record<string, Record<string, Set<string> | RegExp>> = {
   otel_node_context_mismatch_total: {},
   otel_keep_kept_total: { class: oneOf('error', 'deny', 'approval', 'budget', 'guard') },
   otel_keep_evicted_total: { reason: oneOf('run_buffer', 'process_cap') },
+  otel_tenant_export_failures_total: {
+    reason: oneOf('timeout', 'network', 'http', 'too_large', 'denied', 'other'),
+  },
+  otel_tenant_spans_dropped_total: {
+    reason: oneOf('queue_full', 'pending_cap', 'no_capacity', 'region', 'denied', 'operator'),
+  },
+  otel_content_total: {
+    result: oneOf(
+      'attached',
+      'dropped_classification',
+      'dropped_opt_out',
+      'dropped_region',
+      'dropped_operator',
+      'dropped_no_exporter',
+    ),
+  },
   role_bindings_shadow_total: { outcome: slug, authoritative: oneOf('legacy', 'bindings') },
   authz_epoch_rejected_total: { reason: oneOf('stale', 'invalid') },
   mcp_stdio_violations: {},

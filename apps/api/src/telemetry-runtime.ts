@@ -23,7 +23,24 @@ export interface TelemetryStats {
   keepKept(keepClass: 'error' | 'deny' | 'approval' | 'budget' | 'guard'): void;
   /** Spans of not-sampled traces discarded because a keep-buffer bound was hit. */
   keepEvicted(reason: 'run_buffer' | 'process_cap', n: number): void;
+  /** A batch for a tenant-owned exporter failed (ADR 0015 7.3, slice S10). */
+  tenantExportFailed?(reason: ExportFailureReason): void;
+  /** Spans not handed to a tenant-owned exporter, by closed reason. */
+  tenantSpansDropped?(reason: TenantDropReason, n: number): void;
+  /** Outcome of the content gate for a model call span (ADR 0015 5.4). */
+  contentResult?(result: ContentResult, n: number): void;
 }
+
+export type TenantDropReason =
+  'queue_full' | 'pending_cap' | 'no_capacity' | 'region' | 'denied' | 'operator';
+
+export type ContentResult =
+  | 'attached'
+  | 'dropped_classification'
+  | 'dropped_opt_out'
+  | 'dropped_region'
+  | 'dropped_operator'
+  | 'dropped_no_exporter';
 
 export type InboundContextResult = 'ignored' | 'linked' | 'invalid';
 
@@ -39,6 +56,9 @@ export const NOOP_STATS: TelemetryStats = {
   nodeContextMismatch: () => undefined,
   keepKept: () => undefined,
   keepEvicted: () => undefined,
+  tenantExportFailed: () => undefined,
+  tenantSpansDropped: () => undefined,
+  contentResult: () => undefined,
 };
 
 export interface TelemetryRuntime {
@@ -88,6 +108,9 @@ function safeStats(stats: TelemetryStats): TelemetryStats {
     keepEvicted: call((r: Parameters<TelemetryStats['keepEvicted']>[0], n: number) =>
       stats.keepEvicted(r, n),
     ),
+    tenantExportFailed: call((r: ExportFailureReason) => stats.tenantExportFailed?.(r)),
+    tenantSpansDropped: call((r: TenantDropReason, n: number) => stats.tenantSpansDropped?.(r, n)),
+    contentResult: call((r: ContentResult, n: number) => stats.contentResult?.(r, n)),
   };
 }
 

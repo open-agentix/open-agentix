@@ -2,6 +2,7 @@ import { loadConfig } from './config.js';
 import { createControlNode } from './bootstrap.js';
 import { activateAirgap } from './airgap.js';
 import { initTelemetry } from './telemetry.js';
+import { createTenantExporterSource } from './services/telemetry-exporters.js';
 
 const config = loadConfig();
 // The air-gapped check runs before the exporter (and its header secret) exists (#220); the
@@ -14,6 +15,7 @@ const telemetry = await initTelemetry(config.otel, {
 });
 const node = await createControlNode(config);
 telemetry.attachStats(node.ctx.metrics.otel);
+telemetry.attachTenantExporters(createTenantExporterSource(node.ctx));
 await node.app.listen({ host: config.host, port: config.port });
 
 const shutdown = async (signal: string) => {

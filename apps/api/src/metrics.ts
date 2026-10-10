@@ -380,7 +380,28 @@ export class Metrics {
       labelNames: ['reason'],
       registers: [this.registry],
     });
+    const otelTenantExportFailures = new Counter({
+      name: `${prefix}otel_tenant_export_failures_total`,
+      help: 'Failed span exports to tenant-owned exporters by reason (timeout, network, http, too_large, denied, other)',
+      labelNames: ['reason'],
+      registers: [this.registry],
+    });
+    const otelTenantSpansDropped = new Counter({
+      name: `${prefix}otel_tenant_spans_dropped_total`,
+      help: 'Spans not handed to a tenant-owned exporter, by reason (queue_full, pending_cap, no_capacity, region, denied, operator)',
+      labelNames: ['reason'],
+      registers: [this.registry],
+    });
+    const otelContent = new Counter({
+      name: `${prefix}otel_content_total`,
+      help: 'Content gate outcomes for model call spans (attached, dropped_classification, dropped_opt_out, dropped_region, dropped_operator, dropped_no_exporter)',
+      labelNames: ['result'],
+      registers: [this.registry],
+    });
     this.otel = {
+      tenantExportFailed: (reason) => otelTenantExportFailures.inc({ reason }),
+      tenantSpansDropped: (reason, n) => otelTenantSpansDropped.inc({ reason }, n),
+      contentResult: (result, n) => otelContent.inc({ result }, n),
       keepKept: (keepClass) => otelKeepKept.inc({ class: keepClass }),
       keepEvicted: (reason, n) => otelKeepEvicted.inc({ reason }, n),
       nodeEventsDropped: (n) => otelNodeEventsDropped.inc(n),
