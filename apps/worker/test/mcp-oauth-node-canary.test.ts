@@ -13,7 +13,7 @@ import { mergeCredentials } from '../src/run-node.js';
  * its handover, its credentials and its step records from the control node, and its environment is
  * built from those. A stored OAuth token of a connection the step uses must be in none of them.
  */
-const CANARY = 'CANARY-4c2e8aJ1f7d3bK9065wZs3';
+const CANARY = 'CANARY-4c2e8aJ1f7d3bK9065wZs3Pm7QvLd';
 const IMAGE = `ghcr.io/open-agentix/open-agentix-worker@sha256:${'a'.repeat(64)}`;
 const SOURCE = `---
 apiVersion: openagentix.io/v1alpha1

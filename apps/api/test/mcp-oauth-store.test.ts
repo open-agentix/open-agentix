@@ -1,4 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ContextGuard } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -26,9 +29,9 @@ const KEK = randomBytes(32).toString('base64');
 const RESOURCE = 'https://mcp.example.org/mcp';
 const ISSUER = 'https://auth.example.org';
 const OTHER_TENANT = '00000000-0000-4000-8000-0000000000aa';
-const ACCESS = 'Zk29xQ7mLp3Vw8Rn5TbY1uHsJd4Ge';
-const REFRESH = 'Hb41yUe6Cd0Fs5AjXq8NmW2tKr7Pv';
-const SECOND = 'Qw93kLm2Xz7Pa4RtYc6NhB1vSe8Df';
+const ACCESS = 'Zk29xQ7mLp3Vw8Rn5TbY1uHsJd4GeCf6Xa';
+const REFRESH = 'Hb41yUe6Cd0Fs5AjXq8NmW2tKr7PvLg3Zo';
+const SECOND = 'Qw93kLm2Xz7Pa4RtYc6NhB1vSe8DfJu5Mi';
 
 let n: TestNode;
 let oauth: McpOauthStores;
@@ -451,6 +454,47 @@ describe('key service configuration', () => {
     ).toThrow(/cannot be read/); // a sibling path is outside; it fails only because it does not exist
   });
 
+  it('compares real paths: a symlinked directory and a link to the key file are refused too', () => {
+    const base = { NODE_ENV: 'test', OAX_DATABASE_URL: 'memory://' };
+    const root = mkdtempSync(join(tmpdir(), 'oax-kek-'));
+    try {
+      const secrets = join(root, 'secrets');
+      const keys = join(root, 'keys');
+      mkdirSync(secrets);
+      mkdirSync(keys);
+      writeFileSync(join(keys, 'kek'), KEK);
+      symlinkSync(secrets, join(root, 'secrets-link'));
+      symlinkSync(join(keys, 'kek'), join(secrets, 'innocent-name'));
+      // the key file is outside the directory ...
+      expect(() =>
+        loadConfig({
+          ...base,
+          OAX_SECRETS_DIR: join(root, 'nothing'),
+          OAX_MCP_OAUTH_KEK_FILE: join(keys, 'kek'),
+        }),
+      ).not.toThrow();
+      // ... but a link inside the secrets directory serves it
+      expect(() =>
+        loadConfig({
+          ...base,
+          OAX_SECRETS_DIR: secrets,
+          OAX_MCP_OAUTH_KEK_FILE: join(keys, 'kek'),
+        }),
+      ).toThrow(/inside OAX_SECRETS_DIR/);
+      // a key file reached through a symlinked parent of the directory
+      writeFileSync(join(secrets, 'real-kek'), KEK);
+      expect(() =>
+        loadConfig({
+          ...base,
+          OAX_SECRETS_DIR: secrets,
+          OAX_MCP_OAUTH_KEK_FILE: join(root, 'secrets-link', 'real-kek'),
+        }),
+      ).toThrow(/inside OAX_SECRETS_DIR/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('removes the key from process.env once it is loaded', () => {
     const saved = { ...process.env };
     try {
@@ -505,6 +549,15 @@ describe('what put() accepts', () => {
       'api.anthropic.com/v1/messages',
       'node_modules/fastify/lib',
       'ERR_STREAM_PREMATURE_CLOSE',
+      // public text: JWT headers, hashes with a prefix, ids, model ids, hosts, trace headers
+      'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9',
+      'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9',
+      `sha256/${randomBytes(32).toString('hex')}`,
+      `runs/${randomBytes(16).toString('hex')}`,
+      '/api/v1/connections/abc123XYZ',
+      'gpt-4o-mini-2024-07-18',
+      'worker-1a2b3c4d.v1.svc',
+      `00-${randomBytes(16).toString('hex')}-${randomBytes(8).toString('hex')}-01`,
       // long and periodic: slow to match, not random
       `${'abcdefghij'.repeat(40)}Zq8`,
     ];

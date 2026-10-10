@@ -18,7 +18,7 @@ import { executorTelemetry } from '../src/executor-spans.js';
  * exported spans. The canary has no known token shape, so only the exact-value registration can
  * remove it: this proves the registration happens before use.
  */
-const CANARY = 'CANARY-77b1d4Ye9a3c5Rf208vLq6';
+const CANARY = 'CANARY-77b1d4Ye9a3c5Rf208vLq6Hs2NkXt';
 const RESOURCE = 'https://mcp.example.org/mcp';
 
 let t: ReturnType<typeof startTracing>;

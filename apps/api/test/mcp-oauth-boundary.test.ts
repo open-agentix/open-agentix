@@ -21,10 +21,11 @@ const ROOT = join(import.meta.dirname, '../../..');
 const FORBIDDEN_NAMES =
   /mcp-oauth|mcpOauthTokens|mcpOauthClients|tenantDataKeys|McpCredentials|KeyService/;
 /** The api package by its bare name, any subpath of it, and the same through `require` or `import()`. */
-const API_IMPORT = /(?:from|import|require)\s*\(?\s*['"]@openagentix\/api(?:\/[^'"]*)?['"]/;
+const API_IMPORT =
+  /(?:from\s*['"]|import\s*['"]|(?:import|require)\s*\(\s*['"`])@openagentix\/api(?:\/[^'"`]*)?['"`]/;
 const FORBIDDEN = { test: (text: string) => FORBIDDEN_NAMES.test(text) || API_IMPORT.test(text) };
 
-const IMPORT = /(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]/g;
+const IMPORT = /(?:from\s*['"]|import\s*['"]|(?:import|require)\s*\(\s*['"`])([^'"`]+)['"`]/g;
 
 /** Source file behind an import specifier, or null for node builtins and third-party packages. */
 function resolveImport(from: string, spec: string): string | null {
@@ -89,6 +90,7 @@ describe('token boundary', () => {
         flagged('require', `const x = require('@openagentix/api/dist/index.js');`),
       ).toHaveLength(1);
       expect(flagged('dynamic', `const x = await import('@openagentix/api');`)).toHaveLength(1);
+      expect(flagged('template', 'const x = await import(`@openagentix/api`);')).toHaveLength(1);
       expect(flagged('named', `export const k = new McpCredentials();`)).toHaveLength(1);
       expect(flagged('clean', `import { y } from '@openagentix/core';`)).toHaveLength(0);
     } finally {

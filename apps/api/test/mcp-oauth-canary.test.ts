@@ -15,8 +15,8 @@ import { testNode, type TestNode } from './helpers.js';
  * error bodies, audit entries, API responses or what a run node is given. Step records, model
  * requests and spans are covered next to the executor (apps/worker/test/mcp-oauth-canary.test.ts).
  */
-const CANARY = 'CANARY-9f3a7cQ1e5b2dZ4a60xKm8';
-const REFRESH_CANARY = 'CANARY-1d8e6bH4f2a9cW7350pTn2';
+const CANARY = 'CANARY-9f3a7cQ1e5b2dZ4a60xKm8Wp3LsXv';
+const REFRESH_CANARY = 'CANARY-1d8e6bH4f2a9cW7350pTn2Yq5RvUz';
 const RESOURCE = 'https://mcp.example.org/mcp';
 
 let n: TestNode;
@@ -220,6 +220,21 @@ describe('the detector itself', () => {
 });
 
 describe('scoping and wiring', () => {
+  it('scrubs responses of principal-less routes with the tenant the resolver names (run-token routes)', async () => {
+    await arm();
+    const serve = async (tenant: string | undefined) => {
+      const app = Fastify({ logger: false });
+      scrubResponses(app, processSecrets, async () => tenant);
+      app.get('/x', async () => ({ note: CANARY }));
+      const body = (await app.inject({ method: 'GET', url: '/x' })).body;
+      await app.close();
+      return body;
+    };
+    expect(await serve(DEFAULT_TENANT_ID)).not.toContain(CANARY);
+    expect(await serve('other-tenant')).toContain(CANARY);
+    expect(await serve(undefined)).toContain(CANARY);
+  });
+
   it('a response served to another tenant is not rewritten with the token of this one', async () => {
     const app = Fastify({ logger: false });
     app.addHook('onRequest', async (req) => {
