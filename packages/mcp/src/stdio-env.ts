@@ -55,6 +55,27 @@ const EXTRA_RESERVED_ENV = new Set([
   'PAGER',
   'BROWSER',
   'DISPLAY',
+  // further loaders and hooks that run code or load libraries named in the value
+  'SSLKEYLOGFILE',
+  'TCLLIBPATH',
+  'TCL_LIBRARY',
+  'TK_LIBRARY',
+  'ZDOTDIR',
+  'INPUTRC',
+  'TERMINFO',
+  'TERMINFO_DIRS',
+  'MANPAGER',
+  'GNUPGHOME',
+  'SASL_PATH',
+  'HISTFILE',
+  'R_PROFILE',
+  'R_PROFILE_USER',
+  'R_ENVIRON',
+  'R_ENVIRON_USER',
+  'R_LIBS',
+  'R_LIBS_USER',
+  'MAGIC',
+  'ELECTRON_RUN_AS_NODE',
 ]);
 const EXTRA_RESERVED_PREFIXES = [
   'NODE_',
@@ -74,6 +95,27 @@ const EXTRA_RESERVED_PREFIXES = [
   'LD_',
   'DYLD_',
   'OAX_',
+  // OPENSSL_CONF / OPENSSL_ENGINES / OPENSSL_MODULES load engines and providers (shared objects)
+  'OPENSSL_',
+  // .NET startup hooks and CLR profilers load assemblies and native libraries
+  'DOTNET_',
+  'CORECLR_',
+  'COMPLUS_',
+  'COR_',
+  // GUI, media and graphics plugin paths, Kerberos and SSH helpers (SSH_ASKPASS runs a program)
+  'QT_',
+  'GTK_',
+  'GIO_',
+  'GST_',
+  'GDK_',
+  'LIBGL_',
+  'KRB5',
+  'SSH_',
+  'GPG_',
+  'ERL_',
+  'JULIA_',
+  'ELECTRON_',
+  'NODEJS_',
 ];
 
 /** `true` for names an MCP stdio connection must not set (credential rules plus loader hooks). */

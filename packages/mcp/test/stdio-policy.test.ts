@@ -399,6 +399,27 @@ describe('environment', () => {
     'PHP_INI_SCAN_DIR',
     'DENO_DIR',
     'BASH_FUNC_x%%',
+    // loaders reached through a library or runtime rather than the interpreter itself
+    'OPENSSL_CONF',
+    'OPENSSL_ENGINES',
+    'OPENSSL_MODULES',
+    'openssl_conf',
+    'DOTNET_STARTUP_HOOKS',
+    'DOTNET_ADDITIONAL_DEPS',
+    'CORECLR_PROFILER_PATH',
+    'COMPlus_EnableDiagnostics',
+    'QT_PLUGIN_PATH',
+    'GTK_MODULES',
+    'GIO_MODULE_DIR',
+    'GST_PLUGIN_PATH',
+    'LIBGL_DRIVERS_PATH',
+    'KRB5_CONFIG',
+    'SSH_ASKPASS',
+    'SSLKEYLOGFILE',
+    'TCLLIBPATH',
+    'R_PROFILE_USER',
+    'ERL_FLAGS',
+    'ELECTRON_RUN_AS_NODE',
   ])('refuses the name %s', (name) => {
     const issues = env({ [name]: 'x' });
     expect(issues.length, name).toBeGreaterThan(0);
