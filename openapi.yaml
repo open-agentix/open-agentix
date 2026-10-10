@@ -955,7 +955,7 @@ paths:
       summary: List agents
       tags:
         - agents
-      description: Agents the caller may read, newest first. Filters narrow that set and combine with AND. Each item carries tenant, use case, owner team, status, last run, month spend and budget.
+      description: Agents the caller may read, newest first. Filters narrow that set and combine with AND. Each item carries tenant, use case, owner team, status, last run, month spend and budget. With scope=subtree the list spans the acting tenant and its descendants, each node judged by the roles the caller holds there.
       parameters:
         - schema:
             default: 50
@@ -971,6 +971,24 @@ paths:
           in: query
           name: cursor
           required: false
+        - schema:
+            default: node
+            type: string
+            enum:
+              - node
+              - subtree
+          in: query
+          name: scope
+          required: false
+          description: "node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`"
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: tenantId
+          required: false
+          description: "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404"
         - schema:
             type: string
             maxLength: 100
@@ -1072,7 +1090,7 @@ paths:
                             - slugPath
                             - name
                           additionalProperties: false
-                          description: tenant the agent belongs to (always the tenant the request acts in)
+                          description: tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree)
                         useCase:
                           description: labels.useCase of the latest published version, of the draft while unpublished
                           type:
@@ -1312,7 +1330,7 @@ paths:
                       - slugPath
                       - name
                     additionalProperties: false
-                    description: tenant the agent belongs to (always the tenant the request acts in)
+                    description: tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree)
                   useCase:
                     description: labels.useCase of the latest published version, of the draft while unpublished
                     type:
@@ -1672,7 +1690,7 @@ paths:
                       - slugPath
                       - name
                     additionalProperties: false
-                    description: tenant the agent belongs to (always the tenant the request acts in)
+                    description: tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree)
                   useCase:
                     description: labels.useCase of the latest published version, of the draft while unpublished
                     type:
@@ -1922,7 +1940,7 @@ paths:
                       - slugPath
                       - name
                     additionalProperties: false
-                    description: tenant the agent belongs to (always the tenant the request acts in)
+                    description: tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree)
                   useCase:
                     description: labels.useCase of the latest published version, of the draft while unpublished
                     type:
@@ -2311,7 +2329,7 @@ paths:
                       - slugPath
                       - name
                     additionalProperties: false
-                    description: tenant the agent belongs to (always the tenant the request acts in)
+                    description: tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree)
                   useCase:
                     description: labels.useCase of the latest published version, of the draft while unpublished
                     type:
@@ -2586,7 +2604,7 @@ paths:
                       - slugPath
                       - name
                     additionalProperties: false
-                    description: tenant the agent belongs to (always the tenant the request acts in)
+                    description: tenant the agent belongs to (the acting tenant, or any node of the subtree with scope=subtree)
                   useCase:
                     description: labels.useCase of the latest published version, of the draft while unpublished
                     type:
@@ -3349,6 +3367,27 @@ paths:
                       - string
                       - "null"
                   outputs: {}
+                  tenant:
+                    description: "with scope=subtree: the tenant the run belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - agentId
@@ -3395,6 +3434,40 @@ paths:
       summary: List event sources
       tags:
         - events
+      parameters:
+        - schema:
+            default: node
+            type: string
+            enum:
+              - node
+              - subtree
+          in: query
+          name: scope
+          required: false
+          description: "node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`"
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: tenantId
+          required: false
+          description: "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404"
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+          in: query
+          name: limit
+          required: false
+          description: "with scope=subtree: page size (default 200)"
+        - schema:
+            type: string
+            maxLength: 4096
+          in: query
+          name: cursor
+          required: false
+          description: "with scope=subtree: `nextCursor` of the previous page"
       security:
         - bearer: []
       responses:
@@ -3452,6 +3525,27 @@ paths:
                           type:
                             - string
                             - "null"
+                        tenant:
+                          description: "with scope=subtree: the tenant the row belongs to"
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slug:
+                              type: string
+                            slugPath:
+                              type: string
+                              description: slugs from the organisation root to the tenant, e.g. acme/security
+                            name:
+                              type: string
+                          required:
+                            - id
+                            - slug
+                            - slugPath
+                            - name
+                          additionalProperties: false
                       required:
                         - id
                         - name
@@ -3464,6 +3558,10 @@ paths:
                         - createdAt
                         - ingestUrl
                       additionalProperties: false
+                  nextCursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - items
                 additionalProperties: false
@@ -3579,6 +3677,27 @@ paths:
                     type:
                       - string
                       - "null"
+                  tenant:
+                    description: "with scope=subtree: the tenant the row belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - name
@@ -3684,6 +3803,27 @@ paths:
                     type:
                       - string
                       - "null"
+                  tenant:
+                    description: "with scope=subtree: the tenant the row belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - name
@@ -3809,6 +3949,27 @@ paths:
                     type:
                       - string
                       - "null"
+                  tenant:
+                    description: "with scope=subtree: the tenant the row belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - name
@@ -3895,6 +4056,24 @@ paths:
           name: cursor
           required: false
         - schema:
+            default: node
+            type: string
+            enum:
+              - node
+              - subtree
+          in: query
+          name: scope
+          required: false
+          description: "node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`"
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: tenantId
+          required: false
+          description: "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404"
+        - schema:
             type: string
             format: uuid
             pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
@@ -3938,6 +4117,27 @@ paths:
                           type: string
                           description: ISO 8601 timestamp
                         payload: {}
+                        tenant:
+                          description: "with scope=subtree: the tenant the row belongs to"
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slug:
+                              type: string
+                            slugPath:
+                              type: string
+                              description: slugs from the organisation root to the tenant, e.g. acme/security
+                            name:
+                              type: string
+                          required:
+                            - id
+                            - slug
+                            - slugPath
+                            - name
+                          additionalProperties: false
                       required:
                         - id
                         - sourceId
@@ -4012,6 +4212,27 @@ paths:
                     type: string
                     description: ISO 8601 timestamp
                   payload: {}
+                  tenant:
+                    description: "with scope=subtree: the tenant the row belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - sourceId
@@ -4059,6 +4280,24 @@ paths:
           in: query
           name: cursor
           required: false
+        - schema:
+            default: node
+            type: string
+            enum:
+              - node
+              - subtree
+          in: query
+          name: scope
+          required: false
+          description: "node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`"
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: tenantId
+          required: false
+          description: "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404"
         - schema:
             type: string
             format: uuid
@@ -4205,6 +4444,27 @@ paths:
                             - string
                             - "null"
                         outputs: {}
+                        tenant:
+                          description: "with scope=subtree: the tenant the run belongs to"
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slug:
+                              type: string
+                            slugPath:
+                              type: string
+                              description: slugs from the organisation root to the tenant, e.g. acme/security
+                            name:
+                              type: string
+                          required:
+                            - id
+                            - slug
+                            - slugPath
+                            - name
+                          additionalProperties: false
                       required:
                         - id
                         - agentId
@@ -4456,6 +4716,27 @@ paths:
                       - string
                       - "null"
                   outputs: {}
+                  tenant:
+                    description: "with scope=subtree: the tenant the run belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                   traceId:
                     anyOf:
                       - type: string
@@ -4873,6 +5154,27 @@ paths:
                       - string
                       - "null"
                   outputs: {}
+                  tenant:
+                    description: "with scope=subtree: the tenant the run belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - agentId
@@ -4950,6 +5252,24 @@ paths:
           in: query
           name: cursor
           required: false
+        - schema:
+            default: node
+            type: string
+            enum:
+              - node
+              - subtree
+          in: query
+          name: scope
+          required: false
+          description: "node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`"
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: tenantId
+          required: false
+          description: "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404"
         - schema:
             default: pending
             type: string
@@ -5040,6 +5360,27 @@ paths:
                           type:
                             - string
                             - "null"
+                        tenant:
+                          description: "with scope=subtree: the tenant the row belongs to"
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slug:
+                              type: string
+                            slugPath:
+                              type: string
+                              description: slugs from the organisation root to the tenant, e.g. acme/security
+                            name:
+                              type: string
+                          required:
+                            - id
+                            - slug
+                            - slugPath
+                            - name
+                          additionalProperties: false
                       required:
                         - id
                         - runId
@@ -5174,6 +5515,27 @@ paths:
                     type:
                       - string
                       - "null"
+                  tenant:
+                    description: "with scope=subtree: the tenant the row belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - runId
@@ -5292,10 +5654,29 @@ paths:
                 $ref: "#/components/schemas/Error"
   /v1/costs/summary:
     get:
-      summary: Costs grouped by run, agent, team, month, provider or model
+      summary: Costs grouped by run, agent, team, tenant, use case, month, provider or model
       tags:
         - costs
+      description: With scope=subtree the ledger of the acting tenant and its descendants is aggregated, each node judged by the roles the caller holds there; groupBy=tenant then labels every group with its slug path.
       parameters:
+        - schema:
+            default: node
+            type: string
+            enum:
+              - node
+              - subtree
+          in: query
+          name: scope
+          required: false
+          description: "node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`"
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: tenantId
+          required: false
+          description: "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404"
         - schema:
             default: agent
             type: string
@@ -5409,6 +5790,41 @@ paths:
       summary: List connections (MCP servers)
       tags:
         - connections
+      description: "With scope=subtree: the connections owned by the acting tenant and its descendants the caller may read (paged with limit and cursor); platform connections owned by a tenant outside that set are not listed."
+      parameters:
+        - schema:
+            default: node
+            type: string
+            enum:
+              - node
+              - subtree
+          in: query
+          name: scope
+          required: false
+          description: "node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`"
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: tenantId
+          required: false
+          description: "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404"
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+          in: query
+          name: limit
+          required: false
+          description: "with scope=subtree: page size (default 200)"
+        - schema:
+            type: string
+            maxLength: 4096
+          in: query
+          name: cursor
+          required: false
+          description: "with scope=subtree: `nextCursor` of the previous page"
       security:
         - bearer: []
       responses:
@@ -5468,6 +5884,27 @@ paths:
                         updatedAt:
                           type: string
                           description: ISO 8601 timestamp
+                        tenant:
+                          description: "with scope=subtree: the tenant the row belongs to"
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slug:
+                              type: string
+                            slugPath:
+                              type: string
+                              description: slugs from the organisation root to the tenant, e.g. acme/security
+                            name:
+                              type: string
+                          required:
+                            - id
+                            - slug
+                            - slugPath
+                            - name
+                          additionalProperties: false
                       required:
                         - id
                         - tenantId
@@ -5480,6 +5917,10 @@ paths:
                         - createdAt
                         - updatedAt
                       additionalProperties: false
+                  nextCursor:
+                    type:
+                      - string
+                      - "null"
                 required:
                   - items
                 additionalProperties: false
@@ -5594,6 +6035,27 @@ paths:
                   updatedAt:
                     type: string
                     description: ISO 8601 timestamp
+                  tenant:
+                    description: "with scope=subtree: the tenant the row belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - tenantId
@@ -5701,6 +6163,27 @@ paths:
                             updatedAt:
                               type: string
                               description: ISO 8601 timestamp
+                            tenant:
+                              description: "with scope=subtree: the tenant the row belongs to"
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                slug:
+                                  type: string
+                                slugPath:
+                                  type: string
+                                  description: slugs from the organisation root to the tenant, e.g. acme/security
+                                name:
+                                  type: string
+                              required:
+                                - id
+                                - slug
+                                - slugPath
+                                - name
+                              additionalProperties: false
                           required:
                             - id
                             - tenantId
@@ -6121,6 +6604,27 @@ paths:
                   updatedAt:
                     type: string
                     description: ISO 8601 timestamp
+                  tenant:
+                    description: "with scope=subtree: the tenant the row belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - tenantId
@@ -6231,6 +6735,27 @@ paths:
                   updatedAt:
                     type: string
                     description: ISO 8601 timestamp
+                  tenant:
+                    description: "with scope=subtree: the tenant the row belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
                 required:
                   - id
                   - tenantId
@@ -7020,6 +7545,7 @@ paths:
       summary: List audit entries (newest first)
       tags:
         - audit
+      description: "With scope=subtree: the entries of the acting tenant and of every descendant where the caller holds audit:read (entries without a tenant partition are never included)."
       parameters:
         - schema:
             default: 50
@@ -7035,6 +7561,24 @@ paths:
           in: query
           name: cursor
           required: false
+        - schema:
+            default: node
+            type: string
+            enum:
+              - node
+              - subtree
+          in: query
+          name: scope
+          required: false
+          description: "node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`"
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: tenantId
+          required: false
+          description: "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404"
         - schema:
             default: false
             type: boolean
@@ -7109,6 +7653,27 @@ paths:
                           type: string
                         hash:
                           type: string
+                        tenant:
+                          description: "with scope=subtree: the tenant the row belongs to"
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slug:
+                              type: string
+                            slugPath:
+                              type: string
+                              description: slugs from the organisation root to the tenant, e.g. acme/security
+                            name:
+                              type: string
+                          required:
+                            - id
+                            - slug
+                            - slugPath
+                            - name
+                          additionalProperties: false
                       required:
                         - seq
                         - ts
@@ -9384,6 +9949,41 @@ paths:
       summary: Monthly budgets of the tenant with spend and alerts raised this month
       tags:
         - budgets
+      description: With scope=subtree `nodes` lists the budgets of every node of the subtree the caller may read costs of (paged by slug path with limit and cursor).
+      parameters:
+        - schema:
+            default: node
+            type: string
+            enum:
+              - node
+              - subtree
+          in: query
+          name: scope
+          required: false
+          description: "node: the acting tenant only (default). subtree: the acting tenant and every descendant the caller may read, each with its own roles; rows then carry `tenant`"
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 2048
+          in: query
+          name: tenantId
+          required: false
+          description: "with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404"
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+          in: query
+          name: limit
+          required: false
+          description: "with scope=subtree: page size (default 200)"
+        - schema:
+            type: string
+            maxLength: 4096
+          in: query
+          name: cursor
+          required: false
+          description: "with scope=subtree: `nextCursor` of the previous page"
       security:
         - bearer: []
       responses:
@@ -9518,6 +10118,160 @@ paths:
                         - percentUsed
                         - alerts
                       additionalProperties: false
+                  nodes:
+                    description: "with scope=subtree: the budgets of every readable node of the subtree (the acting node included), ordered by slug path"
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        node:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slugPath:
+                              type: string
+                            name:
+                              type: string
+                          required:
+                            - id
+                            - slugPath
+                            - name
+                          additionalProperties: false
+                        tenant:
+                          type: object
+                          properties:
+                            scope:
+                              type: string
+                              enum:
+                                - tenant
+                                - use_case
+                                - team
+                            key:
+                              description: tenant slug, use case label or team slug
+                              type:
+                                - string
+                                - "null"
+                            limitUsd:
+                              description: monthly limit, null when no budget is set
+                              type:
+                                - number
+                                - "null"
+                            spentUsd:
+                              type: number
+                              description: spend of the current UTC month
+                            percentUsed:
+                              type:
+                                - number
+                                - "null"
+                            alerts:
+                              type: array
+                              items:
+                                type: number
+                              description: alert thresholds (50, 80, 100) raised this month
+                          required:
+                            - scope
+                            - key
+                            - limitUsd
+                            - spentUsd
+                            - percentUsed
+                            - alerts
+                          additionalProperties: false
+                        useCases:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              scope:
+                                type: string
+                                enum:
+                                  - tenant
+                                  - use_case
+                                  - team
+                              key:
+                                description: tenant slug, use case label or team slug
+                                type:
+                                  - string
+                                  - "null"
+                              limitUsd:
+                                description: monthly limit, null when no budget is set
+                                type:
+                                  - number
+                                  - "null"
+                              spentUsd:
+                                type: number
+                                description: spend of the current UTC month
+                              percentUsed:
+                                type:
+                                  - number
+                                  - "null"
+                              alerts:
+                                type: array
+                                items:
+                                  type: number
+                                description: alert thresholds (50, 80, 100) raised this month
+                            required:
+                              - scope
+                              - key
+                              - limitUsd
+                              - spentUsd
+                              - percentUsed
+                              - alerts
+                            additionalProperties: false
+                        teams:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              scope:
+                                type: string
+                                enum:
+                                  - tenant
+                                  - use_case
+                                  - team
+                              key:
+                                description: tenant slug, use case label or team slug
+                                type:
+                                  - string
+                                  - "null"
+                              limitUsd:
+                                description: monthly limit, null when no budget is set
+                                type:
+                                  - number
+                                  - "null"
+                              spentUsd:
+                                type: number
+                                description: spend of the current UTC month
+                              percentUsed:
+                                type:
+                                  - number
+                                  - "null"
+                              alerts:
+                                type: array
+                                items:
+                                  type: number
+                                description: alert thresholds (50, 80, 100) raised this month
+                            required:
+                              - scope
+                              - key
+                              - limitUsd
+                              - spentUsd
+                              - percentUsed
+                              - alerts
+                            additionalProperties: false
+                      required:
+                        - node
+                        - tenant
+                        - useCases
+                        - teams
+                      additionalProperties: false
+                  nextCursor:
+                    description: "with scope=subtree: cursor of the next page of `nodes`"
+                    type:
+                      - string
+                      - "null"
                 required:
                   - month
                   - tenant

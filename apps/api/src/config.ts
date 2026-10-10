@@ -20,8 +20,10 @@ import {
   validateImage,
   validateResourceCeiling,
 } from '@openagentix/runners';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { OTEL_ENV_SHAPE, buildOtelConfig, type OtelConfig } from './telemetry-config.js';
+import { parseStdioEgressGrants } from './stdio-egress.js';
 import { loadDatabaseConfig, type DatabaseConfig } from './db/settings.js';
 
 /**
@@ -169,7 +171,13 @@ export const EnvSchema = z.object({
   OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR: json(z.record(z.string(), z.string())).optional(),
   OAX_K8S_CONTROL_PLANE_CIDRS: z.string().default(''),
   OAX_K8S_CONTROL_PLANE_PORTS: z.string().default('443'),
-  OAX_K8S_DNS_EGRESS: bool.default(true),
+  /**
+   * Allow the step Pod to reach kube-dns. Off by default (DNS exfiltration channel, ADR 0016
+   * section 4.5); `true` requires OAX_K8S_DNS_EGRESS_ACK=true.
+   */
+  OAX_K8S_DNS_EGRESS: bool.default(false),
+  /** Acknowledges that OAX_K8S_DNS_EGRESS=true lets a compromised step carry data out in DNS names. */
+  OAX_K8S_DNS_EGRESS_ACK: bool.default(false),
   OAX_K8S_AUTOMOUNT_SA_TOKEN: bool.default(false),
   OAX_K8S_DEFAULT_DENY_POLICY: z.string().default('default-deny-all'),
   // Container runner (W1-3a): opt-in, one hardened container per isolated step.
@@ -253,6 +261,12 @@ export const EnvSchema = z.object({
    * (paths or `dir/*`; default empty = none; ADR 0016 section 3.2).
    */
   OAX_MCP_STDIO_COMMANDS: z.string().default(''),
+  /**
+   * Network a tenant-defined stdio program may be given (ADR 0016 section 4.1): JSON object
+   * `{"/opt/mcp/bin/jira-mcp": ["*.atlassian.net"]}`. A program without an entry gets none; a
+   * tenant's connection can only narrow the grant. Default empty.
+   */
+  OAX_MCP_STDIO_EGRESS: z.string().default(''),
   /** `trusted`: platform stdio connections may start in air-gapped mode (child sockets are not guarded). */
   OAX_AIRGAPPED_STDIO: z.enum(['trusted']).optional(),
 });
@@ -387,7 +401,7 @@ export interface Config {
     anthropicBetas: string[];
   };
   /** Stdio MCP servers (ADR 0016): the operator allowlist for tenant-defined commands. */
-  mcp: { stdioCommands: string[] };
+  mcp: { stdioCommands: string[]; stdioEgress: Map<string, string[]> };
   airgap: {
     enabled: boolean;
     /** `OAX_AIRGAPPED_STDIO=trusted`: platform stdio connections are accepted in air-gapped mode. */
@@ -580,7 +594,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         /^[a-z0-9._-]{1,64}$/.test(b),
       ),
     },
-    mcp: { stdioCommands: stdioCommandsOf(e.OAX_MCP_STDIO_COMMANDS) },
+    mcp: mcpOf(e),
     airgap: {
       enabled: e.OAX_AIRGAPPED,
       stdioTrusted: e.OAX_AIRGAPPED_STDIO === 'trusted',
@@ -588,6 +602,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       catalogRefreshUrl: e.OAX_CATALOG_REFRESH_URL,
       webhookOutUrls: list(e.OAX_WEBHOOK_OUT_URLS),
     },
+  };
+}
+
+function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
+  const stdioCommands = stdioCommandsOf(e.OAX_MCP_STDIO_COMMANDS);
+  return {
+    stdioCommands,
+    stdioEgress: parseStdioEgressGrants(e.OAX_MCP_STDIO_EGRESS, stdioCommands),
   };
 }
 
@@ -739,7 +761,7 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
       'invalid configuration: OAX_K8S_CONTROL_PLANE_PORTS must list at least one TCP port (1-65535)',
     );
   }
-  const job = KubernetesJobRunnerConfigSchema.parse({
+  const jobParsed = KubernetesJobRunnerConfigSchema.safeParse({
     namespace: e.OAX_K8S_NAMESPACE,
     serviceAccountName: e.OAX_K8S_SERVICE_ACCOUNT,
     workerServiceAccount: e.OAX_K8S_WORKER_SERVICE_ACCOUNT,
@@ -767,9 +789,16 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
       ports: controlPlanePorts,
     },
     dnsEgress: e.OAX_K8S_DNS_EGRESS,
+    dnsEgressAcknowledged: e.OAX_K8S_DNS_EGRESS_ACK,
     automountServiceAccountToken: e.OAX_K8S_AUTOMOUNT_SA_TOKEN,
     defaultDenyPolicy: e.OAX_K8S_DEFAULT_DENY_POLICY,
   });
+  if (!jobParsed.success)
+    throw new OaxError(
+      'config_invalid',
+      `invalid configuration: ${jobParsed.error.issues.map((i) => i.message).join('; ')}`,
+    );
+  const job = jobParsed.data;
   try {
     validateResourceCeiling(job.resources);
   } catch (err) {
@@ -820,6 +849,14 @@ function runnersConfig(e: z.infer<typeof EnvSchema>): Config['runners'] {
       throw new OaxError(
         'config_invalid',
         'invalid configuration: runner "kubernetes-job" needs OAX_NODE_CONTROL_URL with an https:// URL',
+      );
+    }
+    // Without DNS egress the Pod cannot resolve any name (ADR 0016 section 4.5): a control URL with
+    // a host name could never be reached, so refuse it now instead of failing every step.
+    if (!job.dnsEgress && !isIP(new URL(e.OAX_NODE_CONTROL_URL).hostname.replace(/^\[|\]$/g, ''))) {
+      throw new OaxError(
+        'config_invalid',
+        'invalid configuration: OAX_K8S_DNS_EGRESS is off (the default) and OAX_NODE_CONTROL_URL names a host, which run nodes cannot resolve; use an IP address (for example a ClusterIP), an egress gateway that resolves names, or set OAX_K8S_DNS_EGRESS=true together with OAX_K8S_DNS_EGRESS_ACK=true (DNS exfiltration channel)',
       );
     }
     if (!job.image) {

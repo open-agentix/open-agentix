@@ -11,7 +11,7 @@ import {
   type Principal,
   type RunStatus,
 } from '@openagentix/core';
-import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { agents, approvals, events, runSteps, runs } from '../db/schema.js';
@@ -27,6 +27,7 @@ import {
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
+import type { ResolvedScope } from './subtree-scope.js';
 
 /** What `enqueue` reads before it opens its transaction. */
 interface AdmissionPlan {
@@ -295,24 +296,27 @@ export class RunsService {
     return run;
   }
 
-  async list(principal: Principal, filter: RunFilter, limit: number, cursor?: string) {
+  async list(
+    principal: Principal,
+    filter: RunFilter,
+    limit: number,
+    cursor?: string,
+    subtree?: ResolvedScope,
+  ) {
     const c = decodeTimeCursor(cursor);
-    const scope = visibleTeams(principal, 'runs:read');
-    const scopedAgents = visibleAgents(principal, 'runs:read');
-    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0)
-      return { items: [], nextCursor: null };
+    const visibility = this.visibility(principal, subtree);
+    if (!visibility) return { items: [], nextCursor: null };
     const rows = await this.ctx.db
       .select()
       .from(runs)
       .where(
         and(
-          eq(runs.tenantId, principal.tenantId),
+          visibility,
           filter.agentId ? eq(runs.agentId, filter.agentId) : undefined,
           filter.status ? eq(runs.status, filter.status) : undefined,
           filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
           filter.from ? gte(runs.createdAt, filter.from) : undefined,
           filter.to ? lt(runs.createdAt, filter.to) : undefined,
-          scope === 'all' ? undefined : this.runScope(scope, scopedAgents),
           c
             ? or(lt(runs.createdAt, c.t), and(eq(runs.createdAt, c.t), lt(runs.id, c.id)))
             : undefined,
@@ -321,6 +325,25 @@ export class RunsService {
       .orderBy(desc(runs.createdAt), desc(runs.id))
       .limit(limit + 1);
     return page(rows, limit, (r) => encodeTimeCursor(r.createdAt, r.id));
+  }
+
+  /**
+   * The row filter for the runs the principal may read: the acting tenant with team and
+   * agent-scoped bindings applied, or the resolved predicate of a `scope=subtree` list.
+   * `undefined` when nothing is readable.
+   */
+  private visibility(principal: Principal, subtree: ResolvedScope | undefined): SQL | undefined {
+    if (subtree)
+      return subtree.isEmpty
+        ? undefined
+        : subtree.predicate({ tenantId: runs.tenantId, teamId: runs.teamId, agent: runs.agentId });
+    const scope = visibleTeams(principal, 'runs:read');
+    const scopedAgents = visibleAgents(principal, 'runs:read');
+    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return undefined;
+    return and(
+      eq(runs.tenantId, principal.tenantId),
+      scope === 'all' ? undefined : this.runScope(scope, scopedAgents),
+    );
   }
 
   /** Aggregates for dashboards (same filters and team scoping as the list). */
@@ -464,34 +487,19 @@ export class RunsService {
     limit: number,
     cursor?: string,
     runId?: string,
+    subtree?: ResolvedScope,
   ) {
     const c = decodeTimeCursor(cursor);
-    const scope = visibleTeams(principal, 'runs:read');
-    const scopedAgents = visibleAgents(principal, 'runs:read');
-    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0)
-      return { items: [], nextCursor: null };
+    const visibility = this.approvalVisibility(principal, subtree);
+    if (!visibility) return { items: [], nextCursor: null };
     const rows = await this.ctx.db
       .select()
       .from(approvals)
       .where(
         and(
-          eq(approvals.tenantId, principal.tenantId),
+          visibility,
           eq(approvals.status, status),
           runId ? eq(approvals.runId, runId) : undefined,
-          scope === 'all'
-            ? undefined
-            : or(
-                scope.length ? inArray(approvals.teamId, scope) : undefined,
-                scopedAgents.length
-                  ? inArray(
-                      approvals.runId,
-                      this.ctx.db
-                        .select({ id: runs.id })
-                        .from(runs)
-                        .where(inArray(runs.agentId, scopedAgents)),
-                    )
-                  : undefined,
-              ),
           c
             ? or(
                 lt(approvals.requestedAt, c.t),
@@ -503,6 +511,38 @@ export class RunsService {
       .orderBy(desc(approvals.requestedAt), desc(approvals.id))
       .limit(limit + 1);
     return page(rows, limit, (r) => encodeTimeCursor(r.requestedAt, r.id));
+  }
+
+  /** Like {@link visibility} for approvals, whose agent scope goes through the run. */
+  private approvalVisibility(
+    principal: Principal,
+    subtree: ResolvedScope | undefined,
+  ): SQL | undefined {
+    const byAgent = (agentIds: string[]) =>
+      inArray(
+        approvals.runId,
+        this.ctx.db.select({ id: runs.id }).from(runs).where(inArray(runs.agentId, agentIds)),
+      );
+    if (subtree)
+      return subtree.isEmpty
+        ? undefined
+        : subtree.predicate({
+            tenantId: approvals.tenantId,
+            teamId: approvals.teamId,
+            agent: byAgent,
+          });
+    const scope = visibleTeams(principal, 'runs:read');
+    const scopedAgents = visibleAgents(principal, 'runs:read');
+    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return undefined;
+    return and(
+      eq(approvals.tenantId, principal.tenantId),
+      scope === 'all'
+        ? undefined
+        : or(
+            scope.length ? inArray(approvals.teamId, scope) : undefined,
+            scopedAgents.length ? byAgent(scopedAgents) : undefined,
+          ),
+    );
   }
 
   /** A human decision; the approver needs `runs:approve` and one of the approver roles of the agent. */

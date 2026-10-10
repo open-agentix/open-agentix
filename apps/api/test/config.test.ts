@@ -9,6 +9,9 @@ const K8S_REQUIRED = {
   OAX_NODE_CONTROL_URL: 'https://oax-api.oax.svc.cluster.local',
   OAX_K8S_IMAGE: `ghcr.io/open-agentix/toolbox-trivy@${DIGEST}`,
   OAX_K8S_CONTROL_PLANE_NAMESPACE_SELECTOR: '{"kubernetes.io/metadata.name":"oax"}',
+  // The control URL above is a host name, which needs DNS in the Pod (ADR 0016 section 4.5).
+  OAX_K8S_DNS_EGRESS: 'true',
+  OAX_K8S_DNS_EGRESS_ACK: 'true',
 };
 
 describe('loadConfig', () => {
@@ -307,5 +310,77 @@ describe('runner, toolbox, secrets and worker settings', () => {
       /always-denied/,
     );
     expect(() => loadConfig({ ...ok, OAX_K8S_CONTROL_PLANE_CIDRS: '10.96.0.10/32' })).not.toThrow();
+  });
+});
+
+describe('Kubernetes DNS egress (ADR 0016 section 4.5)', () => {
+  const k8s = {
+    ...base,
+    ...K8S_REQUIRED,
+    OAX_RUNNERS_ENABLED: 'kubernetes-job',
+    OAX_K8S_JOB_ENABLED: 'true',
+    OAX_TOOLBOX_ALLOWLIST: 'trivy',
+    OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false',
+    OAX_K8S_CONTROL_PLANE_CIDRS: '10.96.0.10/32',
+  };
+  it('OAX_K8S_DNS_EGRESS=true without the acknowledgement fails start-up', () => {
+    expect(() => loadConfig({ ...k8s, OAX_K8S_DNS_EGRESS_ACK: 'false' })).toThrow(
+      /OAX_K8S_DNS_EGRESS_ACK/,
+    );
+    expect(() => loadConfig({ ...k8s, OAX_K8S_DNS_EGRESS_ACK: undefined as never })).toThrow(
+      /OAX_K8S_DNS_EGRESS_ACK/,
+    );
+    const ok = loadConfig(k8s);
+    expect(ok.runners.kubernetesJob).toMatchObject({
+      dnsEgress: true,
+      dnsEgressAcknowledged: true,
+    });
+  });
+  it('is off by default, and the acknowledgement alone does not turn it on', () => {
+    const ip = {
+      ...k8s,
+      OAX_NODE_CONTROL_URL: 'https://10.96.0.10',
+      OAX_K8S_DNS_EGRESS: undefined,
+    };
+    expect(loadConfig(ip as never).runners.kubernetesJob.dnsEgress).toBe(false);
+    expect(
+      loadConfig({ ...ip, OAX_K8S_DNS_EGRESS_ACK: 'true' } as never).runners.kubernetesJob
+        .dnsEgress,
+    ).toBe(false);
+  });
+  it('without DNS a control URL with a host name is refused (it could never be reached)', () => {
+    expect(() =>
+      loadConfig({ ...k8s, OAX_K8S_DNS_EGRESS: 'false', OAX_K8S_DNS_EGRESS_ACK: 'false' }),
+    ).toThrow(/cannot resolve/);
+  });
+});
+
+describe('OAX_MCP_STDIO_EGRESS (ADR 0016 section 4.1)', () => {
+  const ok = { ...base, OAX_MCP_STDIO_COMMANDS: '/opt/mcp/bin/*' };
+  it('parses per-program grants and defaults to none', () => {
+    expect(loadConfig(base).mcp.stdioEgress.size).toBe(0);
+    const c = loadConfig({
+      ...ok,
+      OAX_MCP_STDIO_EGRESS: JSON.stringify({
+        '/opt/mcp/bin/jira-mcp': ['API.Atlassian.example', '*.corp.example'],
+      }),
+    });
+    expect([...c.mcp.stdioEgress]).toEqual([
+      ['/opt/mcp/bin/jira-mcp', ['api.atlassian.example', '*.corp.example']],
+    ]);
+  });
+  it.each([
+    ['not JSON', 'nope'],
+    ['not an object', '["a"]'],
+    ['a relative program', JSON.stringify({ 'jira-mcp': ['a.example.com'] })],
+    ['a program that cannot run', JSON.stringify({ '/opt/other/x': ['a.example.com'] })],
+    ['an empty grant', JSON.stringify({ '/opt/mcp/bin/a': [] })],
+    ['a non-string entry', JSON.stringify({ '/opt/mcp/bin/a': [1] })],
+    ['a too broad wildcard', JSON.stringify({ '/opt/mcp/bin/a': ['*.com'] })],
+    ['a too broad CIDR', JSON.stringify({ '/opt/mcp/bin/a': ['0.0.0.0/0'] })],
+  ])('fails start-up on %s', (_n, value) => {
+    expect(() => loadConfig({ ...ok, OAX_MCP_STDIO_EGRESS: value })).toThrow(
+      /OAX_MCP_STDIO_EGRESS/,
+    );
   });
 });

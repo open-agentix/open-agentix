@@ -20,7 +20,9 @@ import {
   PolicyCreateBody,
   PolicySchema,
   PolicyUpdateBody,
+  SubtreePageQuery,
 } from '../schemas.js';
+import { SUBTREE_DEFAULT_PAGE, assertPagingNeedsSubtree, rowTenants } from '../subtree.js';
 import { HttpError } from '../../errors.js';
 import type { ZApp } from '../zapp.js';
 
@@ -37,14 +39,41 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
         tags: ['connections'],
         summary: 'List connections (MCP servers)',
         security: sec,
-        response: { 200: z.object({ items: z.array(ConnectionSchema) }) },
+        description:
+          'With scope=subtree: the connections owned by the acting tenant and its descendants the caller may read (paged with limit and cursor); platform connections owned by a tenant outside that set are not listed.',
+        querystring: SubtreePageQuery,
+        response: {
+          200: z.object({
+            items: z.array(ConnectionSchema),
+            nextCursor: z.string().nullable().optional(),
+          }),
+        },
       },
     },
-    async (req) => ({
-      items: (await catalog.listConnections(principalOf(req))).map((c) =>
-        connectionDto(c, catalog.stdioIssues(c)),
-      ),
-    }),
+    async (req) => {
+      assertPagingNeedsSubtree(req.query);
+      const principal = principalOf(req);
+      const subtree = await services.subtree.resolve(principal, 'connections:read', req.query);
+      if (!subtree)
+        return {
+          items: (await catalog.listConnections(principal)).map((c) =>
+            connectionDto(c, catalog.stdioIssues(c)),
+          ),
+        };
+      const r = await catalog.listConnectionsIn(
+        subtree,
+        req.query.limit ?? SUBTREE_DEFAULT_PAGE,
+        req.query.cursor,
+      );
+      const tenantOf = await rowTenants(services.subtree, subtree, r.items);
+      return {
+        items: r.items.map((c) => ({
+          ...connectionDto(c, catalog.stdioIssues(c)),
+          tenant: tenantOf(c),
+        })),
+        nextCursor: r.nextCursor,
+      };
+    },
   );
 
   app.post(

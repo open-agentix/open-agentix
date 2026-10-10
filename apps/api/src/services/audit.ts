@@ -18,6 +18,7 @@ import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { auditCheckpoints, auditLog, runs } from '../db/schema.js';
 import { decodeSeqCursor, encodeSeqCursor, page } from '../pagination.js';
+import type { ResolvedScope } from './subtree-scope.js';
 import { activeGuardedSpan, activeSpanIdIn } from '../telemetry.js';
 
 const AUDIT_LOCK = 734_201;
@@ -243,14 +244,20 @@ export class AuditService {
     }));
   }
 
+  /**
+   * `subtree` replaces the tenant of the filter by the nodes of a `scope=subtree` list (entries
+   * without a tenant partition are never part of it) and adds the tenant to every entry.
+   */
   async list(
     filter: AuditListFilter,
     limit: number,
     cursor?: string,
-  ): Promise<{ items: AuditEntry[]; nextCursor: string | null }> {
+    subtree?: ResolvedScope,
+  ): Promise<{ items: (AuditEntry & { tenantId?: string })[]; nextCursor: string | null }> {
     const before = decodeSeqCursor(cursor);
+    if (subtree?.isEmpty) return { items: [], nextCursor: null };
     const conds = [
-      tenantCondition(filter.tenantId),
+      subtree ? subtree.nodePredicate(auditLog.tenantId) : tenantCondition(filter.tenantId),
       filter.runId ? eq(auditLog.runId, filter.runId) : undefined,
       filter.action ? eq(auditLog.action, filter.action) : undefined,
       filter.from ? gte(auditLog.ts, filter.from) : undefined,
@@ -263,7 +270,13 @@ export class AuditService {
       .where(conds.length ? and(...conds) : undefined)
       .orderBy(desc(auditLog.seq))
       .limit(limit + 1);
-    return page(rows.map(rowToEntry), limit, (e) => encodeSeqCursor(e.seq));
+    return page(
+      rows.map((r) =>
+        subtree && r.tenantId ? { ...rowToEntry(r), tenantId: r.tenantId } : rowToEntry(r),
+      ),
+      limit,
+      (e) => encodeSeqCursor(e.seq),
+    );
   }
 
   /** Verifies the chain between two sequence numbers (streaming in batches). */

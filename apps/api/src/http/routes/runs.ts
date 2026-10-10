@@ -25,6 +25,7 @@ import {
   StepSchema,
   pageOf,
 } from '../schemas.js';
+import { assertNotBoth, rowTenants } from '../subtree.js';
 import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
@@ -47,8 +48,10 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
     },
     async (req) => {
       const q = req.query;
+      const principal = principalOf(req);
+      const subtree = await services.subtree.resolve(principal, 'runs:read', q);
       const r = await runs.list(
-        principalOf(req),
+        principal,
         {
           ...q,
           from: q.from ? new Date(q.from) : undefined,
@@ -56,10 +59,15 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
         },
         q.limit,
         q.cursor,
+        subtree,
       );
       const names = await runs.agentNames(r.items.map((x) => x.agentId));
+      const tenantOf = subtree ? await rowTenants(services.subtree, subtree, r.items) : undefined;
       return {
-        items: r.items.map((x) => runDto(x, names.get(x.agentId) ?? null)),
+        items: r.items.map((x) => {
+          const tenant = tenantOf?.(x);
+          return { ...runDto(x, names.get(x.agentId) ?? null), ...(tenant ? { tenant } : {}) };
+        }),
         nextCursor: r.nextCursor,
       };
     },
@@ -241,16 +249,23 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
       },
     },
     async (req) => {
+      const principal = principalOf(req);
+      const subtree = await services.subtree.resolve(principal, 'runs:read', req.query);
       const r = await runs.listApprovals(
-        principalOf(req),
+        principal,
         req.query.status,
         req.query.limit,
         req.query.cursor,
         req.query.runId,
+        subtree,
       );
       const names = await runs.pipelineNames(r.items.map((a) => a.runId));
+      const tenantOf = subtree ? await rowTenants(services.subtree, subtree, r.items) : undefined;
       return {
-        items: r.items.map((a) => approvalDto(a, names.get(a.runId) ?? null)),
+        items: r.items.map((a) => {
+          const tenant = tenantOf?.(a);
+          return { ...approvalDto(a, names.get(a.runId) ?? null), ...(tenant ? { tenant } : {}) };
+        }),
         nextCursor: r.nextCursor,
       };
     },
@@ -315,22 +330,30 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
       config: { access: 'costs:read' },
       schema: {
         tags: ['costs'],
-        summary: 'Costs grouped by run, agent, team, month, provider or model',
+        summary: 'Costs grouped by run, agent, team, tenant, use case, month, provider or model',
+        description:
+          'With scope=subtree the ledger of the acting tenant and its descendants is aggregated, each node judged by the roles the caller holds there; groupBy=tenant then labels every group with its slug path.',
         security: sec,
         querystring: CostQuery,
         response: { 200: z.object({ groupBy: z.string(), items: z.array(CostRowSchema) }) },
       },
     },
-    async (req) => ({
-      groupBy: req.query.groupBy,
-      items: await services.costs.summary(
-        principalOf(req),
-        req.query.groupBy,
-        req.query.from,
-        req.query.to,
-        req.query.limit,
-        req.query.allTenants,
-      ),
-    }),
+    async (req) => {
+      assertNotBoth(req.query);
+      const principal = principalOf(req);
+      const subtree = await services.subtree.resolve(principal, 'costs:read', req.query);
+      return {
+        groupBy: req.query.groupBy,
+        items: await services.costs.summary(
+          principal,
+          req.query.groupBy,
+          req.query.from,
+          req.query.to,
+          req.query.limit,
+          req.query.allTenants,
+          subtree,
+        ),
+      };
+    },
   );
 }

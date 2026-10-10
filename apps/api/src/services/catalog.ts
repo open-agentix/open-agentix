@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
+  getEgressPolicy,
   hasTenantPrefix,
   resolveRoute,
   type AccessCatalog,
@@ -23,6 +24,7 @@ import {
   type McpServerConfig,
 } from '@openagentix/mcp';
 import { findStdioViolations, inlineStdioSteps, stdioIsolationMessage } from '../stdio.js';
+import { effectiveStdioEgress, egressUnusedWarnings, stdioEgressIssues } from '../stdio-egress.js';
 import {
   assertConnectionAllowed,
   getNetworkSettings,
@@ -37,12 +39,14 @@ import {
   type ModelEntry,
 } from '@openagentix/providers';
 import { legacyNetwork } from '@openagentix/providers';
-import { and, asc, eq, or } from 'drizzle-orm';
+import { and, asc, eq, gt, or } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import { DEFAULT_TENANT_ID, agents, connections, policies, teams, tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
+import { decodeNameCursor, encodeNameCursor, page } from '../pagination.js';
 import type { AuditService } from './audit.js';
+import type { ResolvedScope } from './subtree-scope.js';
 
 export type ConnectionRow = typeof connections.$inferSelect;
 export type PolicyRow = typeof policies.$inferSelect;
@@ -110,6 +114,33 @@ export class CatalogService {
       .from(connections)
       .where(this.visible(actor.tenantId))
       .orderBy(asc(connections.name));
+  }
+
+  /**
+   * Connections owned by the nodes of a `scope=subtree` list, ordered by name and id and
+   * keyset-paged by them. Platform connections owned by a node outside the scope are not listed:
+   * their owner would name a node the caller may not see.
+   */
+  async listConnectionsIn(subtree: ResolvedScope, limit: number, cursor?: string) {
+    if (subtree.isEmpty) return { items: [] as ConnectionRow[], nextCursor: null };
+    const after = decodeNameCursor(cursor);
+    const rows = await this.ctx.db
+      .select()
+      .from(connections)
+      .where(
+        and(
+          subtree.nodePredicate(connections.tenantId),
+          after === null
+            ? undefined
+            : or(
+                gt(connections.name, after.key),
+                and(eq(connections.name, after.key), gt(connections.id, after.id)),
+              ),
+        ),
+      )
+      .orderBy(asc(connections.name), asc(connections.id))
+      .limit(limit + 1);
+    return page(rows, limit, (r) => encodeNameCursor(r.name, r.id));
   }
 
   async getConnection(actor: TenantActor, id: string): Promise<ConnectionRow> {
@@ -343,6 +374,7 @@ export class CatalogService {
       ? stdioAirgapProblem(name, scope, cfg, stdioAirgapContext(this.ctx.config))
       : null;
     if (airgap) throw new HttpError(422, 'airgap_violation', airgap);
+    this.assertStdioEgress(name, scope, cfg);
     if (!isTenantScope(scope)) return;
     const issues = checkStdioConfig(cfg, {
       allowlist: this.ctx.config.mcp.stdioCommands,
@@ -354,6 +386,39 @@ export class CatalogService {
       const e = stdioError(name, issues);
       throw new HttpError(400, e.code, e.message, issues);
     }
+  }
+
+  /**
+   * ADR 0016 S2: the `egress` of a stdio connection must be well formed (400 `mcp_egress_invalid`)
+   * and inside its bounds (422 `egress_denied`): for tenant-defined connections the operator's
+   * per-program grant (`OAX_MCP_STDIO_EGRESS`, deny by default), in air-gapped mode the allowlist.
+   * Pure checks, no DNS; the runner ceiling and the proxy apply again at run time.
+   */
+  private assertStdioEgress(
+    name: string,
+    scope: ConnectionScope,
+    cfg: Extract<McpServerConfig, { transport: 'stdio' }>,
+  ): void {
+    const issues = this.stdioEgressProblems(scope, cfg);
+    const first = issues[0];
+    if (!first) return;
+    throw new HttpError(
+      first.code === 'mcp_egress_invalid' ? 400 : 422,
+      first.code,
+      `MCP connection "${name}": ${first.message} (${first.path})`,
+      issues,
+    );
+  }
+
+  private stdioEgressProblems(
+    scope: string,
+    cfg: Extract<McpServerConfig, { transport: 'stdio' }>,
+  ) {
+    const policy = getEgressPolicy();
+    return stdioEgressIssues(cfg, isTenantScope(scope), {
+      grants: this.ctx.config.mcp.stdioEgress,
+      ...(policy.airgapped ? { airgap: policy } : {}),
+    });
   }
 
   /** Stdio rule issues of one stored connection, for the console (`[]` when it is fine). */
@@ -404,6 +469,18 @@ export class CatalogService {
     }));
   }
 
+  /** Agent Check lint `egress_unused` for a definition (advisory warnings, never errors). */
+  async egressUnused(
+    def: Parameters<typeof egressUnusedWarnings>[0],
+    scope: RunScope,
+  ): Promise<{ path: string; message: string }[]> {
+    const configs = (await this.connectionsForRun('mcp', scope)).flatMap((c) => {
+      const p = McpServerConfigSchema.safeParse(c.config);
+      return p.success ? [{ ...p.data, name: c.name }] : [];
+    });
+    return egressUnusedWarnings(def, configs);
+  }
+
   /**
    * The MCP server configs a run node receives for a step (`servers`: the servers it holds grants
    * on), read fresh and checked in the same pass: the tenant stdio connections among them must
@@ -417,13 +494,50 @@ export class CatalogService {
     scope: RunScope,
     servers: ReadonlySet<string>,
     where: { runId: string; actor: string; step?: string },
-  ): Promise<{ configs: McpServerConfig[]; tenantStdio: string[]; tenantHttp: string[] }> {
+  ): Promise<{
+    configs: McpServerConfig[];
+    tenantStdio: string[];
+    tenantHttp: string[];
+    mcpEgress: { server: string; egress: string[] }[];
+  }> {
     const rows = (await this.connectionsForRun('mcp', scope, { fresh: true })).filter((c) =>
       servers.has(c.name),
     );
     const tenantStdio: string[] = [];
     const tenantHttp: string[] = [];
+    const mcpEgress: { server: string; egress: string[] }[] = [];
     for (const c of rows) {
+      // ADR 0016 S2: what a stdio server may reach is decided here, from the stored connection, at
+      // every step: a connection stored before the grant shrank, or before the air-gapped mode was
+      // switched on, fails closed instead of running with the old list.
+      const parsed = McpServerConfigSchema.safeParse(c.config);
+      if (parsed.success && parsed.data.transport === 'stdio') {
+        const bad = this.stdioEgressProblems(c.scope, parsed.data);
+        if (bad.length > 0) {
+          this.ctx.metrics.mcpStdioRefused.inc({ code: 'egress_denied' });
+          await this.audit.append({
+            actor: where.actor,
+            tenantId: scope.tenantId,
+            action: 'mcp.egress.refused',
+            target: c.id,
+            runId: where.runId,
+            payload: {
+              connection: c.name,
+              scope: c.scope,
+              ...(where.step ? { step: where.step } : {}),
+              issues: bad.map((i) => ({ code: i.code, path: i.path })),
+            },
+          });
+          throw new HttpError(
+            422,
+            'egress_denied',
+            `MCP connection "${c.name}": ${bad[0]!.message} (${bad[0]!.path})`,
+            bad,
+          );
+        }
+        const egress = effectiveStdioEgress(parsed.data);
+        if (egress.length > 0) mcpEgress.push({ server: c.name, egress });
+      }
       if (!isTenantScope(c.scope)) continue;
       const transport = (c.config as { transport?: string } | null)?.transport;
       if (transport === 'streamable-http') tenantHttp.push(c.name);
@@ -453,6 +567,7 @@ export class CatalogService {
       configs: rows.map((c) => McpServerConfigSchema.parse(c.config)),
       tenantStdio,
       tenantHttp,
+      mcpEgress,
     };
   }
 

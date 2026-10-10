@@ -50,6 +50,7 @@ export interface EgressProxyOptions {
 }
 
 export interface EgressDenial {
+  /** The proxy account: the node id, or `<node id>.<server>` for an MCP server's grant. */
   nodeId: string;
   target: string;
   reason:
@@ -67,6 +68,12 @@ export interface EgressDenial {
 interface GrantClaims {
   /** node id */
   n: string;
+  /**
+   * MCP server (connection name) the grant belongs to; absent on the step's own grant. The account
+   * name differs per server ({@link egressAccount}), and the signature covers this field, so a
+   * grant of one server cannot be presented under another server's or the step's account.
+   */
+  s?: string;
   /** egress entries */
   e: string[];
   /** expiry, unix seconds */
@@ -77,16 +84,33 @@ const b64 = (b: Buffer | string) => Buffer.from(b).toString('base64url');
 const mac = (secret: string, payload: string) =>
   createHmac('sha256', secret).update(`oax-egress.${payload}`).digest();
 
+const SERVER = /^[a-z][a-z0-9-]{0,62}$/;
+
+/**
+ * The proxy account (Basic auth user name) of a grant: the node id for the step's own grant,
+ * `<node id>.<server>` for the grant of one MCP server. Server names are slugs and cannot contain
+ * a dot, so the two forms never collide.
+ */
+export function egressAccount(nodeId: string, server?: string): string {
+  return server === undefined ? nodeId : `${nodeId}.${server}`;
+}
+
 /** Mints the node's proxy password: `<claims>.<hmac>`; usable as the password of Basic auth. */
 export function mintEgressGrant(
   secret: string,
-  grant: { nodeId: string; egress: readonly string[]; ttlSeconds: number },
+  grant: { nodeId: string; server?: string; egress: readonly string[]; ttlSeconds: number },
   now: number = Date.now(),
 ): string {
   if (secret.length < 32)
     throw new OaxError('config_invalid', 'the egress grant secret needs at least 32 characters');
+  // A dot separates node id and server in the account name; a node id with one could collide.
+  if (grant.nodeId.includes('.') || grant.nodeId === '')
+    throw new OaxError('config_invalid', 'the node id of an egress grant must not contain a dot');
+  if (grant.server !== undefined && !SERVER.test(grant.server))
+    throw new OaxError('config_invalid', 'the MCP server name of an egress grant is not a slug');
   const claims: GrantClaims = {
     n: grant.nodeId,
+    ...(grant.server !== undefined ? { s: grant.server } : {}),
     e: [...grant.egress],
     x: Math.floor(now / 1000) + grant.ttlSeconds,
   };
@@ -94,9 +118,10 @@ export function mintEgressGrant(
   return `${payload}.${b64(mac(secret, payload))}`;
 }
 
+/** `account` is the Basic auth user name ({@link egressAccount}). */
 export function verifyEgressGrant(
   secret: string,
-  nodeId: string,
+  account: string,
   password: string,
   now: number = Date.now(),
 ): GrantClaims | null {
@@ -108,7 +133,11 @@ export function verifyEgressGrant(
   try {
     const c = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as GrantClaims;
     if (
-      c.n !== nodeId ||
+      typeof c.n !== 'string' ||
+      c.n.includes('.') ||
+      (c.s !== undefined && (typeof c.s !== 'string' || !SERVER.test(c.s))) ||
+      // The grant is only valid under the account it was minted for.
+      egressAccount(c.n, c.s) !== account ||
       typeof c.x !== 'number' ||
       c.x * 1000 <= now ||
       !Array.isArray(c.e) ||
@@ -132,6 +161,7 @@ export class EgressProxy {
   private server: http.Server | null = null;
   private readonly sockets = new Set<net.Socket>();
   private readonly tunnels = new Map<string, number>();
+  private readonly accepted = new Map<string, number>();
   private readonly ceiling: EgressRule[];
   private readonly privateRanges: Cidr[];
 
@@ -144,6 +174,14 @@ export class EgressProxy {
       if (!p) throw new OaxError('config_invalid', `invalid private egress range "${c}"`);
       return p;
     });
+  }
+
+  /**
+   * Tunnels this proxy opened, per account (the node id, or `<node id>.<server>` for an MCP
+   * server's grant; bounded). Lets an operator and the egress tests see which account connected.
+   */
+  connectionCounts(): ReadonlyMap<string, number> {
+    return this.accepted;
   }
 
   /** Recent refused attempts (bounded); names only, never credentials. */
@@ -247,6 +285,8 @@ export class EgressProxy {
       return refuse('429 Too Many Requests');
     }
     this.tunnels.set(nodeId, open + 1);
+    if (this.accepted.size < 1024 || this.accepted.has(nodeId))
+      this.accepted.set(nodeId, (this.accepted.get(nodeId) ?? 0) + 1);
     const upstream = (this.opts.connect ?? net.connect)({ host: addresses[0]!, port });
     this.sockets.add(upstream);
     const idle = this.opts.idleTimeoutMs ?? 300_000;

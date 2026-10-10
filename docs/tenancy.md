@@ -263,6 +263,28 @@ the application back first), then `0019_trb_home_move.down.sql` (the trigger onl
 `apps/api/drizzle/down/0018_tenant_role_bindings.down.sql` drops both tables, the triggers
 and the epoch column; `global_roles` is intact, so nothing is lost but the new tables.
 
+## Subtree reads (ADR 0014, slice S3)
+
+List routes accept `?scope=node|subtree` (default `node`: unchanged) and, with `subtree`,
+`?tenantId=<id | slug path | slug>` to narrow. `scope=subtree` spans the acting node
+(`X-OAX-Tenant`) and every descendant the caller can see, **each judged by the roles held there**
+(an inheriting viewer of a division reads the division and below, a team scoped role only its
+teams, ancestors, siblings and other organisations never take part). The node list is built on the
+server; `tenantId` can only narrow it, and a node that is unknown, invisible or outside the subtree
+is the same `404` as one that does not exist. Rows carry `tenant { id, slug, slugPath, name }`.
+
+| Route | Permission | Notes |
+| --- | --- | --- |
+| `GET /v1/agents`, `/v1/runs`, `/v1/approvals` | `agents:read`, `runs:read` | team and agent scoped roles apply per node; the agent summary (last run, spend, budget) is computed per row's own node |
+| `GET /v1/events`, `/v1/event-sources`, `/v1/connections` | `events:read`, `sources:read`, `connections:read` | sources and connections: `limit` (default 200, max 1000) and `cursor`, subtree mode only; platform connections owned by a node outside the scope are not listed |
+| `GET /v1/costs/summary` | `costs:read` | every `groupBy`; `groupBy=tenant` labels groups with the slug path |
+| `GET /v1/budgets` | `costs:read` | `nodes[]` with the budgets of every readable node, paged by slug path |
+| `GET /v1/audit` | `audit:read` | only nodes where the caller holds it; viewers get 403 |
+
+A subtree with more readable nodes than `OAX_TENANT_MAX_NODES_PER_ROOT` is `422 subtree_too_large`
+(narrow with `tenantId`). `allTenants` cannot be combined with `scope=subtree`. On the `legacy` read
+path, and for callers limited to their home node, the subtree is the acting node.
+
 ## Audit
 
 The hash chain is global (one chain keeps ordering and tamper detection simple); every entry carries

@@ -12,7 +12,7 @@ import { ContainerRunner, type RunNodeSpec } from '../src/index.js';
  *   pnpm vitest run packages/runners/test/container.integration.test.ts
  *
  * The image must already exist locally (the runner never pulls) and contain `sh`, `id`, `grep`,
- * `wget` and `ls` (alpine/busybox). The test creates and removes its own internal network. Against
+ * `wget`, `nslookup` and `ls` (alpine/busybox). The test creates and removes its own internal network. Against
  * the raw Docker socket it needs OAX_TEST_ALLOW_RAW_SOCKET=1 (a test-only opt-out of the guard).
  */
 const enabled = process.env.OAX_TEST_DOCKER === '1' && !!process.env.OAX_TEST_IMAGE;
@@ -40,6 +40,9 @@ case "$TOKEN" in "oaxrt.$EXPECT"*) ;; *) exit 17;; esac
 case "$TOKEN" in *"$FORBIDDEN"*) exit 18;; esac
 wget -q -T 3 -O /dev/null http://example.com && exit 19
 wget -q -T 3 -O /dev/null http://1.1.1.1 && exit 19
+# ADR 0016 section 4.5: no external name resolves from a node (the resolver forwards nothing)
+nslookup example.com >/dev/null 2>&1 && exit 21
+nslookup one.one.one.one >/dev/null 2>&1 && exit 21
 [ "$(grep CapEff /proc/self/status | awk '{print $2}')" = "0000000000000000" ] || exit 20
 exit 0
 `;
