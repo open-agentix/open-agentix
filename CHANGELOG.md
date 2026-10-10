@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Docs: the ROADMAP now records `v0.2.0-alpha.1` as released (alpha, GitHub pre-release) with signed images; the
+  Helm install test on kind stays open.
 - Docs: the README, `GOVERNANCE.md` and `CONTRIBUTING.md` now describe how changes are really
   reviewed (agent-authored pull requests, independent review agent, no guarantee of a human read
   before merge) and add a "How changes are reviewed" section.
