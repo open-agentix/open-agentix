@@ -470,9 +470,11 @@ creation** (`tokens:write`) and **no `audit:export`**; secret values are unreada
   node, directly or by inheritance) or a platform operator; integrator, viewer, team admin and token scopes
   without `users:write` are refused (`403`); the other rules (1 to 6, 8, 9) apply unchanged;
 - `expiresAt` is required (`422 expiry_required`) and at most `OAX_PENTEST_MAX_DAYS` (1 to 30, default 30) from
-  now (`422 expiry_too_long`; exactly the maximum is allowed). Moving the expiry later with `PATCH` is possible
-  within the same maximum from the moment of the change (audited, noticed again); more time than that is a new
-  grant. A `PATCH` that turns a binding into `pentest` needs the same expiry; changing or deleting a pentest
+  now (`422 expiry_too_long`; exactly the maximum is allowed). `PATCH` can only shorten the expiry,
+  change `inherit` or the role: a later `expiresAt` is `422 expiry_extension_requires_new_grant` (remove the
+  binding and grant again, which is a fresh `tenant.role_bound`), clearing it is `422 expiry_required`; the
+  maximum is checked only when the expiry changes, so narrowing `inherit` still works after the maximum was
+  lowered. A `PATCH` that turns a binding into `pentest` needs the same expiry; changing or deleting a pentest
   binding of somebody else needs the same authority as granting it (a user can still delete their own);
 - `inherit: true` is allowed (a test of a whole organisation is bound on the root) and needs inheriting
   coverage like any inheriting grant; the role then reads the subtree and nothing else. The database also

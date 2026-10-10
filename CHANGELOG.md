@@ -159,7 +159,7 @@ All notable changes to this project are documented here. The format follows
   audit log or read secrets; expiry is checked on every request, also with a cached principal. Audit:
   `pentest.session_started`, `pentest.expiry_warning`, `tenant.role_expired`; in-app notices for the tenant admins
   and the grantor on grant, 24 h before and at expiry (`GET /v1/me/notices`; there is no mail or webhook channel).
-  A reaper (`OAX_BINDING_REAPER_INTERVAL_SECONDS`, default 60) deletes expired bindings. Migration `0027_pentest_role`
+  A reaper (`OAX_BINDING_REAPER_INTERVAL_SECONDS`, default 60) deletes expired bindings. Migration `0028_pentest_role`
   (down script included).
 - **`OAX_TENANT_RESERVED_SLUGS`** (default empty): slugs a tenant admin cannot claim when creating a sub-tenant;
   slugs whose secret prefix already holds env or file secrets are refused alike (ADR 0014 S5 review).
