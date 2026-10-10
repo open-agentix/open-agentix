@@ -99,6 +99,13 @@
       "when": 1791800000000,
       "tag": "0019_trb_home_move",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791900000000,
+      "tag": "0020_authz_epoch",
+      "breakpoints": true
     }
   ]
 }
