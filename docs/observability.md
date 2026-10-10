@@ -4,12 +4,14 @@ openagentix emits OpenTelemetry traces (OTLP) and Prometheus metrics. The design
 model and the slice plan are in [ADR 0015](adr/0015-opentelemetry-genai-tracing.md). This page
 documents what is implemented; it grows with each slice.
 
-> **Status.** Slices S1 to S9 of ADR 0015 are implemented: the attribute allowlist and exporter
+> **Status.** Slices S1 to S10 of ADR 0015 are implemented: the attribute allowlist and exporter
 > rules (S1), run trace identity, audit links and the first spans (S2), executor spans of
 > in-process steps (S3), control-node spans of isolated steps (S4), complete Prometheus metrics
 > (S5), sampling (S6), export through the outbound dispatcher (S7), opt-in MCP trace context (S8)
-> and this documentation with collector configurations (S9). Content capture and tenant-owned
-> exporters (S10) are **not built**, see [What is not built](#what-is-not-built).
+> this documentation with collector configurations (S9), and gated content capture with
+> tenant-owned exporters (S10, both off by default, see
+> [Tenant-owned exporters and content](#tenant-owned-exporters-and-content)). What is still not
+> built is in [What is not built](#what-is-not-built).
 
 ## Convention version
 
@@ -26,6 +28,11 @@ Telemetry is **metadata only**: names, versions, token counts, cost, latency, co
 responses, tool arguments and results, event payloads, exception messages, stack traces, HTTP
 bodies, query strings, headers, user e-mail addresses, tenant names and slugs are never exported.
 Tenants are identified by UUID (`oax.tenant.id`), never by name.
+
+The one exception is the opt-in described in
+[Tenant-owned exporters and content](#tenant-owned-exporters-and-content): the redacted text of
+model input and output messages, to an exporter that belongs to the tenant, never to the
+operator's collector, and never tool arguments or results.
 
 Three layers enforce this:
 
@@ -486,17 +493,128 @@ many tenants, so `oax.tenant.id` and `oax.tenant.root_id` are **span** attribute
 
 Do not plan on these; they are not available in this version:
 
-- **Content capture (ADR 0015 slice S10).** Prompts, responses, tool arguments and results are
-  never exported. `OAX_OTEL_CONTENT` accepts only `off`; any other value refuses start-up.
-- **Tenant-owned exporters (slice S10).** A tenant cannot configure its own OTLP endpoint or
-  connection type `telemetry`. One export path exists, configured by the operator through the
-  environment; per-tenant separation is done in the collector.
+- **Content for the operator's collector.** Content goes only to a tenant-owned exporter. The
+  single-tenant setup mode of [ADR 0013](adr/0013-hierarchical-tenants-and-setup-modes.md) does not
+  exist in the code yet, so the option "content to the platform exporter in a single-tenant
+  install" of ADR 0015 5.4 is not built either: a single-tenant install uses a tenant-owned exporter
+  too.
+- **Content from tool calls, handovers or run nodes' own reports.** Only the model proxy captures
+  content; harness steps that call a provider directly are not covered (they cannot reach a provider
+  without the proxy).
+- **Exporters for a whole subtree.** A tenant-owned exporter receives the spans of its own tenant
+  (`oax.tenant.id` equal to the tenant of the connection); child tenants of a hierarchy are not
+  included, each defines its own.
+- **A tenant allowed-regions setting.** `allowedRegions` per tenant (ADR 0012 7.1) is not built; the
+  region check uses the operator's `OAX_OTEL_ALLOWED_REGIONS`.
 - **gRPC export.** Only `http/protobuf` and `http/json` over HTTP(S) to `<endpoint>/v1/traces`.
 - **OTLP metrics or logs export.** Metrics are Prometheus (`/metrics`); logs are not exported as
   OTLP (log lines carry `trace_id` and `span_id`).
 - **Retries.** A failed batch is dropped and counted, not retried.
 - **Vendor SDKs, auto-instrumentation and resource detectors.** None; the process refuses to start
   next to another registered OpenTelemetry SDK.
+
+## Tenant-owned exporters and content
+
+ADR 0015 slice S10. Two separate switches, both **off by default**, both set by the operator first
+and then by the tenant:
+
+| | Operator | Tenant |
+| --- | --- | --- |
+| Tenant-owned exporter | `OAX_OTEL_TENANT_EXPORTERS=allow` | a connection of type `telemetry` (tenant admin) |
+| Content of model messages | `OAX_OTEL_CONTENT=redacted` (needs the line above) | `content: "redacted"` on that connection |
+
+### The `telemetry` connection
+
+```bash
+curl -X POST "$OAX/v1/connections" -H "authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d '{
+  "name": "acme-tempo",
+  "kind": "telemetry",
+  "config": {
+    "endpoint": "https://tempo.acme.example",
+    "protocol": "http/protobuf",
+    "headersSecret": "acme.tempo-otlp",
+    "region": "eu",
+    "clearance": "internal",
+    "content": "off"
+  }
+}'
+```
+
+- **Who:** creating, changing and deleting needs the tenant admin permission (`settings:write`); a
+  user or token that only has `connections:write` (the integrator) is refused with 403, like for
+  `telemetry.propagate`. Reading is `connections:read`. Only the tenant scope exists: platform, team
+  and agent scope are refused (the operator's own exporter is configured with the environment). A
+  tenant sees and changes only its own `telemetry` connections.
+- **Fields:** the schema is closed, an unknown key is a 400. `endpoint` is an `https://` base URL
+  (`/v1/traces` is appended) without credentials, query or fragment. `headersSecret` is a secret
+  **reference** whose value is `Name=value,Name2=value2`; it must live in the tenant's own namespace
+  (`<tenant-slug>.<name>`, like every tenant secret reference) and the value is read when the
+  exporter is built, never stored in the config, returned by the API or written to a log, audit
+  entry or span. `region` (`[a-z0-9-]`, up to 32 characters) states where the collector processes
+  data. `clearance` (`public`, `internal`, `confidential`, `restricted`, default `internal`) is the
+  highest classification of a run whose content this exporter may receive. `enabled: false` keeps
+  the connection but stops every export to it. There is no connection test for this type.
+- **Destination rules** (checked when the connection is saved, and again for every request): the
+  ADR 0011 tenant rules. `https` only; no `localhost`, loopback, private, link-local or cloud
+  metadata address in any spelling (decimal, hex, octal, IPv4-mapped IPv6); the operator's `deny`
+  routes; and, with `OAX_AIRGAPPED=true`, the allowlist (an endpoint that is not on
+  `OAX_AIRGAPPED_ALLOW` is refused with 422 `egress_denied`, and a stored one makes start-up fail
+  like any other connection). A name is resolved at connect time and **every** address must be
+  public (the connection is pinned to the checked address, so DNS rebinding after the check does
+  not help); a redirect is an error; connect, header, body and total times are bounded; the
+  response is limited to 256 KiB and not read. In an air-gapped install the collector therefore
+  needs a TLS endpoint, plain `http://` is not available to tenants.
+- **Operator limits:** `OAX_OTEL_TENANT_EXPORTERS_MAX` (default 32) exporters per process; each has
+  its own bounded queue (at most 1024 spans) so a slow collector of one tenant can only lose that
+  tenant's spans; `OAX_OTEL_EXPORT_TIMEOUT_MS` applies. With `OAX_OTEL_ALLOWED_REGIONS=eu,on-prem`
+  a connection must declare a region from the list (422 `region_not_allowed` otherwise, and an
+  exporter whose region is not on the list is not used); empty means no restriction.
+- **What is sent:** a copy of the spans of the tenant that owns the connection, rebuilt from the
+  attribute allowlist for that exporter (same sanitiser as the operator's pipeline, plus the
+  exporter's own secret values in the guard). A span is routed by its `oax.tenant.id`, which the
+  control plane sets from the run; a span without it goes nowhere. The operator's pipeline is
+  unchanged, a tenant with an exporter still appears in the operator's collector (metadata only).
+  Sampling applies as for the operator's pipeline (the always-keep path of the operator is not
+  repeated for tenants).
+- **Freshness:** changes made through the API take effect in the api process at once; other
+  processes (a worker, another api replica) refresh their view every 15 seconds.
+
+### Content (`OAX_OTEL_CONTENT=redacted`)
+
+With both switches and the tenant opt-in, the `chat` span that the model proxy creates for a call
+is sent to that tenant's exporter with two more attributes: `gen_ai.input.messages` and
+`gen_ai.output.messages` (JSON, `[{"role", "parts":[{"type":"text","content"}]}]`), plus
+`oax.content.redacted=true` (and `oax.content.truncated=true` when text was cut).
+
+| Rule | How it is enforced |
+| --- | --- |
+| Model input and output text only | The system text, `user` and `assistant` message text, and the response text. Messages of the `tool` role, the tool calls of assistant messages (arguments) and any non-text content are never read, so tool arguments and results cannot reach a span through this path. |
+| Secrets | Every text passes the ContextGuard (resolved provider keys of the call, token shapes, invisible characters) and passes it again for the exporter, including that exporter's own header values. |
+| Personal data | Every text passes the ADR 0012 PII redactor (e-mail, IBAN, payment card, IP address, phone number) and is replaced by `[pii:<kind>]`. Detection is pattern based, not complete: it does not find names or free-form personal data. |
+| Size | At most 8 KiB (UTF-8) per attribute; for a long conversation the newest messages are kept and a cut text is truncated. A value that cannot be kept within the cap is dropped, never sent cut inside a secret. |
+| Classification | Content is sent only when the run's published classification is at most the `clearance` of the exporter; otherwise the metadata span is sent without content (`oax_otel_content_total{result="dropped_classification"}`). |
+| Operator and tenant | No capture without `OAX_OTEL_CONTENT=redacted` (whatever a tenant stored) and no export without the tenant's `content: "redacted"` on an enabled connection. The opt-in is read from the database for every call (not cached), and an opt-out through the API also withdraws content from spans that are already queued. |
+| Only the tenant's own exporter | Content is not a span attribute. The model proxy parks it next to the span (bounded, one minute, taken once) and only the tenant exporter stage of the same tenant can attach it, per exporter, when the gates above hold at the moment of the export. The operator's pipeline cannot see it; a test asserts this. |
+| Region | An exporter whose region the operator does not allow is not used at all. |
+
+Every change of the opt-in is audited in the tenant's partition: `telemetry.content_enabled` (when
+content is switched on, or when an enabled connection gets another endpoint, secret reference,
+protocol, region or clearance; payload: connection name, clearance, region and endpoint host) and
+`telemetry.content_disabled` (switched off, connection disabled or deleted). The entry is written in
+the same transaction as the change.
+
+Counters (no label holds a tenant, connection or host): `oax_otel_tenant_export_failures_total{reason}`,
+`oax_otel_tenant_spans_dropped_total{reason}` (`queue_full`, `pending_cap`, `no_capacity`, `region`,
+`denied`, `operator`) and `oax_otel_content_total{result}` (`attached`, `dropped_classification`,
+`dropped_opt_out`, `dropped_region`, `dropped_operator`, `dropped_no_exporter`).
+
+Limits you should know: the redactor and the guard reduce the risk, they do not remove it, and a
+user message can contain whatever the user (or a harness) wrote. Treat the destination as a
+processor of the tenant's data: enable content only for a collector the tenant controls and
+record it in the record of processing. A harness that formats tool output into a `user` message
+before it calls the proxy puts that text into the content (the proxy cannot tell); keep
+`clearance` low for such agents.
 
 ## MCP trace context and shared collectors
 
@@ -821,7 +939,7 @@ OAX_OTEL_HEADERS_SECRET=langfuse-otlp-auth
 ```
 
 Langfuse maps `gen_ai.*` attributes to its generation view (vendor behaviour, 2026-10); because the
-content attributes are never sent, input and output stay empty by design, while model, token usage,
+content attributes are never sent to the operator's collector, input and output stay empty by design, while model, token usage,
 latency and the run tree are shown. `oax.*` attributes appear as metadata. Prefer a self-hosted
 Langfuse for anything that is not public: tenant UUIDs, cost and policy outcomes are sent. Check
 the vendor's current documentation for the exact path and any required ingestion header.
@@ -848,8 +966,9 @@ Every log line written inside a span carries `trace_id` and `span_id` (hex, ids 
 
 ## Configuration
 
-See [`configuration.md`](configuration.md#observability) for the table of variables. The sampling keys are in use since slice S6; `OAX_OTEL_NODE_EVENTS_MAX` is in use since slice S4 and
-`OAX_OTEL_GENAI_METRICS` since slice S5.
+See [`configuration.md`](configuration.md#observability) for the table of variables. The sampling keys are in use since slice S6; `OAX_OTEL_NODE_EVENTS_MAX` is in use since slice S4,
+`OAX_OTEL_GENAI_METRICS` since slice S5 and `OAX_OTEL_CONTENT`, `OAX_OTEL_TENANT_EXPORTERS`,
+`OAX_OTEL_TENANT_EXPORTERS_MAX` and `OAX_OTEL_ALLOWED_REGIONS` since slice S10.
 
 ## Metrics
 
@@ -881,6 +1000,9 @@ before it is recorded, so a caller that passes a free text by mistake produces t
 | `oax_otel_inbound_context_total` | counter | `result` (`ignored`, `linked`, `invalid`) | Inbound `traceparent` headers on API requests. |
 | `oax_otel_node_events_dropped_total` | counter | – | Node reports that did not become a span event because the session reached `OAX_OTEL_NODE_EVENTS_MAX`. |
 | `oax_otel_node_context_mismatch_total` | counter | – | Run node requests whose `traceparent` is not the session's stored trace (ignored; a cheap signal for a tampered node). |
+| `oax_otel_tenant_export_failures_total` | counter | `reason` (as for `oax_otel_export_failures_total`) | Failed exports to tenant-owned exporters (slice S10). |
+| `oax_otel_tenant_spans_dropped_total` | counter | `reason` (`queue_full`, `pending_cap`, `no_capacity`, `region`, `denied`, `operator`) | Spans not handed to a tenant-owned exporter. |
+| `oax_otel_content_total` | counter | `result` (`attached`, `dropped_classification`, `dropped_opt_out`, `dropped_region`, `dropped_operator`, `dropped_no_exporter`) | Outcome of the content gates for a model call span. |
 
 The older families (`oax_http_request_duration_seconds`, `oax_runs_by_status`, `oax_policy_decisions_total`,
 `oax_model_proxy_*`, `oax_worker_active_runs`, ...) are unchanged. The model proxy's `provider` label is the

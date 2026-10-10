@@ -340,7 +340,10 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 | `OAX_OTEL_NODE_EVENTS_MAX` | `128` | Node reports kept as span events per run node session (maximum accepted value 1000; larger values refuse start-up); further reports are counted, not exported. |
 | `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link`: what happens to a well-formed inbound `traceparent` on an API request. It is never a parent and never the run's trace. `link` records it as a span link on the request span (needs an exporter; ids only, no `tracestate`/baggage); `ignore` drops it. Either way it is counted in `oax_otel_inbound_context_total{result}`. |
 | `OAX_OTEL_MCP_PROPAGATION` | `deny` | `deny` or `allow`. With `allow`, MCP connections that set `telemetry.propagate: true` send the run's `traceparent` in `params._meta` of `tools/call` (nothing else); `deny` wins over every connection. See [MCP trace context](mcp.md#trace-context-propagation-opt-in). |
-| `OAX_OTEL_CONTENT` | `off` | Only `off` is accepted; any other value refuses start-up. Content capture is not built (ADR 0015 slice S10, needs an owner decision). |
+| `OAX_OTEL_CONTENT` | `off` | `off` or `redacted`. `redacted` is the operator allow for content capture (ADR 0015 5.4): the redacted text of model input and output messages (never tool arguments or results, 8 KiB per attribute) goes to a tenant-owned exporter whose connection opts in with `content: "redacted"` and whose `clearance` covers the run's classification. It is never sent to the operator's collector. Needs `OAX_OTEL_TENANT_EXPORTERS=allow`, otherwise start-up fails. |
+| `OAX_OTEL_TENANT_EXPORTERS` | `deny` | `allow` lets tenant admins define `telemetry` connections (their own OTLP endpoint, https only, tenant destination rules, pinned DNS, air-gap aware) that receive a copy of that tenant's spans. `deny`: such connections are refused and no span is ever copied to a tenant destination. |
+| `OAX_OTEL_TENANT_EXPORTERS_MAX` | `32` | Tenant exporters kept per process (1 to 256); each has its own bounded queue. Further ones are not used and counted. |
+| `OAX_OTEL_ALLOWED_REGIONS` | – | Comma separated regions (`eu,on-prem`) a `telemetry` connection may declare. Empty: no restriction. With a list, a connection without or with another region is refused (422 `region_not_allowed`) and not used. |
 | `OAX_OTEL_GENAI_METRICS` | `false` | `true` exposes the experimental `gen_ai_*` metrics on `/metrics` (labels: operation, provider family, catalog model or `_OTHER`, closed `error_type`); the `oax_*` metrics are always on. See `docs/observability.md`. |
 | `OAX_OTEL_TRACE_URL_TEMPLATE` | – | Link template for the trace of a run, e.g. `https://tempo.internal/trace/{traceId}` (http/https, no credentials, must contain `{traceId}`). `GET /v1/runs/{id}` returns the filled link as `traceUrl` next to `traceId`. |
 
@@ -351,8 +354,9 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 endpoint set, `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER` other than `otlp` is refused too
 (they are not read; unset the endpoint to turn the export off). Details and the data that is never exported: [`observability.md`](observability.md).
 
-Not available in this version: content capture (`OAX_OTEL_CONTENT` accepts only `off`),
-tenant-owned exporters, a gRPC exporter, OTLP metric or log export. The exporter sends to
+Tenant-owned exporters and gated content capture (slice S10) are off by default and described in
+[`observability.md`](observability.md#tenant-owned-exporters-and-content). Not available in this
+version: a gRPC exporter, OTLP metric or log export. The exporter sends to
 `<OTEL_EXPORTER_OTLP_ENDPOINT>/v1/traces` only. Collector configurations (multi-tenant routing,
 tail sampling) and examples for Grafana Tempo, Jaeger, Langfuse and Arize Phoenix:
 [`observability.md`](observability.md#multi-tenant-collectors). With `OAX_AIRGAPPED=true` the

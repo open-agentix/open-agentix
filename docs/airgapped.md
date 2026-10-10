@@ -56,6 +56,21 @@ every other destination ([`observability.md`](observability.md#exporter)):
   never fetches it. `OAX_OTEL_MCP_PROPAGATION` stays `deny` unless you want MCP servers to learn
   the run's trace id.
 
+Tenant-owned exporters (`OAX_OTEL_TENANT_EXPORTERS=allow`, connections of type `telemetry`) follow the
+same rule and are stricter in one respect:
+
+- The endpoint of a `telemetry` connection must be on `OAX_AIRGAPPED_ALLOW` (host **and** port)
+  when it is saved (422 `egress_denied`), a stored connection outside the list stops `api` and
+  `worker` from starting (like any stored MCP or model connection), and every request is checked
+  again by the dispatcher and the network guard. Nothing is sent to a name that is not on the list,
+  and redirects are never followed.
+- Tenants may only use `https://` (the tenant destination rules), so an air-gapped tenant exporter
+  needs a TLS endpoint inside the allowlist; `OAX_OTEL_INSECURE` is an operator setting for the
+  operator's own collector only. Local, private and metadata addresses are refused for tenants
+  unless the operator lists a private range in `privateAllow` of the network file.
+- Content capture (`OAX_OTEL_CONTENT=redacted`) never widens this: it sends only to those exporters.
+  Leave both switches at their defaults (`deny`, `off`) unless a tenant needs its own collector.
+
 ```bash
 OAX_AIRGAPPED=true
 OAX_AIRGAPPED_ALLOW="otel-collector.observability.svc.cluster.local:4318,.keycloak.svc.cluster.local"
@@ -72,6 +87,10 @@ OAX_OTEL_INSECURE=true
   webhook, queue, worker, simulated provider, policy gate, tools, audit chain, costs) with an
   *empty* allowlist and asserts that the run succeeds and that **zero** egress attempts were
   recorded; a second test proves the guard is live by triggering real attempts that throw.
+
+Tenant-owned exporters are covered by `apps/api/test/telemetry-connection.test.ts` (endpoint refused
+outside the allowlist, stored connection checked at start-up in `airgap.test.ts`) and
+`apps/api/test/telemetry-tenant.test.ts` (a dispatcher with an air-gapped network sends nothing).
 
 ## Offline bundle checklist
 
