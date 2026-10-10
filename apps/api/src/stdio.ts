@@ -20,9 +20,10 @@ export interface StoredConnection {
 /**
  * Issues of a tenant-defined stdio MCP connection (ADR 0016 S0): the command, argument and
  * environment rules. Empty for platform connections (operator configuration), for other
- * transports and for non-MCP connections. The file system is consulted for symlinks only when
- * the file exists on this host (the control node does not hold the toolbox binaries; run nodes
- * repeat the check with the real path required).
+ * transports and for non-MCP connections. The control node never looks at its own file system
+ * here: it does not hold the toolbox binaries, and resolving tenant-chosen paths would tell a
+ * tenant which files exist on the api host and where its symlinks point. Run nodes repeat the
+ * check against their image with the real path required.
  */
 export function stdioIssuesOf(
   c: Pick<StoredConnection, 'scope' | 'kind' | 'config'>,
@@ -31,7 +32,7 @@ export function stdioIssuesOf(
   if (c.kind !== 'mcp' || !isTenantScope(c.scope)) return [];
   const parsed = McpServerConfigSchema.safeParse(c.config);
   if (!parsed.success || parsed.data.transport !== 'stdio') return [];
-  return checkStdioConfig(parsed.data, { allowlist, realpath: 'if-exists' });
+  return checkStdioConfig(parsed.data, { allowlist, realpath: 'skip' });
 }
 
 /** Stored tenant stdio connections that break the rules, with their issues. */

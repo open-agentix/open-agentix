@@ -294,7 +294,9 @@ export class CatalogService {
     if (!isTenantScope(scope)) return;
     const issues = checkStdioConfig(cfg, {
       allowlist: this.ctx.config.mcp.stdioCommands,
-      realpath: 'if-exists',
+      // Never resolve tenant-chosen paths on the api host (file existence and symlink oracle);
+      // the run node resolves them against its own image.
+      realpath: 'skip',
     });
     if (issues.length > 0) {
       const e = stdioError(name, issues);

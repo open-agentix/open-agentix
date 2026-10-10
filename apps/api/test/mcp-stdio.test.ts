@@ -84,6 +84,20 @@ describe('creating and updating tenant stdio connections', () => {
     },
   );
 
+  it('does not resolve tenant paths on the api host (no file or symlink oracle)', async () => {
+    // `/proc/self/cwd` is a symlink to the api's working directory; `/proc/self/exe` to its binary.
+    for (const command of ['/proc/self/cwd', '/proc/self/exe', '/proc/self/root/etc/passwd']) {
+      const res = await post(`probe-${Math.random().toString(36).slice(2, 8)}`, {
+        ...OK,
+        command,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).not.toContain(process.cwd());
+      expect(res.body).not.toContain(process.execPath);
+      expect(res.body).not.toMatch(/real path/);
+    }
+  });
+
   it('has no field for a working directory or a shell', async () => {
     for (const extra of [{ cwd: '/' }, { shell: true }]) {
       const res = await post('with-extra', { ...OK, ...extra });
