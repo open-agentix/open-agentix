@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BINDING_ROLES,
+  GRANTABLE_ROLES,
+  PENTEST_MAX_DAYS_LIMIT,
   PERMISSIONS,
   ROLES,
   ROLE_PERMISSIONS,
@@ -95,5 +98,23 @@ describe('agent-scoped bindings', () => {
         'agents:read',
       ),
     ).toEqual([]);
+  });
+});
+
+describe('pentest role (ADR 0014 S6)', () => {
+  it('is a binding role but not a grantable role', () => {
+    expect(BINDING_ROLES).toContain('pentest');
+    expect((GRANTABLE_ROLES as readonly string[]).includes('pentest')).toBe(false);
+    expect(PENTEST_MAX_DAYS_LIMIT).toBe(30);
+  });
+  it('holds read permissions only: no write, execute, approve, cancel, publish, export or token creation', () => {
+    const perms = ROLE_PERMISSIONS.pentest;
+    expect(perms.length).toBeGreaterThan(0);
+    for (const p of perms) expect(p, p).toMatch(/:(read|verify)$/);
+    expect(perms).not.toContain('tokens:write');
+    expect(perms).not.toContain('audit:export');
+  });
+  it('is never wider than admin and has no permission viewer lacks that is not a read', () => {
+    for (const p of ROLE_PERMISSIONS.pentest) expect(ROLE_PERMISSIONS.admin).toContain(p);
   });
 });
