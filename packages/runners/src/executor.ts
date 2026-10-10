@@ -143,9 +143,17 @@ const defaultSleep = (ms: number, signal?: AbortSignal) =>
 class RunAborted extends Error {
   /** The failure code, so that a span ends with it as `error.type` (never the message). */
   readonly code: string;
-  constructor(readonly result: Pick<RunResult, 'status' | 'error'>) {
-    super(result.error?.message ?? result.status);
-    this.code = result.error?.code ?? result.status;
+  /**
+   * @param spanCode overrides `code` (and the error message) for telemetry when the result is not
+   *   the platform's own: a code and message a run node claimed are text from an untrusted process
+   *   and must not reach a span, also not as a guarded `exception.message`.
+   */
+  constructor(
+    readonly result: Pick<RunResult, 'status' | 'error'>,
+    spanCode?: string,
+  ) {
+    super(spanCode ?? result.error?.message ?? result.status);
+    this.code = spanCode ?? result.error?.code ?? result.status;
   }
 }
 
@@ -329,10 +337,11 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
                 })
                 .catch((e: unknown) => {
                   if (e instanceof NodeStepFailure)
-                    throw new RunAborted({
-                      status: e.status,
-                      error: { code: e.code, message: e.message },
-                    });
+                    throw new RunAborted(
+                      { status: e.status, error: { code: e.code, message: e.message } },
+                      // A node-claimed code stays in the run result; the span gets a closed value.
+                      e.claimed ? `run_node_${e.status}` : undefined,
+                    );
                   if (e instanceof OaxError && e.code === 'cancelled')
                     throw new RunAborted({
                       status: 'cancelled',

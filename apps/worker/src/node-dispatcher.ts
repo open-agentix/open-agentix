@@ -234,7 +234,12 @@ export class NodeDispatcher implements StepDispatcher {
       );
     const result = await runNodes.resultOf(session.sessionId);
     if (result?.failure)
-      throw new NodeStepFailure(result.failure.status, result.failure.code, result.failure.message);
+      throw new NodeStepFailure(
+        result.failure.status,
+        result.failure.code,
+        result.failure.message,
+        true,
+      );
     if (!result || exit.exitCode !== 0 || result.agentId !== agent.id)
       throw new NodeStepFailure(
         'failed',

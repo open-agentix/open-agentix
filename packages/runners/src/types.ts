@@ -243,6 +243,11 @@ export class NodeStepFailure extends Error {
     readonly status: 'failed' | 'blocked_by_policy' | 'cancelled',
     readonly code: string,
     message: string,
+    /**
+     * The code and message were reported by the (untrusted) run node itself, not decided by the
+     * orchestrator. Such a code is never exported to telemetry (ADR 0015 section 6.2).
+     */
+    readonly claimed: boolean = false,
   ) {
     super(message);
   }

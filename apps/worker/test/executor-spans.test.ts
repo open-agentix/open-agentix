@@ -2,9 +2,14 @@ import { loadAgentDefinition, type AgentDefinition } from '@openagentix/core';
 import { withSpan } from '@openagentix/api';
 import type { ChatRequest, ChatResponse, ModelProvider } from '@openagentix/providers';
 import { SimulatedProvider } from '@openagentix/providers';
-import { executePipeline, type RunResult, type RunnerContext } from '@openagentix/runners';
+import {
+  NodeStepFailure,
+  executePipeline,
+  type RunResult,
+  type RunnerContext,
+} from '@openagentix/runners';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resetTelemetryRuntime } from '../../api/src/telemetry.js';
+import { configureTelemetryRuntime, resetTelemetryRuntime } from '../../api/src/telemetry.js';
 import { sanitizeReadableSpan } from '../../api/src/telemetry-export.js';
 import { telemetryRuntime } from '../../api/src/telemetry-runtime.js';
 import { attributesComply, startTracing } from '../../api/test/trace-harness.js';
@@ -591,6 +596,42 @@ agents:
       true,
     );
     expect(attributesComply(spans)).toEqual([]);
+  });
+
+  it('never exports a failure code a run node claimed', async () => {
+    const isolated = agentFile(`    simulation:
+      responses:
+        - text: x`);
+    const node = (failure: NodeStepFailure) => ({
+      def: isolated,
+      configure: (ctx: RunnerContext) => {
+        ctx.dispatcher = {
+          isolates: () => true,
+          dispatch: () => Promise.reject(failure),
+        };
+      },
+    });
+    // The node is untrusted: its code reaches the run result, but the span gets a closed value.
+    const claimed = await go(
+      node(new NodeStepFailure('failed', 'CANARY-NODE-CODE', C.providerBody, true)),
+    );
+    expect(claimed.result.error?.code).toBe('CANARY-NODE-CODE');
+    expect(one('invoke_agent').attributes['error.type']).toBe('run_node_failed');
+    const out = exported(t.exporter.getFinishedSpans());
+    expect(out).not.toContain('CANARY-NODE-CODE');
+    expect(out).not.toContain(C.providerBody);
+    // Also with the opt-in exception detail, the node's message stays out.
+    t.exporter.reset();
+    configureTelemetryRuntime({ exceptionDetail: 'guarded' });
+    await go(node(new NodeStepFailure('failed', 'CANARY-NODE-CODE', C.providerBody, true)));
+    expect(exported(t.exporter.getFinishedSpans())).not.toContain(C.providerBody);
+    const exception = one('invoke_agent').events.find((e) => e.name === 'exception');
+    expect(exception?.attributes?.['exception.message']).toBe('run_node_failed');
+    resetTelemetryRuntime();
+    // A failure the orchestrator decided itself keeps its platform code.
+    t.exporter.reset();
+    await go(node(new NodeStepFailure('failed', 'pull_request_unavailable', 'no target')));
+    expect(one('invoke_agent').attributes['error.type']).toBe('pull_request_unavailable');
   });
 
   it('records a provider failure as its code and class only', async () => {
