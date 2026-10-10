@@ -53,7 +53,8 @@ export class DefaultSecretResolver implements SecretResolver {
     try {
       return (await readdir(this.dir)).some((f) => canonical(f).startsWith(canonicalPrefix));
     } catch {
-      return false;
+      // Fail closed: a directory that cannot be listed may hold anything.
+      return true;
     }
   }
 }

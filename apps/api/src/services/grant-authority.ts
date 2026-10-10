@@ -175,6 +175,8 @@ export async function assertNotLastAdmin(
   node: { id: string; parentId: string | null },
   before: BindingRow,
   after: { role: string; inherit: boolean; expiresAt: Date | null } | null,
+  /** The whole user goes away (disabled): none of their other bindings count as a co-admin. */
+  userLeaves = false,
 ): Promise<void> {
   if (actor.platformAdmin || node.parentId !== null) return;
   const counts = (b: { role: string; inherit: boolean; expiresAt: Date | null }) =>
@@ -195,6 +197,7 @@ export async function assertNotLastAdmin(
         isNull(tenantRoleBindings.expiresAt),
         eq(users.disabled, false),
         ne(tenantRoleBindings.id, before.id),
+        userLeaves ? ne(tenantRoleBindings.userId, before.userId) : undefined,
       ),
     );
   if (Number(others?.n ?? 0) === 0)
@@ -207,7 +210,10 @@ export async function assertNotLastAdmin(
 
 /** What is being done to another user's account (ADR 0014 S5, user lifecycle across the tree). */
 export type UserChange =
-  { kind: 'disable' } | { kind: 'roles'; wanted: readonly Role[] } | { kind: 'tokens' };
+  | { kind: 'disable' }
+  | { kind: 'roles'; wanted: readonly Role[] }
+  | { kind: 'profile' }
+  | { kind: 'tokens' };
 
 /**
  * Why `actor` may not manage `targetId`'s account, or `null`. A user is managed through the node
@@ -238,6 +244,26 @@ export async function userManagementViolation(
     if (b.inherit && !coversSubtree(actor, node, b.role, now))
       return 'the user holds an inheriting role your bindings do not cover';
   }
+  // Team memberships and agent bindings sit on the node that owns the team or agent; they never
+  // inherit, but a user who is bound in a node above the manager is not the manager's to change.
+  const teamNodes = await tx
+    .select({ node: tenants, role: teamMembers.role })
+    .from(teamMembers)
+    .innerJoin(teams, eq(teams.id, teamMembers.teamId))
+    .innerJoin(tenants, eq(tenants.id, teams.tenantId))
+    .where(eq(teamMembers.userId, target.id));
+  const agentNodes = await tx
+    .select({ node: tenants, role: agentRoleBindings.role })
+    .from(agentRoleBindings)
+    .innerJoin(agents, eq(agents.id, agentRoleBindings.agentId))
+    .innerJoin(tenants, eq(tenants.id, agents.tenantId))
+    .where(eq(agentRoleBindings.userId, target.id));
+  for (const { node, role } of [...teamNodes, ...agentNodes]) {
+    const perms = permissionsAt(actor, node, now);
+    if (!perms.has('users:write')) return 'the user is bound in a tenant you cannot manage';
+    if (!isRole(role) || !ROLE_PERMISSIONS[role].every((p) => perms.has(p)))
+      return 'the user holds a role above your own';
+  }
   return null;
 }
 
@@ -257,7 +283,7 @@ export async function assertMayChangeUser(
 ): Promise<void> {
   const why = await userManagementViolation(tx, actor, target, now);
   if (why !== null) throw forbidden(why);
-  if (actor.platformAdmin || change.kind === 'tokens') return;
+  if (actor.platformAdmin || change.kind === 'tokens' || change.kind === 'profile') return;
   const rows = await tx
     .select({ b: tenantRoleBindings, node: tenants })
     .from(tenantRoleBindings)
@@ -268,6 +294,6 @@ export async function assertMayChangeUser(
     const removed =
       change.kind === 'disable' ||
       (b.source === 'mirror' && b.tenantId === node.id && !change.wanted.includes(b.role as Role));
-    if (removed) await assertNotLastAdmin(tx, actor, node, b, null);
+    if (removed) await assertNotLastAdmin(tx, actor, node, b, null, change.kind === 'disable');
   }
 }

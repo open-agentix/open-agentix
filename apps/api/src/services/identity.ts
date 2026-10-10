@@ -1011,16 +1011,13 @@ export class IdentityService {
     if (patch.globalRoles !== undefined) set.globalRoles = patch.globalRoles;
     if (patch.disabled !== undefined) set.disabled = patch.disabled;
     const updated = await this.ctx.db.transaction(async (tx) => {
-      await this.guardUserChange(
-        tx as unknown as Db,
-        actor,
-        id,
-        patch.disabled === true
-          ? { kind: 'disable' }
-          : patch.globalRoles !== undefined
-            ? { kind: 'roles', wanted: patch.globalRoles }
-            : null,
-      );
+      // Any change to another user's account is managing that user (ADR 0014 S5).
+      const changes: UserChange[] = [{ kind: 'profile' }];
+      if (patch.disabled === true) changes.push({ kind: 'disable' });
+      if (patch.globalRoles !== undefined)
+        changes.push({ kind: 'roles', wanted: patch.globalRoles });
+      for (const change of changes)
+        await this.guardUserChange(tx as unknown as Db, actor, id, change);
       const rows = await tx
         .update(users)
         .set(set)
