@@ -8,7 +8,11 @@ import {
   type ISerializer,
 } from '@opentelemetry/otlp-transformer';
 import type { CompiledNetwork, SecretResolver } from '@openagentix/core';
-import { createOutboundDispatcher, type OutboundDispatcher } from '@openagentix/providers';
+import {
+  createOutboundDispatcher,
+  findOaxError,
+  type OutboundDispatcher,
+} from '@openagentix/providers';
 
 /**
  * The OTLP/HTTP transport of the trace exporter (ADR 0015 section 8, slice S7).
@@ -47,7 +51,10 @@ export interface DispatcherExporterOptions {
 }
 
 /** A failure the guarded wrapper can classify without ever seeing a message. */
-function failure(kind: 'timeout' | 'network' | 'http' | 'other', status?: number): ExportResult {
+function failure(
+  kind: 'timeout' | 'network' | 'http' | 'too_large' | 'denied' | 'other',
+  status?: number,
+): ExportResult {
   const error =
     kind === 'timeout'
       ? Object.assign(new Error('OTLP export timed out'), { name: 'AbortError' })
@@ -56,15 +63,22 @@ function failure(kind: 'timeout' | 'network' | 'http' | 'other', status?: number
             name: 'OTLPExporterError',
             code: status ?? 0,
           })
-        : kind === 'network'
-          ? Object.assign(new Error('OTLP export failed'), { code: 'ECONNFAILED' })
-          : new Error('OTLP export failed');
+        : kind === 'too_large' || kind === 'denied'
+          ? Object.assign(new Error('OTLP export failed'), {
+              code: kind === 'denied' ? 'EXPORT_DENIED' : 'EXPORT_TOO_LARGE',
+            })
+          : kind === 'network'
+            ? Object.assign(new Error('OTLP export failed'), { code: 'ECONNFAILED' })
+            : new Error('OTLP export failed');
   return { code: ExportResultCode.FAILED, error };
 }
 
 function classify(e: unknown): ExportResult {
   const name = (e as { name?: unknown } | null)?.name;
   if (name === 'TimeoutError' || name === 'AbortError') return failure('timeout');
+  const code = findOaxError(e)?.code;
+  if (code === 'response_too_large') return failure('too_large');
+  if (code === 'egress_denied') return failure('denied');
   return failure('network');
 }
 
@@ -99,7 +113,8 @@ export class DispatcherSpanExporter implements SpanExporter {
     let body: Uint8Array | undefined;
     try {
       body = this.serializer.serializeRequest(spans);
-      if (!body || body.byteLength > MAX_REQUEST_BYTES) return failure('other');
+      if (!body) return failure('other');
+      if (body.byteLength > MAX_REQUEST_BYTES) return failure('too_large');
       if (this.opts.compression === 'gzip') body = await gzipAsync(body);
     } catch {
       return failure('other');

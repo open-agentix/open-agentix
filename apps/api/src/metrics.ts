@@ -252,7 +252,7 @@ export class Metrics {
     });
     const otelExportFailures = new Counter({
       name: `${prefix}otel_export_failures_total`,
-      help: 'Failed span exports by reason (timeout, network, http, other)',
+      help: 'Failed span exports by reason (timeout, network, http, too_large, denied, other)',
       labelNames: ['reason'],
       registers: [this.registry],
     });

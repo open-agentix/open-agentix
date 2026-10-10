@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createServer as createTlsServer, type Server as TlsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { TLSSocket } from 'node:tls';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { ExportResultCode } from '@opentelemetry/core';
 import { trace } from '@opentelemetry/api';
 import {
@@ -573,6 +573,44 @@ describe('never blocking, bounded', () => {
   });
 });
 
+describe('export failure reasons stay a closed set', () => {
+  it('classifies an oversized declared response and a runtime egress denial on their own', async () => {
+    const huge = await collector('huge');
+    const stats = failureRecorder();
+    const t = await initTelemetry(otel({ OTEL_EXPORTER_OTLP_ENDPOINT: huge.url }));
+    t.attachStats(stats.stats);
+    await span();
+    await t.shutdown();
+    expect(stats.reasons).toContain('too_large');
+    await huge.close();
+
+    trace.disable();
+    resetTelemetryRuntime();
+    // Loopback is always direct, so use a named internal collector and a stub transport.
+    const policy = policyFor('collector.internal.example:4318');
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+    const network = compileNetwork(parseNetworkConfig({} as NetworkConfig).config, {
+      egress: policy,
+    });
+    const stats2 = failureRecorder();
+    const t2 = await initTelemetry(
+      otel({ OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.internal.example:4318' }),
+      { egress: policy, outbound: createOutboundDispatcher({ network, fetchImpl }) },
+    );
+    t2.attachStats(stats2.stats);
+    // The policy changes after start-up: the next request is refused by the dispatcher.
+    const closed = new EgressPolicy({ airgapped: true, allow: [] });
+    Object.assign(policy, {
+      isAllowed: closed.isAllowed.bind(closed),
+      covers: closed.covers.bind(closed),
+    });
+    await span();
+    await t2.shutdown();
+    expect(stats2.reasons).toContain('denied');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
 describe('secret canary on every error path', () => {
   const HEADERS = `x-api-key=${HEADER_SECRET}`;
 
@@ -727,5 +765,94 @@ describe('no behaviour change when the exporter is off', () => {
     expect(plan).not.toHaveBeenCalled();
     // spans still go to the no-op tracer
     expect(tracer().startSpan('x').isRecording()).toBe(false);
+  });
+});
+
+describe('hostile collector responses are cancelled, not read', () => {
+  async function hostile(handler: (res: ServerResponse) => void) {
+    const state = { closed: false, written: 0 };
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.on('close', () => (state.closed = true));
+        handler(res);
+        const write = res.write.bind(res);
+        res.write = ((chunk: Buffer | string, ...rest: unknown[]) => {
+          state.written += chunk.length;
+          return (write as (...a: unknown[]) => boolean)(chunk, ...rest);
+        }) as typeof res.write;
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as AddressInfo).port;
+    return {
+      url: `http://127.0.0.1:${port}/v1/traces`,
+      state,
+      close: () =>
+        new Promise<void>((r) => {
+          server.closeAllConnections();
+          server.close(() => r());
+        }),
+    };
+  }
+
+  const exportOnce = async (url: string) => {
+    const dispatcher = createOutboundDispatcher();
+    const exporter = new DispatcherSpanExporter({
+      dispatcher,
+      url,
+      protocol: 'http/json',
+      compression: 'none',
+      timeoutMs: 5000,
+    });
+    const before = process.memoryUsage().arrayBuffers + process.memoryUsage().heapUsed;
+    const result = await new Promise<ExportResultCode>((r) =>
+      exporter.export([], (x) => r(x.code)),
+    );
+    return { result, before, dispatcher };
+  };
+
+  const until = async (cond: () => boolean, ms = 3000) => {
+    const end = Date.now() + ms;
+    while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 25));
+  };
+
+  it('200 with an endless chunked body: success, the connection is closed, nothing piles up', async () => {
+    let timer: NodeJS.Timeout | undefined;
+    const c = await hostile((res) => {
+      res.writeHead(200, { 'content-type': 'application/x-protobuf' });
+      timer = setInterval(() => res.write(Buffer.alloc(64 * 1024, 120)), 1);
+    });
+    const { result, before, dispatcher } = await exportOnce(c.url);
+    expect(result).toBe(ExportResultCode.SUCCESS);
+    await until(() => c.state.closed);
+    clearInterval(timer);
+    expect(c.state.closed).toBe(true); // the client dropped the socket instead of draining it
+    expect(c.state.written).toBeLessThan(32 * 1024 * 1024);
+    const after = process.memoryUsage().arrayBuffers + process.memoryUsage().heapUsed;
+    expect(after - before).toBeLessThan(64 * 1024 * 1024);
+    await c.close();
+    await dispatcher.close();
+  });
+
+  it('200 with a large gzip body: success, the connection is closed, it is not inflated', async () => {
+    const bomb = gzipSync(Buffer.alloc(256 * 1024 * 1024, 0));
+    let timer: NodeJS.Timeout | undefined;
+    const c = await hostile((res) => {
+      res.writeHead(200, { 'content-encoding': 'gzip' });
+      let off = 0;
+      timer = setInterval(() => {
+        if (off < bomb.length) res.write(bomb.subarray(off, (off += 16 * 1024)));
+      }, 1);
+    });
+    const { result, before, dispatcher } = await exportOnce(c.url);
+    expect(result).toBe(ExportResultCode.SUCCESS);
+    await until(() => c.state.closed);
+    clearInterval(timer);
+    expect(c.state.closed).toBe(true);
+    const after = process.memoryUsage().arrayBuffers + process.memoryUsage().heapUsed;
+    expect(after - before).toBeLessThan(64 * 1024 * 1024);
+    await c.close();
+    await dispatcher.close();
   });
 });

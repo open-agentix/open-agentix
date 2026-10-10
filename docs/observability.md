@@ -105,7 +105,7 @@ registered and no socket is opened.
 - **Never blocking.** The export queue is bounded (`OAX_OTEL_MAX_QUEUE`) and every export has a
   timeout (`OAX_OTEL_EXPORT_TIMEOUT_MS`). A full queue drops spans
   (`oax_otel_spans_dropped_total`); a failed export counts in
-  `oax_otel_export_failures_total{reason}` (`timeout`, `network`, `http`, `other`) and is logged at
+  `oax_otel_export_failures_total{reason}` (`timeout`, `network`, `http`, `too_large`, `denied`, `other`) and is logged at
   most once a minute with the reason only. Shutdown waits at most 5 seconds.
 - **Through the outbound dispatcher.** The exporter does not open sockets itself: it serialises the
   spans (OTLP protobuf or JSON) and posts them with `OutboundDispatcher.fetch` and the purpose
@@ -123,6 +123,17 @@ registered and no socket is opened.
   collector normally has a private address). Nothing is retried: a failed batch is dropped and
   counted. At most two requests are in flight; further batches fail at once.
   `OTEL_EXPORTER_OTLP_COMPRESSION` is `none` (default) or `gzip`.
+  **Upgrade note (proxies):** with `HTTPS_PROXY` / `HTTP_PROXY` set, exports now follow the network
+  rules like every other platform request and go through that environment proxy unless `NO_PROXY`
+  matches the collector (ADR 0011 precedence step 7; loopback stays direct). Before S7 the stock
+  exporter ignored these variables. If the collector is reachable directly, add it to `NO_PROXY` or
+  add a `direct` route for purpose `telemetry` to the network file.
+  **Rotation:** the proxy password, client key and trust bundles of the route are loaded once at
+  start-up (a snapshot), so rotating any of them needs a restart of the api and worker processes
+  before the exporter uses the new value.
+  Failed exports are counted in `oax_otel_export_failures_total{reason}` with the closed reasons
+  `timeout`, `network`, `http`, `too_large` (response or request over the size limit), `denied`
+  (the dispatcher refused the destination at run time) and `other`.
 - **Air-gapped mode** fails closed *before* anything is created: with `OAX_AIRGAPPED=true` the
   endpoint must be on `OAX_AIRGAPPED_ALLOW` (host and port), otherwise start-up fails with
   `airgap_violation` before the header secret is resolved, before a dispatcher or exporter exists and
@@ -474,7 +485,7 @@ before it is recorded, so a caller that passes a free text by mistake produces t
 | `oax_events_ingested_total` | counter | `kind` (`webhook`, `mail`, `kafka`, `cron`), `outcome` | Ingested and refused events. |
 | `oax_runs_created_total`, `oax_runs_refused_total` | counter | `trigger` (as above), `reason` | Admission. |
 | `oax_otel_spans_dropped_total` | counter | – | Spans dropped because the export queue was full. |
-| `oax_otel_export_failures_total` | counter | `reason` (`timeout`, `network`, `http`, `other`) | Failed exports. |
+| `oax_otel_export_failures_total` | counter | `reason` (`timeout`, `network`, `http`, `too_large`, `denied`, `other`) | Failed exports. |
 | `oax_otel_attributes_dropped_total` | counter | `key_class` | Attributes the allowlist refused. |
 | `oax_otel_redactions_total` | counter | `kind` | Values the ContextGuard changed (secret kinds, `invisible`). |
 | `oax_otel_inbound_context_total` | counter | `result` (`ignored`, `linked`, `invalid`) | Inbound `traceparent` headers on API requests. |

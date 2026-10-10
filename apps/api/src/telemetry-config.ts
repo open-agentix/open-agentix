@@ -68,6 +68,8 @@ export interface OtelConfig {
  * second configuration path next to ours. The SDK reads them implicitly (`otlp-exporter-base`),
  * merges headers with what the code passes and loads certificate files, so they are refused rather
  * than ignored: exactly one path (`OAX_OTEL_HEADERS_SECRET`, the network configuration) exists.
+ * The exporter no longer reads them (it is our own sender since slice S7), so refusing them is
+ * policy: a second, unreviewed configuration path must not appear to work.
  */
 const REFUSED: Record<string, string> = {};
 for (const [suffix, instead] of [
