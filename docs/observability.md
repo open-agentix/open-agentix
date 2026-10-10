@@ -58,18 +58,22 @@ only for a collector you trust with provider and tool error text.
 
 ## Exporter
 
-The exporter is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set; then no SDK provider is
+The exporter is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set: without it no SDK provider is
 registered and no socket is opened.
 
 - **Protocol:** `OTEL_EXPORTER_OTLP_PROTOCOL` is `http/protobuf` (default) or `http/json`.
 - **TLS:** `http://` is accepted only for a loopback collector, or when `OAX_OTEL_INSECURE=true`
-  (an in-cluster collector without TLS). The endpoint must not contain credentials, a query or a
-  fragment.
+  (an in-cluster collector without TLS). Loopback means a literal loopback address (`127.0.0.0/8`,
+  `[::1]`, also in decimal or hex notation, which the URL parser normalises) or the name
+  `localhost`, which is resolved by the system resolver (`/etc/hosts`); prefer the literal address.
+  Names such as `127.0.0.1.nip.io` are not loopback. The endpoint must not contain credentials, a
+  query or a fragment.
 - **Credentials:** exporter headers (for example a backend API key) come from
   `OAX_OTEL_HEADERS_SECRET`, a secret **reference** resolved through the secret resolver
   (`OAX_SECRET_<NAME>` or a file in `OAX_SECRETS_DIR`). The secret holds `Name=value,Name2=value2`.
   The values are registered with the guard, so they cannot appear in a span, and they are never
-  logged.
+  logged. Like every known secret, a value shorter than 8 characters is not matched exactly (it
+  would mangle ordinary text); use real credentials, not short placeholders.
 - **Refused variables:** the standard `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_CERTIFICATE`,
   `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` and their `_TRACES_`
   variants, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`,
