@@ -706,10 +706,24 @@ export class CatalogService {
       (c as { telemetry?: { propagate?: unknown } } | null)?.telemetry?.propagate === true;
     if (!on(next)) return;
     // Already on and still pointing at the same destination: nothing new is exposed. A changed
-    // transport, url, command or args sends the trace id somewhere else, which needs the admin again.
+    // transport, url, command, args, env, envSecrets or egress sends the trace id somewhere else (or
+    // lets the process reach more), which needs the admin again. Keys are sorted so that the order
+    // jsonb returns them in does not matter.
+    const stable = (v: unknown): unknown =>
+      Array.isArray(v)
+        ? v.map(stable)
+        : v && typeof v === 'object'
+          ? Object.fromEntries(
+              Object.entries(v as Record<string, unknown>)
+                .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+                .map(([k, x]) => [k, stable(x)]),
+            )
+          : v;
     const target = (c: unknown) => {
       const o = (c ?? {}) as Record<string, unknown>;
-      return JSON.stringify([o.transport, o.url, o.command, o.args]);
+      return JSON.stringify(
+        stable([o.transport, o.url, o.command, o.args, o.env, o.envSecrets, o.egress]),
+      );
     };
     if (on(previous) && target(previous) === target(next)) return;
     if (!hasPermission(actor, 'settings:write', null))
@@ -749,8 +763,15 @@ export class CatalogService {
         ),
       )
       .returning();
-    if (!row)
+    if (!row) {
+      // Gone (deleted meanwhile) is a 404; present but different is a 409.
+      const [still] = await this.ctx.db
+        .select({ id: connections.id })
+        .from(connections)
+        .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)));
+      if (!still) throw notFound('connection');
       throw conflict(`connection "${current.name}" was changed meanwhile; reload and try again`);
+    }
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,

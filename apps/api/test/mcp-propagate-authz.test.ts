@@ -212,4 +212,28 @@ describe('updates are compare-and-swap', () => {
       true,
     );
   });
+
+  it('answers 404 when the connection was deleted after it was read', async () => {
+    const id = (await create(undefined, { propagate: false })).json().id as string;
+    const catalog = n.services.catalog as unknown as {
+      getOwnConnection: (...a: unknown[]) => Promise<{ config: unknown }>;
+    };
+    const original = catalog.getOwnConnection.bind(catalog);
+    catalog.getOwnConnection = async (...a) => {
+      const row = await original(...a);
+      await n.ctx.db.delete(connections).where(eq(connections.id, id));
+      return row;
+    };
+    try {
+      const res = await n.req({
+        method: 'PUT',
+        url: `/v1/connections/${id}`,
+        token: integrator,
+        payload: { config: cfg({ propagate: false }) },
+      });
+      expect(res.statusCode).toBe(404);
+    } finally {
+      catalog.getOwnConnection = original;
+    }
+  });
 });
