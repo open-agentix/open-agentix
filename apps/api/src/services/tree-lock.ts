@@ -8,8 +8,9 @@ import type { Db } from '../db/client.js';
  * single-key locks of the audit chain and tenant creation, or with the accounting locks (#288 item
  * 4). They are transaction scoped: released at commit or rollback.
  *
- * Lock order, always: installation-wide creation lock, then the tree lock, then the binding lock,
- * then the audit chain lock (taken by `AuditService.append`).
+ * Lock order, always: the tree lock (shared), then the installation-wide creation lock
+ * (`TenantsService`, taken only after the caller is authorised), then the binding lock, then the
+ * audit chain lock (taken by `AuditService.append`). No path takes them in another order.
  */
 const TREE_LOCK_NS = 734_210;
 const BINDINGS_LOCK_NS = 734_211;

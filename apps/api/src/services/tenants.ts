@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import {
   OaxError,
+  canonicalSecretRef,
   hasPermission,
+  pathIds,
   parseSecretRefPatterns,
   placeNode,
   slugsCollide,
   type Principal,
 } from '@openagentix/core';
-import { count, eq, inArray, sql } from 'drizzle-orm';
+import { and, count, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { tenants } from '../db/schema.js';
@@ -183,6 +185,17 @@ export class TenantsService {
       throw platformOnly();
     const parent = await this.get(p, parentId);
     const now = this.ctx.now();
+    // Cheap pre-check from the cached grants, before any lock: a caller who is plainly not
+    // allowed never queues on the installation-wide creation lock. The transaction decides again.
+    if (p.grants) {
+      const cached: Actor = {
+        userId: p.userId,
+        platformAdmin: false,
+        raw: p.grants.raw,
+        scopes: p.scopes,
+      };
+      if (!isInheritingAdminAt(cached, parent, now)) throw this.notInheriting(cached, parent, now);
+    }
     return this.insert(p, parent, input, 'inheriting_admin', async (tx, current) => {
       const actor = await loadActor(tx, p);
       if (!isInheritingAdminAt(actor, current!, now))
@@ -205,6 +218,37 @@ export class TenantsService {
     return forbidden();
   }
 
+  /**
+   * Budgets are per node until W13-4, so a child of a capped node would spend outside the cap of
+   * its parent. A tenant admin therefore cannot create below a node with a monthly cap on it or
+   * on an ancestor (`403 budget_capped`): an operator creates it (and may cap it).
+   */
+  private async assertNoCapAbove(tx: Db, parent: TenantRow): Promise<void> {
+    const chain = pathIds(parent.path);
+    const [capped] = await tx
+      .select({ n: count() })
+      .from(tenants)
+      .where(and(inArray(tenants.id, chain), isNotNull(tenants.monthlyBudgetMicros)));
+    if (Number(capped?.n ?? 0) > 0)
+      throw new HttpError(
+        403,
+        'budget_capped',
+        'a tenant below a node with a monthly budget can only be created by a platform operator',
+      );
+  }
+
+  /**
+   * Secrets are named `<slug>.*` and a tenant may use its own prefix (ADR 0013 section 3), so a
+   * slug whose prefix already holds secrets, or that an operator reserved
+   * (`OAX_TENANT_RESERVED_SLUGS`), cannot be claimed by a tenant admin.
+   */
+  private async slugReserved(slug: string): Promise<boolean> {
+    const reserved = this.ctx.config.tenancy.reservedSlugs;
+    if (reserved.some((r) => slugsCollide(r, slug))) return true;
+    const prefix = `${canonicalSecretRef(slug)}_`;
+    return (await this.ctx.secrets.hasEntriesUnder?.(prefix)) === true;
+  }
+
   private async insert(
     p: Principal,
     parent: TenantRow | null,
@@ -217,12 +261,8 @@ export class TenantsService {
     const row = await this.ctx.db
       .transaction(async (t) => {
         const tx = t as unknown as Db;
-        // One writer at a time per creation: the slug overlap check and the node limit read what
-        // the insert changes. The lock is held until commit (also on PGlite, which serialises
-        // transactions anyway). The unique index on `slug` stays as the database-level backstop.
-        await tx.execute(sql`select pg_advisory_xact_lock(${TENANT_CREATE_LOCK})`);
-        // The tree lock of the organisation, shared (ADR 0014 6.2): a creation never races a move
-        // or a revocation that would change the creator's coverage; the grants are re-read below.
+        // Lock order (tree-lock.ts): tree lock, authorisation, then the installation-wide creation
+        // lock, so a caller who is not allowed never waits on the lock that serialises everybody.
         let current: TenantRow | null = null;
         if (parent) {
           await lockTreeShared(tx, parent.rootId);
@@ -231,17 +271,14 @@ export class TenantsService {
           current = found;
         }
         if (authorize) await authorize(tx, current);
+        // One writer at a time per creation: the node limit and the slug overlap check read what
+        // the insert changes. Held until commit (PGlite serialises transactions anyway). The unique
+        // index on `slug` stays as the database-level backstop.
+        await tx.execute(sql`select pg_advisory_xact_lock(${TENANT_CREATE_LOCK})`);
         const placement = current
           ? placeNode(id, current, maxDepth)
           : placeNode(id, null, maxDepth);
-        // Until secret names are node-aware (W13-7) slugs must not overlap anywhere in the
-        // installation: `acme.corp.x` and `acme-corp.x` are the same secret for the resolver, so
-        // tenants whose slugs overlap in canonical form could read each other's secrets and cannot
-        // coexist. This also covers the same slug twice.
-        const clash = (await tx.select({ slug: tenants.slug }).from(tenants)).find((x) =>
-          slugsCollide(x.slug, input.slug),
-        );
-        if (clash) throw this.slugConflict(p, input.slug, clash.slug);
+        // Limits before the slug: a caller over a limit learns nothing about which slugs exist.
         if (current) {
           const [size] = await tx
             .select({ n: count() })
@@ -253,6 +290,17 @@ export class TenantsService {
               `an organisation can have at most ${maxNodesPerRoot} tenants`,
             );
         }
+        if (authority === 'inheriting_admin') await this.assertNoCapAbove(tx, current!);
+        // Until secret names are node-aware (W13-7) slugs must not overlap anywhere in the
+        // installation: `acme.corp.x` and `acme-corp.x` are the same secret for the resolver, so
+        // tenants whose slugs overlap in canonical form could read each other's secrets and cannot
+        // coexist. This also covers the same slug twice.
+        const clash = (await tx.select({ slug: tenants.slug }).from(tenants)).find((x) =>
+          slugsCollide(x.slug, input.slug),
+        );
+        if (clash) throw this.slugConflict(p, input.slug, clash.slug);
+        if (authority === 'inheriting_admin' && (await this.slugReserved(input.slug)))
+          throw this.slugConflict(p, input.slug);
         const [inserted] = await tx
           .insert(tenants)
           .values({
@@ -353,12 +401,15 @@ export class TenantsService {
     return this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
       await lockTreeShared(tx, node.rootId);
+      // Re-read under the lock: authorisation looks at the node as it is now, not as it was.
+      const [fresh] = await tx.select().from(tenants).where(eq(tenants.id, id));
+      if (!fresh) throw notFound('tenant');
       if (!p.platformAdmin) {
         // Grants re-read under the lock, evaluated at the node of the path (never the acting node).
         const actor = await loadActor(tx, p);
-        if (!isInheritingAdminAt(actor, node, now)) throw this.notInheriting(actor, node, now);
+        if (!isInheritingAdminAt(actor, fresh, now)) throw this.notInheriting(actor, fresh, now);
       }
-      if (Object.keys(set).length === 0) return node;
+      if (Object.keys(set).length === 0) return fresh;
       const [row] = await tx.update(tenants).set(set).where(eq(tenants.id, id)).returning();
       if (!row) throw notFound('tenant');
       await this.audit.append(
@@ -367,7 +418,10 @@ export class TenantsService {
           tenantId: id,
           action: 'tenant.updated',
           target: id,
-          payload: patch,
+          payload: {
+            ...patch,
+            authority: p.platformAdmin ? ('platform' as const) : ('inheriting_admin' as const),
+          },
         },
         tx,
       );

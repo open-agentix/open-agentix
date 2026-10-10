@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { OaxError } from './errors.js';
 
@@ -9,7 +9,15 @@ import { OaxError } from './errors.js';
  */
 export interface SecretResolver {
   resolve(ref: string): Promise<string>;
+  /**
+   * Whether any secret exists whose canonical name (lower case, every non-alphanumeric character
+   * `_`) starts with `canonicalPrefix` (`acme_`). Optional: a backend that cannot list returns
+   * nothing here and the operator reserves slugs by configuration instead.
+   */
+  hasEntriesUnder?(canonicalPrefix: string): Promise<boolean>;
 }
+
+const canonical = (ref: string) => ref.toLowerCase().replace(/[^a-z0-9]/g, '_');
 
 const REF = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
@@ -37,6 +45,17 @@ export class DefaultSecretResolver implements SecretResolver {
     }
     throw new OaxError('secret_not_found', `secret "${ref}" is not configured`);
   }
+
+  async hasEntriesUnder(canonicalPrefix: string): Promise<boolean> {
+    const envPrefix = `OAX_SECRET_${canonicalPrefix.toUpperCase()}`;
+    if (Object.entries(this.env).some(([k, v]) => k.startsWith(envPrefix) && v)) return true;
+    if (!this.dir) return false;
+    try {
+      return (await readdir(this.dir)).some((f) => canonical(f).startsWith(canonicalPrefix));
+    } catch {
+      return false;
+    }
+  }
 }
 
 /** In-memory resolver for tests and the local CLI. */
@@ -48,5 +67,9 @@ export class StaticSecretResolver implements SecretResolver {
     if (v === undefined)
       throw new OaxError('secret_not_found', `secret "${ref}" is not configured`);
     return v;
+  }
+
+  async hasEntriesUnder(canonicalPrefix: string): Promise<boolean> {
+    return Object.keys(this.values).some((k) => canonical(k).startsWith(canonicalPrefix));
   }
 }
