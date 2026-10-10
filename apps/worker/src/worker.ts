@@ -111,8 +111,7 @@ export class Worker {
     const run = await this.services.runs.get(runId);
     const toolScope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
     // Configs and platform names from one resolution: the stdio guard below decides by name.
-    const { configs: mcp, platformNames } =
-      await this.services.catalog.mcpRunConfigs(toolScope);
+    const { configs: mcp, platformNames } = await this.services.catalog.mcpRunConfigs(toolScope);
     const tools = new ToolGateway(
       mcp,
       {
