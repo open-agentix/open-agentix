@@ -71,7 +71,7 @@ const GLOBAL_PATTERNS: readonly (readonly [string, RegExp])[] = SECRET_PATTERNS.
  * Kubernetes Secret or an encoded `.env` puts the value at any offset). The characters at either
  * end mix in neighbouring bits and are left out, so the core matches whatever surrounds it.
  */
-function base64Cores(bytes: Buffer): string[] {
+export function base64Cores(bytes: Buffer): string[] {
   const out: string[] = [];
   for (let shift = 0; shift < 3; shift++) {
     const enc = Buffer.concat([Buffer.alloc(shift), bytes]).toString('base64');

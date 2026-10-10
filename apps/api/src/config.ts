@@ -20,9 +20,9 @@ import {
   validateImage,
   validateResourceCeiling,
 } from '@openagentix/runners';
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isIP } from 'node:net';
-import { resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { OTEL_ENV_SHAPE, buildOtelConfig, type OtelConfig } from './telemetry-config.js';
 import { parseStdioEgressGrants } from './stdio-egress.js';
@@ -711,8 +711,7 @@ function kekOf(e: z.infer<typeof EnvSchema>): Config['mcp']['oauth'] {
   if (e.OAX_MCP_OAUTH_KEK_FILE) {
     // The default secret resolver serves every file below OAX_SECRETS_DIR as a secret reference; a
     // KEK there could be handed to a run node by a tenant that is allowed that reference.
-    const dir = e.OAX_SECRETS_DIR ? resolve(e.OAX_SECRETS_DIR) : null;
-    if (dir && resolve(e.OAX_MCP_OAUTH_KEK_FILE).startsWith(dir + sep))
+    if (insideDirectory(e.OAX_MCP_OAUTH_KEK_FILE, e.OAX_SECRETS_DIR))
       throw new OaxError(
         'config_invalid',
         'OAX_MCP_OAUTH_KEK_FILE must not be inside OAX_SECRETS_DIR (its files are served as secrets)',
@@ -739,6 +738,27 @@ function kekOf(e: z.infer<typeof EnvSchema>): Config['mcp']['oauth'] {
   const kek = { id: e.OAX_MCP_OAUTH_KEK_ID } as { id: string; key: Buffer | null };
   Object.defineProperty(kek, 'key', { get: () => key, enumerable: false });
   return { kek, source, fileLoose };
+}
+
+/** Whether `file` is `dir` or below it, compared by real path (symlinks followed) where it exists. */
+function insideDirectory(file: string, dir: string | undefined): boolean {
+  if (!dir) return false;
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p); // missing: the lexical path is all there is
+    }
+  };
+  const root = real(dir);
+  const target = real(file);
+  if (target === root || target.startsWith(root + sep)) return true;
+  // A link inside the directory that leads to the file serves it just the same.
+  try {
+    return readdirSync(dir).some((name) => real(join(dir, name)) === target);
+  } catch {
+    return false;
+  }
 }
 
 function stdioCommandsOf(raw: string): string[] {

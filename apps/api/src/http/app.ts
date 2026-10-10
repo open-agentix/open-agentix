@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import compress from '@fastify/compress';
 import cors from '@fastify/cors';
 import etag from '@fastify/etag';
@@ -26,6 +27,7 @@ import type { AppContext } from '../context.js';
 import { LOG_REDACT_PATHS, logDestination } from '../context.js';
 import { processSecrets, scrubResponses, type LineSink } from '../mcp-oauth/index.js';
 import { HttpError, forbidden, registerErrorHandler } from '../errors.js';
+import { runs } from '../db/schema.js';
 import type { Services } from '../services/index.js';
 import { VERSION } from '../version.js';
 import { verifyStreamToken } from '../auth/stream-token.js';
@@ -223,7 +225,17 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   };
 
   // Authentication + route-level RBAC. Resource-level (team) checks happen in the services.
-  scrubResponses(app, processSecrets);
+  scrubResponses(app, processSecrets, async (req) => {
+    // Run-token routes carry no principal; their tenant is the run's (one indexed lookup, cached).
+    const runId = (req.params as { id?: string } | undefined)?.id;
+    if (!runId || !req.url.startsWith('/v1/worker/runs/')) return undefined;
+    const key = `run-tenant:${runId}`;
+    const hit = await ctx.cache.get<string>(key);
+    if (hit) return hit;
+    const [row] = await ctx.db.select({ t: runs.tenantId }).from(runs).where(eq(runs.id, runId));
+    if (row) await ctx.cache.set(key, row.t, 3_600_000);
+    return row?.t;
+  });
   app.addHook('onRequest', async (req, reply) => {
     const access = req.routeOptions.config?.access;
     if (!access || access === 'public' || access === 'webhook') return;

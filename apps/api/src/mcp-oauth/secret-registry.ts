@@ -1,5 +1,6 @@
-import { secretForms } from '@openagentix/core';
+import { base64Cores } from '@openagentix/core';
 import { Automaton } from './automaton.js';
+import { isGlobalSafe } from './token-shape.js';
 
 /**
  * Process-wide set of secret values in use right now (OAuth access tokens handed out by
@@ -7,9 +8,11 @@ import { Automaton } from './automaton.js';
  * lines, audit payloads, HTTP bodies, run streams and span attributes. It is the "log redactor" of
  * ADR 0016 section 7.5; the per-run `ContextGuard` is the other registration target.
  *
- * Scoping: a value belongs to a tenant. Log lines (tenant unknown) are scrubbed with all values;
- * audit payloads, responses and streams are scrubbed with the values of the tenant they are
- * written or served for, so one tenant's token can never blank text of another tenant.
+ * Scoping: a value belongs to a tenant. Audit payloads, responses and streams are scrubbed with
+ * the values of the tenant they are written or served for, so one tenant's token can never blank
+ * text of another tenant. Log lines, stdout and span attributes (tenant unknown) are scrubbed with
+ * the values that pass the stricter tenant-less rule (`isGlobalSafe`: long, high entropy, not the
+ * shape of a UUID or digest) only.
  *
  * Deviation from "not cached beyond one call" (ADR 0016 section 7.5), recorded there: the registry
  * keeps token values in memory so the redactors can recognise them. Entries leave when the token
@@ -24,7 +27,11 @@ import { Automaton } from './automaton.js';
 export const MAX_KNOWN_SECRETS = 4096;
 export const MAX_SECRETS_PER_TENANT = 256;
 /** Total characters over all indexed spellings; bounds memory and rebuild time of the automata. */
-export const MAX_FORM_CHARS = 2_000_000;
+export const MAX_FORM_CHARS = 150_000;
+/** Per-tenant share of the above, so one tenant cannot fill the registry (and slow every rebuild). */
+export const MAX_FORM_CHARS_PER_TENANT = 40_000;
+/** At most one eviction warning per this long; the handler gets the number dropped since. */
+const WARN_EVERY_MS = 60_000;
 export const REDACTED = '[REDACTED]';
 /** An expired token stays registered this long, for late log lines of in-flight calls. */
 export const EXPIRY_GRACE_MS = 5 * 60_000;
@@ -39,6 +46,8 @@ const UNSCOPED = '';
 
 interface Entry {
   forms: string[];
+  /** Counts for the tenant-less scope (see `isGlobalSafe`). */
+  global: boolean;
   chars: number;
   owner: string | undefined;
   tenant: string;
@@ -50,15 +59,24 @@ export interface RegistryOptions {
   maxEntries?: number;
   maxPerTenant?: number;
   maxFormChars?: number;
-  /** Called with the number of still-valid entries dropped to stay within a limit. */
+  maxFormCharsPerTenant?: number;
+  /** Called (at most once a minute) with the number of still-valid entries dropped since the last call. */
   onLiveEviction?: (count: number) => void;
 }
 
-/** Every spelling worth matching: the guard's forms, JSON-escaped, lower-case percent-encoding. */
+/**
+ * Every spelling worth matching: the value, percent-encoded in either case, JSON-escaped, and the
+ * three base64 alignments (a `Basic` header or a docker `auth` field carries `user:token` encoded).
+ * Hex and base64url are left out: each roughly doubles the indexed text, every rebuild of the
+ * automata costs in proportion to it, and they do not occur in logs; the run's own `ContextGuard`
+ * still matches them.
+ */
 function spellings(value: string): string[] {
-  const pct = encodeURIComponent(value).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
+  const pct = encodeURIComponent(value);
+  const lowerPct = pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
   const escaped = JSON.stringify(value).slice(1, -1);
-  return [...new Set([...secretForms(value), escaped, pct])].filter((f) => f.length >= MIN_FORM);
+  const forms = [value, pct, lowerPct, escaped, ...base64Cores(Buffer.from(value))];
+  return [...new Set(forms)].filter((f) => f.length >= MIN_FORM);
 }
 
 export class SecretRegistry {
@@ -71,6 +89,9 @@ export class SecretRegistry {
   private readonly max: number;
   private readonly maxPerTenant: number;
   private readonly maxChars: number;
+  private readonly maxCharsPerTenant: number;
+  private lastWarn = Number.NEGATIVE_INFINITY;
+  private unreported = 0;
   onLiveEviction: ((count: number) => void) | undefined;
 
   constructor(opts: RegistryOptions = {}) {
@@ -78,6 +99,7 @@ export class SecretRegistry {
     this.max = opts.maxEntries ?? MAX_KNOWN_SECRETS;
     this.maxPerTenant = opts.maxPerTenant ?? MAX_SECRETS_PER_TENANT;
     this.maxChars = opts.maxFormChars ?? MAX_FORM_CHARS;
+    this.maxCharsPerTenant = opts.maxFormCharsPerTenant ?? MAX_FORM_CHARS_PER_TENANT;
     this.onLiveEviction = opts.onLiveEviction;
   }
 
@@ -89,14 +111,26 @@ export class SecretRegistry {
   register(value: string, opts: { owner?: string; tenant?: string; ttlMs?: number } = {}): void {
     if (value.length < MIN_FORM) return;
     this.prune(true);
+    const tenant = opts.tenant ?? UNSCOPED;
+    const expiresAt = this.now() + (opts.ttlMs ?? DEFAULT_TTL_MS) + EXPIRY_GRACE_MS;
+    const known = this.entries.get(value);
+    if (known && known.tenant === tenant && known.owner === opts.owner) {
+      // The same token again (every tool use does this): refresh its lifetime and recency only.
+      // The automata stay as they are; rebuilding them is the expensive part.
+      known.expiresAt = Math.max(known.expiresAt, expiresAt);
+      this.entries.delete(value);
+      this.entries.set(value, known);
+      return;
+    }
     this.remove(value);
     const forms = spellings(value);
     const entry: Entry = {
       forms,
+      global: isGlobalSafe(value),
       chars: forms.reduce((n, f) => n + f.length, 0),
       owner: opts.owner,
-      tenant: opts.tenant ?? UNSCOPED,
-      expiresAt: this.now() + (opts.ttlMs ?? DEFAULT_TTL_MS) + EXPIRY_GRACE_MS,
+      tenant,
+      expiresAt,
     };
     // Re-adding moves the entry to the most recently used end of the map.
     this.entries.set(value, entry);
@@ -143,7 +177,7 @@ export class SecretRegistry {
     if (this.automata.has(scope)) return this.automata.get(scope) ?? null;
     const forms: string[] = [];
     for (const e of this.entries.values())
-      if (scope === ALL || e.tenant === scope) forms.push(...e.forms);
+      if (scope === ALL ? e.global : e.tenant === scope) forms.push(...e.forms);
     const built = forms.length === 0 ? null : new Automaton(forms);
     if (this.automata.size >= MAX_CACHED_AUTOMATA) {
       const oldest = this.automata.keys().next().value;
@@ -177,16 +211,37 @@ export class SecretRegistry {
     this.forgetWhere((e) => e.expiresAt <= now);
   }
 
-  /** Per-tenant quota first (a tenant can only push out its own values), then the global limits. */
+  /** Per-tenant quotas first (a tenant can only push out its own values), then the global limits. */
   private enforceLimits(tenant: string): void {
     let live = 0;
-    while (this.countOf(tenant) > this.maxPerTenant && this.evictOldest(tenant)) live++;
+    while (
+      (this.countOf(tenant) > this.maxPerTenant || this.charsOf(tenant) > this.maxCharsPerTenant) &&
+      this.evictOldest(tenant)
+    )
+      live++;
     while (
       (this.entries.size > this.max || this.totalChars > this.maxChars) &&
       this.evictOldest(this.busiestTenant())
     )
       live++;
-    if (live > 0) this.onLiveEviction?.(live);
+    if (live > 0) this.reportEviction(live);
+  }
+
+  /** Rate-limited: a tenant at its cap evicts on every rotation, and the log line itself is scrubbed. */
+  private reportEviction(count: number): void {
+    this.unreported += count;
+    const now = this.now();
+    if (now - this.lastWarn < WARN_EVERY_MS) return;
+    this.lastWarn = now;
+    const total = this.unreported;
+    this.unreported = 0;
+    this.onLiveEviction?.(total);
+  }
+
+  private charsOf(tenant: string): number {
+    let n = 0;
+    for (const e of this.entries.values()) if (e.tenant === tenant) n += e.chars;
+    return n;
   }
 
   private countOf(tenant: string): number {

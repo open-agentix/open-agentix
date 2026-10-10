@@ -2,11 +2,16 @@
  * Aho-Corasick multi-pattern matcher over ASCII, stored in typed arrays (first-child /
  * next-sibling edges). Scanning is linear in the text whatever the patterns look like (shared
  * prefixes, periodic strings), which is what the redactor needs: patterns are chosen by other
- * parties. Build cost is proportional to the total pattern length.
+ * parties. Build cost is proportional to the total pattern length. The first levels of the trie
+ * (where the branching is wide) use dense 128-entry tables; deeper nodes, which of random strings
+ * have one or two children, use the sibling lists.
  */
 const ROOT = 0;
 const NONE = -1;
 const ASCII_MAX = 127;
+const ALPHABET = 128;
+/** Nodes at this depth or above get a dense table. */
+const DENSE_DEPTH = 2;
 
 export class Automaton {
   private readonly first: Int32Array;
@@ -15,6 +20,11 @@ export class Automaton {
   private readonly fail: Int32Array;
   /** Length of the longest pattern that ends at this state (through the suffix links). */
   private readonly longest: Int32Array;
+  private readonly depth: Uint8Array;
+  /** Index of the node's dense table, or -1. */
+  private readonly denseOf: Int32Array;
+  private dense: Int32Array = new Int32Array(0);
+  private denseCount = 0;
   private nodes = 1;
   readonly patterns: number;
 
@@ -26,6 +36,11 @@ export class Automaton {
     this.ch = new Uint8Array(total);
     this.fail = new Int32Array(total);
     this.longest = new Int32Array(total);
+    this.depth = new Uint8Array(total);
+    this.denseOf = new Int32Array(total).fill(NONE);
+    this.dense = new Int32Array(ALPHABET).fill(NONE); // the root's table
+    this.denseOf[ROOT] = 0;
+    this.denseCount = 1;
     let count = 0;
     for (const p of patterns) if (this.insert(p)) count++;
     this.patterns = count;
@@ -33,6 +48,8 @@ export class Automaton {
   }
 
   private child(node: number, c: number): number {
+    const d = this.denseOf[node] as number;
+    if (d !== NONE) return this.dense[d * ALPHABET + c] as number;
     for (let k = this.first[node] as number; k !== NONE; k = this.next[k] as number)
       if (this.ch[k] === c) return k;
     return NONE;
@@ -50,11 +67,30 @@ export class Automaton {
         this.ch[to] = c;
         this.next[to] = this.first[node] as number;
         this.first[node] = to;
+        this.depth[to] = (this.depth[node] as number) + 1;
+        this.addEdge(node, c, to);
       }
       node = to;
     }
     this.longest[node] = Math.max(this.longest[node] as number, pattern.length);
     return true;
+  }
+
+  /** Records the edge in the dense table of `node`, and gives `to` a table if it is shallow. */
+  private addEdge(node: number, c: number, to: number): void {
+    const d = this.denseOf[node] as number;
+    if (d !== NONE) this.dense[d * ALPHABET + c] = to;
+    if ((this.depth[to] as number) <= DENSE_DEPTH) this.allocDense(to);
+  }
+
+  private allocDense(node: number): void {
+    const need = (this.denseCount + 1) * ALPHABET;
+    if (need > this.dense.length) {
+      const grown = new Int32Array(Math.max(need, this.dense.length * 2)).fill(NONE);
+      grown.set(this.dense);
+      this.dense = grown;
+    }
+    this.denseOf[node] = this.denseCount++;
   }
 
   /** Breadth-first failure links and inherited match lengths. */

@@ -31,6 +31,17 @@ const MAX_WORD_SHARE = 0.4;
 const MIN_COMPRESSED_SHARE = 0.75;
 const COMPRESSION_CHECK_FROM = 32;
 const MIN_DISTINCT = 6;
+/** Shapes of public text that must never become redaction targets. */
+const DATE_INSIDE = /\d{4}-\d{2}-\d{2}/;
+/** A short lower-case word (with an optional number) before the first slash: `runs/`, `sha256/`. */
+const WORD_THEN_SLASH = /^[a-z]{2,8}[0-9]{0,4}\//;
+const WORD_BETWEEN_SLASHES = /\/[a-z]{3,}\//;
+const SEPARATORS = /[-._/~+]/;
+/** What the tenant-less scopes (logs, stdout, span attributes) accept; see {@link isGlobalSafe}. */
+const GLOBAL_MIN_LENGTH = 32;
+const GLOBAL_MIN_BITS = 128;
+/** Hex lengths of UUIDs without dashes and of SHA-1 / SHA-256 digests: public data looks like this. */
+const PUBLIC_HEX_LENGTHS: ReadonlySet<number> = new Set([32, 40, 64]);
 
 const invalid = (why: string) => new OaxError('token_invalid', `the token ${why}`);
 
@@ -69,12 +80,51 @@ export function assertTokenShape(value: string, ids: readonly string[] = []): vo
     // One alphanumeric class only (an upper-case code, a lower-case path) is not a random token.
     if (!hasTwoClasses(value)) throw invalid('is not random enough to be a credential');
     if (wordShare(value) > MAX_WORD_SHARE) throw invalid('looks like text, not a credential');
+    rejectPublicShapes(value);
   }
   if (value.length >= COMPRESSION_CHECK_FROM) {
     const compressedBits = deflateRawSync(value, { level: 9 }).length * 8;
     if (compressedBits < MIN_COMPRESSED_SHARE * bits)
       throw invalid('is repetitive and not random enough to be a credential');
   }
+}
+
+/**
+ * Paths, host names, model ids with dates, versions, trace headers and JWT headers are public text
+ * that a hostile value could make the redactors blank. Standard base64 may contain `/`, but then
+ * neither `-`, `_` nor `.`, and no word between slashes.
+ */
+function rejectPublicShapes(value: string): void {
+  const slash = value.includes('/');
+  if (slash && /[-_.]/.test(value)) throw invalid('looks like a path, not a credential');
+  if (WORD_THEN_SLASH.test(value) || WORD_BETWEEN_SLASHES.test(value))
+    throw invalid('looks like a path, not a credential');
+  if (DATE_INSIDE.test(value)) throw invalid('looks like a dated name, not a credential');
+  // Lower-case with separators is a host name, a version or a model id, not a random token.
+  if (!/[A-Z]/.test(value) && SEPARATORS.test(value))
+    throw invalid('looks like a name, not a credential');
+  // A JWT is three parts; the header alone (or any `eyJ` fragment) is public text.
+  if (value.startsWith('eyJ') && value.split('.').filter(Boolean).length !== 3)
+    throw invalid('looks like a fragment of a JWT');
+}
+
+/**
+ * The stricter rule for scopes that cannot name a tenant. A value accepted by
+ * {@link assertTokenShape} that is also long, high-entropy and not shaped like a UUID or a SHA
+ * digest is redacted everywhere; any other accepted value is redacted for its own tenant only.
+ * Residual risk, accepted: a long random-looking value can still equal some public string of the
+ * same shape, so log and span text (not API data, audit entries or other tenants' responses) can
+ * lose such a string; it costs integrity of that text, never confidentiality.
+ */
+export function isGlobalSafe(value: string): boolean {
+  try {
+    assertTokenShape(value);
+  } catch {
+    return false;
+  }
+  if (value.length < GLOBAL_MIN_LENGTH) return false;
+  if (HEX_ONLY.test(value) && PUBLIC_HEX_LENGTHS.has(value.length)) return false;
+  return value.length * alphabetBits(value) >= GLOBAL_MIN_BITS;
 }
 
 function hasTwoClasses(value: string): boolean {
