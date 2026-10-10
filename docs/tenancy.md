@@ -416,6 +416,39 @@ see `404 user` (the grantee visibility of the grant API), token scopes are appli
 exclude each other during a rolling deploy for the duration of the rollout; do not create nodes and
 grants at the same time as deploying.
 
+**User lifecycle across the tree (review of #302).** A user is managed through the node they live on, but
+their grants can sit on nodes above the manager. With `OAX_ROLE_BINDINGS_READ=bindings`, a non-operator who
+disables a user (`PATCH /v1/users/{id} { disabled: true }`), changes their `globalRoles`, or revokes or lists
+their API tokens is checked in a transaction under the tree lock (shared) and the binding lock, from grants
+re-read there: for **every** unexpired node binding of the target the caller needs `users:write` on that node,
+the permissions of the role, and (when the binding inherits) coverage of the subtree, otherwise `403`. A
+platform operator account is managed by operators only (`403`), the last-admin rule (`409 last_admin`)
+covers disabling and removing the mirror admin role (closes #288 item 1 for these paths; deleting users is
+not an API). Operators and a user acting on their own account are exempt from the first check (the last
+admin rule still applies). A division admin therefore cannot lock out or demote the root admin who happens
+to live below it. `GET /v1/tokens?all=true` leaves out tokens of users the caller may not manage. With
+`legacy` nothing changes (no authority exists below the home node there).
+
+**Budgets.** Budgets are per node until W13-4: a child would spend outside its parent's cap. A tenant admin
+therefore cannot create below a node that has a monthly budget on it or on an ancestor (`403 budget_capped`);
+an operator creates the node and may cap it.
+
+**Slugs and secrets.** Secrets are named `<slug>.*`, so a slug is a claim on a secret namespace. A tenant
+admin cannot claim a slug that an operator reserved (`OAX_TENANT_RESERVED_SLUGS`, comma separated, collides
+in canonical form like slugs do) or whose prefix already holds secrets in a backend that can be listed (the
+default env and file resolver can; for other backends use the reserved list). The answer is the same
+`409 this slug is not available`. **Never pre-stage secrets under a prefix you do not want claimed, and delete
+the secrets of removed tenants.**
+
+**Order of checks (creation).** Pre-check from the cached grants (no lock, no transaction), then in the
+transaction: tree lock (shared), parent re-read, authorisation from re-read grants, installation-wide
+creation lock, depth, node limit, budget cap, slug. Limits answer before the slug, so the `409` for a taken
+slug is only reachable by a caller who is authorised and within the limits. There is no rate limit for
+non-operator creation beyond the global one; the node limit per organisation is the bound.
+
+Renaming does not bump the authz epoch (the name is not part of any decision); the tree snapshot carries slugs
+only. `tenant.updated` records `authority`.
+
 ## Audit
 
 The hash chain is global (one chain keeps ordering and tamper detection simple); every entry carries

@@ -228,6 +228,13 @@ S5 (write inheritance and sub-tenant creation; #190):
   and 6 are not S5 and stay open (#288 item 1, the last-admin guard for `global_roles`/disable/delete, becomes
   more relevant now that administrators below a root can be created by inheriting admins; it concerns roots
   only).
+- **Review fixes (Opus review of #302).** User lifecycle across the tree (`assertMayChangeUser`: disable,
+  `globalRoles`, tokens; every node binding of the target must be within the manager's `users:write` and
+  coverage; operator accounts operator-only; rule 8 for these paths, #288 item 1), `403 budget_capped` below
+  capped nodes (budgets are per node until W13-4), `OAX_TENANT_RESERVED_SLUGS` plus a `hasEntriesUnder` check on
+  listable secret backends, limits before slug, pre-check and lock order (tree, authorise, creation lock),
+  platform-operator targets of the access endpoint evaluated at the path node, the legacy read path in the
+  access endpoint, node re-read inside the rename transaction, `authority` on `tenant.updated`.
 - Not in S5: the `parent_admins_do_not_inherit` warning for operators, `actions` on detail responses (A6 #160
   builds on the access endpoints), node deletion and moves (S10).
 

@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **User lifecycle across the tree (ADR 0014 S5 review)**: with `OAX_ROLE_BINDINGS_READ=bindings`, disabling a
+  user, changing their global roles and revoking or listing their API tokens now require `users:write`
+  (and subtree coverage for inheriting bindings) on every node the target is bound on, so a subordinate
+  administrator can no longer lock out or demote a superior admin who lives below it; operator accounts are
+  managed by operators only; the last inheriting admin of a root cannot be disabled or demoted (`409`).
+  Tenant admins cannot create sub-tenants below a node with a monthly budget (`403 budget_capped`) or claim
+  reserved slugs or slugs with staged secrets. Unauthorised callers no longer take the creation lock, limits
+  answer before slug conflicts, and the access endpoint no longer names the home node of a platform operator.
 - **Write inheritance (ADR 0014 slice S5, #190)**: the read-only clamp on inherited bindings is removed. An
   inheriting binding (`inherit = true`, opt-in per binding, default off) now gives its whole role at every node
   below it, so an inheriting tenant admin administers its subtree. Clamp rules that stay, documented in
@@ -84,6 +92,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **`OAX_TENANT_RESERVED_SLUGS`** (default empty): slugs a tenant admin cannot claim when creating a sub-tenant;
+  slugs whose secret prefix already holds env or file secrets are refused alike (ADR 0014 S5 review).
 - **Sub-tenants by tenant admins and access explanation (ADR 0014 slice S5, #190)**:
   `POST /v1/tenants { parentId }` for an inheriting `admin` on the parent or an ancestor (`403 inheritance_required`
   for a direct admin; depth, node and slug limits as for operators; `tenant.created` audited in the new node's
