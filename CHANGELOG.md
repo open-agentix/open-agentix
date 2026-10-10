@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The role-binding reconcile no longer reports `blocked` (mirror rows and explicit grants cannot collide any
+  more); `oax_role_bindings_reconcile_fixes_total` keeps `kind=added|removed`.
 - Docs: the ROADMAP now records `v0.2.0-alpha.1` as released (alpha, GitHub pre-release) with signed images; the
   Helm install test on kind stays open.
 - Docs: the README, `GOVERNANCE.md` and `CONTRIBUTING.md` now describe how changes are really
@@ -16,6 +18,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Role-binding API (ADR 0014 slice S4, #189, #226)**: `GET/POST /v1/tenants/{id}/role-bindings`,
+  `PATCH/DELETE .../{bindingId}` (`inherit` required on POST) and the platform-operator bulk opt-in
+  `POST /v1/tenants/{rootId}/role-bindings/enable-inheritance { roles, dryRun }` with a dry run that lists the
+  users and nodes that would gain access. Grant rules 1 to 9 of the ADR (no grant above one's own permissions,
+  coverage for `inherit`, no self-grant, grantee visibility as `404 user`, last inheriting admin `409`), audit events
+  `tenant.role_bound`, `tenant.role_binding_changed`, `tenant.role_unbound` and `tenant.inheritance_enabled` in the
+  binding node's partition, all under the shared tree lock; use-case bindings are `422
+  use_case_bindings_unsupported`. Migration `0023_trb_source` (down script and snapshot included) gives mirror
+  rows of `users.global_roles` their own key (`source = mirror | grant`, part of `trb_uq`): the same-key rule, the
+  reconcile and the `0019` trigger now touch mirror rows only, so an explicit grant survives an unrelated
+  `global_roles` change and a home move. New `OAX_MAX_BINDINGS_PER_USER` (default 200). OpenAPI and the UI schema
+  types are updated; see `docs/tenancy.md`.
 - **Subtree reads (ADR 0014 slice S3, #188)**: `?scope=node|subtree` (default `node`, unchanged) and `?tenantId=`
   (narrowing only) on `GET /v1/agents`, `/v1/runs`, `/v1/approvals`, `/v1/events`, `/v1/event-sources`,
   `/v1/connections`, `/v1/costs/summary`, `/v1/budgets` and `/v1/audit`. The server builds the node list from
