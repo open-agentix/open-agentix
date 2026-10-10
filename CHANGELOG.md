@@ -6,8 +6,157 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Docs: the README, `GOVERNANCE.md` and `CONTRIBUTING.md` now describe how changes are really
+  reviewed (agent-authored pull requests, independent review agent, no guarantee of a human read
+  before merge) and add a "How changes are reviewed" section.
+
 ### Added
 
+- **Roadmap**: new planned wave W14 (agent lifecycle governance: four-eyes publish approval with review
+  comments, development vs published agents, scoped and encrypted secrets, Vault and AWS Secrets Manager
+  backends; design in ADR 0017, issues #244 to #252) in v0.4, with notes on W5-3, W6-3, W7-2 and W9-2.
+  Nothing of it is built yet.
+
+### Security
+
+- **Tenant stdio MCP servers no longer run next to the worker (ADR 0016 slice S0, #230)**: any
+  tenant admin could create a `stdio` MCP connection with an arbitrary `command`, and in-process
+  steps (the default runner) started it as a child of the trusted worker, with the worker's
+  network, database credentials and run-token secret (the air-gapped guard patches the Node
+  process only). Tenant, team and agent `stdio` connections now run only in run nodes; in the
+  worker the gateway starts platform (operator-defined) stdio servers only. See `docs/mcp.md`
+  ("Stdio MCP servers") and the Breaking entry below. Hardened in review: platform connections
+  could be changed or deleted by any administrator of the operator's home tenant (and then run any
+  command in the worker for every tenant), an allowlisted interpreter could run a file of the
+  workspace, the api resolved tenant paths on its own host (file existence oracle), and a cached
+  stdio config could reach a node unchecked.
+
+### Breaking
+
+- **Tenant stdio MCP connections (ADR 0016 S0, #230)**: (1) `command` of a tenant, team or agent
+  `stdio` connection must be an absolute path that matches `OAX_MCP_STDIO_COMMANDS` (default empty:
+  no tenant stdio command is accepted, so `POST`/`PUT /v1/connections` return
+  `400 mcp_command_forbidden` until the operator lists binaries); shells, `env`, wrappers,
+  run-time installers (`npx`, `npm`, `pnpm`, `yarn`, `bunx`, `uvx`, `pip`, `docker`, `podman`,
+  `curl`, `wget`, `git`, ...) and interpreters with an inline program or code-loading flag
+  (`node -e`, `python -c`, ...) are refused even when listed; `env`/`envSecrets` names follow the
+  reserved-name rules (no `PATH`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `BASH_ENV`, proxy variables,
+  `OAX_*`, ...) and return `400 mcp_env_forbidden`. (2) A step on `in-process` or `local` that
+  holds a grant on such a connection cannot be published (`400 mcp_stdio_requires_isolation`) and
+  fails at run time with the same code; set `runtime.runner` to `container` or `kubernetes-job`.
+  (3) Existing stored connections are kept unchanged but fail closed at run time
+  (`422 mcp_command_forbidden`, audit entry `mcp.stdio.refused`); they are reported at start-up
+  (warning, gauge `oax_mcp_stdio_violations`), in `GET /v1/connections/stdio-violations` and as
+  `warnings` on `GET /v1/connections`. (4) Air-gapped mode refuses platform stdio connections
+  unless `OAX_AIRGAPPED_STDIO=trusted`, and tenant stdio connections unless an isolating runner is
+  enabled. Platform connections are not subject to the command and environment rules. Run nodes
+  receive `stdio` in the step handover and reject it when older than this change (fail closed).
+  (5) Interpreters (`node`, `python`, `java`, `deno`, ...) must run a program file that is itself
+  an allowlisted absolute path, with only value-less options before it: `python -m`, `java -cp`,
+  relative scripts and `dotnet <tool>` are refused, and `bun` is refused as a run-time installer.
+  Allowlist entries in or below `/tmp`, `/var/tmp`, `/dev`, `/proc`, `/sys`, `/run`, `/workspace`
+  or `/work` fail start-up, and the run node refuses a command or program file that it could
+  change (file or directory writable). (6) `PUT` and `DELETE /v1/connections/{id}` on a `platform`
+  connection need platform operator access (`403` for other administrators of the operator's home
+  tenant).
+
+## [0.2.0-alpha.1] - 2026-10-10
+
+This is the first pre-release that ships release images (signed `api`, `worker` and `ui` images on
+GHCR). It collects everything merged since `v0.1.0`: the model proxy and isolated run nodes, the
+Claude Code and OpenCode harness adapters, the Kubernetes Job runner, air-gapped mode and the outbound
+network configuration, bring-your-own-key model connections with a pinned models.dev catalog, tenant
+isolation in every query, hierarchical tenants with role bindings, OpenTelemetry tracing and the runnable
+demo.
+
+**Known limitations (alpha).** Not production-ready. Verified with real runs so far: Claude Code on the
+in-process path only. Implemented but not verified with real runs: the isolated run-node path through the
+model proxy, the OpenCode adapter, the Kubernetes Job runner on a real cluster and the model providers with
+real accounts. Tenant administrators can still create stdio MCP connections whose command the worker starts
+for in-process steps (containment with an operator allowlist is in review and planned for the next
+pre-release, see ADR 0016); until then, treat tenant administrators as trusted. Test code inside run nodes
+shares the node's user id (issue #140).
+
+**Status: alpha, not production-ready.** Interfaces, settings and the database schema can still change
+between pre-releases. What has been verified with real runs: Claude Code running in-process
+(real `claude` CLI runs behind the policy gate). What has not: the isolated run-node path with a real
+harness, OpenCode with a real run, the Kubernetes Job runner on a real cluster, and the model providers
+with real accounts. These paths are covered by unit and integration tests with fakes only.
+
+Database migrations in this release: `0003_tenant_isolation`, `0004_budgets`, `0009_run_node_sessions`,
+`0010_model_proxy`, `0013_tenant_hierarchy`, `0014_workspace_seed`, `0015_agent_summary_fields`,
+`0016_agent_disable`, `0017_approvals_tenant_status_idx`, `0018_tenant_role_bindings` and
+`0019_trb_home_move` (down scripts from 0013 on). Roll out the control plane and the run-node
+images together.
+
+### Breaking
+
+Read this before upgrading from `0.1.0`. Details are in the entries below.
+
+- **OpenTelemetry start-up refusals.** `OTEL_EXPORTER_OTLP_ENDPOINT` with plain `http://` to a
+  non-loopback host (for example an in-cluster collector) fails start-up unless `OAX_OTEL_INSECURE=true`
+  is set; an endpoint with credentials, a query or a fragment is refused. The standard
+  `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`, `_CLIENT_CERTIFICATE`, `_CLIENT_KEY` (also the `_TRACES_`
+  variants), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`,
+  `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` are refused with a message naming the replacement
+  (`OAX_OTEL_HEADERS_SECRET`, the network configuration, `OAX_OTEL_SAMPLE_RATIO`).
+  `OTEL_SDK_DISABLED=true` or an `OTEL_TRACES_EXPORTER` other than `otlp` next to an endpoint fails
+  start-up; a process in which another OpenTelemetry SDK is already registered (auto-instrumentation
+  through `NODE_OPTIONS`, operator injection) fails start-up. The default OTLP protocol is now
+  `http/protobuf`.
+- **Kubernetes Job runner**: an enabled `kubernetes-job` runner now requires an `https://`
+  `OAX_NODE_CONTROL_URL`, a digest-pinned `OAX_K8S_IMAGE` and a control plane selector or CIDR
+  (`OAX_K8S_CONTROL_PLANE_*`, at least one port); it is started only with `OAX_K8S_JOB_ENABLED=true` and
+  refuses to start outside a cluster or with an incomplete configuration.
+- **`labels.useCase` is limited to 200 characters**; a longer label is a validation error.
+- **Tenant admins reach only their home node.** `X-OAX-Tenant` accepts an id, slug or slug path, but
+  everybody except platform admins (tenant admins included) can act only in their own tenant node until
+  role bindings can inherit down the tree (ADR 0014); every other node answers `404`.
+- **Model proxy cutover**: isolated run-node steps call models only through the model proxy. With
+  `OAX_MODEL_PROXY_ENABLED=false` (the default) they fail with `model_proxy_unavailable`. Run nodes can no
+  longer report `model_call` steps (`400 step_kind_refused`; breaking for custom workers). With any cost
+  limit in force, a model without a price is rejected with `422 model_unpriced`.
+- **Network start-up checks**: `NODE_TLS_REJECT_UNAUTHORIZED=0` aborts start-up (`tls_insecure`); invalid
+  `HTTPS_PROXY`/`HTTP_PROXY` values abort start-up (`network_config_invalid`); `OAX_NETWORK_PRIVATE_ALLOW`
+  accepts only IPs and CIDR ranges of at least /8 that do not cover loopback or link-local space; the deny
+  code of a `deny` route is `egress_denied`.
+- **Tenant secrets and slugs**: MCP connection secrets of in-process runs resolve only through the
+  tenant allowlist `tenants.secret_refs` (empty by default); tenant slugs that overlap in canonical form
+  cannot be created together. `Principal` carries `tenantId` and `platformAdmin`; migration
+  `0003_tenant_isolation` makes names unique per tenant and marks existing `admin` users as platform
+  operators.
+- **Demo**: the published demo accounts and data changed (platform-admin visitor `owner@example.org`,
+  seed as a tenant tree with stable ids, scenario runs only in the Security tenant, read-only allowlist
+  enforced, unlisted seed accounts get random passwords). Reseed the demo database.
+- **Database**: migrations `0013` to `0019` listed above are required; data-only restores need
+  `pg_restore --disable-triggers` (tenant hierarchy guard trigger).
+
+Full notes:
+
+- **Network start-up checks (W10-1-1)**: the api now aborts start-up (`tls_insecure`) when
+  `NODE_TLS_REJECT_UNAUTHORIZED=0` is set, air-gapped or not; add the CA to a trust bundle or
+  `NODE_EXTRA_CA_CERTS` instead. `HTTPS_PROXY`/`HTTP_PROXY` values that are not an `http://` or
+  `https://` URL abort start-up (`network_config_invalid`); a bare `host:port` is still accepted
+  (read as `http://host:port`, with a warning), `socks5://` and other schemes are refused.
+  `OAX_NETWORK_PRIVATE_ALLOW` and `privateAllow` now accept only IPs and CIDR ranges with a prefix
+  of at least /8 that do not cover loopback, link-local, unspecified or multicast space; the
+  allowlist grammar rejects `/0`, empty and non-numeric prefixes (`10.0.0.0/`); the deny code of a
+  `deny` route is `egress_denied` (was `denied_by_route`).
+- **Model proxy cutover (W1-3b-4)**: isolated run node steps now call models only through the
+  model proxy. With `OAX_MODEL_PROXY_ENABLED=false` (the default) they fail with
+  `model_proxy_unavailable`, the simulated provider included. Old `oax run-node` images report
+  `model_call` steps themselves and now get `400 step_kind_refused`: roll out control node and node
+  images together. As soon as any cost limit applies (run, step, team or monthly), a model without
+  a price is rejected with `422 model_unpriced`.
+
+### Added
+
+- **CI: manual workflow runs (`ci`)**: `ci.yml` gets a `workflow_dispatch` trigger; `release.yml` can be
+  started manually for an existing tag (`-f tag=vX.Y.Z`) after a `verify` job checks the tag format,
+  that it exists on `main`, that no release exists and that `CHANGELOG.md` has its section. Tags are
+  never created by the workflow. See `docs/releasing.md`.
 - **Telemetry core hardening (ADR 0015 slice S1)**: a closed attribute allowlist for spans
   (`packages/core/src/telemetry`: key, type, length cap and value set per span kind; every string
   passes the `ContextGuard`; unknown keys are dropped and counted), a single `withSpan` wrapper
@@ -300,204 +449,6 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 - Run node environment variables `OAX_CLAUDE_BIN`, `OAX_OPENCODE_BIN`, `OAX_OPENCODE_SHA256`
   (the images with pinned binaries are PLAT-05).
 
-### Security
-
-- **Tenant stdio MCP servers no longer run next to the worker (ADR 0016 slice S0, #230)**: any
-  tenant admin could create a `stdio` MCP connection with an arbitrary `command`, and in-process
-  steps (the default runner) started it as a child of the trusted worker, with the worker's
-  network, database credentials and run-token secret (the air-gapped guard patches the Node
-  process only). Tenant, team and agent `stdio` connections now run only in run nodes; in the
-  worker the gateway starts platform (operator-defined) stdio servers only. See `docs/mcp.md`
-  ("Stdio MCP servers") and the Breaking entry below. Hardened in review: platform connections
-  could be changed or deleted by any administrator of the operator's home tenant (and then run any
-  command in the worker for every tenant), an allowlisted interpreter could run a file of the
-  workspace, the api resolved tenant paths on its own host (file existence oracle), and a cached
-  stdio config could reach a node unchecked.
-
-- **Telemetry no longer exports error messages or stacks.** `withSpan` used to record the raw
-  exception (message and stack) and the message as the span status, so provider response bodies,
-  tool output and secrets inside an error could reach the collector. A failed span now carries the
-  error code (`error.type` and status description, or `_OTHER`) and one `exception` event with the
-  class name only; `OAX_OTEL_EXCEPTION_DETAIL=guarded` opts in to a guarded, 256-character message
-  (the stack is never recorded). The exporter uses no resource detectors (no metadata-endpoint
-  calls) and only static resource attributes.
-- **Demo: unlisted seed accounts no longer share the published password**: `demo-owner@example.org`
-  (platform admin) and `admin@acme.example.org` (Acme Labs admin) only build the data set; they get
-  a random password per seed, so the shared demo password opens only the accounts on the sign-in
-  page.
-- **Demo: scenario limits hold under concurrent requests**: `POST /v1/demo/scenarios/{id}/run`
-  checked its limits before inserting the run, so a burst of parallel requests passed all of them
-  (per-visitor window, daily cap, one live run and the daily budget in `claude-code` mode). Starts
-  are now checked and queued one at a time (per API process; the demo runs one replica).
-- **Demo: failed sign-ins no longer store what a visitor typed**: in demo mode a failed sign-in for
-  a name that is no account is audited as `(unknown account)` instead of the typed name, because
-  the published platform-admin accounts read the audit log of every tenant (a visitor's real
-  address typed by mistake was visible to every other visitor). Outside demo mode nothing changes.
-- **Invisible-Unicode filter for model input** (ADR 0008 Amendment 6): zero-width, bidi, tag-block,
-  variation-selector runs, control and other invisible format characters are removed from prompts,
-  tool results, tool error messages and tool descriptions/schemas before they enter the model
-  context or a stored step output. Choke points: `ToolGateway.call`, `ToolGateway.exposedTools` and
-  the executors. ZWJ/ZWNJ are kept only between non-ASCII letters or emoji. Audited as an `input_guard` control step with
-  counts and class names only (a run node may report exactly that step). On by default;
-  `OAX_STRIP_INVISIBLE_UNICODE=false` switches it off for diagnostics. Docs:
-  `docs/security-input-hardening.md`.
-- **Secret redaction for model input** (ADR 0008 Amendment 6): known secret values (resolved secret
-  references, brokered credentials, run, gate and model tokens; also inside larger base64 blobs) and
-  common token shapes are replaced
-  by `[redacted:<kind>]` in prompts and in every tool result before it enters the model context or a
-  stored step output; the counts are part of the `input_guard` audit entry. On by default;
-  `OAX_REDACT_MODEL_CONTEXT=false` switches it off for diagnostics. The token patterns moved from
-  `apps/worker` to `@openagentix/core` (`SECRET_PATTERNS`); `scanForSecrets` is unchanged.
-- Network configuration refuses plain `http://` proxies in production (`proxy_plain_http`), proxy
-  URLs with credentials (use `authSecret` references), any key that would disable TLS verification
-  and `NODE_TLS_REJECT_UNAUTHORIZED=0` (`tls_insecure`). Cloud metadata addresses and names are
-  never routable, tenant destinations must be public, loopback never goes through a proxy, and
-  proxies that inspect TLS cap the data classification.
-- Hardening of the route resolver (security review): `OAX_NETWORK_PRIVATE_ALLOW` follows the same
-  rules as the file and can no longer open loopback or the internet; `ldap(s)` hosts are
-  canonicalised (`0xa9fea9fe`, `2852039166`, octal spellings) so the metadata and tenant checks
-  apply; tenants may select only `tenantSelectableCertificates` and never override a route's client
-  certificate; tenant `proxyUrl` hosts must be public (metadata and loopback refused, also
-  grandfathered); `deny` routes veto regardless of order; LDAP is never sent through an HTTP proxy;
-  plain `ldap://` is refused for `identity` and `mcp` is TLS-only for tenant destinations; 6to4,
-  Teredo, site-local and local-use NAT64 addresses, `169.254.170.23` and `192.0.0.192` are
-  classified; the config file is read from a regular file only, bounded through one descriptor;
-  network configuration warnings are logged at start-up; the digest covers the environment proxies.
-- **Harness review fixes (W1-3b-7)**: OpenCode substitutes `{env:...}` / `{file:...}` in the raw
-  text of its config, so author strings could pull the model token or the run token file into the
-  prompt. Such sequences are now refused in `provider`, `model` and the instructions of a harness
-  step at validation, and escaped (`\u007b`) in every string written to the generated
-  `opencode.json` (proxy and BYOK variants). The run token file is removed once read (best effort).
-  Tokens are redacted in the recorded `call.args` of gate calls and in harness errors; stderr is
-  redacted before it is truncated; a malformed model token response no longer surfaces a ZodError.
-  The harness environment is an allowlist behind the proxy (loader, certificate and OpenCode/Claude
-  config variables are refused for every harness), `ANTHROPIC_BASE_URL` must equal the proxy URL and
-  the check runs on the environment actually passed to `spawn`. A harness run no longer hangs on a
-  grandchild that keeps stdout open (`exit` is handled, the process group is always signalled).
-  Model tokens carry a `surface` claim (`native` | `harness`) plus the harness kind: the native
-  `/model` route refuses a harness token and the pass-through surfaces refuse a native one.
-
-- Hardening of the dispatcher factory (security review of PR #133): a legacy `proxyUrl` of a platform
-  connection is no longer pinned (a private proxy host works again); only tenant-chosen proxies are.
-  Node agents (Bedrock) behind a proxy use a dedicated CONNECT agent: the proxy hop gets its own CA
-  and never the client certificate, the destination gets the trust bundles and the client
-  certificate, also in `extra-only` mode. `rejectUnauthorized: true` is set on every TLS option set
-  and the factory refuses to run with `NODE_TLS_REJECT_UNAUTHORIZED=0`. `proxyUrlGrandfathered`
-  comes from the connection metadata only, never from "a proxyUrl is set". Policy and configuration
-  errors (`egress_denied`, `network_secret_unavailable`, `client_certificate_unknown`,
-  `network_config_invalid`, `tls_insecure`), also behind undici's `fetch failed`, are never retried
-  or wrapped into a retryable provider error. Tenant destinations behind a proxy are resolved once
-  and checked before sending. The dispatcher cache is bounded (LRU, 64) and keyed by a digest of
-  proxy credentials; invalid percent-encoding in proxy credentials fails with
-  `network_config_invalid`; the size limit has its own code `response_too_large`; plain `http://`
-  Bedrock endpoints now also go through the proxy.
-
-### Changed
-
-- **Telemetry**: the worker's `oax.run` span carries `oax.run.id` (was `oax.run_id`) and
-  `oax.tenant.id`. The default OTLP protocol is now `http/protobuf` (was JSON); set
-  `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` to keep the old wire format. **Breaking:**
-  `OTEL_EXPORTER_OTLP_ENDPOINT` with `http://` to a non-loopback host (for example an in-cluster
-  collector such as `http://otel-collector.observability.svc:4318`, as in the Helm EKS example) now
-  fails start-up unless `OAX_OTEL_INSECURE=true` is set (Helm: add it to `config.extraEnv`
-  until the chart has its own value), and an endpoint with credentials, a query or
-  a fragment is refused. **Breaking** as well for installs that relied on the
-  standard `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`, `_CLIENT_CERTIFICATE` or `_CLIENT_KEY`
-  variables (also the `_TRACES_` variants), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
-  `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_TRACES_SAMPLER` or `OTEL_TRACES_SAMPLER_ARG`: start-up
-  now fails with a message naming the replacement (`OAX_OTEL_HEADERS_SECRET`, the network
-  configuration, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OAX_OTEL_SAMPLE_RATIO`). `OTEL_SDK_DISABLED=true`
-  or an `OTEL_TRACES_EXPORTER` other than `otlp` next to an endpoint fails start-up as well (they
-  are not read; unset the endpoint to turn the export off). A process in which another
-  OpenTelemetry SDK is already registered (auto-instrumentation through `NODE_OPTIONS` or an
-  operator injection) now fails start-up.
-- **UI**: German glossary follows the multi-tenant UX design: "Use Case" (was "Anwendungsfall") and
-  "Owner-Team" (was "Verantwortliches Team"). The browser tab title now reads
-  `Page · Tenant · open-agentix`.
-- Outbound routing of existing installs (dispatcher factory): loopback destinations are always
-  direct (never sent to `HTTP(S)_PROXY`), cloud metadata addresses are denied, and an invalid
-  `HTTPS_PROXY`/`HTTP_PROXY` value now fails with `network_config_invalid` instead of being ignored.
-- Clients without their own network configuration share one factory per proxy environment.
-- The response size limit error code is `response_too_large` (was `egress_denied`).
-- UI wording: token counts read "Input / Output" in both languages (German no longer "rein / raus"),
-  the "Operate" navigation group is now "Operations" (German "Betrieb", was "Betreiben"), and the
-  German translation keeps technical terms (Run, Policy, Tenant, Tool, Secret, Input, Output) and
-  uses the informal "du" form throughout.
-
-### Breaking
-
-- **Tenant stdio MCP connections (ADR 0016 S0, #230)**: (1) `command` of a tenant, team or agent
-  `stdio` connection must be an absolute path that matches `OAX_MCP_STDIO_COMMANDS` (default empty:
-  no tenant stdio command is accepted, so `POST`/`PUT /v1/connections` return
-  `400 mcp_command_forbidden` until the operator lists binaries); shells, `env`, wrappers,
-  run-time installers (`npx`, `npm`, `pnpm`, `yarn`, `bunx`, `uvx`, `pip`, `docker`, `podman`,
-  `curl`, `wget`, `git`, ...) and interpreters with an inline program or code-loading flag
-  (`node -e`, `python -c`, ...) are refused even when listed; `env`/`envSecrets` names follow the
-  reserved-name rules (no `PATH`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `BASH_ENV`, proxy variables,
-  `OAX_*`, ...) and return `400 mcp_env_forbidden`. (2) A step on `in-process` or `local` that
-  holds a grant on such a connection cannot be published (`400 mcp_stdio_requires_isolation`) and
-  fails at run time with the same code; set `runtime.runner` to `container` or `kubernetes-job`.
-  (3) Existing stored connections are kept unchanged but fail closed at run time
-  (`422 mcp_command_forbidden`, audit entry `mcp.stdio.refused`); they are reported at start-up
-  (warning, gauge `oax_mcp_stdio_violations`), in `GET /v1/connections/stdio-violations` and as
-  `warnings` on `GET /v1/connections`. (4) Air-gapped mode refuses platform stdio connections
-  unless `OAX_AIRGAPPED_STDIO=trusted`, and tenant stdio connections unless an isolating runner is
-  enabled. Platform connections are not subject to the command and environment rules. Run nodes
-  receive `stdio` in the step handover and reject it when older than this change (fail closed).
-  (5) Interpreters (`node`, `python`, `java`, `deno`, ...) must run a program file that is itself
-  an allowlisted absolute path, with only value-less options before it: `python -m`, `java -cp`,
-  relative scripts and `dotnet <tool>` are refused, and `bun` is refused as a run-time installer.
-  Allowlist entries in or below `/tmp`, `/var/tmp`, `/dev`, `/proc`, `/sys`, `/run`, `/workspace`
-  or `/work` fail start-up, and the run node refuses a command or program file that it could
-  change (file or directory writable). (6) `PUT` and `DELETE /v1/connections/{id}` on a `platform`
-  connection need platform operator access (`403` for other administrators of the operator's home
-  tenant).
-
-- **Network start-up checks (W10-1-1)**: the api now aborts start-up (`tls_insecure`) when
-  `NODE_TLS_REJECT_UNAUTHORIZED=0` is set, air-gapped or not; add the CA to a trust bundle or
-  `NODE_EXTRA_CA_CERTS` instead. `HTTPS_PROXY`/`HTTP_PROXY` values that are not an `http://` or
-  `https://` URL abort start-up (`network_config_invalid`); a bare `host:port` is still accepted
-  (read as `http://host:port`, with a warning), `socks5://` and other schemes are refused.
-  `OAX_NETWORK_PRIVATE_ALLOW` and `privateAllow` now accept only IPs and CIDR ranges with a prefix
-  of at least /8 that do not cover loopback, link-local, unspecified or multicast space; the
-  allowlist grammar rejects `/0`, empty and non-numeric prefixes (`10.0.0.0/`); the deny code of a
-  `deny` route is `egress_denied` (was `denied_by_route`).
-- **Model proxy cutover (W1-3b-4)**: isolated run node steps now call models only through the
-  model proxy. With `OAX_MODEL_PROXY_ENABLED=false` (the default) they fail with
-  `model_proxy_unavailable`, the simulated provider included. Old `oax run-node` images report
-  `model_call` steps themselves and now get `400 step_kind_refused`: roll out control node and node
-  images together. As soon as any cost limit applies (run, step, team or monthly), a model without
-  a price is rejected with `422 model_unpriced`.
-
-### Security
-
-- Price lookups resolve the fallback keys (catalog provider, adapter kind) against the platform
-  table only; a tenant connection named like a catalog provider can no longer zero the price of
-  another connection. Tenant overrides apply only under the connection name the agent uses.
-- In-process reservations are settled only by the in-process call of the same agent; reservations
-  of a proxied session are refused.
-
-### Fixed
-
-- **Secret scan: linear JWT pattern.** The JWT token shape restarted at every `eyJ` inside a run
-  of base64url characters (128 KiB of `eyJ-` took about 9 s); it is shared by the pull-request
-  secret scan and the model-context guard and is now linear.
-- **UI**: a run or agent link that no longer resolves shows a friendly page instead of the raw
-  "not found" error. In the demo build it says the demo is reset daily and links back to the list
-  (UI-NF-01).
-- **UI**: the owner team name on the agents list (and agent detail, runs, costs) is readable
-  without `users:read`: `GET /v1/teams` only needs a signed-in user, the console asked for the
-  permission needlessly. Without a name it falls back to "Team <id>" instead of "–".
-- In-process model errors release their reservation only for failures that provably did no work
-  (egress refusal, DNS or refused connection, 4xx other than 408, 409 and 429); everything else
-  expires at the reserved amount like the proxy does.
-- The in-process provider call is bounded by the reservation deadline, and a late report for an
-  already expired reservation is recorded as a `model.late_settlement` correction in the audit log
-  instead of failing the run.
-- A price lookup that fails during reservation or settlement is logged as a warning.
-
-### Added
-
 - **Model proxy pass-through surfaces (W1-3b-6)**: `POST /v1/model-proxy/anthropic/v1/messages`,
   `POST /v1/model-proxy/openai/v1/chat/completions` and the two `GET .../v1/models` routes speak the
   Anthropic and OpenAI protocols for harnesses, with JSON and Server-Sent Events. They open with the
@@ -705,6 +656,36 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Changed
 
+- **Telemetry**: the worker's `oax.run` span carries `oax.run.id` (was `oax.run_id`) and
+  `oax.tenant.id`. The default OTLP protocol is now `http/protobuf` (was JSON); set
+  `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` to keep the old wire format. **Breaking:**
+  `OTEL_EXPORTER_OTLP_ENDPOINT` with `http://` to a non-loopback host (for example an in-cluster
+  collector such as `http://otel-collector.observability.svc:4318`, as in the Helm EKS example) now
+  fails start-up unless `OAX_OTEL_INSECURE=true` is set (Helm: add it to `config.extraEnv`
+  until the chart has its own value), and an endpoint with credentials, a query or
+  a fragment is refused. **Breaking** as well for installs that relied on the
+  standard `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`, `_CLIENT_CERTIFICATE` or `_CLIENT_KEY`
+  variables (also the `_TRACES_` variants), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+  `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_TRACES_SAMPLER` or `OTEL_TRACES_SAMPLER_ARG`: start-up
+  now fails with a message naming the replacement (`OAX_OTEL_HEADERS_SECRET`, the network
+  configuration, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OAX_OTEL_SAMPLE_RATIO`). `OTEL_SDK_DISABLED=true`
+  or an `OTEL_TRACES_EXPORTER` other than `otlp` next to an endpoint fails start-up as well (they
+  are not read; unset the endpoint to turn the export off). A process in which another
+  OpenTelemetry SDK is already registered (auto-instrumentation through `NODE_OPTIONS` or an
+  operator injection) now fails start-up.
+- **UI**: German glossary follows the multi-tenant UX design: "Use Case" (was "Anwendungsfall") and
+  "Owner-Team" (was "Verantwortliches Team"). The browser tab title now reads
+  `Page · Tenant · open-agentix`.
+- Outbound routing of existing installs (dispatcher factory): loopback destinations are always
+  direct (never sent to `HTTP(S)_PROXY`), cloud metadata addresses are denied, and an invalid
+  `HTTPS_PROXY`/`HTTP_PROXY` value now fails with `network_config_invalid` instead of being ignored.
+- Clients without their own network configuration share one factory per proxy environment.
+- The response size limit error code is `response_too_large` (was `egress_denied`).
+- UI wording: token counts read "Input / Output" in both languages (German no longer "rein / raus"),
+  the "Operate" navigation group is now "Operations" (German "Betrieb", was "Betreiben"), and the
+  German translation keeps technical terms (Run, Policy, Tenant, Tool, Secret, Input, Output) and
+  uses the informal "du" form throughout.
+
 - A model call is refused before it is made when its worst case does not fit a run, step or monthly
   budget (it used to be checked only after the call); an in-process step without `maxTokensPerCall`
   is capped at 4096 output tokens when the control plane reserves. A run node can no longer report
@@ -731,6 +712,23 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Fixed
 
+- **Secret scan: linear JWT pattern.** The JWT token shape restarted at every `eyJ` inside a run
+  of base64url characters (128 KiB of `eyJ-` took about 9 s); it is shared by the pull-request
+  secret scan and the model-context guard and is now linear.
+- **UI**: a run or agent link that no longer resolves shows a friendly page instead of the raw
+  "not found" error. In the demo build it says the demo is reset daily and links back to the list
+  (UI-NF-01).
+- **UI**: the owner team name on the agents list (and agent detail, runs, costs) is readable
+  without `users:read`: `GET /v1/teams` only needs a signed-in user, the console asked for the
+  permission needlessly. Without a name it falls back to "Team <id>" instead of "–".
+- In-process model errors release their reservation only for failures that provably did no work
+  (egress refusal, DNS or refused connection, 4xx other than 408, 409 and 429); everything else
+  expires at the reserved amount like the proxy does.
+- The in-process provider call is bounded by the reservation deadline, and a late report for an
+  already expired reservation is recorded as a `model.late_settlement` correction in the audit log
+  instead of failing the run.
+- A price lookup that fails during reservation or settlement is logged as a warning.
+
 - `docker-compose.yml`: the `volumes:` section contained a copy of the `ui` service and a dangling
   `ollama:` key; it now declares `pgdata` and `ollama`.
 - **Release workflow**: the api image is built for linux/amd64 only; the QEMU arm64 build exceeded the 60 minute job timeout and the api image was never published (worker and ui keep amd64 and arm64).
@@ -744,6 +742,92 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
   placeholder; the UI no longer prints a head for an empty trail.
 - **UI unknown routes**: signed-out visitors opening an unknown path are redirected to `/login` instead of seeing the "Page not found" page; signed-in users still get the not-found page.
 - **Database password override**: `OAX_DATABASE_PASSWORD` / `PGPASSWORD` were ignored with pg 8.23 when the connection string contained no password (SCRAM error "client password must be a string"); the password is now injected into the connection string (URL-encoded).
+
+### Security
+
+- **Telemetry no longer exports error messages or stacks.** `withSpan` used to record the raw
+  exception (message and stack) and the message as the span status, so provider response bodies,
+  tool output and secrets inside an error could reach the collector. A failed span now carries the
+  error code (`error.type` and status description, or `_OTHER`) and one `exception` event with the
+  class name only; `OAX_OTEL_EXCEPTION_DETAIL=guarded` opts in to a guarded, 256-character message
+  (the stack is never recorded). The exporter uses no resource detectors (no metadata-endpoint
+  calls) and only static resource attributes.
+- **Demo: unlisted seed accounts no longer share the published password**: `demo-owner@example.org`
+  (platform admin) and `admin@acme.example.org` (Acme Labs admin) only build the data set; they get
+  a random password per seed, so the shared demo password opens only the accounts on the sign-in
+  page.
+- **Demo: scenario limits hold under concurrent requests**: `POST /v1/demo/scenarios/{id}/run`
+  checked its limits before inserting the run, so a burst of parallel requests passed all of them
+  (per-visitor window, daily cap, one live run and the daily budget in `claude-code` mode). Starts
+  are now checked and queued one at a time (per API process; the demo runs one replica).
+- **Demo: failed sign-ins no longer store what a visitor typed**: in demo mode a failed sign-in for
+  a name that is no account is audited as `(unknown account)` instead of the typed name, because
+  the published platform-admin accounts read the audit log of every tenant (a visitor's real
+  address typed by mistake was visible to every other visitor). Outside demo mode nothing changes.
+- **Invisible-Unicode filter for model input** (ADR 0008 Amendment 6): zero-width, bidi, tag-block,
+  variation-selector runs, control and other invisible format characters are removed from prompts,
+  tool results, tool error messages and tool descriptions/schemas before they enter the model
+  context or a stored step output. Choke points: `ToolGateway.call`, `ToolGateway.exposedTools` and
+  the executors. ZWJ/ZWNJ are kept only between non-ASCII letters or emoji. Audited as an `input_guard` control step with
+  counts and class names only (a run node may report exactly that step). On by default;
+  `OAX_STRIP_INVISIBLE_UNICODE=false` switches it off for diagnostics. Docs:
+  `docs/security-input-hardening.md`.
+- **Secret redaction for model input** (ADR 0008 Amendment 6): known secret values (resolved secret
+  references, brokered credentials, run, gate and model tokens; also inside larger base64 blobs) and
+  common token shapes are replaced
+  by `[redacted:<kind>]` in prompts and in every tool result before it enters the model context or a
+  stored step output; the counts are part of the `input_guard` audit entry. On by default;
+  `OAX_REDACT_MODEL_CONTEXT=false` switches it off for diagnostics. The token patterns moved from
+  `apps/worker` to `@openagentix/core` (`SECRET_PATTERNS`); `scanForSecrets` is unchanged.
+- Network configuration refuses plain `http://` proxies in production (`proxy_plain_http`), proxy
+  URLs with credentials (use `authSecret` references), any key that would disable TLS verification
+  and `NODE_TLS_REJECT_UNAUTHORIZED=0` (`tls_insecure`). Cloud metadata addresses and names are
+  never routable, tenant destinations must be public, loopback never goes through a proxy, and
+  proxies that inspect TLS cap the data classification.
+- Hardening of the route resolver (security review): `OAX_NETWORK_PRIVATE_ALLOW` follows the same
+  rules as the file and can no longer open loopback or the internet; `ldap(s)` hosts are
+  canonicalised (`0xa9fea9fe`, `2852039166`, octal spellings) so the metadata and tenant checks
+  apply; tenants may select only `tenantSelectableCertificates` and never override a route's client
+  certificate; tenant `proxyUrl` hosts must be public (metadata and loopback refused, also
+  grandfathered); `deny` routes veto regardless of order; LDAP is never sent through an HTTP proxy;
+  plain `ldap://` is refused for `identity` and `mcp` is TLS-only for tenant destinations; 6to4,
+  Teredo, site-local and local-use NAT64 addresses, `169.254.170.23` and `192.0.0.192` are
+  classified; the config file is read from a regular file only, bounded through one descriptor;
+  network configuration warnings are logged at start-up; the digest covers the environment proxies.
+- **Harness review fixes (W1-3b-7)**: OpenCode substitutes `{env:...}` / `{file:...}` in the raw
+  text of its config, so author strings could pull the model token or the run token file into the
+  prompt. Such sequences are now refused in `provider`, `model` and the instructions of a harness
+  step at validation, and escaped (`\u007b`) in every string written to the generated
+  `opencode.json` (proxy and BYOK variants). The run token file is removed once read (best effort).
+  Tokens are redacted in the recorded `call.args` of gate calls and in harness errors; stderr is
+  redacted before it is truncated; a malformed model token response no longer surfaces a ZodError.
+  The harness environment is an allowlist behind the proxy (loader, certificate and OpenCode/Claude
+  config variables are refused for every harness), `ANTHROPIC_BASE_URL` must equal the proxy URL and
+  the check runs on the environment actually passed to `spawn`. A harness run no longer hangs on a
+  grandchild that keeps stdout open (`exit` is handled, the process group is always signalled).
+  Model tokens carry a `surface` claim (`native` | `harness`) plus the harness kind: the native
+  `/model` route refuses a harness token and the pass-through surfaces refuse a native one.
+
+- Hardening of the dispatcher factory (security review of PR #133): a legacy `proxyUrl` of a platform
+  connection is no longer pinned (a private proxy host works again); only tenant-chosen proxies are.
+  Node agents (Bedrock) behind a proxy use a dedicated CONNECT agent: the proxy hop gets its own CA
+  and never the client certificate, the destination gets the trust bundles and the client
+  certificate, also in `extra-only` mode. `rejectUnauthorized: true` is set on every TLS option set
+  and the factory refuses to run with `NODE_TLS_REJECT_UNAUTHORIZED=0`. `proxyUrlGrandfathered`
+  comes from the connection metadata only, never from "a proxyUrl is set". Policy and configuration
+  errors (`egress_denied`, `network_secret_unavailable`, `client_certificate_unknown`,
+  `network_config_invalid`, `tls_insecure`), also behind undici's `fetch failed`, are never retried
+  or wrapped into a retryable provider error. Tenant destinations behind a proxy are resolved once
+  and checked before sending. The dispatcher cache is bounded (LRU, 64) and keyed by a digest of
+  proxy credentials; invalid percent-encoding in proxy credentials fails with
+  `network_config_invalid`; the size limit has its own code `response_too_large`; plain `http://`
+  Bedrock endpoints now also go through the proxy.
+
+- Price lookups resolve the fallback keys (catalog provider, adapter kind) against the platform
+  table only; a tenant connection named like a catalog provider can no longer zero the price of
+  another connection. Tenant overrides apply only under the connection name the agent uses.
+- In-process reservations are settled only by the in-process call of the same agent; reservations
+  of a proxied session are refused.
 
 ## [0.1.0] - 2026-10-04
 
@@ -836,5 +920,6 @@ First release of the openagentix platform (control node, worker, packages).
 - English and German, light/dark theme, responsive layout, axe checks in tests, coverage gate
   80 %, bundle budget (initial JS < 200 KB gzip) and a third-party request scan of `dist/`.
 
-[Unreleased]: https://github.com/open-agentix/open-agentix/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/open-agentix/open-agentix/compare/v0.2.0-alpha.1...HEAD
+[0.2.0-alpha.1]: https://github.com/open-agentix/open-agentix/compare/v0.1.0...v0.2.0-alpha.1
 [0.1.0]: https://github.com/open-agentix/open-agentix/releases/tag/v0.1.0

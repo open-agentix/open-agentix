@@ -129,7 +129,10 @@ export class McpConnection {
   ) {}
 
   static async connect(config: McpServerConfig, deps: ConnectDeps): Promise<McpConnection> {
-    const client = new Client({ name: 'openagentix', version: '0.1.0' }, { capabilities: {} });
+    const client = new Client(
+      { name: 'openagentix', version: '0.2.0-alpha.1' },
+      { capabilities: {} },
+    );
     await client.connect(await createTransport(config, deps), { timeout: config.timeoutMs });
     return new McpConnection(config, client);
   }

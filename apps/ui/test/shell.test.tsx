@@ -28,7 +28,7 @@ describe('app shell', () => {
       'page',
     );
     expect(await within(nav).findByLabelText('1 approval pending')).toBeInTheDocument();
-    expect(await screen.findByText('UI v0.1.0 · API v0.1.0')).toBeInTheDocument();
+    expect(await screen.findByText('UI v0.2.0-alpha.1 · API v0.2.0-alpha.1')).toBeInTheDocument();
   });
 
   it('hides what a viewer may not use', async () => {

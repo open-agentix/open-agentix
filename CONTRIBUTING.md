@@ -102,7 +102,9 @@ pnpm --filter @openagentix/api db:generate
 2. Fill in the PR template, link issues, describe risk and rollback.
 3. CI must be green: lint, typecheck, tests with coverage gate, build, container image build.
 4. Architectural decisions get an ADR in [`docs/adr/`](docs/adr/) (see [GOVERNANCE.md](GOVERNANCE.md)).
-5. A maintainer reviews and squash-merges with a Conventional Commit title.
+5. A maintainer reviews pull requests from people. Agent-authored pull requests are reviewed by an
+   independent review agent. Merges are squash merges with a Conventional Commit title (see
+   [How changes are reviewed](GOVERNANCE.md#how-changes-are-reviewed)).
 
 ## Adding dependencies
 
