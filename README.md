@@ -13,8 +13,10 @@ cron, mail), one or more **agents** act on them through **MCP tools and APIs**, 
 messages or reports.
 
 > **Transparency:** the code in this repository is written by **agentix-zero**, the project's AI
-> agent account. Humans review every change and own all decisions (accountable: the project lead). See
-> [GOVERNANCE.md](GOVERNANCE.md).
+> agent account. Each pull request is reviewed by a second, independent review agent before merge;
+> there is no guarantee that a human reads every change. The maintainer (the project lead) sets the
+> direction, can inspect, revert and block changes at any time, and owns the decisions and releases.
+> See [How changes are reviewed](GOVERNANCE.md#how-changes-are-reviewed).
 
 ## Why
 

@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Docs: the README, `GOVERNANCE.md` and `CONTRIBUTING.md` now describe how changes are really
+  reviewed (agent-authored pull requests, independent review agent, no guarantee of a human read
+  before merge) and add a "How changes are reviewed" section.
+
 ### Added
 
 - **Roadmap**: new planned wave W14 (agent lifecycle governance: four-eyes publish approval with review
