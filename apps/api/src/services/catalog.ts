@@ -146,18 +146,29 @@ export class CatalogService {
 
   /** Names of the MCP servers of a run that come from PLATFORM-scope connections. */
   async platformMcpNames(scope: RunScope): Promise<Set<string>> {
-    return new Set(
-      (await this.connectionsForRun('mcp', scope))
-        .filter((c) => c.scope === 'platform')
-        .map((c) => c.name),
-    );
+    return (await this.mcpRunConfigs(scope)).platformNames;
   }
 
   /** MCP server configs for a run (secrets stay references). */
   async mcpConfigs(scope: RunScope): Promise<McpServerConfig[]> {
-    return (await this.connectionsForRun('mcp', scope)).map((c) =>
-      McpServerConfigSchema.parse(c.config),
-    );
+    return (await this.mcpRunConfigs(scope)).configs;
+  }
+
+  /**
+   * The MCP server configs of a run together with the names that come from PLATFORM-scope
+   * connections, both from ONE resolution. The worker decides by name which stdio servers it may
+   * start (ADR 0016 S0); two separate (cached) reads could disagree when a tenant creates or
+   * deletes a connection that shadows a platform one in between, and the worker would then start
+   * the tenant's command as if it were the operator's.
+   */
+  async mcpRunConfigs(
+    scope: RunScope,
+  ): Promise<{ configs: McpServerConfig[]; platformNames: Set<string> }> {
+    const rows = await this.connectionsForRun('mcp', scope);
+    return {
+      configs: rows.map((c) => McpServerConfigSchema.parse(c.config)),
+      platformNames: new Set(rows.filter((c) => c.scope === 'platform').map((c) => c.name)),
+    };
   }
 
   /**
@@ -353,19 +364,27 @@ export class CatalogService {
   }
 
   /**
-   * Run-time check (defence in depth): the tenant stdio connections among `servers` must still
-   * satisfy the command rules. A stored connection that does not (created before the rules, or the
-   * allowlist shrank) is refused with an audit entry and an error the console shows with the run.
+   * The MCP server configs a run node receives for a step (`servers`: the servers it holds grants
+   * on), read fresh and checked in the same pass: the tenant stdio connections among them must
+   * still satisfy the command rules. A stored connection that does not (created before the rules,
+   * or the allowlist shrank) is refused with an audit entry and an error the console shows with
+   * the run. The configs that are checked are exactly the configs that are shipped: a separate
+   * (cached) read for the handover could still hold an older stdio configuration of a connection
+   * that the check already saw as changed, and the node would start it unchecked.
    */
-  async assertStdioRunnable(
+  async stepMcpConfigs(
     scope: RunScope,
     servers: ReadonlySet<string>,
     where: { runId: string; actor: string; step?: string },
-  ): Promise<string[]> {
-    const names: string[] = [];
-    for (const c of await this.tenantStdioConnections(scope)) {
-      if (!servers.has(c.name)) continue;
-      names.push(c.name);
+  ): Promise<{ configs: McpServerConfig[]; tenantStdio: string[] }> {
+    const rows = (await this.connectionsForRun('mcp', scope, { fresh: true })).filter((c) =>
+      servers.has(c.name),
+    );
+    const tenantStdio: string[] = [];
+    for (const c of rows) {
+      if (!isTenantScope(c.scope)) continue;
+      if ((c.config as { transport?: string } | null)?.transport !== 'stdio') continue;
+      tenantStdio.push(c.name);
       const bad = findStdioViolations([c], this.ctx.config.mcp.stdioCommands)[0];
       if (!bad) continue;
       const err = stdioError(c.name, bad.issues);
@@ -386,7 +405,7 @@ export class CatalogService {
       });
       throw new HttpError(422, err.code, err.message, bad.issues);
     }
-    return names;
+    return { configs: rows.map((c) => McpServerConfigSchema.parse(c.config)), tenantStdio };
   }
 
   async createConnection(

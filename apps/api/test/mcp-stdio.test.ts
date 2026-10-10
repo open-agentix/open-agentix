@@ -453,6 +453,56 @@ describe('stored connections that break the rules fail closed at run time', () =
     });
   });
 
+  it('ships exactly the configs it checked (no stale cached stdio config in the handover)', async () => {
+    // A stored legacy stdio connection (`npx`) is changed to HTTP; a cached copy of the old
+    // config must not reach the node while the fresh check already sees HTTP and skips the rules.
+    await stored('racy', { transport: 'stdio', command: 'npx', args: ['-y', 'x@latest'] });
+    await publish(await create(agent('run-racy', 'container', null, tool('racy'))));
+    const ag = (await n.req({ method: 'GET', url: '/v1/agents?limit=100' }))
+      .json()
+      .items.find((a: { name: string }) => a.name === 'run-racy');
+    const [row] = await n.ctx.db.select().from(connections).where(eq(connections.name, 'racy'));
+    // warm the 30 s connection cache with the old (stdio) row
+    await n.services.catalog.mcpConfigs({ tenantId: row!.tenantId, teamId: null, agentId: null });
+    await n.ctx.db
+      .update(connections)
+      .set({
+        config: {
+          name: 'racy',
+          transport: 'streamable-http',
+          url: 'https://jira.example.org/mcp',
+          tools: { get_issue: { access: 'read' } },
+          profiles: {},
+          headers: {},
+          headerSecrets: {},
+          timeoutMs: 30000,
+          maxResultBytes: 262144,
+        },
+      })
+      .where(eq(connections.id, row!.id));
+    const runId = (
+      await n.req({ method: 'POST', url: `/v1/agents/${ag.id}/runs`, payload: { data: {} } })
+    ).json().id as string;
+    await n.ctx.db
+      .update(runs)
+      .set({
+        status: 'running',
+        lockedBy: 'w1',
+        startedAt: new Date(),
+        leaseUntil: new Date(Date.now() + 60_000),
+      })
+      .where(eq(runs.id, runId));
+    const created = await session(runId);
+    const handover = await n.services.runNodes.handover(
+      { runId, workerId: created.nodeId, sid: created.sessionId, steps: ['a'] } as never,
+      runId,
+      'a',
+    );
+    const shipped = handover.mcp.find((c) => c.name === 'racy');
+    expect(shipped?.transport).toBe('streamable-http');
+    expect(handover.mcp.some((c) => c.transport === 'stdio' && c.command === 'npx')).toBe(false);
+  });
+
   it('lists the offenders per tenant and flags them on the connection', async () => {
     const list = await n.req({ method: 'GET', url: '/v1/connections/stdio-violations' });
     expect(list.statusCode).toBe(200);

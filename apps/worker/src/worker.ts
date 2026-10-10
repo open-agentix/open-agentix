@@ -110,9 +110,11 @@ export class Worker {
     // Tool servers resolve per run: only connections of the run's tenant (and platform ones) exist.
     const run = await this.services.runs.get(runId);
     const toolScope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
-    const platformNames = await this.services.catalog.platformMcpNames(toolScope);
+    // Configs and platform names from one resolution: the stdio guard below decides by name.
+    const { configs: mcp, platformNames } =
+      await this.services.catalog.mcpRunConfigs(toolScope);
     const tools = new ToolGateway(
-      await this.services.catalog.mcpConfigs(toolScope),
+      mcp,
       {
         // Tenant allowlist (tenants.secret_refs) applies in-process exactly as it does for nodes;
         // only connections of PLATFORM scope keep the unrestricted (operator-chosen) resolver.
