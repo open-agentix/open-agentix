@@ -541,6 +541,28 @@ describe.each(sqlTargets)('role-binding API (%s)', (_kind, enabled, open) => {
       expect(await bound('viewer-a', 'org-a', 'viewer', 'mirror')).toHaveLength(1);
     });
 
+    it('refuses to grant to a disabled user, after the visibility check', async () => {
+      await mkUser('off', 'org-a', []);
+      await n.ctx.db
+        .update(usersTable)
+        .set({ disabled: true })
+        .where(eq(usersTable.id, uid['off']!));
+      const r = await post('admin-a', 'org-a', grant('off', 'viewer'));
+      expect(r.statusCode).toBe(422);
+      expect(r.json().error).toBe('grantee_disabled');
+      expect(await rows('off')).toHaveLength(0);
+      // a disabled user the caller cannot see is still 404 user
+      await n.ctx.db
+        .update(usersTable)
+        .set({ disabled: true })
+        .where(eq(usersTable.id, uid['m-d1']!));
+      expect((await post('admin-a', 'org-a', grant('m-d1', 'viewer'))).statusCode).toBe(404);
+      await n.ctx.db
+        .update(usersTable)
+        .set({ disabled: false })
+        .where(eq(usersTable.id, uid['m-d1']!));
+    });
+
     it('caps the bindings of one user', async () => {
       await mkUser('capped', 'org-a', []);
       setMax(1);

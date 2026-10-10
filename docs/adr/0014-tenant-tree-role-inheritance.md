@@ -189,7 +189,7 @@ S4 (role-binding API; #189, #226):
   mirror_binding`; their role follows `global_roles`), a user may delete their own grant but not change
   it (rule 6), `dryRun` of the bulk opt-in defaults to `true`, skips disabled users and expired
   bindings and reports at most 50 nodes per binding, and `OAX_MAX_BINDINGS_PER_USER` (default 200)
-  implements `422 binding_limit_exceeded`. Grants authorise only with `OAX_ROLE_BINDINGS_READ=bindings`.
+  implements `422 binding_limit_exceeded`. Grants take effect for request authorisation only with `OAX_ROLE_BINDINGS_READ=bindings`, but the grant API reads the grantor's authority from `tenant_role_bindings` in both modes. Granting to a disabled user is `422 grantee_disabled`.
   Error codes added: `grant_exceeds_own`, `inheritance_required`, `self_grant`, `last_admin`,
   `mirror_binding`, `cross_organisation_grant`, `use_case_bindings_unsupported`, `binding_limit_exceeded`.
 - Tests: `apps/api/test/role-binding-api.test.ts` (one refusal per rule, enumeration parity, scoped

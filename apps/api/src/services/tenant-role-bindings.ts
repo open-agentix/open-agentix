@@ -274,6 +274,9 @@ export class TenantRoleBindingsService {
         'cross_organisation_grant',
         'a role can only be bound inside the organisation of the user',
       );
+    // After the visibility check, so a disabled user is not an oracle for hidden users.
+    if (u!.disabled)
+      throw new HttpError(422, 'grantee_disabled', 'a role cannot be bound to a disabled user');
     return u!;
   }
 

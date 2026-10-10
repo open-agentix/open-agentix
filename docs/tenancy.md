@@ -337,9 +337,12 @@ user's `global_roles`. A grant is audited in the **binding node's partition**: `
 `tenant.role_binding_changed { bindingId, field: role|inherit|expiresAt, from, to }`,
 `tenant.role_unbound { bindingId, userId, role, reason: revoked|self }`, and `tenant.inheritance_enabled
 { roles, bindings, users }` on the root. The authz epoch is bumped by the triggers of migration `0021`,
-so the next request of every cached principal of the organisation is rebuilt. Grants only authorise
-with `OAX_ROLE_BINDINGS_READ=bindings`; on `legacy` they are stored and audited, and the shadow check
-reports the difference.
+so the next request of every cached principal of the organisation is rebuilt. A grant takes effect for
+**request authorisation** only with `OAX_ROLE_BINDINGS_READ=bindings`; on `legacy` the rest of the API
+still decides from `users.global_roles`, teams and agent bindings, and the shadow check reports the
+difference. The role-binding API itself always reads grants from `tenant_role_bindings`, in both modes:
+a grantor acts on the bindings it holds there (mirror rows and earlier grants) whatever the read path.
+A role cannot be bound to a disabled user (`422 grantee_disabled`, checked after grantee visibility).
 
 **Bulk opt-in.** `enable-inheritance` makes the plain (non-inheriting, unexpired, no use case) bindings
 of the listed roles in one organisation inheriting, mirror rows included. `dryRun` defaults to `true`
