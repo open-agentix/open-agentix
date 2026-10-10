@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **Run nodes reach HTTP MCP servers only through the control-node relay (ADR 0016 S4, #234)**: header
+  secrets are no longer brokered to nodes. `POST /v1/worker/runs/{id}/mcp/{server}` takes one JSON-RPC
+  message (`initialize`, `ping`, `tools/list`, `tools/call`, two notifications) with the step-scoped run
+  token and answers from the control node's own connection: node session, the step's grant and
+  connection, the policy gate again, a granted single-use approval where the decision needs one, the tool
+  pin (digest) and the S1 dispatcher with the connection's origin class. The node holds no url, header or
+  token of an HTTP server and needs no egress for it; central shared-credential HTTP instances work from
+  nodes. A revoked or expired session, a foreign run, a server without a grant and another tenant's
+  connection are refused with the same `404` as an unknown server. Per session: concurrency
+  (`OAX_MCP_RELAY_CONCURRENCY`, 4), rate (`OAX_MCP_RELAY_RATE_PER_MINUTE`, 120), call timeout, result and
+  request caps (`OAX_MCP_RELAY_MAX_REQUEST_BYTES`), open sessions (`OAX_MCP_RELAY_MAX_SESSIONS`,
+  `OAX_MCP_RELAY_IDLE_SECONDS`, `OAX_MCP_RELAY_BODY_READ_SECONDS`); sessions are keyed `(tenant, connection, credential version, run)`, so a
+  rotated secret opens a new session. Sampling, elicitation and roots are not relayed
+  (`mcp_capability_unsupported`, also in process). New metrics `oax_mcp_relay_requests_total{method,outcome}`
+  and `oax_mcp_relay_sessions`; audit `mcp.relay.call`, `mcp.relay.denied`, `mcp.relay.refused`. Migration
+  `0025_approvals_consumed_at` (down script included). Decides ADR 0012 open question 2.
+
 - **Publishing against an HTTP MCP connection needs an approved tool snapshot** (ADR 0016 S3): refresh
   and approve the connection's tools once, then publish. Existing published versions are not
   affected. `stdio` and `in-memory` connections publish as before.
@@ -194,6 +211,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Breaking
 
+- **Run node protocol (ADR 0016 S4, pre-1.0)**: the credential broker response no longer carries
+  `connections[].headers` (HTTP header secrets), the step handover replaces `http.tenantServers` with
+  `http: { relay: true }` and ships HTTP connections with a placeholder `url` and without headers,
+  `headerSecrets` and `egress`, and the node bundle marker is `oax-bundle:v3` (also in the Kubernetes
+  token Secret). **Run node images from before this release cannot run steps any more** (they refuse the
+  marker and fail at start, by design); rebuild or pull the node image of the same version as the control
+  node. Steps whose `runtime.egress` listed the hosts of HTTP MCP servers can drop them. Clients that read
+  the broker's `headers` or `http.tenantServers` must stop doing so.
 - **Tenant-safe metric labels (ADR 0015 S5, #210; pre-1.0)**: `oax_cost_micro_usd_total{provider}` now
   carries the provider **family** (`anthropic`, `openai`, `aws.bedrock`, `azure.ai.openai`, ..., `tool`
   for tool cost, `other`) instead of the provider instance name, which for a tenant (BYOK) connection

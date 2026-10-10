@@ -129,10 +129,8 @@ resolver and one pre-request lookup refuse private answers, but the proxy's own 
 (residual risk of ADR 0011). A connection that was stored before these rules and breaks them fails
 closed when a run uses it.
 
-Run nodes: the control node tells the node which HTTP servers a tenant defined (`http.tenantServers`
-in the step handover); the node applies the tenant rules to them by name and literal address, and
-the egress proxy of the node resolves and enforces the destination. The control-node relay of
-ADR 0016 S4 will take HTTP servers out of nodes altogether.
+Run nodes never connect to HTTP servers: every call goes through the control node's relay, which
+uses exactly the path above (see [Control-node relay for run nodes](#control-node-relay-for-run-nodes)).
 
 ### Test a connection
 
@@ -275,12 +273,101 @@ published before pinning existed.
   report the list they read to `POST /v1/worker/runs/{id}/mcp-tools-changed`. A node is untrusted, so
   the control node recomputes the digest, bounds and scans the list, accepts the report only for a
   server the step holds a pin and a grant for, ignores a report of an accepted digest and records at
-  most 10 changes per run. Until the control-node relay of ADR 0016 S4 the node's own check is
-  cooperative: a compromised node can ignore it.
+  most 10 changes per run. The node's own check is a second wall: HTTP calls of a node go through the
+  relay, which verifies the pin on the control node before any call reaches the server, so a
+  compromised node cannot skip it.
 
 Configuration: `OAX_MCP_REQUIRE_TOOL_PIN` (see [`configuration.md`](configuration.md)). Migration
 `0024_mcp_tool_snapshots` adds the two tables; the down script drops them (published versions keep
 their `toolPins`, which an older build ignores).
+
+## Control-node relay for run nodes
+
+ADR 0016 section 6 (slice S4); decides ADR 0012 open question 2. A run node never connects to an
+HTTP MCP server and never holds its header secrets or tokens: the node's MCP client talks to the
+control node, which holds the credentials and makes the call.
+
+```text
+node MCP client -- POST /v1/worker/runs/{id}/mcp/{server} (step-scoped run token) --> control node
+                                                      session, grants, gate, approval, pin, guard
+                                                      credentials resolved here, S1 dispatcher --> HTTP MCP server
+```
+
+- **Every** `streamable-http` connection of a step used by a run node goes through the relay; there is
+  no fallback and no switch (a node of an older image fails closed, see below). The node needs no
+  egress for HTTP MCP servers, and `runtime.egress` no longer has to list them.
+- **What the node is told**: the handover announces `http: { relay: true }` and carries, for an HTTP
+  server, only the tool classes and profiles: the `url` (a token may sit in its query string), the
+  headers, `headerSecrets` and `egress` are replaced (`url` becomes `https://mcp-relay.invalid/`). The
+  credential broker (`POST /v1/worker/runs/{id}/credentials`) no longer carries `headers`; it hands out
+  `envSecrets` of stdio servers and the step's declared credentials only. Platform connections
+  with header secrets used to be refused for nodes (`platform_secret`); through the relay they work,
+  so a central shared-credential HTTP instance is usable from a node, with the operator's secrets
+  never leaving the control node.
+- **Methods** (JSON-RPC 2.0, one message per request, strict fields): `initialize`, `ping`, `tools/list`,
+  `tools/call` and the notifications `notifications/initialized` and `notifications/cancelled`
+  (`202`). Anything else is refused with `mcp_method_not_allowed`; `sampling/createMessage`,
+  `elicitation/create` and `roots/list` with `mcp_capability_unsupported`. A server that asks the
+  platform for sampling, elicitation or roots fails the call that needed it with
+  `mcp_capability_unsupported` (the client declares no such capability; this also holds for
+  in-process calls). Streaming results and server-initiated messages are not relayed: the control
+  node reads the whole result (SSE included) and returns one JSON answer. `initialize` is answered by
+  the relay itself (it announces `tools` only) and does not touch the server.
+- **`tools/list`** returns the verified list: for a pinned server the tools the pin covers (the node
+  recomputes the same digest), otherwise the tools the step holds grants on. The verdict is taken once
+  per session. A changed tool fails with `mcp_tools_changed`, is recorded by the control node
+  (`mcp.tools.changed`, pending snapshot, `oax_mcp_tools_changed_total`) and none of the server's tools
+  is available.
+- **`tools/call`** is checked again on the control node, because a node is not trusted to have asked:
+  the step must hold a grant (`policy_denied` otherwise); the policy gate decides with the same rules as
+  `POST /v1/worker/runs/{id}/gate`; a `require_approval` decision passes only with an **approved
+  approval for exactly this call** (run, step, tool and arguments), used **once**
+  (`approvals.consumed_at`, `approval_required` otherwise); the pin is verified; the call leaves through
+  the S1 dispatcher (purpose `mcp`, tenant rules, pinned DNS, no redirects, response cap) with the
+  connection's own origin class; the result is guarded with the secret values the connection resolved,
+  so a server that echoes its token back is redacted before the node sees it.
+- **Refusals look alike.** No or a bad token, an expired or revoked node session, a token of another
+  run or of the orchestrator, a run that ended or lost its lease, a server the step holds no grant on,
+  a connection of another tenant, an unknown name: always `404 {"error":"not_found","message":"MCP server not
+  found"}`. The reason is in the audit log (`mcp.relay.refused`, at most 20 per node session) and
+  never in the answer. A platform connection's errors reach the node as a code without server text.
+- **Sessions** are keyed `(tenant, connection, credential version, run)`. The credential version
+  hashes the connection's last change and the current values of its header secrets, so rotating a secret
+  or editing the connection opens a new session and the old one is never used again (only the hash is
+  kept). Sessions close when idle (`OAX_MCP_RELAY_IDLE_SECONDS`), when the run's node session is revoked
+  on the same replica, when the replica evicts the least recently used one for a new one, and on
+  shutdown; a session of a revoked node session is unusable anyway because every request re-checks the
+  database.
+- **Limits** (per session, i.e. per run and connection): concurrent calls
+  (`OAX_MCP_RELAY_CONCURRENCY`, default 4, `429 mcp_relay_busy`), calls per minute
+  (`OAX_MCP_RELAY_RATE_PER_MINUTE`, default 120, `429 rate_limited`), call time (the connection's
+  `timeoutMs`, with a hard stop of three times that plus 2 s so that a stuck call always frees its
+  slot), result size (the connection's `maxResultBytes` for the text; structured content larger than
+  that is left out; a tool list over 1 MiB fails with `mcp_result_too_large`), request body
+  (`OAX_MCP_RELAY_MAX_REQUEST_BYTES`, default 1 MiB, `413`; strict JSON: duplicate keys, `__proto__`
+  and deep nesting are refused), the time to deliver it (`OAX_MCP_RELAY_BODY_READ_SECONDS`, 15 s, then the
+  connection is closed) and open sessions per replica (`OAX_MCP_RELAY_MAX_SESSIONS`, default 256,
+  `503 mcp_relay_busy` when all are in use). A node that disconnects cancels its upstream call.
+- **Old images fail closed.** The bundle every container node receives (`oax-bundle:v3`, the same
+  marker for the Kubernetes Secret) is not a URL and an unknown version for a node from before the relay,
+  which refuses to start (`config_invalid`) instead of dialling the server without credentials. A new node
+  refuses a bundle of marker `v2` and a handover with HTTP servers that does not announce the relay.
+- **Audit and metrics.** `mcp.relay.call` for every tool call (tool, outcome, size, duration, guard
+  counts), `mcp.relay.denied`, `mcp.relay.refused`. `oax_mcp_relay_requests_total{method,outcome}` (method
+  `initialize|tools_list|tools_call|other`; outcome `ok|refused|denied|approval_required|tools_changed|
+  unsupported|rate_limited|busy|timeout|error`) and `oax_mcp_relay_sessions`; no tenant, connection,
+  tool or server label. A grant with `maxCallsPerRun` is counted from the relay's own audit entries as
+  well as from the node's step reports, so a node that does not report its calls cannot exceed it (calls
+  in flight at the same moment can overshoot it by up to the session's concurrency).
+
+Migration `0025_approvals_consumed_at` adds the nullable column behind the single-use approval; the
+down script drops it. Configuration: [`configuration.md`](configuration.md).
+
+**What this does not do.** The relay trusts the connection's server like an in-process call does:
+a malicious server can still return text that is only filtered by the context guard. Stdio servers
+are not relayed (they run in the node). The credential version reads the secret store on every request,
+a slow store slows the relay down. Replay of a request is harmless (`tools/call` is as idempotent as the
+tool; the approval is single use). The limits and sessions are per replica.
 
 ## Stdio MCP servers
 
@@ -460,8 +547,9 @@ network that is not `internal`).
 **Lint.** `POST /v1/agents/validate` reports the warning `egress_unused` for a host in a step's
 `runtime.egress` of a step on the container runner that may only serve a stdio server with its own
 `egress`: the step's account no longer reaches it. Kubernetes steps are not reported (there the
-entry must stay in `runtime.egress`). Hosts of HTTP MCP servers are not reported, because until the
-control-node relay (slice S4) the node still reaches them with the step's account.
+entry must stay in `runtime.egress`). Hosts of HTTP MCP servers are not reported: a node does not
+connect to them at all, the control-node relay (slice S4) does, so they never belong in
+`runtime.egress`.
 
 **What this does not do.**
 

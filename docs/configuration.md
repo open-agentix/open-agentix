@@ -356,6 +356,12 @@ endpoint set, `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER` other than `otl
 | --- | --- | --- |
 | `OAX_MCP_STDIO_EGRESS` | – (none) | JSON object `{"/opt/mcp/bin/jira-mcp": ["*.atlassian.net"]}`: the network a tenant-defined stdio program may be given, by program (the command, or the program file of an interpreter). A program without an entry gets none; a tenant's connection `egress` must lie inside its grant (it can only narrow). Entries use the `runtime.egress` grammar; the program must be listed in `OAX_MCP_STDIO_COMMANDS`; a typo fails start-up. Bounded further by `OAX_CONTAINER_EGRESS_ALLOW` and, air-gapped, `OAX_AIRGAPPED_ALLOW`. See [`mcp.md`](mcp.md#egress-of-stdio-servers). |
 | `OAX_MCP_REQUIRE_TOOL_PIN` | `false` | Fail runs of published versions that pinned no tool definitions of an HTTP MCP connection with `mcp_tools_unpinned`. Off: such runs proceed and are audited as `mcp.tools.unpinned`. Versions published since ADR 0016 S3 pin the granted tools and are always checked, whatever this says. Recommended `true` for new installations; the default stays `false` so upgrades keep working. See [`mcp.md`](mcp.md#pinned-tool-definitions). |
+| `OAX_MCP_RELAY_CONCURRENCY` | `4` | Calls in flight per relay session (one run, one HTTP MCP connection) of the control-node MCP relay for run nodes (1 to 32). Beyond it: `429 mcp_relay_busy`. See [`mcp.md`](mcp.md#control-node-relay-for-run-nodes). |
+| `OAX_MCP_RELAY_RATE_PER_MINUTE` | `120` | Relayed calls per minute per relay session (1 to 6000). Beyond it: `429 rate_limited`. |
+| `OAX_MCP_RELAY_MAX_REQUEST_BYTES` | `1048576` | Largest request body of the relay (1 KiB to 8 MiB). Larger: `413`. |
+| `OAX_MCP_RELAY_MAX_SESSIONS` | `256` | Open relay sessions per api replica (1 to 10000); the least recently used idle session is closed to make room, `503 mcp_relay_busy` when all are in use. |
+| `OAX_MCP_RELAY_BODY_READ_SECONDS` | `15` | Time a run node has to deliver one relay request body (1 to 120); a slower trickle is cut off. |
+| `OAX_MCP_RELAY_IDLE_SECONDS` | `300` | A relay session nobody used for this long is closed (5 to 3600). |
 | `OAX_MCP_STDIO_COMMANDS` | – (none) | Comma list of absolute paths (or `dir/*`, direct children only) that tenant, team and agent `stdio` MCP connections may start, in run nodes only. Empty means no tenant stdio command. Shells, installers and inline-code interpreters are refused even when listed; unsafe entries fail start-up. See [`mcp.md`](mcp.md#stdio-mcp-servers). |
 
 ## Air-gapped mode

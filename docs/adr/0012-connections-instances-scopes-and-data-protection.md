@@ -128,7 +128,7 @@ Rules for central instances:
 | Model call, in-process | key resolved on the orchestrator for the run's tenant | same, after the grant check |
 | Model call, run node (ADR 0009) | through the model proxy; key never in the node | through the model proxy; key never in the node; grant, quota and per-tenant budget checked in admission |
 | MCP call, in-process (gate) | gateway connects with the instance's secrets | same, after the grant check |
-| MCP call, run node | credential broker hands the step the instance's secrets (tenant namespace, `secret_refs` patterns) | the broker **refuses** platform secrets (`platform_secret`, unchanged); such steps use a control-node MCP relay through the policy gate (follow-up of W1-3b, open question 2) or stay in-process; publish refuses `runner: container|kubernetes-job` steps that hold tools of a central shared-credential MCP instance without the relay (`central_mcp_node_unsupported`) |
+| MCP call, run node | credential broker hands the step the instance's secrets (tenant namespace, `secret_refs` patterns) | the broker **refuses** platform secrets (`platform_secret`, unchanged); such steps use a control-node MCP relay through the policy gate (follow-up of W1-3b, open question 2) or stay in-process; publish refuses `runner: container|kubernetes-job` steps that hold tools of a central shared-credential MCP instance without the relay (`central_mcp_node_unsupported`); for HTTP instances the relay exists since ADR 0016 S4 (#234) and nothing is refused |
 
 ### 4. Isolation on central connections
 
@@ -339,7 +339,10 @@ counts), `support_access.granted|used|expired`, `tenant.key_destroyed`.
 1. Default retention for new tenants: `metadata` only for step content (data-minimising, but the
    run view then shows no outputs), or a short window such as 7 days?
 2. Control-node MCP relay for central shared-credential MCP servers used by run nodes: part of
-   this wave or a follow-up of W1-3b?
+   this wave or a follow-up of W1-3b? **Decided by ADR 0016 section 6 (slice S4, #234): a follow-up
+   that ships with the MCP slices.** Every HTTP MCP connection of a run node goes through the relay;
+   central shared-credential HTTP instances are usable from nodes without `central_mcp_node_unsupported`
+   (stdio instances stay in-process or in the node with their own broker rules).
 3. Should tenants be allowed to publish their own types for other teams (tenant-level catalog)?
 4. Tenant-owned key-encryption keys (customer-managed keys in a KMS) for crypto-shredding and
    secret separation from operators: required for v1.0?
