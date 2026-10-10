@@ -1,4 +1,5 @@
 import type { AppContext } from '../context.js';
+import { createMcpOauth, type McpOauthStores } from '../mcp-oauth/index.js';
 import { AgentCheckService } from './agent-check.js';
 import { AgentSummaryService } from './agent-summaries.js';
 import { AgentsService } from './agents.js';
@@ -44,6 +45,8 @@ export interface Services {
   mcpTools: McpToolsService;
   mcpRelay: McpRelayService;
   agentCheck: AgentCheckService;
+  /** Key service, encrypted token stores and credentials of MCP OAuth (ADR 0016 S5). */
+  mcpOauth: McpOauthStores;
   subtree: SubtreeScopes;
 }
 
@@ -116,6 +119,7 @@ export function createServices(ctx: AppContext): Services {
     mcpTools,
     mcpRelay,
     agentCheck,
+    mcpOauth: createMcpOauth(ctx, 'api'),
     subtree: new SubtreeScopes(ctx),
   };
 }

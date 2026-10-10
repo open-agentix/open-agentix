@@ -23,7 +23,8 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import type { AppContext } from '../context.js';
-import { LOG_REDACT_PATHS } from '../context.js';
+import { LOG_REDACT_PATHS, logDestination } from '../context.js';
+import { processSecrets, scrubResponses, type LineSink } from '../mcp-oauth/index.js';
 import { HttpError, forbidden, registerErrorHandler } from '../errors.js';
 import type { Services } from '../services/index.js';
 import { VERSION } from '../version.js';
@@ -70,6 +71,8 @@ export interface RouteInfo {
 export interface Deps {
   ctx: AppContext;
   services: Services;
+  /** Destination of the request log (default stdout, minus registered secrets); for tests. */
+  logSink?: LineSink;
 }
 
 export function bearerOf(req: FastifyRequest): string | null {
@@ -108,6 +111,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     logger: {
       level: ctx.config.logLevel,
       redact: { paths: LOG_REDACT_PATHS, censor: '[REDACTED]' },
+      stream: deps.logSink ?? logDestination(),
     },
     genReqId: (req) => {
       const given = req.headers['x-request-id'];
@@ -219,6 +223,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   };
 
   // Authentication + route-level RBAC. Resource-level (team) checks happen in the services.
+  scrubResponses(app, processSecrets);
   app.addHook('onRequest', async (req, reply) => {
     const access = req.routeOptions.config?.access;
     if (!access || access === 'public' || access === 'webhook') return;

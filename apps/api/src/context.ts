@@ -26,6 +26,7 @@ import { createDatabase, waitForDatabase, type Database, type Db } from './db/cl
 import { Metrics } from './metrics.js';
 import type { LdapClientFactory } from './auth/ldap.js';
 import type { OidcClient } from './auth/oidc.js';
+import { processSecrets, scrubbingDestination, type LineSink } from './mcp-oauth/index.js';
 
 /** Shared dependencies of the control node services (API and in-process worker). */
 export interface AppContext {
@@ -69,13 +70,24 @@ export function traceLogFields(): { trace_id?: string; span_id?: string } {
   return ctx && isSpanContextValid(ctx) ? { trace_id: ctx.traceId, span_id: ctx.spanId } : {};
 }
 
-export function createLogger(level: string, name = 'openagentix'): Logger {
-  return pino({
-    name,
-    level,
-    redact: { paths: LOG_REDACT_PATHS, censor: '[REDACTED]' },
-    mixin: traceLogFields,
-  });
+/**
+ * Log destination of every process: stdout, minus the secret values registered at run time (OAuth
+ * access tokens, see `mcp-oauth/secret-registry.ts`). `sink` is for tests.
+ */
+export function logDestination(sink: LineSink = process.stdout): LineSink {
+  return scrubbingDestination(processSecrets, sink);
+}
+
+export function createLogger(level: string, name = 'openagentix', sink?: LineSink): Logger {
+  return pino(
+    {
+      name,
+      level,
+      redact: { paths: LOG_REDACT_PATHS, censor: '[REDACTED]' },
+      mixin: traceLogFields,
+    },
+    logDestination(sink) as pino.DestinationStream,
+  );
 }
 
 /**

@@ -19,6 +19,7 @@ import type { Db } from '../db/client.js';
 import { auditCheckpoints, auditLog, runs } from '../db/schema.js';
 import { decodeSeqCursor, encodeSeqCursor, page } from '../pagination.js';
 import type { ResolvedScope } from './subtree-scope.js';
+import { processSecrets } from '../mcp-oauth/secret-registry.js';
 import { activeGuardedSpan, activeSpanIdIn } from '../telemetry.js';
 
 const AUDIT_LOCK = 734_201;
@@ -82,6 +83,16 @@ export function withOtel(payload: unknown, otel: AuditOtel | null): unknown {
   const { otel: _forged, ...rest } = payload;
   void _forged;
   return otel ? { ...rest, otel } : rest;
+}
+
+/**
+ * Removes the access tokens handed out by `McpCredentials` from a payload. Audit payloads carry
+ * names and ids only; this is the net for the day a caller passes an upstream error text along.
+ * The payload is hashed after this step, so the chain stays consistent.
+ */
+export function scrubPayload(payload: unknown): unknown {
+  if (processSecrets.size === 0 || payload === null || payload === undefined) return payload;
+  return JSON.parse(processSecrets.scrub(JSON.stringify(payload))) as unknown;
 }
 
 export interface AuditListFilter {
@@ -163,7 +174,7 @@ export class AuditService {
         .limit(1);
       const entry = createAuditEntry(prev ?? null, {
         ...entryInput,
-        payload: withOtel(entryInput.payload, otel),
+        payload: scrubPayload(withOtel(entryInput.payload, otel)),
         ts: input.ts ?? this.ctx.now(),
       });
       await db.insert(auditLog).values({
