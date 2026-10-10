@@ -13,6 +13,7 @@ import { IngestService } from './ingest.js';
 import { ModelAccountingService } from './model-accounting.js';
 import { ModelProxyService } from './model-proxy.js';
 import { McpTestService } from './mcp-test.js';
+import { McpToolsService } from './mcp-tools.js';
 import { ModelsService } from './models.js';
 import { RunNodesService } from './run-nodes.js';
 import { RunsService } from './runs.js';
@@ -39,6 +40,7 @@ export interface Services {
   roleBindings: TenantRoleBindingsService;
   models: ModelsService;
   mcpTest: McpTestService;
+  mcpTools: McpToolsService;
   agentCheck: AgentCheckService;
   subtree: SubtreeScopes;
 }
@@ -85,6 +87,10 @@ export function createServices(ctx: AppContext): Services {
   const tenants = new TenantsService(ctx, audit, identity);
   const modelProxy = new ModelProxyService(ctx, audit, agents, models, modelAccounting, runNodes);
   const agentCheck = new AgentCheckService(ctx, audit, catalog, models, budgets);
+  const mcpTest = new McpTestService(ctx, catalog, runNodes, audit);
+  const mcpTools = new McpToolsService(ctx, audit, catalog, mcpTest, runNodes);
+  runNodes.pinResolver = (definition, scope, servers) =>
+    mcpTools.pinsFor(definition, scope, servers);
   return {
     audit,
     budgets,
@@ -103,7 +109,8 @@ export function createServices(ctx: AppContext): Services {
     tenants,
     roleBindings: new TenantRoleBindingsService(ctx, audit, identity),
     models,
-    mcpTest: new McpTestService(ctx, catalog, runNodes, audit),
+    mcpTest,
+    mcpTools,
     agentCheck,
     subtree: new SubtreeScopes(ctx),
   };
@@ -123,6 +130,7 @@ export {
   IngestService,
   ModelAccountingService,
   ModelProxyService,
+  McpToolsService,
   ModelsService,
   RunNodesService,
   RunsService,

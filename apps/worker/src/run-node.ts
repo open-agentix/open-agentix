@@ -584,6 +584,21 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
       },
       guard,
     );
+    // ADR 0016 S3: the pinned tool definitions of this step's HTTP servers. A mismatch fails the
+    // step closed here; the report is best effort (the control node records it for the admins).
+    if (handover.toolPins)
+      tools.pinTools(handover.toolPins, async (e) => {
+        await control
+          .postToolsChanged(env.runId, {
+            agentId,
+            server: e.server,
+            liveDigest: e.liveDigest,
+            ...(e.tools ? { tools: e.tools } : {}),
+          })
+          .catch((err: unknown) =>
+            log(`could not report the changed tools: ${(err as Error).message}`),
+          );
+      });
     // Every model call of a node goes through the control node's model proxy (ADR 0009), the
     // simulated provider included, so tests and demos exercise the real path. `localProviders` is
     // for unit tests only; the node binary never sets it.

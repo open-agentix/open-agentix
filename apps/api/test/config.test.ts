@@ -384,3 +384,13 @@ describe('OAX_MCP_STDIO_EGRESS (ADR 0016 section 4.1)', () => {
     );
   });
 });
+
+describe('OAX_MCP_REQUIRE_TOOL_PIN (ADR 0016 section 5)', () => {
+  it('is off by default and switched on explicitly', () => {
+    expect(loadConfig(base).mcp.requireToolPin).toBe(false);
+    expect(loadConfig({ ...base, OAX_MCP_REQUIRE_TOOL_PIN: 'true' }).mcp.requireToolPin).toBe(true);
+    expect(loadConfig({ ...base, OAX_MCP_REQUIRE_TOOL_PIN: 'false' }).mcp.requireToolPin).toBe(
+      false,
+    );
+  });
+});

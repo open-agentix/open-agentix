@@ -18,6 +18,7 @@ import {
   StepHandoverSchema,
   type StepHandover,
   type StepHandoverResult,
+  type ToolsChangedReport,
 } from './run-node-protocol.js';
 import type {
   ApprovalOutcome,
@@ -140,6 +141,11 @@ export class HttpControlPlane implements ControlPlane, ModelProxyClient {
   /** Step credentials from the broker: issued once per step and session. */
   fetchCredentials(runId: string, agentId: string): Promise<StepCredentials> {
     return this.request('POST', `/v1/worker/runs/${runId}/credentials`, { agentId });
+  }
+
+  /** Tells the control node that the tools of a pinned server differ from the pin (never throws). */
+  async postToolsChanged(runId: string, report: ToolsChangedReport): Promise<void> {
+    await this.request('POST', `/v1/worker/runs/${runId}/mcp-tools-changed`, report);
   }
 
   async postHandoverResult(runId: string, result: StepHandoverResult): Promise<void> {

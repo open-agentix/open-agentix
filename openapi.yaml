@@ -2954,6 +2954,30 @@ paths:
                   expansionDigest:
                     description: SHA-256 over the expanded grants and the tool classification at publish
                     type: string
+                  toolPins:
+                    description: pinned tool definitions per MCP connection (ADR 0016 section 5); absent for versions published before pinning
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties:
+                      type: object
+                      properties:
+                        snapshotDigest:
+                          type: string
+                          description: digest of the approved snapshot the version was published against
+                        toolsDigest:
+                          type: string
+                          description: SHA-256 over the granted tools of that snapshot (RFC 8785)
+                        granted:
+                          type: array
+                          items:
+                            type: string
+                          description: the version's grants on the connection (names and `prefix*`)
+                      required:
+                        - snapshotDigest
+                        - toolsDigest
+                        - granted
+                      additionalProperties: false
                 required:
                   - id
                   - agentId
@@ -6522,6 +6546,852 @@ paths:
                   - message
                 additionalProperties: false
         "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/connections/{id}/tools/refresh:
+    post:
+      summary: Fetch the tool definitions of an HTTP MCP connection and store them as a pending snapshot (audited; shares the rate limit of the connection test)
+      tags:
+        - connections
+      description: Connects like a run does (outbound dispatcher, destination checks) and lists the tools. The definitions are bounded, reduced to the model-visible fields and refused when they contain a credential. The answer carries the category and the snapshot summary, never a tool text; read the snapshot to review it.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  category:
+                    type: string
+                    enum:
+                      - ok
+                      - config_invalid
+                      - egress_denied
+                      - dns_failed
+                      - connect_failed
+                      - proxy_refused
+                      - tls_untrusted
+                      - tls_hostname_mismatch
+                      - auth_failed
+                      - http_error
+                      - protocol_error
+                      - timeout
+                      - error
+                  snapshot:
+                    type: object
+                    properties:
+                      digest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256 over the RFC 8785 JSON of the tools, sorted by name
+                      status:
+                        type: string
+                        enum:
+                          - pending
+                          - approved
+                          - rejected
+                      source:
+                        type: string
+                        enum:
+                          - refresh
+                          - run
+                        description: "`run`: a run saw this list and failed closed"
+                      toolCount:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      fetchedAt:
+                        type: string
+                        description: ISO 8601 timestamp
+                      approvedAt:
+                        anyOf:
+                          - type: string
+                            description: ISO 8601 timestamp
+                          - type: "null"
+                      approvalScope:
+                        anyOf:
+                          - type: string
+                            enum:
+                              - new-versions
+                              - existing-versions
+                          - type: "null"
+                      rejectedAt:
+                        anyOf:
+                          - type: string
+                            description: ISO 8601 timestamp
+                          - type: "null"
+                      current:
+                        type: boolean
+                        description: the snapshot a version published now would pin
+                      pinnedVersions:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                        description: published versions of your tenant that pinned it
+                    required:
+                      - digest
+                      - status
+                      - source
+                      - toolCount
+                      - fetchedAt
+                      - approvedAt
+                      - approvalScope
+                      - rejectedAt
+                      - current
+                      - pinnedVersions
+                    additionalProperties: false
+                  created:
+                    description: false when a snapshot with this digest already existed
+                    type: boolean
+                  matchesCurrent:
+                    type: boolean
+                required:
+                  - ok
+                  - category
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/connections/{id}/tool-snapshots:
+    get:
+      summary: List the tool snapshots of an MCP connection (newest first, summaries only)
+      tags:
+        - connections
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        digest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256 over the RFC 8785 JSON of the tools, sorted by name
+                        status:
+                          type: string
+                          enum:
+                            - pending
+                            - approved
+                            - rejected
+                        source:
+                          type: string
+                          enum:
+                            - refresh
+                            - run
+                          description: "`run`: a run saw this list and failed closed"
+                        toolCount:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                        fetchedAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        approvedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        approvalScope:
+                          anyOf:
+                            - type: string
+                              enum:
+                                - new-versions
+                                - existing-versions
+                            - type: "null"
+                        rejectedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        current:
+                          type: boolean
+                          description: the snapshot a version published now would pin
+                        pinnedVersions:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                          description: published versions of your tenant that pinned it
+                      required:
+                        - digest
+                        - status
+                        - source
+                        - toolCount
+                        - fetchedAt
+                        - approvedAt
+                        - approvalScope
+                        - rejectedAt
+                        - current
+                        - pinnedVersions
+                      additionalProperties: false
+                required:
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/connections/{id}/tool-snapshots/{digest}:
+    get:
+      summary: One tool snapshot with its definitions, the current approved snapshot to diff against and the versions that pinned it
+      tags:
+        - connections
+      description: Tool names, descriptions and schemas are untrusted text from the server; show them as data (escape invisible characters), never as instructions.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            pattern: ^[0-9a-f]{64}$
+          in: path
+          name: digest
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  digest:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+                    description: SHA-256 over the RFC 8785 JSON of the tools, sorted by name
+                  status:
+                    type: string
+                    enum:
+                      - pending
+                      - approved
+                      - rejected
+                  source:
+                    type: string
+                    enum:
+                      - refresh
+                      - run
+                    description: "`run`: a run saw this list and failed closed"
+                  toolCount:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  fetchedAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  approvedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  approvalScope:
+                    anyOf:
+                      - type: string
+                        enum:
+                          - new-versions
+                          - existing-versions
+                      - type: "null"
+                  rejectedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  current:
+                    type: boolean
+                    description: the snapshot a version published now would pin
+                  pinnedVersions:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                    description: published versions of your tenant that pinned it
+                  tools:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        title:
+                          type:
+                            - string
+                            - "null"
+                        description:
+                          type:
+                            - string
+                            - "null"
+                        inputSchema:
+                          type: object
+                          propertyNames:
+                            type: string
+                          additionalProperties: {}
+                        outputSchema:
+                          anyOf:
+                            - type: object
+                              propertyNames:
+                                type: string
+                              additionalProperties: {}
+                            - type: "null"
+                        annotations:
+                          anyOf:
+                            - type: object
+                              propertyNames:
+                                type: string
+                              additionalProperties: {}
+                            - type: "null"
+                      required:
+                        - name
+                        - inputSchema
+                      additionalProperties: false
+                      description: the model-visible fields of an MCP tool (untrusted text from the server)
+                  base:
+                    anyOf:
+                      - type: object
+                        properties:
+                          digest:
+                            type: string
+                            pattern: ^[0-9a-f]{64}$
+                          tools:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                title:
+                                  type:
+                                    - string
+                                    - "null"
+                                description:
+                                  type:
+                                    - string
+                                    - "null"
+                                inputSchema:
+                                  type: object
+                                  propertyNames:
+                                    type: string
+                                  additionalProperties: {}
+                                outputSchema:
+                                  anyOf:
+                                    - type: object
+                                      propertyNames:
+                                        type: string
+                                      additionalProperties: {}
+                                    - type: "null"
+                                annotations:
+                                  anyOf:
+                                    - type: object
+                                      propertyNames:
+                                        type: string
+                                      additionalProperties: {}
+                                    - type: "null"
+                              required:
+                                - name
+                                - inputSchema
+                              additionalProperties: false
+                              description: the model-visible fields of an MCP tool (untrusted text from the server)
+                        required:
+                          - digest
+                          - tools
+                        additionalProperties: false
+                      - type: "null"
+                    description: the current approved snapshot to compare with
+                  changed:
+                    type: array
+                    items:
+                      type: string
+                    description: tool names added, removed or changed relative to `base`
+                  pinnedBy:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agentId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        agent:
+                          type: string
+                        version:
+                          type: string
+                      required:
+                        - agentId
+                        - agent
+                        - version
+                      additionalProperties: false
+                required:
+                  - digest
+                  - status
+                  - source
+                  - toolCount
+                  - fetchedAt
+                  - approvedAt
+                  - approvalScope
+                  - rejectedAt
+                  - current
+                  - pinnedVersions
+                  - tools
+                  - base
+                  - changed
+                  - pinnedBy
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/connections/{id}/tool-snapshots/{digest}/approve:
+    post:
+      summary: Approve a pending tool snapshot (audited as mcp.tools.approved); `existing-versions` is refused when the granted tools or their access classes changed
+      tags:
+        - connections
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum:
+                    - new-versions
+                    - existing-versions
+                  description: "`new-versions`: only versions published afterwards pin it. `existing-versions`: published versions that pinned the previous snapshot accept it too; refused when the names or access classes of the granted tools changed"
+              required:
+                - scope
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            pattern: ^[0-9a-f]{64}$
+          in: path
+          name: digest
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  digest:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+                    description: SHA-256 over the RFC 8785 JSON of the tools, sorted by name
+                  status:
+                    type: string
+                    enum:
+                      - pending
+                      - approved
+                      - rejected
+                  source:
+                    type: string
+                    enum:
+                      - refresh
+                      - run
+                    description: "`run`: a run saw this list and failed closed"
+                  toolCount:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  fetchedAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  approvedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  approvalScope:
+                    anyOf:
+                      - type: string
+                        enum:
+                          - new-versions
+                          - existing-versions
+                      - type: "null"
+                  rejectedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  current:
+                    type: boolean
+                    description: the snapshot a version published now would pin
+                  pinnedVersions:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                    description: published versions of your tenant that pinned it
+                required:
+                  - digest
+                  - status
+                  - source
+                  - toolCount
+                  - fetchedAt
+                  - approvedAt
+                  - approvalScope
+                  - rejectedAt
+                  - current
+                  - pinnedVersions
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/connections/{id}/tool-snapshots/{digest}/reject:
+    post:
+      summary: Reject a pending tool snapshot (audited as mcp.tools.rejected)
+      tags:
+        - connections
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            pattern: ^[0-9a-f]{64}$
+          in: path
+          name: digest
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  digest:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+                    description: SHA-256 over the RFC 8785 JSON of the tools, sorted by name
+                  status:
+                    type: string
+                    enum:
+                      - pending
+                      - approved
+                      - rejected
+                  source:
+                    type: string
+                    enum:
+                      - refresh
+                      - run
+                    description: "`run`: a run saw this list and failed closed"
+                  toolCount:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  fetchedAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  approvedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  approvalScope:
+                    anyOf:
+                      - type: string
+                        enum:
+                          - new-versions
+                          - existing-versions
+                      - type: "null"
+                  rejectedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  current:
+                    type: boolean
+                    description: the snapshot a version published now would pin
+                  pinnedVersions:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                    description: published versions of your tenant that pinned it
+                required:
+                  - digest
+                  - status
+                  - source
+                  - toolCount
+                  - fetchedAt
+                  - approvedAt
+                  - approvalScope
+                  - rejectedAt
+                  - current
+                  - pinnedVersions
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
           description: Default Response
           content:
             application/json:
@@ -11929,6 +12799,27 @@ paths:
                     required:
                       - tenantServers
                     additionalProperties: false
+                  toolPins:
+                    description: "pinned tool definitions of the step's HTTP MCP servers: grants and acceptable digests (ADR 0016 section 5)"
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties:
+                      type: object
+                      properties:
+                        granted:
+                          type: array
+                          items:
+                            type: string
+                        accepted:
+                          type: array
+                          items:
+                            type: string
+                            pattern: ^[0-9a-f]{64}$
+                      required:
+                        - granted
+                        - accepted
+                      additionalProperties: false
                 required:
                   - agentId
                   - agent
@@ -12204,6 +13095,71 @@ paths:
                 - agentId
                 - format
                 - content
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - runToken: []
+      responses:
+        "200":
+          description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/worker/runs/{id}/mcp-tools-changed:
+    post:
+      summary: "Run node: report that the tools of a pinned MCP server differ from the pin (audit entry and pending snapshot)"
+      tags:
+        - worker
+      description: The node fails the step closed on its own; this call lets the control node record what it saw. The digest is recomputed here, the list is bounded and scanned for credentials, and only a server the step holds a pin and a grant for is accepted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agentId:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                server:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                liveDigest:
+                  type: string
+                  maxLength: 64
+                  description: digest of the granted tools as the node computed it
+                tools:
+                  description: the tool list the node read (bounded and re-checked); absent when it is too large
+                  maxItems: 500
+                  type: array
+                  items: {}
+              required:
+                - agentId
+                - server
+                - liveDigest
       parameters:
         - schema:
             type: string

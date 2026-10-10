@@ -21,6 +21,8 @@ export const StepRunInfoSchema = z.strictObject({
   budget: BudgetSchema,
 });
 
+const Sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
+
 export const StepHandoverSchema = z.strictObject({
   agentId: z.string(),
   agent: AgentSpecSchema,
@@ -54,15 +56,42 @@ export const StepHandoverSchema = z.strictObject({
    * defined (fail closed).
    */
   http: z.strictObject({ tenantServers: z.array(z.string()) }).optional(),
+  /**
+   * Pinned tool definitions of the step's HTTP MCP servers (ADR 0016 section 5): per server, the
+   * grants of the published version and every digest of the granted tools the run may accept. The
+   * node refuses to expose the tools of a server whose live list matches none of them and reports
+   * the list to the control node. Digests only; absent for versions that pinned nothing.
+   */
+  toolPins: z
+    .record(
+      z.string().max(64),
+      z.strictObject({
+        granted: z.array(z.string().max(200)).max(500),
+        accepted: z.array(Sha256Hex).max(100),
+      }),
+    )
+    .optional(),
 });
 export type StepHandover = z.infer<typeof StepHandoverSchema>;
+
+/**
+ * What a node reports when the tools of a pinned server differ from the pin (ADR 0016 section 5):
+ * the list it read. The control node recomputes every digest itself and bounds the list.
+ */
+export const ToolsChangedReportSchema = z.strictObject({
+  agentId: z.string(),
+  server: z.string().max(64),
+  /** The digest the node computed over the granted tools (`invalid` when it could not). */
+  liveDigest: z.string().max(64),
+  /** The whole list; absent when it was too large or unreadable to be pinned. */
+  tools: z.array(z.unknown()).max(500).optional(),
+});
+export type ToolsChangedReport = z.infer<typeof ToolsChangedReportSchema>;
 
 export const NODE_FAILURE_STATUSES = ['failed', 'blocked_by_policy', 'cancelled'] as const;
 
 /** Largest workspace seed archive the control node stores and a node accepts (design: 5 MiB). */
 export const MAX_WORKSPACE_SEED_BYTES = 5 * 1024 * 1024;
-
-const Sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
 
 /** Largest patch a node may attach (characters; the worker re-checks bytes and policy again). */
 export const MAX_PATCH_ATTACHMENT_CHARS = 131_072;

@@ -71,6 +71,7 @@ export class Metrics {
   /** Stored tenant stdio MCP connections that break the ADR 0016 S0 rules (no tenant labels). */
   readonly mcpStdioViolations: Gauge<string>;
   readonly mcpStdioRefused: Counter<'code'>;
+  readonly mcpToolsChanged: Counter<string>;
   readonly roleBindingsReconcileFixes: Counter<'kind' | 'trigger'>;
   readonly roleBindingsReconcileRuns: Counter<'trigger' | 'outcome'>;
   // ADR 0015 S5: every label value is a member of a closed set (`metric-labels.ts`) and is
@@ -132,6 +133,13 @@ export class Metrics {
       name: `${prefix}mcp_stdio_refused_total`,
       help: 'Stdio MCP servers refused at run time (code: error code)',
       labelNames: ['code'],
+      registers: [this.registry],
+    });
+    this.mcpToolsChanged = new Counter({
+      name: `${prefix}mcp_tools_changed_total`,
+      help:
+        'Runs that found the granted tool definitions of a pinned MCP server changed and failed ' +
+        'closed (ADR 0016 S3). No labels: the server and the tools are in the audit log',
       registers: [this.registry],
     });
     this.roleBindingsReconcileFixes = new Counter({

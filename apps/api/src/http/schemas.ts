@@ -181,6 +181,15 @@ export const ExpansionRecordSchema = z.object({
   tools: z.array(z.string()),
   connectionVersion: z.string(),
 });
+export const ToolPinSchema = z.object({
+  snapshotDigest: z
+    .string()
+    .describe('digest of the approved snapshot the version was published against'),
+  toolsDigest: z.string().describe('SHA-256 over the granted tools of that snapshot (RFC 8785)'),
+  granted: z
+    .array(z.string())
+    .describe("the version's grants on the connection (names and `prefix*`)"),
+});
 export const VersionDetailSchema = VersionSchema.extend({
   source: z.string(),
   definition: z.record(z.string(), z.unknown()),
@@ -192,6 +201,12 @@ export const VersionDetailSchema = VersionSchema.extend({
     .string()
     .optional()
     .describe('SHA-256 over the expanded grants and the tool classification at publish'),
+  toolPins: z
+    .record(z.string(), ToolPinSchema)
+    .optional()
+    .describe(
+      'pinned tool definitions per MCP connection (ADR 0016 section 5); absent for versions published before pinning',
+    ),
 });
 export const PublishResultSchema = z.object({ version: VersionSchema, created: z.boolean() });
 
@@ -462,6 +477,59 @@ export const McpConnectionTestResultSchema = z
   })
   .describe('categorized result of an MCP connection test: no body, header, address or tool text');
 export const ConnectionUpdateBody = z.object({ config: z.record(z.string(), z.unknown()) });
+
+const Sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
+export const ToolSnapshotParams = z.object({ id: Id, digest: Sha256Hex });
+/** A tool as the model sees it: untrusted server text, shown as data only. */
+export const PinnedToolSchema = z
+  .object({
+    name: z.string(),
+    title: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    inputSchema: z.record(z.string(), z.unknown()),
+    outputSchema: z.record(z.string(), z.unknown()).nullable().optional(),
+    annotations: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .describe('the model-visible fields of an MCP tool (untrusted text from the server)');
+export const ToolSnapshotSummarySchema = z.object({
+  digest: Sha256Hex.describe('SHA-256 over the RFC 8785 JSON of the tools, sorted by name'),
+  status: z.enum(['pending', 'approved', 'rejected']),
+  source: z.enum(['refresh', 'run']).describe('`run`: a run saw this list and failed closed'),
+  toolCount: z.number().int(),
+  fetchedAt: Iso,
+  approvedAt: Iso.nullable(),
+  approvalScope: z.enum(['new-versions', 'existing-versions']).nullable(),
+  rejectedAt: Iso.nullable(),
+  current: z.boolean().describe('the snapshot a version published now would pin'),
+  pinnedVersions: z.number().int().describe('published versions of your tenant that pinned it'),
+});
+export const ToolSnapshotListSchema = z.object({ items: z.array(ToolSnapshotSummarySchema) });
+export const ToolSnapshotDetailSchema = ToolSnapshotSummarySchema.extend({
+  tools: z.array(PinnedToolSchema),
+  base: z
+    .object({ digest: Sha256Hex, tools: z.array(PinnedToolSchema) })
+    .nullable()
+    .describe('the current approved snapshot to compare with'),
+  changed: z.array(z.string()).describe('tool names added, removed or changed relative to `base`'),
+  pinnedBy: z.array(z.object({ agentId: Id, agent: z.string(), version: z.string() })),
+});
+export const ToolRefreshResultSchema = z.object({
+  ok: z.boolean(),
+  category: z.enum(MCP_TEST_CATEGORIES),
+  snapshot: ToolSnapshotSummarySchema.optional(),
+  created: z
+    .boolean()
+    .optional()
+    .describe('false when a snapshot with this digest already existed'),
+  matchesCurrent: z.boolean().optional(),
+});
+export const ToolSnapshotApproveBody = z.object({
+  scope: z
+    .enum(['new-versions', 'existing-versions'])
+    .describe(
+      '`new-versions`: only versions published afterwards pin it. `existing-versions`: published versions that pinned the previous snapshot accept it too; refused when the names or access classes of the granted tools changed',
+    ),
+});
 
 export const PolicySchema = z.object({
   id: Id,
@@ -998,6 +1066,22 @@ export const StepHandoverSchema = z.object({
     .object({ tenantServers: z.array(z.string()) })
     .optional()
     .describe('tenant-defined streamable-http servers of the step (ADR 0016)'),
+  toolPins: z
+    .record(z.string(), z.object({ granted: z.array(z.string()), accepted: z.array(Sha256Hex) }))
+    .optional()
+    .describe(
+      "pinned tool definitions of the step's HTTP MCP servers: grants and acceptable digests (ADR 0016 section 5)",
+    ),
+});
+export const ToolsChangedBody = z.object({
+  agentId: z.string().min(1).max(64),
+  server: z.string().min(1).max(64),
+  liveDigest: z.string().max(64).describe('digest of the granted tools as the node computed it'),
+  tools: z
+    .array(z.unknown())
+    .max(500)
+    .optional()
+    .describe('the tool list the node read (bounded and re-checked); absent when it is too large'),
 });
 export const StepHandoverResultBody = z.object({
   agentId: z.string(),

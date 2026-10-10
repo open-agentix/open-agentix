@@ -35,6 +35,7 @@ import {
   StepHandoverQuery,
   StepHandoverResultBody,
   StepHandoverSchema,
+  ToolsChangedBody,
 } from '../schemas.js';
 import type { ZApp } from '../zapp.js';
 
@@ -289,6 +290,33 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
         inbound(req),
       );
       await services.runNodes.submitResult(claims, req.params.id, req.body);
+      return reply.status(204).send();
+    },
+  );
+
+  app.post(
+    '/v1/worker/runs/:id/mcp-tools-changed',
+    {
+      config: { access: 'run-token' },
+      schema: {
+        tags,
+        summary:
+          'Run node: report that the tools of a pinned MCP server differ from the pin (audit entry and pending snapshot)',
+        description:
+          'The node fails the step closed on its own; this call lets the control node record what it saw. The digest is recomputed here, the list is bounded and scanned for credentials, and only a server the step holds a pin and a grant for is accepted.',
+        security: sec,
+        params: RunIdParams,
+        body: ToolsChangedBody,
+      },
+    },
+    async (req, reply) => {
+      const claims = await control.authorizeNodeStep(
+        token(req),
+        req.params.id,
+        req.body.agentId,
+        inbound(req),
+      );
+      await services.mcpTools.reportFromNode(claims, req.params.id, req.body);
       return reply.status(204).send();
     },
   );

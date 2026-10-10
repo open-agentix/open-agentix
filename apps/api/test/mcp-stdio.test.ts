@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import { toolsDigest } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../src/index.js';
-import { connections, runs } from '../src/db/schema.js';
+import { connections, mcpToolSnapshots, runs } from '../src/db/schema.js';
 import { reportStdioViolations } from '../src/context.js';
 import { RUN_TOKEN_SECRET, testNode, type TestNode } from './helpers.js';
 
@@ -310,6 +312,23 @@ describe('publish refuses in-process steps with a tenant stdio grant', () => {
       (await publish(await create(agent('node-ok', 'container', null, tool('tenant-stdio')))))
         .statusCode,
     ).toBe(201);
+    // An HTTP connection is pinned (ADR 0016 S3): publishing needs an approved tool snapshot.
+    const [http] = await n.ctx.db
+      .select()
+      .from(connections)
+      .where(eq(connections.name, 'http-one'));
+    const pinned = [{ name: 'get_issue', inputSchema: { type: 'object' } }];
+    await n.ctx.db.insert(mcpToolSnapshots).values({
+      id: randomUUID(),
+      tenantId: http!.tenantId,
+      connectionId: http!.id,
+      digest: toolsDigest(pinned),
+      tools: pinned,
+      toolCount: 1,
+      status: 'approved',
+      approvedAt: new Date(),
+      approvalScope: 'new-versions',
+    });
     expect(
       (await publish(await create(agent('http-inproc', 'in-process', null, tool('http-one')))))
         .statusCode,

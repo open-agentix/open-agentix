@@ -269,6 +269,11 @@ export const EnvSchema = z.object({
    * tenant's connection can only narrow the grant. Default empty.
    */
   OAX_MCP_STDIO_EGRESS: z.string().default(''),
+  /**
+   * Refuse runs of published versions that pinned no tool definitions of an HTTP MCP connection
+   * (ADR 0016 section 5). Default false: such versions run and are audited as `mcp.tools.unpinned`.
+   */
+  OAX_MCP_REQUIRE_TOOL_PIN: bool.default(false),
   /** `trusted`: platform stdio connections may start in air-gapped mode (child sockets are not guarded). */
   OAX_AIRGAPPED_STDIO: z.enum(['trusted']).optional(),
 });
@@ -403,7 +408,7 @@ export interface Config {
     anthropicBetas: string[];
   };
   /** Stdio MCP servers (ADR 0016): the operator allowlist for tenant-defined commands. */
-  mcp: { stdioCommands: string[]; stdioEgress: Map<string, string[]> };
+  mcp: { stdioCommands: string[]; stdioEgress: Map<string, string[]>; requireToolPin: boolean };
   airgap: {
     enabled: boolean;
     /** `OAX_AIRGAPPED_STDIO=trusted`: platform stdio connections are accepted in air-gapped mode. */
@@ -613,6 +618,7 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
   return {
     stdioCommands,
     stdioEgress: parseStdioEgressGrants(e.OAX_MCP_STDIO_EGRESS, stdioCommands),
+    requireToolPin: e.OAX_MCP_REQUIRE_TOOL_PIN,
   };
 }
 

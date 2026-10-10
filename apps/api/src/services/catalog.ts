@@ -3,8 +3,11 @@ import {
   PolicyBundleSchema,
   getEgressPolicy,
   hasTenantPrefix,
+  pinnedToolsOf,
   resolveRoute,
+  toolsDigest,
   type AccessCatalog,
+  type PinnedTool,
   evaluateToolCall,
   expandProfiles,
   loadAgentDefinition,
@@ -39,10 +42,18 @@ import {
   type ModelEntry,
 } from '@openagentix/providers';
 import { legacyNetwork } from '@openagentix/providers';
-import { and, asc, eq, gt, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, or } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
-import { DEFAULT_TENANT_ID, agents, connections, policies, teams, tenants } from '../db/schema.js';
+import {
+  DEFAULT_TENANT_ID,
+  agents,
+  connections,
+  mcpToolSnapshots,
+  policies,
+  teams,
+  tenants,
+} from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import { decodeNameCursor, encodeNameCursor, page } from '../pagination.js';
 import type { AuditService } from './audit.js';
@@ -218,14 +229,62 @@ export class CatalogService {
    */
   async accessCatalog(scope: RunScope): Promise<AccessCatalog> {
     const out: Record<string, AccessCatalog[string]> = {};
-    for (const c of await this.connectionsForRun('mcp', scope)) {
+    const rows = (await this.connectionsForRun('mcp', scope)).flatMap((c) => {
       const parsed = McpServerConfigSchema.safeParse(c.config);
-      if (!parsed.success) continue;
+      return parsed.success ? [{ c, cfg: parsed.data }] : [];
+    });
+    // ADR 0016 section 5: the tool definitions of HTTP connections are pinned; the latest approved
+    // snapshot of each is what a version published now records. Other transports publish as before.
+    const snapshots = await this.latestApprovedSnapshots(
+      rows.filter((r) => r.cfg.transport === 'streamable-http').map((r) => r.c),
+    );
+    for (const { c, cfg } of rows) {
       out[c.name] = {
-        tools: Object.fromEntries(Object.entries(parsed.data.tools).map(([n, v]) => [n, v.access])),
-        profiles: parsed.data.profiles,
+        tools: Object.fromEntries(Object.entries(cfg.tools).map(([n, v]) => [n, v.access])),
+        profiles: cfg.profiles,
         version: c.updatedAt.toISOString(),
+        ...(cfg.transport === 'streamable-http'
+          ? { pin: { snapshot: snapshots.get(c.id) ?? null } }
+          : {}),
       };
+    }
+    return out;
+  }
+
+  /**
+   * The most recently approved snapshot per connection. Every row is checked against the owner
+   * tenant of its connection and against its own digest; a row that fails either is ignored, so a
+   * damaged or foreign row can only make publishing stricter, never let a wrong pin through.
+   */
+  private async latestApprovedSnapshots(
+    conns: readonly ConnectionRow[],
+  ): Promise<Map<string, { digest: string; tools: PinnedTool[] }>> {
+    const out = new Map<string, { digest: string; tools: PinnedTool[] }>();
+    if (conns.length === 0) return out;
+    const owner = new Map(conns.map((c) => [c.id, c.tenantId]));
+    const rows = await this.ctx.db
+      .select()
+      .from(mcpToolSnapshots)
+      .where(
+        and(
+          inArray(mcpToolSnapshots.connectionId, [...owner.keys()]),
+          inArray(mcpToolSnapshots.tenantId, [...new Set(owner.values())]),
+          eq(mcpToolSnapshots.status, 'approved'),
+        ),
+      )
+      .orderBy(desc(mcpToolSnapshots.approvedAt), desc(mcpToolSnapshots.id));
+    const seen = new Set<string>();
+    for (const r of rows) {
+      if (owner.get(r.connectionId) !== r.tenantId || seen.has(r.connectionId)) continue;
+      // Only the latest approval counts; if it is unusable the connection is unreviewed, the
+      // snapshot approved before it must not silently take its place.
+      seen.add(r.connectionId);
+      try {
+        const tools = pinnedToolsOf(r.tools as unknown[]);
+        if (toolsDigest(tools) === r.digest) out.set(r.connectionId, { digest: r.digest, tools });
+      } catch {
+        /* unusable row: the connection counts as unreviewed */
+      }
     }
     return out;
   }
@@ -621,7 +680,7 @@ export class CatalogService {
    * from the tenant rules (ADR 0016 section 3.1), so a tenant admin who could change it would run
    * code in the worker process for every tenant.
    */
-  private async getOwnConnection(actor: Principal, id: string): Promise<ConnectionRow> {
+  async getOwnConnection(actor: Principal, id: string): Promise<ConnectionRow> {
     const row = await this.getConnection(actor, id);
     if (row.tenantId !== actor.tenantId)
       throw forbidden('platform connections are managed by the platform operator');

@@ -1,0 +1,2 @@
+#!/bin/sh
+touch /work/apps/worker/test/.oax-stdio-worker-P7chza/started
