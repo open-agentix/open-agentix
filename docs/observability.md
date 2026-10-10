@@ -268,7 +268,7 @@ What a node claims is bounded and never trusted:
 
 - **Time.** An event is stamped when the control node *received* the report; a duration the node
   claims is only an attribute (capped at 1 hour), never a span time.
-- **Count.** At most `OAX_OTEL_NODE_EVENTS_MAX` events per session (default 128, hard ceiling 1000);
+- **Count.** At most `OAX_OTEL_NODE_EVENTS_MAX` events per session (default 128; values above 1000 are refused at start-up);
   further reports are counted in `oax.node.events_dropped` and `oax_otel_node_events_dropped_total`.
   The cap is enforced in the database statement, so concurrent reports cannot exceed it. The
   ordinary step rows and audit entries of the reports are unaffected.

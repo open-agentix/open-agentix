@@ -731,18 +731,56 @@ describe('unit: what a stored report may carry', () => {
         output: {
           source: `evil-${CANARY}`,
           invisible: { total: 'many' },
-          secrets: { total: 2, kinds: { 'Bad Kind With Spaces': 1, github_token: 1 } },
+          secrets: {
+            total: 2,
+            kinds: { 'Bad Kind With Spaces': 1, 'not-a-kind-canary': 1, 'known-secret': 1 },
+          },
         },
       },
       [],
       5,
     );
-    expect(ev).toEqual({ k: 'guard', t: 5, s: 'ok', sec: 2, kinds: ['github_token'] });
+    expect(ev).toEqual({ k: 'guard', t: 5, s: 'ok', sec: 2, kinds: ['known-secret'] });
     expect(
       nodeEventOf({ kind: 'tool_call', name: 'a/b', status: `weird-${CANARY}` }, [], 1),
     ).toEqual({ k: 'tool_call', t: 1 });
     expect(nodeEventOf({ kind: 'model_call', name: 'a', status: 'ok' }, [], 1)).toBeNull();
     expect(nodeEventOf({ kind: 'control', name: 'kill', status: 'ok' }, [], 1)).toBeNull();
+  });
+
+  it('a slug-shaped fantasy secret kind never reaches an event', () => {
+    const ev = nodeEventOf(
+      {
+        kind: 'control',
+        name: 'input_guard',
+        status: 'ok',
+        output: { secrets: { total: 1, kinds: { 'not-a-kind-canary': 1 } } },
+      },
+      [],
+      1,
+    );
+    expect(JSON.stringify(ev)).not.toContain('canary');
+    expect(ev).not.toHaveProperty('kinds');
+  });
+
+  it('counts a dropped event only when the cap dropped it, not for a revoked session', async () => {
+    const m = await dispatch();
+    await n.services.runNodes.revoke(m.sessionId, 'step_end');
+    const before = stats.node.eventsDropped;
+    await n.services.runNodes.noteReport(m.sessionId, 'a', {
+      kind: 'output',
+      name: 'x',
+      status: 'ok',
+    });
+    expect(stats.node.eventsDropped).toBe(before);
+    const live = await dispatch();
+    for (let i = 0; i < 9; i++)
+      await n.services.runNodes.noteReport(live.sessionId, 'a', {
+        kind: 'output',
+        name: 'x',
+        status: 'ok',
+      });
+    expect(stats.node.eventsDropped).toBe(before + 1);
   });
 
   it('storedParent rejects malformed and all-zero contexts', () => {

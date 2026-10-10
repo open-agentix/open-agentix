@@ -1,5 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import {
+  SECRET_KINDS,
   formatTraceparent,
   isSpanId,
   isTraceId,
@@ -48,7 +49,6 @@ const STATUSES: ReadonlySet<string> = new Set<string>([
   'skipped',
 ]);
 const GUARD_SOURCES: ReadonlySet<string> = new Set(['input', 'tool_result', 'tool_error']);
-const KIND = /^[a-z][a-z0-9_-]{0,31}$/;
 const MAX_KINDS = 8;
 /** A node-claimed duration is kept below a day before the attribute cap (1 h) applies. */
 const MAX_CLAIMED_MS = 86_400_000;
@@ -209,7 +209,7 @@ export function nodeEventOf(
     const kinds =
       o.secrets?.kinds !== null && typeof o.secrets?.kinds === 'object'
         ? Object.keys(o.secrets.kinds as object)
-            .filter((x) => KIND.test(x))
+            .filter((x) => SECRET_KINDS.has(x))
             .slice(0, MAX_KINDS)
         : [];
     if (kinds.length > 0) ev.kinds = kinds;
@@ -285,15 +285,16 @@ export async function appendNodeEvent(
       .returning({ id: t.id });
     if (kept.length > 0) return true;
   }
-  await ctx.db
+  // Only a report that reached a live session and found it full counts as dropped; a session that
+  // was revoked in the meantime (or has no telemetry state) counts nothing.
+  const dropped = await ctx.db
     .update(t)
     .set({
       otelSession: sql`jsonb_set(${t.otelSession}, '{dropped}', to_jsonb(least((${t.otelSession}->>'dropped')::bigint + 1, ${MAX_DROPPED})))`,
     })
-    .where(
-      and(eq(t.id, sessionId), sql`${t.otelSession} is not null`, sql`${t.revokedAt} is null`),
-    );
-  telemetryRuntime().stats.nodeEventsDropped(1);
+    .where(and(eq(t.id, sessionId), sql`${t.otelSession} is not null`, sql`${t.revokedAt} is null`))
+    .returning({ id: t.id });
+  if (dropped.length > 0) telemetryRuntime().stats.nodeEventsDropped(1);
   return false;
 }
 
