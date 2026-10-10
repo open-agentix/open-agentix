@@ -67,6 +67,12 @@ All notable changes to this project are documented here. The format follows
 - Docs: the README, `GOVERNANCE.md` and `CONTRIBUTING.md` now describe how changes are really
   reviewed (agent-authored pull requests, independent review agent, no guarantee of a human read
   before merge) and add a "How changes are reviewed" section.
+- **Observability guide** (ADR 0015 S9): `docs/observability.md` now has the span reference, the
+  attribute table checked against the allowlist, what is not built (content capture, tenant-owned
+  exporters), multi-tenant collector configurations (`groupbyattrs` on `oax.tenant.id`, `routing`
+  connector, tenant headers, shared-collector trust note), the audit relationship and dated
+  compatibility examples for Grafana Tempo, Jaeger, Langfuse and Arize Phoenix; `docs/configuration.md`
+  and `docs/airgapped.md` updated.
 
 ### Added
 
