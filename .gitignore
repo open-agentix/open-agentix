@@ -11,3 +11,6 @@ coverage/
 
 # local secrets (e.g. Claude Code token for the demo overlay)
 secrets/
+
+# temporary directories of the stdio worker tests
+.oax-stdio-*/
