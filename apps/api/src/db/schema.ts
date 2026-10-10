@@ -154,6 +154,12 @@ export const tenantRoleBindings = pgTable(
     useCase: text('use_case'),
     inherit: boolean('inherit').notNull().default(false),
     expiresAt: ts('expires_at'),
+    /**
+     * When the 24 h notice before `expires_at` was sent (ADR 0014 section 8, slice S6). `null` =
+     * not yet; reset whenever the expiry changes. Read by the expiry reaper only; the resolver
+     * never looks at it.
+     */
+    expiryWarnedAt: ts('expiry_warned_at'),
     grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
     /**
      * `mirror` = a row that mirrors `users.global_roles` (home node, legacy roles; owned by the
@@ -180,6 +186,57 @@ export const tenantRoleBindings = pgTable(
     ),
     index('trb_tenant_idx').on(t.tenantId),
     index('trb_user_idx').on(t.userId),
+  ],
+);
+
+/**
+ * The first request of a session (an API or session token) that had a `pentest` binding in effect
+ * (ADR 0014 section 8, slice S6): one row per token and binding node and expiry, so that
+ * `pentest.session_started` is audited once and not per request, across replicas and restarts.
+ * A new grant of the same node has a new expiry and so starts a new session record.
+ */
+export const pentestSessions = pgTable(
+  'pentest_sessions',
+  {
+    tokenId: text('token_id')
+      .notNull()
+      .references(() => apiTokens.id, { onDelete: 'cascade' }),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    expiresAt: ts('expires_at').notNull(),
+    startedAt: ts('started_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.tokenId, t.tenantId, t.expiresAt] })],
+);
+
+/**
+ * In-app notices for a user (ADR 0014 section 8, slice S6): the only notification channel there is;
+ * no mail, webhook or push. Written in the transaction of the event they report, listed by
+ * `GET /v1/me/notices`, deleted by the reaper after 30 days. Carries ids, role and expiry, never
+ * secrets.
+ */
+export const userNotices = pgTable(
+  'user_notices',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    payload: jsonb('payload').notNull(),
+    createdAt: created(),
+  },
+  (t) => [
+    check(
+      'user_notices_kind',
+      sql`${t.kind} in ('pentest_granted','pentest_expiring','pentest_expired')`,
+    ),
+    index('user_notices_user_idx').on(t.userId, t.createdAt),
+    index('user_notices_created_idx').on(t.createdAt),
   ],
 );
 

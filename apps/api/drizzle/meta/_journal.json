@@ -148,6 +148,13 @@
       "when": 1792500000000,
       "tag": "0026_mcp_oauth_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792600000000,
+      "tag": "0027_pentest_role",
+      "breakpoints": true
     }
   ]
 }
