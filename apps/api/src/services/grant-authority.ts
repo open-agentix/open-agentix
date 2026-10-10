@@ -1,0 +1,163 @@
+import {
+  ROLE_PERMISSIONS,
+  appliedAt,
+  isRole,
+  pathIds,
+  type Permission,
+  type Principal,
+  type RawGrants,
+  type Role,
+  type RoleNode,
+} from '@openagentix/core';
+import { and, count, eq, inArray } from 'drizzle-orm';
+import type { Db } from '../db/client.js';
+import {
+  agentRoleBindings,
+  agents,
+  teamMembers,
+  teams,
+  tenantRoleBindings,
+  tenants,
+  users,
+} from '../db/schema.js';
+import { forbidden, notFound } from '../errors.js';
+import { loadRawGrants } from './role-bindings.js';
+
+/**
+ * What a principal may do to the tenant tree, decided from grants read inside the transaction
+ * (never from the cached principal) with the same resolver the request path uses (ADR 0014
+ * section 7). Shared by the role-binding API, tenant creation and rename, and the access
+ * explanation, so there is exactly one implementation of "what does P hold at node N".
+ */
+
+export const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
+/** What the grantor holds, read inside the transaction. */
+export interface Actor {
+  userId: string;
+  platformAdmin: boolean;
+  raw: RawGrants;
+  scopes: readonly Permission[] | undefined;
+}
+
+export async function loadActor(tx: Db, p: Principal): Promise<Actor> {
+  const [u] = await tx.select().from(users).where(eq(users.id, p.userId));
+  if (!u || u.disabled) throw forbidden();
+  const loaded = await loadRawGrants(tx, {
+    id: u.id,
+    tenantId: u.tenantId,
+    platformAdmin: u.platformAdmin,
+  });
+  if (!loaded) throw forbidden();
+  return { userId: u.id, platformAdmin: u.platformAdmin, raw: loaded.raw, scopes: p.scopes };
+}
+
+/** Node-level permissions of the actor at `node` (platform admin: admin; token scopes apply). */
+export function permissionsAt(actor: Actor, node: RoleNode, now: Date): Set<Permission> {
+  const out = new Set<Permission>();
+  for (const b of appliedAt(actor.raw, node, { now })) {
+    // Team and agent scoped bindings never give the right to change the tree or its grants.
+    if (b.source !== 'direct' && b.source !== 'inherited' && b.source !== 'platform') continue;
+    for (const perm of b.permissions) out.add(perm);
+  }
+  if (actor.scopes) for (const perm of out) if (!actor.scopes.includes(perm)) out.delete(perm);
+  return out;
+}
+
+/** An unexpired, use-case free binding of the actor that inherits and sits on `node`'s chain. */
+function inheritingOnChain(actor: Actor, node: RoleNode, now: Date) {
+  const chain = new Set(pathIds(node.path));
+  return actor.raw.nodeBindings.filter(
+    (b) =>
+      b.inherit &&
+      b.useCase === null &&
+      isRole(b.role) &&
+      chain.has(b.tenantId) &&
+      (b.expiresAt === null || b.expiresAt.getTime() > now.getTime()),
+  );
+}
+
+/**
+ * Whether the actor's inheriting bindings on `node` or an ancestor together cover everything
+ * `role` gives (ADR 0014 rule 2: a grant that inherits is a grant on the whole subtree).
+ */
+export function coversSubtree(actor: Actor, node: RoleNode, role: Role, now: Date): boolean {
+  if (actor.platformAdmin) return true;
+  const have = new Set<Permission>();
+  for (const b of inheritingOnChain(actor, node, now))
+    for (const perm of ROLE_PERMISSIONS[b.role]) have.add(perm);
+  return ROLE_PERMISSIONS[role].every((perm) => have.has(perm));
+}
+
+/**
+ * A "tenant admin" in the sense of ADR 0014 section 4.2: an `admin` binding without use case that
+ * inherits and sits on `node` or an ancestor. The condition for creating a child of `node`
+ * (the creator must administer what they create).
+ */
+export function isInheritingAdminAt(actor: Actor, node: RoleNode, now: Date): boolean {
+  if (actor.platformAdmin) return true;
+  if (actor.scopes && !actor.scopes.includes('settings:write')) return false;
+  return inheritingOnChain(actor, node, now).some((b) => b.role === 'admin');
+}
+
+/**
+ * Rule 4 of ADR 0014 section 7: the user must be visible to the actor, otherwise `404 user`, the
+ * same answer and the same queries as for an id that does not exist. Visible = the user's home
+ * node is in the actor's `users:read` coverage, or the user already holds a binding (node, team
+ * or agent) inside it. Platform admins see every user.
+ */
+export async function visibleUser(
+  tx: Db,
+  actor: Actor,
+  node: { rootId: string },
+  userId: string,
+  now: Date,
+): Promise<typeof users.$inferSelect> {
+  const [u] = await tx.select().from(users).where(eq(users.id, userId));
+  if (actor.platformAdmin) {
+    if (!u) throw notFound('user');
+    return u;
+  }
+  const nodes = await tx
+    .select({ id: tenants.id, rootId: tenants.rootId, path: tenants.path })
+    .from(tenants)
+    .where(eq(tenants.rootId, node.rootId));
+  const covered = nodes
+    .filter((n) => permissionsAt(actor, n, now).has('users:read'))
+    .map((n) => n.id);
+  const probe = u?.id ?? NIL_UUID;
+  const hit = async (q: PromiseLike<{ n: number }[]>) => Number((await q)[0]?.n ?? 0) > 0;
+  const none = covered.length === 0;
+  const ids = none ? [NIL_UUID] : covered;
+  const visible =
+    (await hit(
+      tx
+        .select({ n: count() })
+        .from(users)
+        .where(and(eq(users.id, probe), inArray(users.tenantId, ids))),
+    )) ||
+    (await hit(
+      tx
+        .select({ n: count() })
+        .from(tenantRoleBindings)
+        .where(
+          and(eq(tenantRoleBindings.userId, probe), inArray(tenantRoleBindings.tenantId, ids)),
+        ),
+    )) ||
+    (await hit(
+      tx
+        .select({ n: count() })
+        .from(teamMembers)
+        .innerJoin(teams, eq(teams.id, teamMembers.teamId))
+        .where(and(eq(teamMembers.userId, probe), inArray(teams.tenantId, ids))),
+    )) ||
+    (await hit(
+      tx
+        .select({ n: count() })
+        .from(agentRoleBindings)
+        .innerJoin(agents, eq(agents.id, agentRoleBindings.agentId))
+        .where(and(eq(agentRoleBindings.userId, probe), inArray(agents.tenantId, ids))),
+    ));
+  if (!u || none || !visible) throw notFound('user');
+  return u;
+}
