@@ -541,6 +541,39 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
       expect(await homeRoles(u)).toEqual(['auditor']);
     });
 
+    it('a pass that overruns the interval is not started twice (counted as skipped)', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((res) => (release = res));
+      let scans = 0;
+      const slow = {
+        execute: async () => {
+          scans++;
+          await gate;
+          return { rows: [] };
+        },
+      };
+      const r = new BindingReconciler({
+        db: slow as never,
+        metrics: n.ctx.metrics,
+        logger: pino({ level: 'silent' }),
+        now: () => new Date(),
+      });
+      const skipped = async () =>
+        (await n.ctx.metrics.roleBindingsReconcileRuns.get()).values
+          .filter((v) => v.labels.trigger === 'periodic' && v.labels.outcome === 'skipped')
+          .reduce((s, v) => s + v.value, 0);
+      const before = await skipped();
+      const first = r.runAll('periodic');
+      expect(await r.runAll('periodic')).toBeUndefined();
+      expect(await skipped()).toBe(before + 1);
+      release();
+      expect(await first).toMatchObject({ users: 0 });
+      expect(scans).toBe(1);
+      // after it finished, the next pass runs again
+      expect(await r.runAll('periodic')).toMatchObject({ users: 0 });
+      expect(scans).toBe(2);
+    });
+
     it('the control node reconciles at start-up unless switched off', async () => {
       const runs = async (node: TestNode) =>
         (await node.ctx.metrics.roleBindingsReconcileRuns.get()).values

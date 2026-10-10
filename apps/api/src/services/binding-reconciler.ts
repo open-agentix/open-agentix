@@ -26,6 +26,8 @@ export class BindingReconciler {
 
   private readonly lastUser = new Map<string, number>();
   private inFlight = 0;
+  /** A full pass is running in this process (start-up or periodic); a second one is skipped. */
+  private fullRunning = false;
   private readonly pending = new Set<Promise<unknown>>();
   private timer: NodeJS.Timeout | undefined;
   private stopped = false;
@@ -41,9 +43,18 @@ export class BindingReconciler {
     if (s.blocked) c.inc({ kind: 'blocked', trigger }, s.blocked);
   }
 
-  /** One full pass over all users; errors are logged and counted, never thrown. */
+  /**
+   * One full pass over all users; errors are logged and counted, never thrown. At most one full
+   * pass runs per process: a pass that overruns the interval makes the next tick a counted
+   * `skipped` instead of a second concurrent scan.
+   */
   async runAll(trigger: ReconcileTrigger, dryRun = false): Promise<ReconcileSummary | undefined> {
     const runs = this.deps.metrics.roleBindingsReconcileRuns;
+    if (this.fullRunning) {
+      runs.inc({ trigger, outcome: 'skipped' });
+      return undefined;
+    }
+    this.fullRunning = true;
     try {
       const summary = await reconcileAllBindings(this.deps.db, { dryRun });
       if (!dryRun) this.count(trigger, summary);
@@ -60,6 +71,8 @@ export class BindingReconciler {
       runs.inc({ trigger, outcome: 'error' });
       this.deps.logger.error({ err: e, trigger }, 'role binding reconcile failed');
       return undefined;
+    } finally {
+      this.fullRunning = false;
     }
   }
 
