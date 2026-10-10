@@ -108,7 +108,8 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
 
   beforeAll(async () => {
     target = await open();
-    n = await testNode({ OAX_DATABASE_URL: target.url });
+    // The mismatch-driven reconcile test asserts that the legacy result decides (ADR 0014 S1).
+    n = await testNode({ OAX_DATABASE_URL: target.url, OAX_ROLE_BINDINGS_READ: 'legacy' });
     id.sub = (
       await n.services.tenants.createChild(
         {
