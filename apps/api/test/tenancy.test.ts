@@ -143,6 +143,14 @@ describe('tenant isolation', () => {
       ['DELETE', `/v1/teams/${b.team}`],
       ['DELETE', `/v1/tokens/${b.token}`],
       ['GET', `/v1/tenants/${tenantB}`],
+      ['GET', `/v1/tenants/${tenantB}/role-bindings`],
+      [
+        'POST',
+        `/v1/tenants/${tenantB}/role-bindings`,
+        { userId: b.user, role: 'viewer', inherit: false },
+      ],
+      ['PATCH', `/v1/tenants/${tenantB}/role-bindings/${b.user}`, { inherit: true }],
+      ['DELETE', `/v1/tenants/${tenantB}/role-bindings/${b.user}`],
     ];
     for (const [method, url, payload] of probes) {
       const r = await A({ method: method as 'GET', url, ...(payload ? { payload } : {}) });

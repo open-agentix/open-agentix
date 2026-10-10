@@ -26,7 +26,7 @@ try {
   const s = await reconcileAllBindings(db.db, { dryRun });
   console.warn(
     `${dryRun ? 'would repair' : 'repaired'} ${s.users} user(s): ` +
-      `${s.added} binding(s) added, ${s.removed} removed, ${s.blocked} blocked by a non-managed row`,
+      `${s.added} binding(s) added, ${s.removed} removed`,
   );
   for (const id of s.fixed) console.warn(`  user ${id}`);
 } catch (e) {

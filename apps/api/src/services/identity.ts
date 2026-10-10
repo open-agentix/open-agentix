@@ -1017,7 +1017,8 @@ export class IdentityService {
     return this.getUser(id, actor.tenantId);
   }
 
-  private async invalidateUserTokens(userId: string): Promise<void> {
+  /** Drops the cached principals of every token of the user (the next request rebuilds them). */
+  async invalidateUserTokens(userId: string): Promise<void> {
     const tokens = await this.ctx.db
       .select({ id: apiTokens.id })
       .from(apiTokens)
