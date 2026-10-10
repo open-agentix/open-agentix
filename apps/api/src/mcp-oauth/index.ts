@@ -3,6 +3,7 @@ import type { Config } from '../config.js';
 import { McpCredentials, type TrustedRole } from './credentials.js';
 import { KeyService } from './key-service.js';
 import { processSecrets, type SecretRegistry } from './secret-registry.js';
+import { McpOauthPendingStore } from './pending-store.js';
 import { McpOauthClientStore, McpOauthTokenStore } from './token-store.js';
 
 export interface McpOauthStores {
@@ -10,6 +11,7 @@ export interface McpOauthStores {
   keys: KeyService;
   tokens: McpOauthTokenStore;
   clients: McpOauthClientStore;
+  pending: McpOauthPendingStore;
   credentials: McpCredentials;
 }
 
@@ -27,11 +29,18 @@ export function createMcpOauth(
     keys,
     tokens,
     clients: new McpOauthClientStore(ctx.db, keys),
+    pending: new McpOauthPendingStore(ctx.db, keys, ctx.now),
     credentials: new McpCredentials(tokens, registry, ctx.now, role),
   };
 }
 
-export { McpCredentials, KeyService, McpOauthClientStore, McpOauthTokenStore };
+export {
+  McpCredentials,
+  KeyService,
+  McpOauthClientStore,
+  McpOauthPendingStore,
+  McpOauthTokenStore,
+};
 export type { TrustedRole };
 export { SecretRegistry, processSecrets } from './secret-registry.js';
 export { scrubbingDestination, type LineSink } from './scrubbing-stream.js';

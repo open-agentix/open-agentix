@@ -57,12 +57,16 @@ export interface IssuedToken {
 
 export interface TokenRequest {
   tokenEndpoint: string;
-  grant: 'client_credentials' | 'refresh_token';
+  grant: 'client_credentials' | 'refresh_token' | 'authorization_code';
   client: ClientCredentials;
   scope: readonly string[];
   /** Canonical URI of the MCP server (RFC 8707): sent on EVERY token request. */
   resource: string;
   refreshToken?: string | undefined;
+  /** `authorization_code`: the code of the callback, the PKCE verifier and the exact redirect URI. */
+  code?: string | undefined;
+  codeVerifier?: string | undefined;
+  redirectUri?: string | undefined;
   origin: OauthOrigin;
   now: Date;
   algsSupported?: readonly string[] | undefined;
@@ -82,7 +86,18 @@ export async function requestToken(
     algsSupported: r.algsSupported,
   });
   const form = new URLSearchParams({ grant_type: r.grant, resource: r.resource });
-  if (r.scope.length > 0) form.set('scope', r.scope.join(' '));
+  // A code is redeemed for the scopes it was issued for (RFC 6749 section 4.1.3): no `scope`.
+  if (r.scope.length > 0 && r.grant !== 'authorization_code') form.set('scope', r.scope.join(' '));
+  if (r.grant === 'authorization_code') {
+    if (!r.code || !r.codeVerifier || !r.redirectUri)
+      throw new OaxError(
+        'mcp_oauth_client_invalid',
+        'the authorization code request is incomplete',
+      );
+    form.set('code', r.code);
+    form.set('code_verifier', r.codeVerifier);
+    form.set('redirect_uri', r.redirectUri);
+  }
   if (r.grant === 'refresh_token') {
     if (!r.refreshToken) throw new OaxError('mcp_auth_required', 'there is no refresh token');
     form.set('refresh_token', r.refreshToken);

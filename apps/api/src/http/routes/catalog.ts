@@ -5,6 +5,7 @@ import { principalOf } from '../app.js';
 import { connectionDto, policyDto } from '../dto.js';
 import {
   OauthAuthorizeBody,
+  OauthAuthorizeResultSchema,
   OauthStatusSchema,
   ConnectionCreateBody,
   ConnectionSchema,
@@ -32,6 +33,8 @@ import {
 } from '../schemas.js';
 import { SUBTREE_DEFAULT_PAGE, assertPagingNeedsSubtree, rowTenants } from '../subtree.js';
 import { HttpError } from '../../errors.js';
+import { cimdDocument } from '../../mcp-oauth/registration.js';
+import type { CallbackOutcome } from '../../services/mcp-oauth.js';
 import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
@@ -211,14 +214,14 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
       schema: {
         tags: ['connections'],
         summary:
-          'Authorize an OAuth connection (client_credentials): discover the authorization server, pin its issuer and endpoints, obtain a token (audited, rate limited)',
+          'Authorize an OAuth connection: client_credentials obtains a token now; authorization_code returns the authorization URL for the consent (audited, rate limited)',
         description:
-          'Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. The answer carries the state only, never a token.',
+          'Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. authorization_code: PKCE S256 always, a single-use state (10 minutes) bound to the caller, the connection and the tenant, and the exact redirect URI `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback`; refused on central (platform) instances (`central_user_delegation`). Authorizing again after `insufficient_scope` asks for the union of the granted, required and configured scopes (step-up). The answer carries the state and, for authorization_code, the authorization URL; never a token.',
         security: sec,
         params: IdParams,
         body: OauthAuthorizeBody,
         response: {
-          200: OauthStatusSchema,
+          200: OauthAuthorizeResultSchema,
           400: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
@@ -245,6 +248,77 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
       },
     },
     async (req) => services.mcpOauthFlows.disconnect(principalOf(req), req.params.id),
+  );
+
+  // The browser lands here after the consent at the authorization server. There is no session: the
+  // single-use state decides, and the answer is a redirect to the console (or, without a console
+  // URL, a page of fixed text). The query is never echoed: only the closed result codes leave.
+  app.get(
+    '/v1/oauth/mcp/callback',
+    {
+      config: { access: 'public' },
+      schema: {
+        tags: ['connections'],
+        summary: 'Redirect target of the MCP OAuth authorization-code flow (browser)',
+        description:
+          'Consumes the state, checks the RFC 9207 `iss` parameter, redeems the code with the PKCE verifier and stores the tokens on the connection instance. Redirects to the console with `mcp_oauth=<result>` (a closed set) or answers a small page of fixed text.',
+        querystring: z.object({}).passthrough(),
+        response: { 200: z.string(), 302: z.void(), 400: z.string() },
+      },
+    },
+    async (req, reply) => {
+      const q = req.query as Record<string, unknown>;
+      // A parameter that is repeated, nested or not a string is treated as absent.
+      const one = (k: string) => (typeof q[k] === 'string' ? (q[k] as string) : undefined);
+      let outcome: CallbackOutcome;
+      try {
+        outcome = await services.mcpOauthFlows.completeAuthorization({
+          state: one('state'),
+          code: one('code'),
+          iss: one('iss'),
+          error: one('error'),
+        });
+      } catch {
+        outcome = { result: 'error' };
+      }
+      void reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer');
+      if (ctx.config.uiUrl) {
+        const target = new URL('/connections', ctx.config.uiUrl);
+        target.searchParams.set('mcp_oauth', outcome.result);
+        if (outcome.connectionId) target.searchParams.set('connection', outcome.connectionId);
+        return reply.redirect(target.toString());
+      }
+      const text =
+        outcome.result === 'ok'
+          ? 'Authorization completed. You can close this window and return to the console.'
+          : `Authorization failed (${outcome.result}). Close this window and try again in the console.`;
+      void reply.status(outcome.result === 'ok' ? 200 : 400);
+      return reply
+        .type('text/html; charset=utf-8')
+        .send(
+          `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>openagentix</title></head><body><p>${text}</p></body></html>`,
+        );
+    },
+  );
+
+  // The Client ID Metadata Document of this installation (ADR 0016 section 7.2). Off unless the
+  // operator enabled it; the document contains no secret and nothing tenant-specific.
+  app.get(
+    '/oauth/mcp-client.json',
+    {
+      config: { access: 'public' },
+      schema: {
+        tags: ['connections'],
+        summary: 'Client ID Metadata Document of the MCP OAuth client (OAX_MCP_OAUTH_CIMD)',
+        response: { 200: z.record(z.string(), z.unknown()), 404: ErrorSchema },
+      },
+    },
+    async (_req, reply) => {
+      if (!ctx.config.mcp.oauth.cimd)
+        throw new HttpError(404, 'not_found', 'client ID metadata documents are not enabled');
+      void reply.header('cache-control', 'public, max-age=300');
+      return cimdDocument(ctx.config.publicUrl);
+    },
   );
 
   // ---------- pinned tool definitions (ADR 0016 section 5) ----------

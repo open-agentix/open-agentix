@@ -102,6 +102,11 @@ export function modelCredentialOf(req: FastifyRequest): string | null {
   return bearer ?? apiKey;
 }
 
+/** The URL as logged: the query of the MCP OAuth callback carries the state and the code. */
+export function logUrl(url: string | undefined): string | undefined {
+  return url?.startsWith('/v1/oauth/mcp/callback') ? '/v1/oauth/mcp/callback' : url;
+}
+
 /** Throws unless the request carries a principal (set by the auth hook). */
 export function principalOf(req: FastifyRequest): Principal {
   if (!req.principal) throw new HttpError(401, 'unauthenticated', 'authentication required');
@@ -115,6 +120,20 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       level: ctx.config.logLevel,
       redact: { paths: LOG_REDACT_PATHS, censor: '[REDACTED]' },
       stream: deps.logSink ?? logDestination(),
+      // Same fields as Fastify's own serializer, except that the query of the OAuth callback (state,
+      // code, iss) never reaches a log line.
+      serializers: {
+        req(req) {
+          return {
+            method: req.method,
+            url: logUrl(req.url),
+            version: [req.headers?.['accept-version']].flat()[0],
+            host: req.host,
+            remoteAddress: req.ip,
+            remotePort: req.socket?.remotePort,
+          };
+        },
+      },
     },
     genReqId: (req) => {
       const given = req.headers['x-request-id'];

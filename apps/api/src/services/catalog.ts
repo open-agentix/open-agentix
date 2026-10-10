@@ -380,6 +380,7 @@ export class CatalogService {
       refs = [];
     } else if (kind === 'mcp') {
       const parsed = McpServerConfigSchema.parse({ ...(config as object), name });
+      this.assertOauthAllowed(scope, parsed);
       stored = parsed;
       refs = [
         ...Object.values((parsed as { envSecrets?: Record<string, string> }).envSecrets ?? {}),
@@ -591,6 +592,36 @@ export class CatalogService {
    * allowlist refuse. Pure checks, no DNS: the dispatcher resolves, checks and pins every address
    * at connect time, so saving a connection is never a name-resolution oracle.
    */
+  /**
+   * authorization_code needs a person's consent, which cannot be shared with the tenants that use a
+   * central (platform) instance (ADR 0016 section 7.6); the metadata document and dynamic
+   * registration exist only when the operator turned them on (never in air-gapped mode).
+   */
+  private assertOauthAllowed(scope: ConnectionScope, cfg: McpServerConfig): void {
+    if (cfg.transport !== 'streamable-http' || cfg.auth?.kind !== 'oauth') return;
+    if (cfg.auth.grant !== 'authorization_code') return;
+    if (scope === 'platform')
+      throw new HttpError(
+        400,
+        'central_user_delegation',
+        "authorization_code is refused on central instances: a person's consent cannot be shared with other tenants",
+      );
+    const reg = cfg.auth.client.registration;
+    const oauth = this.ctx.config.mcp.oauth;
+    if (reg === 'cimd' && !oauth.cimd)
+      throw new HttpError(
+        400,
+        'mcp_oauth_cimd_disabled',
+        'client ID metadata documents are not enabled (OAX_MCP_OAUTH_CIMD)',
+      );
+    if (reg === 'dcr' && !oauth.dcr)
+      throw new HttpError(
+        400,
+        'mcp_oauth_dcr_disabled',
+        'dynamic client registration is not enabled (OAX_MCP_OAUTH_DCR)',
+      );
+  }
+
   private assertHttpAllowed(name: string, scope: ConnectionScope, stored: unknown): void {
     const cfg = stored as McpServerConfig;
     if (cfg.transport !== 'streamable-http') return;

@@ -556,6 +556,39 @@ export const OauthStatusSchema = z.object({
     .array(z.string())
     .describe('Authorization server hosts the connection contacts (purpose identity)'),
   scopesWider: z.boolean().describe('The granted scopes exceed what the profiles need'),
+  registration: z
+    .enum(['preregistered', 'cimd', 'dcr'])
+    .nullable()
+    .describe(
+      'Client registration of an authorization_code connection; null for client_credentials',
+    ),
+  redirectUri: z
+    .string()
+    .nullable()
+    .describe(
+      'The exact redirect URI of the authorization-code flow (derived from OAX_PUBLIC_URL)',
+    ),
+  scopesMissing: z
+    .array(z.string())
+    .describe('Scopes the connection asks for that the grant lacks (authorization_code)'),
+  requiredScopes: z
+    .array(z.string())
+    .describe('Scopes a server asked for with insufficient_scope (step-up)'),
+  reauthorizationNeeded: z
+    .boolean()
+    .describe('A new consent is due; runs fail closed until an administrator gives it'),
+  pendingExpiresAt: z
+    .string()
+    .nullable()
+    .describe('Expiry of the consent request the caller has started and not completed'),
+});
+export const OauthAuthorizeResultSchema = OauthStatusSchema.extend({
+  authorizationUrl: z
+    .string()
+    .nullable()
+    .describe(
+      'authorization_code: the URL to open in the browser (single use, 10 minutes); null for client_credentials, which is authorized by this call',
+    ),
 });
 export const OauthAuthorizeBody = z.object({
   issuer: z

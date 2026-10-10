@@ -4,7 +4,7 @@ import { OaxError } from '@openagentix/core';
 /** What a client needs to authenticate at a token or revocation endpoint (values, never logged). */
 export interface ClientCredentials {
   clientId: string;
-  method: 'client_secret_basic' | 'private_key_jwt';
+  method: 'client_secret_basic' | 'private_key_jwt' | 'none';
   /** `client_secret_basic`. */
   secret?: string | undefined;
   /** `private_key_jwt`: PEM. */
@@ -101,6 +101,9 @@ export function authenticateClient(
   c: ClientCredentials,
   ctx: ClientAuthContext,
 ): ClientAuthentication {
+  // A public client (authorization_code with PKCE) identifies itself and proves nothing else; the
+  // code verifier is what binds the redemption to the request.
+  if (c.method === 'none') return { headers: {}, form: { client_id: c.clientId }, sensitive: [] };
   if (c.method === 'client_secret_basic') {
     if (!c.secret) throw new OaxError('mcp_oauth_client_invalid', 'the client secret is empty');
     const basic = Buffer.from(`${formEncode(c.clientId)}:${formEncode(c.secret)}`).toString(

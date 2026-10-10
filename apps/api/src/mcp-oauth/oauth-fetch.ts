@@ -217,6 +217,24 @@ export class OauthFetch {
     }
   }
 
+  /** POST of a JSON document (dynamic client registration, RFC 7591). The answer must be JSON. */
+  async postJson(url: string, doc: unknown, req: OauthRequest): Promise<JsonReply> {
+    const { res, text } = await this.send(
+      url,
+      {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json', ...req.headers },
+        body: JSON.stringify(doc),
+      },
+      req,
+      this.tokenTimeoutMs,
+      true,
+    );
+    if (res.status !== 200 && res.status !== 201)
+      return { status: res.status, headers: res.headers };
+    return { status: res.status, json: this.jsonOf(res, text), headers: res.headers };
+  }
+
   /**
    * The unauthenticated `initialize` that makes an MCP server name its protected resource metadata
    * (`WWW-Authenticate`, MCP authorization specification). Only the status and the header are used.
