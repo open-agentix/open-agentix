@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { OaxError, resolveRoute, type Principal, type SecretResolver } from '@openagentix/core';
 import {
   McpServerConfigSchema,
