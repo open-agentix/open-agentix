@@ -598,6 +598,11 @@ export const connections = pgTable(
     name: text('name').notNull(),
     kind: text('kind').notNull(),
     config: jsonb('config').notNull(),
+    /**
+     * Bumped when the server URL changes (ADR 0016 section 7.4): stored OAuth tokens belong to one
+     * (connection, credential version) and are deleted with the bump.
+     */
+    credentialVersion: integer('credential_version').notNull().default(1),
     createdBy: uuid('created_by'),
     createdAt: created(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
@@ -605,6 +610,9 @@ export const connections = pgTable(
   (t) => [
     // Platform connections share one namespace, everything else is unique inside its tenant.
     uniqueIndex('connections_tenant_name_uq').on(t.tenantId, t.name),
+    // Target of the composite foreign key of `mcp_oauth_tokens` (a token row cannot name a tenant
+    // other than the owner of its connection).
+    uniqueIndex('connections_id_tenant_uq').on(t.id, t.tenantId),
   ],
 );
 
@@ -702,10 +710,8 @@ export const mcpOauthTokens = pgTable(
   'mcp_oauth_tokens',
   {
     id: uuid('id').primaryKey(),
-    tenantId: tenant(),
-    connectionId: uuid('connection_id')
-      .notNull()
-      .references(() => connections.id, { onDelete: 'cascade' }),
+    tenantId: uuid('tenant_id').notNull(),
+    connectionId: uuid('connection_id').notNull(),
     credentialVersion: integer('credential_version').notNull().default(1),
     issuer: text('issuer').notNull(),
     /** Registration row (`mcp_oauth_clients.id`) or a secret reference; never a secret value. */
@@ -723,6 +729,11 @@ export const mcpOauthTokens = pgTable(
     updatedAt: ts('updated_at').notNull().defaultNow(),
   },
   (t) => [
+    foreignKey({
+      name: 'mcp_oauth_tokens_connection_tenant_fk',
+      columns: [t.connectionId, t.tenantId],
+      foreignColumns: [connections.id, connections.tenantId],
+    }).onDelete('cascade'),
     uniqueIndex('mcp_oauth_tokens_connection_version_uq').on(t.connectionId, t.credentialVersion),
     index('mcp_oauth_tokens_tenant_idx').on(t.tenantId, t.status),
     check(
@@ -741,7 +752,7 @@ export const mcpOauthClients = pgTable(
   'mcp_oauth_clients',
   {
     id: uuid('id').primaryKey(),
-    tenantId: tenant(),
+    tenantId: uuid('tenant_id').notNull(),
     issuer: text('issuer').notNull(),
     registration: text('registration').notNull().default('dcr'),
     clientId: text('client_id').notNull(),

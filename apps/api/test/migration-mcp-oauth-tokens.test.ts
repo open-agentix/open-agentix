@@ -109,7 +109,7 @@ describe.each(sqlTargets)('migration 0026 on existing data (%s)', (_kind, enable
       /mcp_oauth_tokens_status/,
     );
     expect(await failure(token({ connection: randomUUID(), version: 9 }))).toMatch(
-      /mcp_oauth_tokens_connection_id_connections_id_fk/,
+      /mcp_oauth_tokens_connection_tenant_fk/,
     );
   });
 
@@ -143,6 +143,34 @@ describe.each(sqlTargets)('migration 0026 on existing data (%s)', (_kind, enable
     );
   });
 
+  it('ties a token row to the tenant of its connection and gives connections a credential version', async () => {
+    const other = '00000000-0000-4000-8000-0000000000bb';
+    const conn = randomUUID();
+    await c.query(
+      `insert into connections (id, tenant_id, scope, name, kind, config)
+       values ($1, $2, 'tenant', 'v', 'mcp', '{}')`,
+      [conn, DEFAULT_TENANT_ID],
+    );
+    const { rows } = await c.query<{ credential_version: number }>(
+      `select credential_version from connections where id = $1`,
+      [conn],
+    );
+    expect(rows[0]!.credential_version).toBe(1);
+    // the token names another tenant than the owner of its connection
+    const wrongTenant = c.query(
+      `insert into mcp_oauth_tokens (id, tenant_id, connection_id, issuer, client_ref, resource, key_version, access_token_enc)
+       values ($1, $2, $3, 'https://a.example', 'c', 'https://x.example/mcp', 1, 'oaxe1.a.b.c')`,
+      [randomUUID(), other, conn],
+    );
+    expect(await failure(wrongTenant)).toMatch(/mcp_oauth_tokens_connection_tenant_fk/);
+    // no silent default tenant on the secret tables
+    const noTenant = c.query(
+      `insert into mcp_oauth_clients (id, issuer, client_id) values ($1, 'https://a.example', 'c')`,
+      [randomUUID()],
+    );
+    expect(await failure(noTenant)).toMatch(/tenant_id/);
+  });
+
   it('removes tokens with their connection', async () => {
     await c.query(`delete from connections where id = $1`, [connection]);
     expect((await c.query(`select id from mcp_oauth_tokens`)).rows).toHaveLength(0);
@@ -151,6 +179,10 @@ describe.each(sqlTargets)('migration 0026 on existing data (%s)', (_kind, enable
   it('the down script removes the tables and can run twice', async () => {
     await c.script(DOWN);
     expect(await tables()).toEqual([]);
+    const col = await c.query(
+      `select column_name from information_schema.columns where table_name = 'connections' and column_name = 'credential_version'`,
+    );
+    expect(col.rows).toHaveLength(0);
     await c.script(DOWN);
   });
 });

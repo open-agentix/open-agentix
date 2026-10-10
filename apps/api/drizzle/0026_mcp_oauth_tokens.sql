@@ -1,6 +1,6 @@
 CREATE TABLE "mcp_oauth_clients" (
 	"id" uuid PRIMARY KEY NOT NULL,
-	"tenant_id" uuid DEFAULT '00000000-0000-4000-8000-000000000001' NOT NULL,
+	"tenant_id" uuid NOT NULL,
 	"issuer" text NOT NULL,
 	"registration" text DEFAULT 'dcr' NOT NULL,
 	"client_id" text NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE "mcp_oauth_clients" (
 --> statement-breakpoint
 CREATE TABLE "mcp_oauth_tokens" (
 	"id" uuid PRIMARY KEY NOT NULL,
-	"tenant_id" uuid DEFAULT '00000000-0000-4000-8000-000000000001' NOT NULL,
+	"tenant_id" uuid NOT NULL,
 	"connection_id" uuid NOT NULL,
 	"credential_version" integer DEFAULT 1 NOT NULL,
 	"issuer" text NOT NULL,
@@ -45,7 +45,9 @@ CREATE TABLE "tenant_data_keys" (
 	CONSTRAINT "tenant_data_keys_material" CHECK (("tenant_data_keys"."status" = 'destroyed') = ("tenant_data_keys"."wrapped_key" is null))
 );
 --> statement-breakpoint
-ALTER TABLE "mcp_oauth_tokens" ADD CONSTRAINT "mcp_oauth_tokens_connection_id_connections_id_fk" FOREIGN KEY ("connection_id") REFERENCES "public"."connections"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "connections" ADD COLUMN "credential_version" integer DEFAULT 1 NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "connections_id_tenant_uq" ON "connections" USING btree ("id","tenant_id");--> statement-breakpoint
+ALTER TABLE "mcp_oauth_tokens" ADD CONSTRAINT "mcp_oauth_tokens_connection_tenant_fk" FOREIGN KEY ("connection_id","tenant_id") REFERENCES "public"."connections"("id","tenant_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "mcp_oauth_clients_tenant_issuer_uq" ON "mcp_oauth_clients" USING btree ("tenant_id","issuer");--> statement-breakpoint
 CREATE UNIQUE INDEX "mcp_oauth_tokens_connection_version_uq" ON "mcp_oauth_tokens" USING btree ("connection_id","credential_version");--> statement-breakpoint
 CREATE INDEX "mcp_oauth_tokens_tenant_idx" ON "mcp_oauth_tokens" USING btree ("tenant_id","status");--> statement-breakpoint

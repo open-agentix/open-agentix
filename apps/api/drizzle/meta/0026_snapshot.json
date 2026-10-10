@@ -1,5 +1,5 @@
 {
-  "id": "72eceb77-fe55-4f84-a34e-d1c1e4f8ddee",
+  "id": "2c5b57c8-e0be-4856-9d99-986999316920",
   "prevId": "e16ccb98-2bec-4563-a4ca-2fcd3d255a81",
   "version": "7",
   "dialect": "postgresql",
@@ -1068,6 +1068,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "credential_version": {
+          "name": "credential_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
         "created_by": {
           "name": "created_by",
           "type": "uuid",
@@ -1101,6 +1108,27 @@
             },
             {
               "expression": "name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "connections_id_tenant_uq": {
+          "name": "connections_id_tenant_uq",
+          "columns": [
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "tenant_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1810,8 +1838,7 @@
           "name": "tenant_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'00000000-0000-4000-8000-000000000001'"
+          "notNull": true
         },
         "issuer": {
           "name": "issuer",
@@ -1911,8 +1938,7 @@
           "name": "tenant_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'00000000-0000-4000-8000-000000000001'"
+          "notNull": true
         },
         "connection_id": {
           "name": "connection_id",
@@ -2049,15 +2075,17 @@
         }
       },
       "foreignKeys": {
-        "mcp_oauth_tokens_connection_id_connections_id_fk": {
-          "name": "mcp_oauth_tokens_connection_id_connections_id_fk",
+        "mcp_oauth_tokens_connection_tenant_fk": {
+          "name": "mcp_oauth_tokens_connection_tenant_fk",
           "tableFrom": "mcp_oauth_tokens",
           "tableTo": "connections",
           "columnsFrom": [
-            "connection_id"
+            "connection_id",
+            "tenant_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "tenant_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
