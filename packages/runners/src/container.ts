@@ -142,8 +142,14 @@ export const INSTANCE_LABEL = 'io.openagentix.instance';
 /** Unix seconds after which the container must not exist any more (hard lifetime). */
 export const EXPIRES_LABEL = 'io.openagentix.expires';
 const TOKEN_DIR = '/run/oax';
-/** Line 2 of the node's stdin when it carries egress accounts (see `parseBundle` in the worker). */
-export const BUNDLE_MARKER = 'oax-bundle:v2';
+/**
+ * Line 2 of the bundle every node receives (see `parseBundle` in the worker). v2 carried the
+ * egress accounts (ADR 0016 S2); v3 (S4) additionally means "the node reaches HTTP MCP servers
+ * through the control-node relay". It is always written, and it is not an http(s) URL: a node of
+ * an older image fails at once with `config_invalid` instead of connecting to an HTTP MCP server
+ * itself (it would have no credential for it any more).
+ */
+export const BUNDLE_MARKER = 'oax-bundle:v3';
 /** Resolver of every node: loopback, where nothing listens (no upstream forwarding). */
 export const NODE_DNS = '127.0.0.1';
 /** At most this many stdio MCP servers with their own egress grant per node. */
@@ -566,22 +572,19 @@ export class ContainerRunner implements IsolatingRunner {
       // Attach before the start so that the node can never miss its token.
       stdin = await this.engine.attachStdin(id, ctx.signal);
       await this.engine.startContainer(id);
-      // Line 1: the run token. With egress accounts: line 2 is the marker `oax-bundle:v2` (a node
-      // from before S2 reads line 2 as a URL and refuses it instead of misusing the step's
-      // account), line 3 the step's own account (empty without step egress), further lines
-      // `<server> <proxy url>`, the account of one MCP server, which the node hands to that
-      // server's process and to nobody else.
-      const lines =
-        proxyPassword || serverProxies.length > 0
-          ? [
-              spec.runToken,
-              BUNDLE_MARKER,
-              proxyPassword
-                ? proxyUrlWithCredentials(this.config.egressProxyUrl!, spec.nodeId, proxyPassword)
-                : '',
-              ...serverProxies.map((p) => `${p.server} ${p.url}`),
-            ]
-          : [spec.runToken];
+      // Line 1: the run token. Line 2 is the marker `oax-bundle:v3` (a node from before S2 reads
+      // line 2 as a URL and refuses it instead of misusing the step's account; a node from before
+      // S4 refuses the unknown version instead of dialling HTTP MCP servers), line 3 the step's
+      // own account (empty without step egress), further lines `<server> <proxy url>`, the account
+      // of one MCP server, which the node hands to that server's process and to nobody else.
+      const lines = [
+        spec.runToken,
+        BUNDLE_MARKER,
+        proxyPassword
+          ? proxyUrlWithCredentials(this.config.egressProxyUrl!, spec.nodeId, proxyPassword)
+          : '',
+        ...serverProxies.map((p) => `${p.server} ${p.url}`),
+      ];
       await stdin.send(Buffer.from(`${lines.join('\n')}\n`));
     } catch (e) {
       stdin?.abort();

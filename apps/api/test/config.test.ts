@@ -394,3 +394,46 @@ describe('OAX_MCP_REQUIRE_TOOL_PIN (ADR 0016 section 5)', () => {
     );
   });
 });
+
+describe('OAX_MCP_RELAY_* (ADR 0016 section 6)', () => {
+  it('has safe defaults and validated bounds', () => {
+    expect(loadConfig(base).mcp.relay).toEqual({
+      concurrency: 4,
+      ratePerMinute: 120,
+      maxRequestBytes: 1024 * 1024,
+      maxSessions: 256,
+      idleMs: 300_000,
+      bodyReadMs: 15_000,
+    });
+    const set = loadConfig({
+      ...base,
+      OAX_MCP_RELAY_CONCURRENCY: '2',
+      OAX_MCP_RELAY_RATE_PER_MINUTE: '10',
+      OAX_MCP_RELAY_MAX_REQUEST_BYTES: '4096',
+      OAX_MCP_RELAY_MAX_SESSIONS: '8',
+      OAX_MCP_RELAY_IDLE_SECONDS: '60',
+      OAX_MCP_RELAY_BODY_READ_SECONDS: '3',
+    }).mcp.relay;
+    expect(set).toEqual({
+      concurrency: 2,
+      ratePerMinute: 10,
+      maxRequestBytes: 4096,
+      maxSessions: 8,
+      idleMs: 60_000,
+      bodyReadMs: 3000,
+    });
+  });
+  it.each([
+    ['OAX_MCP_RELAY_CONCURRENCY', '0'],
+    ['OAX_MCP_RELAY_CONCURRENCY', '33'],
+    ['OAX_MCP_RELAY_RATE_PER_MINUTE', '0'],
+    ['OAX_MCP_RELAY_MAX_REQUEST_BYTES', '10'],
+    ['OAX_MCP_RELAY_MAX_REQUEST_BYTES', '999999999'],
+    ['OAX_MCP_RELAY_MAX_SESSIONS', '0'],
+    ['OAX_MCP_RELAY_IDLE_SECONDS', '1'],
+    ['OAX_MCP_RELAY_BODY_READ_SECONDS', '0'],
+    ['OAX_MCP_RELAY_CONCURRENCY', 'many'],
+  ])('refuses %s=%s', (key, value) => {
+    expect(() => loadConfig({ ...base, [key]: value })).toThrow();
+  });
+});

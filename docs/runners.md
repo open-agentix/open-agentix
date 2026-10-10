@@ -74,9 +74,11 @@ complete a run (`403`).
 `POST /v1/worker/runs/{id}/credentials` with body `{ "agentId": "..." }` and a step-scoped token.
 
 - Hands out the values of exactly the references the step declares (`agents[].credentials`) plus the
-  secret references of the MCP connections the step holds grants for (`envSecrets` of stdio servers,
-  `headerSecrets` of HTTP servers): `{ credentials: [{ secret, env, value }], connections: [{ server,
-  env?, headers? }], expiresAt }`. Never another step's secrets.
+  secret references of the stdio MCP connections the step holds grants for (`envSecrets`):
+  `{ credentials: [{ secret, env, value }], connections: [{ server, env? }], expiresAt }`. Never another
+  step's secrets. **Header secrets of HTTP servers are not brokered any more**: the control-node MCP
+  relay (`POST /v1/worker/runs/{id}/mcp/{server}`, [`mcp.md`](mcp.md#control-node-relay-for-run-nodes))
+  resolves them and makes the call, so a node never holds them.
 - **Once per step and session** (`409 credential_already_issued` afterwards, audited). A restarted
   node gets a new session. The issue is recorded before the values are resolved, so a failure never
   leaves a second chance on the same session.

@@ -18,7 +18,7 @@ describe('system endpoints', () => {
     expect((await n.req({ method: 'GET', url: '/readyz', token: null })).json()).toEqual({
       status: 'ok',
       checks: { database: true, schema: true },
-      schema: { expected: 19, applied: 19, ok: true },
+      schema: { expected: 20, applied: 20, ok: true },
       airgapped: { enabled: false, allowlist: 0, blockedAttempts: 0 },
     });
     expect((await n.req({ method: 'GET', url: '/v1/version', token: null })).json()).toMatchObject({

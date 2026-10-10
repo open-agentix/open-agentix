@@ -274,6 +274,22 @@ export const EnvSchema = z.object({
    * (ADR 0016 section 5). Default false: such versions run and are audited as `mcp.tools.unpinned`.
    */
   OAX_MCP_REQUIRE_TOOL_PIN: bool.default(false),
+  /**
+   * Limits of the control-node MCP relay for run nodes (ADR 0016 section 6). Concurrency and rate
+   * are per relay session (one run, one connection); the request cap bounds a node's message.
+   */
+  OAX_MCP_RELAY_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+  OAX_MCP_RELAY_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(6000).default(120),
+  OAX_MCP_RELAY_MAX_REQUEST_BYTES: z.coerce
+    .number()
+    .int()
+    .min(1024)
+    .max(8 * 1024 * 1024)
+    .default(1024 * 1024),
+  OAX_MCP_RELAY_MAX_SESSIONS: z.coerce.number().int().min(1).max(10_000).default(256),
+  OAX_MCP_RELAY_IDLE_SECONDS: z.coerce.number().int().min(5).max(3600).default(300),
+  /** Time a node has to deliver a request body; a slow trickle is cut off (slowloris). */
+  OAX_MCP_RELAY_BODY_READ_SECONDS: z.coerce.number().int().min(1).max(120).default(15),
   /** `trusted`: platform stdio connections may start in air-gapped mode (child sockets are not guarded). */
   OAX_AIRGAPPED_STDIO: z.enum(['trusted']).optional(),
 });
@@ -408,7 +424,19 @@ export interface Config {
     anthropicBetas: string[];
   };
   /** Stdio MCP servers (ADR 0016): the operator allowlist for tenant-defined commands. */
-  mcp: { stdioCommands: string[]; stdioEgress: Map<string, string[]>; requireToolPin: boolean };
+  mcp: {
+    stdioCommands: string[];
+    stdioEgress: Map<string, string[]>;
+    requireToolPin: boolean;
+    relay: {
+      concurrency: number;
+      ratePerMinute: number;
+      maxRequestBytes: number;
+      maxSessions: number;
+      idleMs: number;
+      bodyReadMs: number;
+    };
+  };
   airgap: {
     enabled: boolean;
     /** `OAX_AIRGAPPED_STDIO=trusted`: platform stdio connections are accepted in air-gapped mode. */
@@ -619,6 +647,14 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
     stdioCommands,
     stdioEgress: parseStdioEgressGrants(e.OAX_MCP_STDIO_EGRESS, stdioCommands),
     requireToolPin: e.OAX_MCP_REQUIRE_TOOL_PIN,
+    relay: {
+      concurrency: e.OAX_MCP_RELAY_CONCURRENCY,
+      ratePerMinute: e.OAX_MCP_RELAY_RATE_PER_MINUTE,
+      maxRequestBytes: e.OAX_MCP_RELAY_MAX_REQUEST_BYTES,
+      maxSessions: e.OAX_MCP_RELAY_MAX_SESSIONS,
+      idleMs: e.OAX_MCP_RELAY_IDLE_SECONDS * 1000,
+      bodyReadMs: e.OAX_MCP_RELAY_BODY_READ_SECONDS * 1000,
+    },
   };
 }
 

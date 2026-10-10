@@ -5355,6 +5355,9 @@ paths:
                         tool:
                           type: string
                         args: {}
+                        argsRedacted:
+                          type: boolean
+                          description: "secrets in the arguments were replaced by [REDACTED]: the call has more than shown"
                         reasons: {}
                         approverRoles:
                           type: array
@@ -5417,6 +5420,7 @@ paths:
                         - agentId
                         - tool
                         - args
+                        - argsRedacted
                         - reasons
                         - approverRoles
                         - status
@@ -5510,6 +5514,9 @@ paths:
                   tool:
                     type: string
                   args: {}
+                  argsRedacted:
+                    type: boolean
+                    description: "secrets in the arguments were replaced by [REDACTED]: the call has more than shown"
                   reasons: {}
                   approverRoles:
                     type: array
@@ -5572,6 +5579,7 @@ paths:
                   - agentId
                   - tool
                   - args
+                  - argsRedacted
                   - reasons
                   - approverRoles
                   - status
@@ -12775,7 +12783,7 @@ paths:
                       propertyNames:
                         type: string
                       additionalProperties: {}
-                    description: MCP connections of the step with all secret references stripped
+                    description: MCP connections of the step with all secret references stripped; HTTP servers carry no url or headers (relay)
                   stdio:
                     description: tenant-defined stdio servers of the step and the command allowlist (ADR 0016)
                     type: object
@@ -12793,15 +12801,15 @@ paths:
                       - allowlist
                     additionalProperties: false
                   http:
-                    description: tenant-defined streamable-http servers of the step (ADR 0016)
+                    description: streamable-http servers of the step are reached through the control-node MCP relay (ADR 0016 section 6)
                     type: object
                     properties:
-                      tenantServers:
-                        type: array
-                        items:
-                          type: string
+                      relay:
+                        type: boolean
+                        enum:
+                          - true
                     required:
-                      - tenantServers
+                      - relay
                     additionalProperties: false
                   toolPins:
                     description: "pinned tool definitions of the step's HTTP MCP servers: grants and acceptable digests (ADR 0016 section 5)"
@@ -13260,12 +13268,6 @@ paths:
                         server:
                           type: string
                         env:
-                          type: object
-                          propertyNames:
-                            type: string
-                          additionalProperties:
-                            type: string
-                        headers:
                           type: object
                           propertyNames:
                             type: string
@@ -13940,6 +13942,203 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/worker/runs/{id}/mcp/{server}:
+    post:
+      summary: "Run node: one JSON-RPC message for an HTTP MCP server, relayed by the control node"
+      tags:
+        - worker
+      description: "The node never connects to the server and never holds its credentials. Allowed: `initialize`, `ping`, `tools/list`, `tools/call` and the notifications `notifications/initialized` and `notifications/cancelled`. `tools/call` is decided by the policy gate again, needs a granted approval where the decision says so, is checked against the pinned tool definitions and leaves through the same outbound dispatcher as an in-process call. Sampling, elicitation and roots are not relayed (`mcp_capability_unsupported`). A revoked or expired session, a server the step has no grant on, a connection of another tenant and a foreign run answer alike (404). Limits per session: concurrency, calls per minute, request and result size, call timeout."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                jsonrpc:
+                  type: string
+                  enum:
+                    - "2.0"
+                id:
+                  description: absent for notifications
+                  type:
+                    - string
+                    - number
+                method:
+                  type: string
+                  description: initialize, ping, tools/list, tools/call, notifications/initialized, notifications/cancelled
+                params:
+                  type: object
+                  propertyNames:
+                    type: string
+                  additionalProperties: {}
+              required:
+                - jsonrpc
+                - method
+              additionalProperties: {}
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          in: path
+          name: server
+          required: true
+          description: name of an HTTP MCP connection of the step
+      security:
+        - runToken: []
+      responses:
+        "200":
+          description: JSON-RPC 2.0 response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jsonrpc:
+                    type: string
+                    enum:
+                      - "2.0"
+                  id:
+                    type:
+                      - string
+                      - number
+                  result: {}
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: number
+                      message:
+                        type: string
+                      data:
+                        type: object
+                        properties:
+                          oaxCode:
+                            type: string
+                        required:
+                          - oaxCode
+                        additionalProperties: false
+                    required:
+                      - code
+                      - message
+                    additionalProperties: false
+                required:
+                  - jsonrpc
+                  - id
+                additionalProperties: {}
+                description: JSON-RPC 2.0 response
+        "202":
+          description: Default Response
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "413":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "503":
           description: Default Response
           content:
             application/json:

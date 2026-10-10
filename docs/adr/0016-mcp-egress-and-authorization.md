@@ -82,7 +82,7 @@ description said when a version was published: a server can change descriptions 
 **Credentials.** Static only: secret references resolved by the static resolver (environment or
 files) and delivered by the credential broker (ADR 0008 section 2). The platform stores **no**
 credential values in its database today. Platform secrets are never brokered to nodes
-(`platform_secret`). ADR 0012 open question 2 (a control-node MCP relay) is undecided.
+(`platform_secret`). ADR 0012 open question 2 (a control-node MCP relay) is decided by section 6 below.
 
 **Telemetry** (ADR 0015 S8): MCP trace context propagation is opt-in and default off; spans are
 metadata only.
@@ -614,6 +614,31 @@ S2.
   the opt-in real-engine test asserts the DNS refusal, but the raw-socket and "exactly the expected
   CONNECTs" checks run in unit tests with a real proxy and real child processes, not inside a
   container namespace. See `docs/mcp.md` ("Egress of stdio servers").
+
+- **S4 (#234) implemented.** Differences from the text above, decided while implementing: the relay is a
+  JSON-RPC pipe, not a semantic API: the node's own MCP client keeps working unchanged on a
+  `RelayTransport`, and the control node answers `initialize` and `ping` itself and serves `tools/list` and
+  `tools/call` from one `ToolGateway` per relay session (the same class the in-process path uses, so pin
+  verification, guard and the S1 dispatcher are not re-implemented). The allowed methods are
+  `initialize`, `ping`, `tools/list`, `tools/call` and the two client notifications; sampling,
+  elicitation and roots are refused, and a server that asks for them fails the call with
+  `mcp_capability_unsupported` (in-process too). The relay route is a run-token route with
+  `config.relay`: a missing, forged or expired token and every other refusal answer with the same
+  `404 not_found` as an unknown server. The handover replaces `http.tenantServers` with
+  `http: { relay: true }` and ships HTTP connections without `url`, `headers`, `headerSecrets` and
+  `egress`; the broker's `connections[].headers` is gone. Old node images fail closed through the bundle
+  marker `oax-bundle:v3` (also in the Kubernetes Secret); a v2 marker or a handover without the
+  announcement is refused by new nodes. The approval path needed an addition the ADR did not name: a node
+  asks for approvals itself, so the relay accepts a `require_approval` call only when it can consume an
+  approved approval for exactly that call (run, step, tool, scrubbed arguments), which needs the nullable
+  column `approvals.consumed_at` (migration 0025). Sessions are `(tenant, connection, credential version,
+  run)`; the credential version is a hash of the connection's last change and the values of its header
+  secrets, resolved on every request. Per-session limits: concurrency 4, 120 calls per minute, the
+  connection's `timeoutMs` with a hard stop, `maxResultBytes`, a 1 MiB request cap and 256 sessions per
+  replica; all configurable (`OAX_MCP_RELAY_*`). The executor's last-resort error step is now best effort,
+  so that a node's refused step report does not replace the error code the relay produced. Open for
+  review: relay sessions and their limits are per api replica; the credential-version read per request
+  depends on the secret store's latency. See `docs/mcp.md`.
 
 ## Alternatives considered
 

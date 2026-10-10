@@ -127,11 +127,14 @@ export function parseSecretRefPatterns(input: readonly string[]): string[] {
   return [...new Set(input)].sort();
 }
 
-/** One MCP connection as delivered to a run node: resolved env/headers for exactly this step. */
+/**
+ * One stdio MCP connection as delivered to a run node: resolved env for exactly this step. There
+ * is deliberately no `headers`: HTTP MCP servers are reached through the control node's relay and
+ * their header secrets never leave it (ADR 0016 section 6).
+ */
 export interface StepConnectionCredentials {
   server: string;
   env?: Record<string, string>;
-  headers?: Record<string, string>;
 }
 
 /** Response of the broker endpoint (`Cache-Control: no-store`, never logged). */

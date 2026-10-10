@@ -21,7 +21,7 @@ import {
 } from '@openagentix/runners';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  httpOriginFor,
+  assertRelayAnnounced,
   mergeCredentials,
   parseBundle,
   parseNodeEnv,
@@ -84,10 +84,7 @@ describe('mergeCredentials', () => {
     agentId: 'action',
     expiresAt: 'x',
     credentials: [{ secret: 's', env: 'GH_TOKEN', value: 'v1' }],
-    connections: [
-      { server: 'jira', env: { JIRA_TOKEN: 'v2' } },
-      { server: 'crm', headers: { authorization: 'Bearer v3' } },
-    ],
+    connections: [{ server: 'jira', env: { JIRA_TOKEN: 'v2' } }],
   };
   it('puts values where the step needs them and strips every reference', () => {
     const [j, c, d] = mergeCredentials([stdio, http, mem], creds, (s) =>
@@ -107,7 +104,8 @@ describe('mergeCredentials', () => {
       http_proxy: 'http://p',
     });
     expect(j.envSecrets).toEqual({});
-    expect(c.headers).toEqual({ 'x-a': '1', authorization: 'Bearer v3' });
+    // HTTP servers get no values from the broker any more: the relay uses them on the control node
+    expect(c.headers).toEqual({ 'x-a': '1' });
     expect(c.headerSecrets).toEqual({});
     expect(d).toEqual(mem);
   });
@@ -143,14 +141,19 @@ describe('mergeCredentials', () => {
   });
 });
 
-describe('httpOriginFor (ADR 0016 S1)', () => {
-  it('treats only servers the control node did not name as tenant defined as platform', () => {
-    const origin = httpOriginFor({ http: { tenantServers: ['crm'] } });
-    expect(origin('crm')).toBe('tenant');
-    expect(origin('platform-one')).toBe('platform');
+describe('assertRelayAnnounced (ADR 0016 S4)', () => {
+  const http = McpServerConfigSchema.parse({
+    name: 'crm',
+    transport: 'streamable-http',
+    url: 'https://relay.invalid/',
   });
-  it('fails closed without the field: every HTTP server counts as tenant defined', () => {
-    expect(httpOriginFor({})('anything')).toBe('tenant');
+  const mem = McpServerConfigSchema.parse({ name: 'demo', transport: 'in-memory' });
+  it('accepts a handover that announces the relay, or has no HTTP server', () => {
+    expect(() => assertRelayAnnounced({ mcp: [http], http: { relay: true } })).not.toThrow();
+    expect(() => assertRelayAnnounced({ mcp: [mem] })).not.toThrow();
+  });
+  it('refuses HTTP servers without the announcement (a control node from before the relay)', () => {
+    expect(() => assertRelayAnnounced({ mcp: [http] })).toThrow(/did not announce the MCP relay/);
   });
 });
 
@@ -718,7 +721,7 @@ describe('per-server egress inside a run node (ADR 0016 S2)', () => {
     // line 2 is the STEP's account: wide on purpose, it must not reach any server
     const bundle = [
       'oaxrt.a.b',
-      'oax-bundle:v2',
+      'oax-bundle:v3',
       account(['a.example.com', 'b.example.org']),
       `srv-a ${account(['a.example.com'], 'srv-a')}`,
       `srv-b ${account(['b.example.org'], 'srv-b')}`,
@@ -807,13 +810,13 @@ describe('per-server egress inside a run node (ADR 0016 S2)', () => {
 
   it('refuses a malformed server proxy list instead of guessing', async () => {
     for (const bad of [
-      'oaxrt.a.b\noax-bundle:v2\n\nsrv-a not-a-url',
-      'oaxrt.a.b\noax-bundle:v2\n\nSrv_A http://p',
-      'oaxrt.a.b\noax-bundle:v2\n\nsrv-a http://p\nsrv-a http://q',
-      'oaxrt.a.b\noax-bundle:v2\n\nsrv-a file:///etc/passwd',
-      'oaxrt.a.b\noax-bundle:v3\n\nsrv-a http://p', // unknown version
+      'oaxrt.a.b\noax-bundle:v3\n\nsrv-a not-a-url',
+      'oaxrt.a.b\noax-bundle:v3\n\nSrv_A http://p',
+      'oaxrt.a.b\noax-bundle:v3\n\nsrv-a http://p\nsrv-a http://q',
+      'oaxrt.a.b\noax-bundle:v3\n\nsrv-a file:///etc/passwd',
+      'oaxrt.a.b\noax-bundle:v4\n\nsrv-a http://p', // unknown version
       'oaxrt.a.b\n\nsrv-a http://p', // server lines without the marker
-      'oaxrt.a.b\noax-bundle:v2\nfile:///etc/passwd', // bad step proxy
+      'oaxrt.a.b\noax-bundle:v3\nfile:///etc/passwd', // bad step proxy
     ]) {
       const { calls, fetchImpl } = control();
       expect(await runNode({ ...base(fetchImpl), readFile: async () => bad })).toBe(2);
@@ -834,27 +837,39 @@ describe('run-node bundle version marker (ADR 0016 S2)', () => {
     return { token, proxyUrl: proxy };
   };
   const v2 =
-    'oaxrt.a.b\noax-bundle:v2\nhttp://n:pw@proxy:3128/\nsrv-a http://n.srv-a:pw@proxy:3128/';
+    'oaxrt.a.b\noax-bundle:v3\nhttp://n:pw@proxy:3128/\nsrv-a http://n.srv-a:pw@proxy:3128/';
 
-  it('an old-style parser fails closed on a v2 bundle, at once, with config_invalid', () => {
+  it('an old-style parser fails closed on a v3 bundle, at once, with config_invalid', () => {
     expect(() => oldParser(v2)).toThrow(expect.objectContaining({ code: 'config_invalid' }));
     // also when only server lines are sent (empty step account)
-    expect(() => oldParser('oaxrt.a.b\noax-bundle:v2\n\nsrv-a http://p/')).toThrow(
+    expect(() => oldParser('oaxrt.a.b\noax-bundle:v3\n\nsrv-a http://p/')).toThrow(
       expect.objectContaining({ code: 'config_invalid' }),
     );
   });
-  it('the new parser accepts v2, the bare token and the legacy step-only form', () => {
+  it('an S2 parser (marker v2 only) fails closed on a v3 bundle: no old node dials HTTP servers', () => {
+    const s2 = (text: string) => {
+      const second = text.split('\n')[1]?.trim() ?? '';
+      if (second.startsWith('oax-bundle:') && second !== 'oax-bundle:v2')
+        throw new OaxError('config_invalid', 'unsupported bundle version');
+    };
+    expect(() => s2(v2)).toThrow(expect.objectContaining({ code: 'config_invalid' }));
+    // and the new parser refuses the v2 marker of a runner from before the relay
+    expect(() => parseBundle('oaxrt.a.b\noax-bundle:v2\n\nsrv-a http://p/')).toThrow(
+      expect.objectContaining({ code: 'config_invalid' }),
+    );
+  });
+  it('the new parser accepts v3, the bare token and the legacy step-only form', () => {
     const b = parseBundle(v2)!;
     expect(b.proxyUrl).toBe('http://n:pw@proxy:3128/');
     expect([...b.serverProxies.keys()]).toEqual(['srv-a']);
     expect(parseBundle('oaxrt.a.b\n')).toEqual({ token: 'oaxrt.a.b', serverProxies: new Map() });
     expect(parseBundle('oaxrt.a.b\nhttp://p:1/\n')!.proxyUrl).toBe('http://p:1/');
-    expect(parseBundle('oaxrt.a.b\noax-bundle:v2\n\nsrv-a http://p/')!.proxyUrl).toBeUndefined();
+    expect(parseBundle('oaxrt.a.b\noax-bundle:v3\n\nsrv-a http://p/')!.proxyUrl).toBeUndefined();
     expect(parseBundle('not-a-token')).toBeNull();
   });
   it('refuses a malformed or unknown marker', () => {
     for (const bad of [
-      'oaxrt.a.b\noax-bundle:v3\nhttp://p/',
+      'oaxrt.a.b\noax-bundle:v4\nhttp://p/',
       'oaxrt.a.b\noax-bundle:\nhttp://p/',
       'oaxrt.a.b\nOAX-BUNDLE:V2\nhttp://p/\nsrv-a http://p/',
       'oaxrt.a.b\nsrv-a http://p/\nsrv-b http://q/',

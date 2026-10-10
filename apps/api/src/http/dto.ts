@@ -134,6 +134,7 @@ export const approvalDto = (a: ApprovalRow, pipelineName: string | null = null) 
   agentId: a.agentId,
   tool: a.tool,
   args: a.args,
+  argsRedacted: a.argsRedacted,
   reasons: a.reasons,
   approverRoles: a.approverRoles,
   status: a.status as never,

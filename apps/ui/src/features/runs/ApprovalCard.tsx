@@ -88,6 +88,7 @@ export function ApprovalCard({
           ))}
         </ul>
       ) : null}
+      {approval.argsRedacted ? <p className="muted">{t('approvals.argsRedacted')}</p> : null}
       <JsonBlock value={redact(approval.args)} label={t('approvals.args')} />
       <p className="muted">
         {t('approvals.who', { roles: approval.approverRoles.join(', ') })} ·{' '}

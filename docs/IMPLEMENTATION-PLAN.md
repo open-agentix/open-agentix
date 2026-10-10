@@ -1765,7 +1765,7 @@ Acceptance criteria:
 
 - Reservations with grant and instance scopes; rate limits per grant in admission; `cost_ledger.connection_id/connection_scope`.
 - `cacheIsolation: tenant` for central model instances, tenant pseudonym as end-user field where supported; client, session and token caches keyed by tenant, connection and credential version.
-- Publish refuses node steps with tools of central shared-credential MCP instances (`central_mcp_node_unsupported`) until a control-node relay exists; central `multi-tenant` MCP instances cannot be granted twice.
+- Publish refuses node steps with tools of central shared-credential MCP instances (`central_mcp_node_unsupported`) until a control-node relay exists (HTTP instances: the relay of ADR 0016 S4, #234, is that relay; the refusal remains for stdio instances); central `multi-tenant` MCP instances cannot be granted twice.
 
 Tests: Concurrency test: two tenants on one central instance with per-tenant budgets never exceed their own limits. Security tests: tenant A's prompt prefix never yields a cache hit for tenant B (fake provider with a prefix cache); cache keys of every cache in api/worker include the tenant (static test over `cached(` calls); the broker refuses platform secrets of a central instance to a node; a revoked grant fails the next call.
 

@@ -200,8 +200,9 @@ describe('worker isolation wiring', () => {
     expect(JSON.stringify(job)).not.toContain(TOKEN);
     expect(JSON.stringify([...kube.policies.values()])).not.toContain(TOKEN);
     expect(warnings.join('\n')).not.toContain(TOKEN);
+    // the token and the bundle marker that makes a node of an older image refuse to start
     expect(Buffer.from((kube.secrets.get(name) as any).data.token, 'base64').toString()).toBe(
-      TOKEN,
+      `${TOKEN}\noax-bundle:v3\n`,
     );
     // the control node is the only extra destination; no ingress
     const policy = kube.policies.get(name) as any;

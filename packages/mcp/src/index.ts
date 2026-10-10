@@ -10,3 +10,4 @@ export * from './stdio-programs.js';
 export * from './stdio-env.js';
 export * from './http-policy.js';
 export * from './mcp-test.js';
+export * from './relay.js';

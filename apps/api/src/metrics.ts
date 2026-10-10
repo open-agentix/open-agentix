@@ -11,6 +11,8 @@ import {
   GUARD_CLASSES,
   GUARD_SOURCES,
   NODE_REPORT_RESULTS,
+  RELAY_METHOD_LABELS,
+  RELAY_OUTCOMES,
   RUNNER_LABELS,
   RUN_STATUS_LABELS,
   STEP_KIND_LABELS,
@@ -72,6 +74,8 @@ export class Metrics {
   readonly mcpStdioViolations: Gauge<string>;
   readonly mcpStdioRefused: Counter<'code'>;
   readonly mcpToolsChanged: Counter<string>;
+  readonly mcpRelayRequests: Counter<'method' | 'outcome'>;
+  readonly mcpRelaySessions: Gauge<string>;
   readonly roleBindingsReconcileFixes: Counter<'kind' | 'trigger'>;
   readonly roleBindingsReconcileRuns: Counter<'trigger' | 'outcome'>;
   // ADR 0015 S5: every label value is a member of a closed set (`metric-labels.ts`) and is
@@ -140,6 +144,20 @@ export class Metrics {
       help:
         'Runs that found the granted tool definitions of a pinned MCP server changed and failed ' +
         'closed (ADR 0016 S3). No labels: the server and the tools are in the audit log',
+      registers: [this.registry],
+    });
+    this.mcpRelayRequests = new Counter({
+      name: `${prefix}mcp_relay_requests_total`,
+      help:
+        'Requests of run nodes to the control-node MCP relay (ADR 0016 section 6) by method ' +
+        '(initialize, tools_list, tools_call, other) and outcome (ok, refused, denied, ' +
+        'approval_required, tools_changed, unsupported, rate_limited, busy, timeout, error)',
+      labelNames: ['method', 'outcome'],
+      registers: [this.registry],
+    });
+    this.mcpRelaySessions = new Gauge({
+      name: `${prefix}mcp_relay_sessions`,
+      help: 'Open MCP relay sessions of this replica (one per run, connection and credential version)',
       registers: [this.registry],
     });
     this.roleBindingsReconcileFixes = new Counter({
@@ -446,6 +464,14 @@ export class Metrics {
         { source: src, class: closed(GUARD_CLASSES, 'invisible') },
         invisible,
       );
+  }
+
+  /** One request of a run node to the MCP relay; both values are normalised to closed sets. */
+  mcpRelayRequest(method: string, outcome: string): void {
+    this.mcpRelayRequests.inc({
+      method: closed(RELAY_METHOD_LABELS, method),
+      outcome: closed(RELAY_OUTCOMES, outcome, 'error'),
+    });
   }
 
   nodeReport(kind: string, result: string): void {

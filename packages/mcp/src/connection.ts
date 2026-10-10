@@ -8,8 +8,15 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerConfig } from './config.js';
 import { assertHttpConfig } from './http-policy.js';
+import {
+  RELAY_UNSUPPORTED_CLIENT_METHODS,
+  RelayTransport,
+  oaxCodeOf,
+  type RelayPost,
+} from './relay.js';
 
 export interface McpTool {
   name: string;
@@ -69,7 +76,16 @@ export interface ConnectDeps {
   proxyChecksDestination?: boolean | undefined;
   /** Name resolution for the connect-time destination check (tests inject a fake resolver). */
   lookup?: HostLookup | undefined;
+  /**
+   * Run nodes (ADR 0016 section 6): when set, EVERY streamable-HTTP connection goes through the
+   * control node's MCP relay instead of the network. No url, header, secret or dispatcher is used
+   * for it, so a node holds no credential of an HTTP server and needs no egress for it.
+   */
+  relay?: RelayPost | undefined;
 }
+
+/** Slack on top of a connection's `timeoutMs` before the relay POST itself is cut off. */
+const RELAY_POST_GRACE_MS = 5_000;
 
 type HttpConfig = Extract<McpServerConfig, { transport: 'streamable-http' }>;
 
@@ -125,6 +141,8 @@ export async function createTransport(cfg: McpServerConfig, deps: ConnectDeps): 
       });
     }
     case 'streamable-http': {
+      if (deps.relay)
+        return new RelayTransport(cfg.name, deps.relay, cfg.timeoutMs + RELAY_POST_GRACE_MS);
       // Stored connections that predate the rules fail closed here instead of being repaired.
       assertHttpConfig(cfg.name, cfg);
       const headers: Record<string, string> = { ...cfg.headers };
@@ -197,19 +215,47 @@ const MAX_TOOL_PAGES = 50;
 /** One connected MCP server. */
 export class McpConnection {
   private tools: McpTool[] | null = null;
+  /** Set when the server sent a request for a client feature this platform does not offer. */
+  private unsupported: string | null = null;
 
   private constructor(
     readonly config: McpServerConfig,
     private readonly client: Client,
-  ) {}
+  ) {
+    // The client declares no capabilities; a server that asks for sampling, elicitation or roots
+    // anyway is told so, and the call that needed it fails with `mcp_capability_unsupported`
+    // (ADR 0016 section 6) instead of an opaque server error.
+    client.fallbackRequestHandler = async (request) => {
+      if (RELAY_UNSUPPORTED_CLIENT_METHODS.has(request.method)) this.unsupported = request.method;
+      throw new McpError(ErrorCode.MethodNotFound, 'the client does not support this request');
+    };
+  }
 
   static async connect(config: McpServerConfig, deps: ConnectDeps): Promise<McpConnection> {
     const client = new Client(
       { name: 'openagentix', version: '0.2.0-alpha.1' },
       { capabilities: {} },
     );
-    await client.connect(await createTransport(config, deps), { timeout: config.timeoutMs });
-    return new McpConnection(config, client);
+    const connection = new McpConnection(config, client);
+    try {
+      await client.connect(await createTransport(config, deps), { timeout: config.timeoutMs });
+    } catch (e) {
+      throw connection.translate(e) ?? e;
+    }
+    return connection;
+  }
+
+  /** The platform error behind a relay refusal or an unsupported client feature, if any. */
+  private translate(e: unknown): OaxError | undefined {
+    if (this.unsupported)
+      return new OaxError(
+        'mcp_capability_unsupported',
+        `MCP server "${this.config.name}" needs a client feature that is not supported (${this.unsupported})`,
+      );
+    const code = e instanceof McpError ? oaxCodeOf(e) : undefined;
+    return code
+      ? new OaxError(code, (e as Error).message.replace(/^MCP error -?\d+: /, ''))
+      : undefined;
   }
 
   async listTools(): Promise<McpTool[]> {
@@ -221,9 +267,11 @@ export class McpConnection {
       // A server that never stops returning cursors must not pin the run (or a connection test).
       if (++pages > MAX_TOOL_PAGES)
         throw new OaxError('tool_failed', `MCP server "${this.config.name}" lists too many pages`);
-      const page = await this.client.listTools(cursor ? { cursor } : {}, {
-        timeout: this.config.timeoutMs,
-      });
+      const page = await this.client
+        .listTools(cursor ? { cursor } : {}, { timeout: this.config.timeoutMs })
+        .catch((e: unknown) => {
+          throw this.translate(e) ?? e;
+        });
       for (const t of page.tools)
         out.push({
           name: t.name,
@@ -249,11 +297,16 @@ export class McpConnection {
         timeout: this.config.timeoutMs,
         ...(signal ? { signal } : {}),
       });
-      return renderToolResult(
+      const rendered = renderToolResult(
         raw as { content?: unknown; isError?: unknown; structuredContent?: unknown },
         this.config.maxResultBytes,
       );
+      if (this.unsupported && rendered.isError) throw this.translate(undefined);
+      return rendered;
     } catch (e) {
+      if (e instanceof OaxError) throw e;
+      const translated = this.translate(e);
+      if (translated) throw translated;
       const msg = (e as Error).message;
       if (/timed out|timeout/i.test(msg)) {
         throw new OaxError(
