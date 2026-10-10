@@ -411,9 +411,7 @@ describe.each(sqlTargets)(
         expect((await shadow()).mismatch).toBe(counts.mismatch + 1);
         expect(identity.shadowInFlight).toBe(0);
         // Concurrent principal builds never leave a slot behind, whatever was skipped.
-        await Promise.all(
-          Array.from({ length: 8 }, () => n.services.identity.principalForUser(u)),
-        );
+        await Promise.all(Array.from({ length: 8 }, () => n.services.identity.principalForUser(u)));
         expect(identity.shadowInFlight).toBe(0);
       });
 
