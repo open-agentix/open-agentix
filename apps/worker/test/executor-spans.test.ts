@@ -517,7 +517,8 @@ agents:
       responses:
         - toolCalls:
             - { server: tickets, tool: add_comment, args: { key: SEC-1, comment: ${C.args} } }
-            - { server: tickets, tool: get_ticket, args: { key: ${C.toolError} } }
+            - { server: tickets, tool: get_ticket, args: { key: ${C.result} } }
+            - { server: tickets, tool: get_ticket, args: { key: SEC-ERR } }
             - { server: tickets, tool: ${C.invented}, args: { x: ${C.args} } }
         - text: ${C.response}
 ---
@@ -545,6 +546,15 @@ agents:
         const exposed = ctx.tools.exposedTools.bind(ctx.tools);
         ctx.tools.exposedTools = async (agent) =>
           (await exposed(agent)).map((t) => ({ ...t, description: C.description }));
+        // A failing tool call: its error text must stay out of the spans as well.
+        const call = ctx.tools.call.bind(ctx.tools);
+        ctx.tools.call = async (...args: Parameters<typeof call>) => {
+          if (args[0].args.key === 'SEC-ERR')
+            throw Object.assign(new Error(`upstream failed: ${C.toolError}`), {
+              code: 'tool_failed',
+            });
+          return call(...args);
+        };
       },
     };
     const run = await go(sc);
@@ -562,6 +572,9 @@ agents:
     const handled = JSON.stringify([run.control.steps, run.control.audit]);
     expect(handled).toContain(C.args);
     expect(handled).toContain(C.response);
+    expect(handled).toContain(C.result);
+    expect(handled).toContain(C.toolError);
+    expect(shape(spans)).toContain('    execute_tool get_ticket (INTERNAL) !tool_failed');
 
     // The connection name is exported on the model-call and agent spans as the instance, never in a
     // span name, never under another key, and never together with the API key.
