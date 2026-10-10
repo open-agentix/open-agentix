@@ -12,10 +12,7 @@ import { OaxError, normalizeTarget } from '@openagentix/core';
  */
 
 export type HttpIssueCode =
-  | 'mcp_header_forbidden'
-  | 'mcp_url_invalid'
-  | 'mcp_egress_invalid'
-  | 'auth_conflict';
+  'mcp_header_forbidden' | 'mcp_url_invalid' | 'mcp_egress_invalid' | 'auth_conflict';
 
 export interface HttpIssue {
   code: HttpIssueCode;
@@ -191,6 +188,12 @@ function authIssues(cfg: HttpFields, url: URL | undefined, out: HttpIssue[]): vo
           path: `${field}.authorization`,
           message: `auth.kind "${kind}" cannot be combined with an authorization header`,
         });
+  if (kind === 'oauth' && url && url.search)
+    out.push({
+      code: 'mcp_url_invalid',
+      path: 'url',
+      message: 'an oauth connection url must not have a query (the resource identifier is the path)',
+    });
   if (kind === 'oauth' && url && url.protocol !== 'https:')
     out.push({
       code: 'mcp_url_invalid',
