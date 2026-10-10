@@ -35,8 +35,13 @@ export const OTEL_ENV_SHAPE = {
   OAX_OTEL_INBOUND_CONTEXT: z.enum(['ignore', 'link']).default('ignore'),
   OAX_OTEL_MCP_PROPAGATION: z.enum(['deny', 'allow']).default('deny'),
   OAX_OTEL_EXCEPTION_DETAIL: z.enum(['off', 'guarded']).default('off'),
-  // Content capture is a separate, owner-gated decision (slice S10): only `off` is accepted.
-  OAX_OTEL_CONTENT: z.literal('off').default('off'),
+  // Content capture (slice S10): `redacted` is the operator allow; it also needs a tenant opt-in and
+  // a tenant-owned exporter (OAX_OTEL_TENANT_EXPORTERS=allow), see docs/observability.md.
+  OAX_OTEL_CONTENT: z.enum(['off', 'redacted']).default('off'),
+  // Tenant-owned exporters (ADR 0012 connection type `telemetry`, slice S10): operator switch.
+  OAX_OTEL_TENANT_EXPORTERS: z.enum(['deny', 'allow']).default('deny'),
+  OAX_OTEL_TENANT_EXPORTERS_MAX: bounded(32, 1, 256),
+  OAX_OTEL_ALLOWED_REGIONS: z.string().optional(),
   OAX_OTEL_GENAI_METRICS: flag.default(false),
   OAX_OTEL_TRACE_URL_TEMPLATE: z.string().optional(),
 };
@@ -60,6 +65,13 @@ export interface OtelConfig {
   mcpPropagation: 'deny' | 'allow';
   exceptionDetail: 'off' | 'guarded';
   genaiMetrics: boolean;
+  /** `redacted`: the operator allows content capture (a tenant opt-in is still needed). */
+  content: 'off' | 'redacted';
+  /** `allow`: tenants may define `telemetry` connections that receive their own spans. */
+  tenantExporters: 'deny' | 'allow';
+  tenantExportersMax: number;
+  /** Regions a `telemetry` connection may declare; empty = no restriction. */
+  allowedRegions: string[];
   traceUrlTemplate: string | undefined;
 }
 
@@ -203,6 +215,21 @@ function parseKeep(raw: string): KeepClass[] {
   return [...new Set(items)] as KeepClass[];
 }
 
+const REGION = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+function parseRegions(raw: string | undefined): string[] {
+  const items = (raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (items.some((r) => !REGION.test(r)))
+    bad(
+      'OAX_OTEL_ALLOWED_REGIONS',
+      'regions are lower-case names (a-z, 0-9 and -), comma separated',
+    );
+  return [...new Set(items)];
+}
+
 function validateTemplate(raw: string | undefined): string | undefined {
   if (raw === undefined || raw === '') return undefined;
   if (!raw.includes('{traceId}')) bad('OAX_OTEL_TRACE_URL_TEMPLATE', 'must contain {traceId}');
@@ -229,6 +256,13 @@ export function buildOtelConfig(
     ? validateEndpoint(e.OTEL_EXPORTER_OTLP_ENDPOINT.trim(), e.OAX_OTEL_INSECURE)
     : undefined;
   refuseDisablingVariables(env, endpoint);
+  // Content goes only to tenant-owned exporters (ADR 0015 5.4): without them it has no destination,
+  // and a platform collector never receives it, so the combination is a configuration error.
+  if (e.OAX_OTEL_CONTENT === 'redacted' && e.OAX_OTEL_TENANT_EXPORTERS !== 'allow')
+    bad(
+      'OAX_OTEL_CONTENT',
+      'redacted needs OAX_OTEL_TENANT_EXPORTERS=allow (content is only sent to tenant-owned exporters)',
+    );
   return {
     endpoint,
     protocol: e.OTEL_EXPORTER_OTLP_PROTOCOL,
@@ -247,6 +281,10 @@ export function buildOtelConfig(
     mcpPropagation: e.OAX_OTEL_MCP_PROPAGATION,
     exceptionDetail: e.OAX_OTEL_EXCEPTION_DETAIL,
     genaiMetrics: e.OAX_OTEL_GENAI_METRICS,
+    content: e.OAX_OTEL_CONTENT,
+    tenantExporters: e.OAX_OTEL_TENANT_EXPORTERS,
+    tenantExportersMax: e.OAX_OTEL_TENANT_EXPORTERS_MAX,
+    allowedRegions: parseRegions(e.OAX_OTEL_ALLOWED_REGIONS),
     traceUrlTemplate: validateTemplate(e.OAX_OTEL_TRACE_URL_TEMPLATE),
   };
 }

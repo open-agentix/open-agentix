@@ -170,15 +170,16 @@ const QUEUE_FULL = 'queue_full';
  * with `error.type=queue_full`; this provider turns exactly those into
  * `oax_otel_spans_dropped_total`. Every other instrument is a no-op, nothing is exported.
  */
-export function dropCountingMeterProvider(): MeterProvider {
+export function dropCountingMeterProvider(
+  onDrop: (n: number) => void = (n) => telemetryRuntime().stats.spansDropped(n),
+): MeterProvider {
   const noop = createNoopMeter();
   const meter: Meter = Object.assign(Object.create(noop) as Meter, {
     createCounter(name: string, options?: MetricOptions): Counter {
       if (name !== PROCESSED_SPANS_METRIC) return noop.createCounter(name, options);
       return {
         add(value: number, attributes?: Attributes) {
-          if (attributes?.['error.type'] === QUEUE_FULL)
-            telemetryRuntime().stats.spansDropped(value);
+          if (attributes?.['error.type'] === QUEUE_FULL) onDrop(value);
         },
       };
     },

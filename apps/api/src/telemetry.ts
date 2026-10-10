@@ -16,7 +16,7 @@ import {
   type Tracer,
   type TracerProvider,
 } from '@opentelemetry/api';
-import type { BufferConfig, IdGenerator } from '@opentelemetry/sdk-trace-base';
+import type { BufferConfig, IdGenerator, SpanProcessor } from '@opentelemetry/sdk-trace-base';
 import {
   type CompiledNetwork,
   type ContextGuard,
@@ -35,6 +35,7 @@ import {
 } from '@openagentix/core';
 import type { OutboundDispatcher } from '@openagentix/providers';
 import { getNetworkSettings } from './airgap.js';
+import type { TenantExporterSource } from './telemetry-tenant.js';
 import type { OtelConfig } from './telemetry-config.js';
 import { parseHeaderList } from './telemetry-config.js';
 import {
@@ -321,6 +322,11 @@ export interface Telemetry {
   enabled: boolean;
   /** Connects the `oax_otel_*` counters (the metrics registry exists after the context is built). */
   attachStats(stats: TelemetryStats): void;
+  /**
+   * Connects the source of tenant-owned exporters (ADR 0015 7.3, slice S10). Without it, or with
+   * `OAX_OTEL_TENANT_EXPORTERS=deny`, no span is ever copied to a tenant destination.
+   */
+  attachTenantExporters(source: TenantExporterSource): void;
   shutdown(): Promise<void>;
 }
 
@@ -454,10 +460,17 @@ export async function initTelemetry(
     ...(init.warn ? { warn: init.warn } : {}),
   });
   const attachStats = (stats: TelemetryStats) => configureTelemetryRuntime({ stats });
-  if (!config.endpoint) return { enabled: false, attachStats, shutdown: async () => undefined };
+  const tenantMode = config.tenantExporters === 'allow';
+  const inert: Telemetry = {
+    enabled: false,
+    attachStats,
+    attachTenantExporters: () => undefined,
+    shutdown: async () => undefined,
+  };
+  if (!config.endpoint && !tenantMode) return inert;
   // Fail closed before anything is resolved or created: the air-gapped allowlist first (no secret
   // is read, no exporter or socket exists when it refuses), then the route of the dispatcher.
-  assertEndpointAllowed(config.endpoint, init.egress ?? getEgressPolicy());
+  if (config.endpoint) assertEndpointAllowed(config.endpoint, init.egress ?? getEgressPolicy());
   const { DispatcherSpanExporter, createTelemetryDispatcher, loadNetworkSecrets } =
     await import('./telemetry-transport.js');
   const secrets = init.secrets ?? new DefaultSecretResolver();
@@ -467,41 +480,47 @@ export async function initTelemetry(
     : { read: (): undefined => undefined, values: [] as string[] };
   const dispatcher =
     init.outbound ?? createTelemetryDispatcher(net, netSecrets.read, config.exportTimeoutMs);
-  const url = `${config.endpoint.replace(/\/$/, '')}/v1/traces`;
+  const url = config.endpoint ? `${config.endpoint.replace(/\/$/, '')}/v1/traces` : undefined;
   try {
     // Resolves the route (deny, metadata veto, proxy rules, trust, client certificate) now, so a
     // refused or unusable destination stops start-up instead of failing every export later.
-    dispatcher.plan(url, { purpose: 'telemetry' });
+    if (url) dispatcher.plan(url, { purpose: 'telemetry' });
   } catch (e) {
     if (!init.outbound) void dispatcher.close().catch(() => undefined);
     throw startupRefusal(e);
   }
   for (const v of netSecrets.values) telemetryRuntime().guard.addSecret(v);
-  const headers = await resolveHeaders(config, secrets);
+  const headers = url ? await resolveHeaders(config, secrets) : undefined;
   const [
     { NodeTracerProvider },
     { AlwaysOnSampler, BatchSpanProcessor, ParentBasedSampler },
     { resourceFromAttributes },
     { GuardedSpanExporter, dropCountingMeterProvider },
     { OaxKeepProcessor, OaxRatioSampler, keepStatsFromRuntime },
+    { TenantExportRouter },
   ] = await Promise.all([
     import('@opentelemetry/sdk-trace-node'),
     import('@opentelemetry/sdk-trace-base'),
     import('@opentelemetry/resources'),
     import('./telemetry-export.js'),
     import('./telemetry-sampling.js'),
+    import('./telemetry-tenant.js'),
   ]);
-  const exporter = new DispatcherSpanExporter(
-    {
-      dispatcher,
-      url,
-      protocol: config.protocol,
-      headers,
-      compression: config.compression,
-      timeoutMs: config.exportTimeoutMs,
-    },
-    !init.outbound,
-  );
+  // The platform exporter only exists with OTEL_EXPORTER_OTLP_ENDPOINT. With tenant exporters the
+  // dispatcher is shared and closed after the provider shut down.
+  const exporter = url
+    ? new DispatcherSpanExporter(
+        {
+          dispatcher,
+          url,
+          protocol: config.protocol,
+          headers,
+          compression: config.compression,
+          timeoutMs: config.exportTimeoutMs,
+        },
+        !init.outbound && !tenantMode,
+      )
+    : undefined;
   // Every option is passed explicitly, so none of the SDK's OTEL_BSP_* fallbacks applies.
   // `selfObsMeterProvider` is an option of the underlying processor that the BufferConfig type of
   // the env shim does not declare; it carries the queue-full drops to our counter.
@@ -513,26 +532,37 @@ export async function initTelemetry(
     exportTimeoutMillis: config.exportTimeoutMs + BATCH_TIMEOUT_MARGIN_MS,
     selfObsMeterProvider: dropCountingMeterProvider(),
   };
-  const batch = new BatchSpanProcessor(
-    new GuardedSpanExporter(exporter, config.exportTimeoutMs),
-    bufferConfig,
-  );
+  const batch = exporter
+    ? new BatchSpanProcessor(
+        new GuardedSpanExporter(exporter, config.exportTimeoutMs),
+        bufferConfig,
+      )
+    : undefined;
   // Sampling (slice S6). Ratio 1 keeps the former sampler and pipeline untouched. Below 1 the
   // decision is a function of the trace id alone; the keep processor sits in front of the batch
   // processor and only ever hands it extra spans (it never changes or exports anything itself).
   const sampling = config.sampleRatio < 1;
-  const keepEnabled = sampling && config.keep.length > 0;
-  const spanProcessors = keepEnabled
-    ? [
+  const keepEnabled = sampling && config.keep.length > 0 && batch !== undefined;
+  const router = tenantMode
+    ? new TenantExportRouter({
+        dispatcher,
+        config,
+      })
+    : undefined;
+  const spanProcessors: SpanProcessor[] = [];
+  if (batch) {
+    if (keepEnabled)
+      spanProcessors.push(
         new OaxKeepProcessor({
           classes: config.keep,
           bufferSpans: config.keepBufferSpans,
           downstream: batch,
           stats: keepStatsFromRuntime(),
         }),
-        batch,
-      ]
-    : [batch];
+      );
+    spanProcessors.push(batch);
+  }
+  if (router) spanProcessors.push(router);
   // Static resource only: no detectors, so nothing calls a cloud metadata endpoint or reads host
   // details (ADR 0015 section 8). `resourceFromAttributes` does not read OTEL_RESOURCE_ATTRIBUTES.
   // Sampler and limits are explicit too: the SDK would otherwise build them from OTEL_TRACES_SAMPLER
@@ -560,10 +590,16 @@ export async function initTelemetry(
   return {
     enabled: true,
     attachStats,
+    attachTenantExporters: (source) => router?.attach(source),
     // Never throws and never waits longer than the bound: a failed final flush is already counted.
     shutdown: () =>
       Promise.race([
-        provider.shutdown().catch(() => undefined),
+        provider
+          .shutdown()
+          .catch(() => undefined)
+          .then(() =>
+            tenantMode && !init.outbound ? dispatcher.close().catch(() => undefined) : undefined,
+          ),
         new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS).unref()),
       ]),
   };

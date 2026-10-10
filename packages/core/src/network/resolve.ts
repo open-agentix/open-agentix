@@ -192,7 +192,10 @@ export function resolveRoute(
   }
 
   // 3. No plain http for traffic that carries keys or tenant data (outside loopback/private-allow).
-  const tlsOnly = TLS_ONLY_PURPOSES.has(purpose) || (purpose === 'mcp' && origin === 'tenant');
+  // Tenant-supplied MCP servers and tenant-owned telemetry exporters (ADR 0015 S10) are TLS-only.
+  const tlsOnly =
+    TLS_ONLY_PURPOSES.has(purpose) ||
+    ((purpose === 'mcp' || purpose === 'telemetry') && origin === 'tenant');
   const plain =
     target.scheme === 'http' ||
     target.scheme === 'ws' ||

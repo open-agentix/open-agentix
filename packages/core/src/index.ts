@@ -16,6 +16,7 @@ export * from './agents/handover.js';
 export * from './policy/engine.js';
 export * from './control/controller.js';
 export * from './redact.js';
+export * from './pii.js';
 export * from './secret-patterns.js';
 export * from './invisible-text.js';
 export * from './context-guard.js';

@@ -141,7 +141,12 @@ function portOf(u: URL): number | null {
 
 /** Endpoints a stored connection (`mcp` streamable HTTP server or `model` provider) contacts. */
 export function connectionEndpoints(kind: string, name: string, config: unknown): AirgapEndpoint[] {
-  const cfg = (config ?? {}) as { transport?: string; url?: string; egress?: unknown };
+  const cfg = (config ?? {}) as {
+    transport?: string;
+    url?: string;
+    endpoint?: unknown;
+    egress?: unknown;
+  };
   if (kind === 'mcp') {
     if (cfg.transport !== 'streamable-http') return [];
     const out: AirgapEndpoint[] = [];
@@ -169,6 +174,10 @@ export function connectionEndpoints(kind: string, name: string, config: unknown)
     }));
   }
   if (kind === 'model') return providerEndpoints(config, `model connection "${name}"`);
+  if (kind === 'telemetry')
+    return cfg.endpoint
+      ? [{ purpose: `telemetry connection "${name}"`, url: String(cfg.endpoint) }]
+      : [];
   return [];
 }
 

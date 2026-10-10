@@ -5,6 +5,7 @@ export * from './metrics.js';
 export * from './telemetry.js';
 export * from './db/client.js';
 export * from './services/index.js';
+export { createTenantExporterSource } from './services/telemetry-exporters.js';
 export {
   buildApp,
   routeIndex,

@@ -7,7 +7,7 @@ import {
   ProtobufTraceSerializer,
   type ISerializer,
 } from '@opentelemetry/otlp-transformer';
-import type { CompiledNetwork, SecretResolver } from '@openagentix/core';
+import type { CompiledNetwork, RouteScope, SecretResolver } from '@openagentix/core';
 import {
   createOutboundDispatcher,
   findOaxError,
@@ -48,6 +48,12 @@ export interface DispatcherExporterOptions {
   headers?: Record<string, string> | undefined;
   compression: 'none' | 'gzip';
   timeoutMs: number;
+  /**
+   * Route scope of every request. A tenant-owned exporter (slice S10) sets `origin: 'tenant'`:
+   * the destination must be public by name and by every resolved address (pinned at connect time),
+   * TLS only, and the tenant's own deny rules and proxy choices apply.
+   */
+  scope?: RouteScope | undefined;
 }
 
 /** A failure the guarded wrapper can classify without ever seeing a message. */
@@ -130,7 +136,11 @@ export class DispatcherSpanExporter implements SpanExporter {
       const res = await this.opts.dispatcher.fetch(
         this.opts.url,
         { method: 'POST', headers, body: Buffer.from(body) },
-        { purpose: 'telemetry', timeoutMs: this.opts.timeoutMs },
+        {
+          purpose: 'telemetry',
+          timeoutMs: this.opts.timeoutMs,
+          ...(this.opts.scope ? { scope: this.opts.scope } : {}),
+        },
       );
       // The body is never read: a collector answers with an empty or tiny message.
       void res.body?.cancel().catch(() => undefined);

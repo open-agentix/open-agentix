@@ -30,6 +30,14 @@ import { findInlineSecrets, secretReferences } from './secrets';
 import { ToolAccessSummary, ToolProfilesEditor } from './ToolProfiles';
 import { ToolsDialog } from './ToolSnapshots';
 
+/** A tenant-owned OTLP exporter (ADR 0015 S10); secrets only as references, content off by default. */
+const TELEMETRY_EXAMPLE = `{
+  "endpoint": "",
+  "protocol": "http/protobuf",
+  "clearance": "internal",
+  "content": "off"
+}`;
+
 const EXAMPLE = `{
   "transport": "streamable-http",
   "url": "https://mcp.example.internal/mcp",
@@ -208,7 +216,7 @@ function ConnectionDialog({
   const existing = editing && editing !== 'new' ? editing : null;
   const can = useCan();
   const [name, setName] = useState('');
-  const [kind, setKind] = useState<'mcp' | 'model'>('mcp');
+  const [kind, setKind] = useState<'mcp' | 'model' | 'telemetry'>('mcp');
   const [provider, setProvider] = useState<(typeof MODEL_PROVIDERS)[number]>('anthropic');
   const [scope, setScope] = useState<'tenant' | 'platform'>('tenant');
   const [config, setConfig] = useState(EXAMPLE);
@@ -324,14 +332,21 @@ function ConnectionDialog({
             label={t('connections.kind')}
             value={kind}
             onChange={(e) => {
-              const next = e.target.value as 'mcp' | 'model';
+              const next = e.target.value as 'mcp' | 'model' | 'telemetry';
               setKind(next);
               setProposals(null);
-              setConfig(next === 'mcp' ? EXAMPLE : modelExample(provider));
+              setConfig(
+                next === 'mcp'
+                  ? EXAMPLE
+                  : next === 'telemetry'
+                    ? TELEMETRY_EXAMPLE
+                    : modelExample(provider),
+              );
             }}
           >
             <option value="mcp">{t('connections.kinds.mcp')}</option>
             <option value="model">{t('connections.kinds.model')}</option>
+            <option value="telemetry">{t('connections.kinds.telemetry')}</option>
           </SelectField>
         ) : null}
         {!existing && kind === 'model' ? (
