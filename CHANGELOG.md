@@ -382,6 +382,9 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Changed
 
+- Docs: the README, `GOVERNANCE.md` and `CONTRIBUTING.md` now describe how changes are really
+  reviewed (agent-authored pull requests, independent review agent, no guarantee of a human read
+  before merge) and add a "How changes are reviewed" section.
 - **Telemetry**: the worker's `oax.run` span carries `oax.run.id` (was `oax.run_id`) and
   `oax.tenant.id`. The default OTLP protocol is now `http/protobuf` (was JSON); set
   `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` to keep the old wire format. **Breaking:**
