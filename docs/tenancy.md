@@ -176,7 +176,13 @@ authoritative, so upgrading changes nobody's access.
   shape, role, date) makes the whole entry a cache miss, never a partial grant list. A binding with
   an expiry therefore still applies until it expires after a round trip through Valkey. Without
   this the resolver (which treats a non-`Date` expiry as expired) would silently drop every
-  expiring binding, `pentest` included.
+  expiring binding, `pentest` included. An entry must also be consistent (home node, root and path
+  agree) and, with `reviveGrants(value, { userId, homeTenantId })`, belong to the user it is read
+  for; the S2 cache passes the owner, so an entry under a wrong key is a miss, never another
+  user's grants. Neither the codec nor the cache shortens the revocation window: a cached entry
+  lives at most `min(OAX_AUTH_CACHE_TTL_SECONDS, token lifetime)` unless it is deleted
+  (`invalidateUserTokens`); revocations by the trigger or the reconcile do not delete it yet (S2
+  adds the authz epoch, ADR 0014 section 6.1).
 - **`loadRawGrants` uses one connection (#217)**: the node row and the three grant lists come from a
   single statement, so a principal build holds at most one pool connection and reads the home node
   and the grants from the same snapshot. Expiries are read as epoch milliseconds, rounded down: a
