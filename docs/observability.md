@@ -107,8 +107,29 @@ registered and no socket is opened.
   (`oax_otel_spans_dropped_total`); a failed export counts in
   `oax_otel_export_failures_total{reason}` (`timeout`, `network`, `http`, `other`) and is logged at
   most once a minute with the reason only. Shutdown waits at most 5 seconds.
-- **Air-gapped mode** is unchanged: the endpoint must be on `OAX_AIRGAPPED_ALLOW`. Routing the
-  exporter through the outbound dispatcher (proxies, trust bundles, client certificates) is slice S7.
+- **Through the outbound dispatcher.** The exporter does not open sockets itself: it serialises the
+  spans (OTLP protobuf or JSON) and posts them with `OutboundDispatcher.fetch` and the purpose
+  `telemetry` (the network configuration, [ADR 0011](adr/0011-outbound-network-proxies-and-private-endpoints.md)). Routes, proxies, trust bundles and
+  client certificates (mTLS) of the network file apply, a `deny` route and the cloud metadata
+  addresses are refused, a redirect is an error (it is never followed), the connect, header and body
+  times and the total time are bounded by `OAX_OTEL_EXPORT_TIMEOUT_MS`, and the response size is
+  limited to 256 KiB (the body is not read). TLS verification is always on, and start-up fails with
+  `NODE_TLS_REJECT_UNAUTHORIZED=0`. Route a collector with an `mTLS` route such as
+  `{ "match": { "hosts": ["otel.internal.example"], "purposes": ["telemetry"] }, "via": "direct", "clientCertificate": "otel" }`;
+  the secrets the network file references are loaded once at start-up. The route is resolved at
+  start-up, so a denied or unusable destination refuses start-up (`egress_denied`,
+  `network_secret_unavailable`) instead of failing every export later. The destination is checked
+  by name and literal address like any platform destination; there is no DNS pinning (an internal
+  collector normally has a private address). Nothing is retried: a failed batch is dropped and
+  counted. At most two requests are in flight; further batches fail at once.
+  `OTEL_EXPORTER_OTLP_COMPRESSION` is `none` (default) or `gzip`.
+- **Air-gapped mode** fails closed *before* anything is created: with `OAX_AIRGAPPED=true` the
+  endpoint must be on `OAX_AIRGAPPED_ALLOW` (host and port), otherwise start-up fails with
+  `airgap_violation` before the header secret is resolved, before a dispatcher or exporter exists and
+  before an SDK provider is registered. The process entry points (`api`, `worker`) activate the
+  air-gapped configuration first and hand the policy to `initTelemetry`. Without an endpoint nothing
+  is created at all (no provider, no socket), so a full air-gapped scenario ends with no blocked
+  attempt. The network guard and the dispatcher's own allowlist rule apply on top.
 
 ## One trace per run
 

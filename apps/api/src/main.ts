@@ -1,9 +1,14 @@
 import { loadConfig } from './config.js';
 import { createControlNode } from './bootstrap.js';
+import { activateAirgap } from './airgap.js';
 import { initTelemetry } from './telemetry.js';
 
 const config = loadConfig();
+// The air-gapped check runs before the exporter (and its header secret) exists (#220); the
+// context activates the same configuration again once the exporter is up.
+const egress = activateAirgap(config);
 const telemetry = await initTelemetry(config.otel, {
+  egress,
   warn: (fields, message) =>
     console.warn(JSON.stringify({ level: 'warn', ...fields, msg: message })),
 });

@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **The OTLP trace exporter now sends through the outbound dispatcher** (ADR 0015 S7, #212): purpose
+  `telemetry`, so routes, proxies, trust bundles, client certificates (mTLS), the air-gapped allowlist and
+  the cloud metadata veto apply; redirects are never followed and request time and response size are
+  bounded. The route is resolved at start-up. In air-gapped mode a non-allowlisted endpoint now refuses
+  start-up before the header secret is resolved and before any exporter exists (#220). The stock OTLP
+  exporter packages are replaced by a minimal sender (no retries; failed batches are dropped and counted);
+  `OTEL_EXPORTER_OTLP_COMPRESSION` (`none`, `gzip`) is read by the configuration. Nothing changes without
+  `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
 ### Changed
 
 - **Publishing against an HTTP MCP connection needs an approved tool snapshot** (ADR 0016 S3): refresh

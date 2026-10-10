@@ -1,4 +1,10 @@
-import { createContext, createLogger, initTelemetry, loadConfig } from '@openagentix/api';
+import {
+  activateAirgap,
+  createContext,
+  createLogger,
+  initTelemetry,
+  loadConfig,
+} from '@openagentix/api';
 import { demoServerFactories, inMemoryServers } from '@openagentix/mcp';
 import { ContainerRunner } from '@openagentix/runners';
 import { buildIsolation, createKubernetesJobRunner } from './isolation.js';
@@ -11,7 +17,11 @@ import { Worker } from './worker.js';
 
 const config = loadConfig();
 const logger = createLogger(config.logLevel, 'openagentix-worker');
+// The air-gapped check runs before the exporter (and its header secret) exists (#220); the
+// context activates the same configuration again once the exporter is up.
+const egress = activateAirgap(config);
 const telemetry = await initTelemetry(config.otel, {
+  egress,
   serviceName: process.env.OTEL_SERVICE_NAME ?? 'openagentix-worker',
   warn: (fields, message) => logger.warn(fields, message),
 });
