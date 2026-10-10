@@ -9263,7 +9263,7 @@ export interface paths {
                                     [key: string]: unknown;
                                 };
                             };
-                            /** @description MCP connections of the step with all secret references stripped */
+                            /** @description MCP connections of the step with all secret references stripped; HTTP servers carry no url or headers (relay) */
                             mcp: {
                                 [key: string]: unknown;
                             }[];
@@ -9272,9 +9272,10 @@ export interface paths {
                                 tenantServers: string[];
                                 allowlist: string[];
                             };
-                            /** @description tenant-defined streamable-http servers of the step (ADR 0016) */
+                            /** @description streamable-http servers of the step are reached through the control-node MCP relay (ADR 0016 section 6) */
                             http?: {
-                                tenantServers: string[];
+                                /** @enum {boolean} */
+                                relay: true;
                             };
                             /** @description pinned tool definitions of the step's HTTP MCP servers: grants and acceptable digests (ADR 0016 section 5) */
                             toolPins?: {
@@ -9639,9 +9640,6 @@ export interface paths {
                             connections: {
                                 server: string;
                                 env?: {
-                                    [key: string]: string;
-                                };
-                                headers?: {
                                     [key: string]: string;
                                 };
                             }[];
@@ -10107,6 +10105,173 @@ export interface paths {
                 };
                 /** @description Default Response */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/worker/runs/{id}/mcp/{server}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run node: one JSON-RPC message for an HTTP MCP server, relayed by the control node
+         * @description The node never connects to the server and never holds its credentials. Allowed: `initialize`, `ping`, `tools/list`, `tools/call` and the notifications `notifications/initialized` and `notifications/cancelled`. `tools/call` is decided by the policy gate again, needs a granted approval where the decision says so, is checked against the pinned tool definitions and leaves through the same outbound dispatcher as an in-process call. Sampling, elicitation and roots are not relayed (`mcp_capability_unsupported`). A revoked or expired session, a server the step has no grant on, a connection of another tenant and a foreign run answer alike (404). Limits per session: concurrency, calls per minute, request and result size, call timeout.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    /** @description name of an HTTP MCP connection of the step */
+                    server: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        jsonrpc: "2.0";
+                        /** @description absent for notifications */
+                        id?: string | number;
+                        /** @description initialize, ping, tools/list, tools/call, notifications/initialized, notifications/cancelled */
+                        method: string;
+                        params?: {
+                            [key: string]: unknown;
+                        };
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description JSON-RPC 2.0 response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            jsonrpc: "2.0";
+                            id: string | number;
+                            result?: unknown;
+                            error?: {
+                                code: number;
+                                message: string;
+                                data?: {
+                                    oaxCode: string;
+                                };
+                            };
+                        } & {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };

@@ -556,14 +556,12 @@ export class CatalogService {
   ): Promise<{
     configs: McpServerConfig[];
     tenantStdio: string[];
-    tenantHttp: string[];
     mcpEgress: { server: string; egress: string[] }[];
   }> {
     const rows = (await this.connectionsForRun('mcp', scope, { fresh: true })).filter((c) =>
       servers.has(c.name),
     );
     const tenantStdio: string[] = [];
-    const tenantHttp: string[] = [];
     const mcpEgress: { server: string; egress: string[] }[] = [];
     for (const c of rows) {
       // ADR 0016 S2: what a stdio server may reach is decided here, from the stored connection, at
@@ -599,7 +597,6 @@ export class CatalogService {
       }
       if (!isTenantScope(c.scope)) continue;
       const transport = (c.config as { transport?: string } | null)?.transport;
-      if (transport === 'streamable-http') tenantHttp.push(c.name);
       if (transport !== 'stdio') continue;
       tenantStdio.push(c.name);
       const bad = findStdioViolations([c], this.ctx.config.mcp.stdioCommands)[0];
@@ -625,7 +622,6 @@ export class CatalogService {
     return {
       configs: rows.map((c) => McpServerConfigSchema.parse(c.config)),
       tenantStdio,
-      tenantHttp,
       mcpEgress,
     };
   }

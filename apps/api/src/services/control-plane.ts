@@ -381,23 +381,43 @@ export class ControlPlaneService {
     );
   }
 
+  /**
+   * The policy decision for a call, without audit entry and metric: the MCP relay re-evaluates the
+   * decision a node already received from the gate (ADR 0016 section 6) and records only what it
+   * adds. Same inputs, same rules as {@link decide}.
+   */
+  async evaluate(
+    runId: string,
+    agentId: string,
+    call: ToolCallRequest,
+    /** Calls of this tool the relay itself let through: a node may not have reported them. */
+    relayedCalls = 0,
+  ): Promise<PolicyDecision> {
+    const { definition, tenantId } = await this.definitionForRun(runId);
+    return this.evaluateIn(definition, tenantId, runId, agentId, call, relayedCalls);
+  }
+
+  /**
+   * Uses one granted approval for exactly this call (run, agent, tool and scrubbed arguments), once.
+   * Returns false when there is none: the relay then refuses a call whose decision needs approval.
+   */
+  async consumeApproval(runId: string, agentId: string, call: ToolCallRequest): Promise<boolean> {
+    const args = JSON.stringify(await this.nodes.scrub(runId, call.args));
+    const res = await this.ctx.db.execute(sql`
+      update approvals set consumed_at = ${this.ctx.now().toISOString()}::timestamptz
+      where id = (
+        select id from approvals
+        where run_id = ${runId} and agent_id = ${agentId}
+          and tool = ${`${call.server}/${call.tool}`} and status = 'approved'
+          and consumed_at is null and args = ${args}::jsonb
+        order by decided_at limit 1 for update skip locked)
+      returning id`);
+    return (res as unknown as { rows: unknown[] }).rows.length > 0;
+  }
+
   async decide(runId: string, agentId: string, call: ToolCallRequest): Promise<PolicyDecision> {
     const { definition, tenantId } = await this.definitionForRun(runId);
-    const agent = definition.agents.find((a) => a.id === agentId) ?? { id: agentId, tools: [] };
-    const counts = await this.ctx.db
-      .select({ name: runSteps.name, n: sql<number>`count(*)::int` })
-      .from(runSteps)
-      .where(
-        and(eq(runSteps.runId, runId), eq(runSteps.kind, 'tool_call'), eq(runSteps.status, 'ok')),
-      )
-      .groupBy(runSteps.name);
-    const decision = evaluateToolCall(call, {
-      definition,
-      agent,
-      toolAccess: (definition as PublishedDefinition).toolAccess,
-      bundles: await this.bundlesFor(definition, tenantId),
-      callCounts: new Map(counts.map((c) => [c.name, Number(c.n)])),
-    });
+    const decision = await this.evaluateIn(definition, tenantId, runId, agentId, call);
     this.ctx.metrics.policyDecisions.inc({ effect: decision.effect });
     await this.audit.append({
       actor: `agent:${definition.name}/${agentId}`,
@@ -411,6 +431,34 @@ export class ControlPlaneService {
       },
     });
     return decision;
+  }
+
+  private async evaluateIn(
+    definition: AgentDefinition,
+    tenantId: string,
+    runId: string,
+    agentId: string,
+    call: ToolCallRequest,
+    relayedCalls = 0,
+  ): Promise<PolicyDecision> {
+    const agent = definition.agents.find((a) => a.id === agentId) ?? { id: agentId, tools: [] };
+    const counts = await this.ctx.db
+      .select({ name: runSteps.name, n: sql<number>`count(*)::int` })
+      .from(runSteps)
+      .where(
+        and(eq(runSteps.runId, runId), eq(runSteps.kind, 'tool_call'), eq(runSteps.status, 'ok')),
+      )
+      .groupBy(runSteps.name);
+    const callCounts = new Map(counts.map((c) => [c.name, Number(c.n)]));
+    const key = `${call.server}/${call.tool}`;
+    if (relayedCalls > 0) callCounts.set(key, Math.max(callCounts.get(key) ?? 0, relayedCalls));
+    return evaluateToolCall(call, {
+      definition,
+      agent,
+      toolAccess: (definition as PublishedDefinition).toolAccess,
+      bundles: await this.bundlesFor(definition, tenantId),
+      callCounts,
+    });
   }
 
   /**

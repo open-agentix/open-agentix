@@ -255,34 +255,57 @@ export class ToolGateway {
     if (decision.effect === 'deny') return { status: 'denied', decision };
     if (decision.effect === 'require_approval' && !opts.approved)
       return { status: 'approval_required', decision };
-    let raw: ToolResult;
-    // A call never reaches a pinned server whose definitions changed, whatever the caller did before,
-    // nor a tool of it that was not in the verified (pinned) list.
-    const verified = await this.verify(call.server);
-    if (verified && !verified.some((t) => t.name === call.tool))
-      throw new OaxError(
-        'mcp_tools_changed',
-        `tool "${call.server}/${call.tool}" is not part of the approved tool definitions of MCP server "${call.server}"`,
-      );
+    return { status: 'ok', decision, ...(await this.execute(call, opts.signal)) };
+  }
+
+  /**
+   * The verified tool definitions of a server, raw (not guarded): for a pinned server the list that
+   * matched the pin, for any other the server's own. The control-node relay answers `tools/list`
+   * with it (ADR 0016 section 6); the verdict is taken once per session like for the model.
+   */
+  async serverTools(server: string): Promise<McpTool[]> {
     try {
+      return (await this.verify(server)) ?? (await (await this.connection(server)).listTools());
+    } catch (e) {
+      // Connect errors carry server text (an HTTP error body can echo the credential it was sent).
+      throw this.guardedError(e);
+    }
+  }
+
+  /**
+   * Runs a call that the policy gate already allowed (and, where needed, a human approved): tool
+   * pin verification, the call itself and the guard over its result. The one place a tool result
+   * is produced for inline runs, harness steps and the relay alike.
+   */
+  async execute(
+    call: ToolCallRequest,
+    signal?: AbortSignal,
+  ): Promise<{ result: ToolResult; guard?: GuardReport }> {
+    let raw: ToolResult;
+    try {
+      // A call never reaches a pinned server whose definitions changed, whatever the caller did
+      // before, nor a tool of it that was not in the verified (pinned) list.
+      const verified = await this.verify(call.server);
+      if (verified && !verified.some((t) => t.name === call.tool))
+        throw new OaxError(
+          'mcp_tools_changed',
+          `tool "${call.server}/${call.tool}" is not part of the approved tool definitions of MCP server "${call.server}"`,
+        );
       const conn = await this.connection(call.server);
-      raw = await conn.callTool(call.tool, call.args, opts.signal);
+      raw = await conn.callTool(call.tool, call.args, signal);
     } catch (e) {
       // The message of a failed call carries server text (a JSON-RPC error, a crash message) and
       // reaches the model like a result: the executor shows it, the harness gate returns it.
       throw this.guardedError(e);
     }
     const text = this.guard.text(raw.text);
-    if (raw.structured === undefined && isGuardReportEmpty(text.report))
-      return { status: 'ok', decision, result: raw };
+    if (raw.structured === undefined && isGuardReportEmpty(text.report)) return { result: raw };
     const structured = raw.structured === undefined ? undefined : this.guard.value(raw.structured);
     const report = text.report;
     if (structured) mergeGuardReports(report, structured.report);
     const result: ToolResult = { ...raw, text: text.text };
     if (structured) result.structured = structured.value;
-    return isGuardReportEmpty(report)
-      ? { status: 'ok', decision, result }
-      : { status: 'ok', decision, result, guard: report };
+    return isGuardReportEmpty(report) ? { result } : { result, guard: report };
   }
 
   /** The error of a failed call with its message guarded; content-bearing details are dropped. */

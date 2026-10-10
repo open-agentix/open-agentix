@@ -29,6 +29,17 @@ import type {
   StepInput,
 } from './types.js';
 
+/** Largest relay answer a node reads (the control node caps results far below this). */
+const MAX_RELAY_ANSWER_CHARS = 8 * 1024 * 1024;
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface HttpControlPlaneOptions {
@@ -146,6 +157,51 @@ export class HttpControlPlane implements ControlPlane, ModelProxyClient {
   /** Tells the control node that the tools of a pinned server differ from the pin (never throws). */
   async postToolsChanged(runId: string, report: ToolsChangedReport): Promise<void> {
     await this.request('POST', `/v1/worker/runs/${runId}/mcp-tools-changed`, report);
+  }
+
+  /**
+   * One JSON-RPC message of the node's MCP client for an HTTP MCP server, relayed by the control
+   * node (ADR 0016 section 6). Resolves with the JSON-RPC answer, `undefined` for a notification
+   * (HTTP 202). A refusal rejects with the platform error code the control node named; the answer
+   * is size-capped because the control node is the only party that can have produced it.
+   */
+  async relayMcp(
+    runId: string,
+    server: string,
+    message: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const res = await this.fetch(
+      `${this.opts.baseUrl.replace(/\/$/, '')}/v1/worker/runs/${encodeURIComponent(runId)}/mcp/${encodeURIComponent(server)}`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.opts.runToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(message),
+        ...(signal ? { signal } : {}),
+      },
+    );
+    if (res.status === 202) return undefined;
+    const text = await res.text();
+    if (text.length > MAX_RELAY_ANSWER_CHARS)
+      throw new OaxError('mcp_relay_failed', 'the MCP relay answer is too large');
+    if (!res.ok) {
+      const e = safeJson(text) as { error?: unknown; message?: unknown } | null;
+      const code =
+        typeof e?.error === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(e.error)
+          ? e.error
+          : 'mcp_relay_failed';
+      throw new OaxError(
+        code,
+        String(e?.message ?? `the MCP relay answered HTTP ${res.status}`).slice(0, 300),
+        {
+          status: res.status,
+        },
+      );
+    }
+    return safeJson(text);
   }
 
   async postHandoverResult(runId: string, result: StepHandoverResult): Promise<void> {

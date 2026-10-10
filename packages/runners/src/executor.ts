@@ -900,13 +900,15 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
       };
     }
     const err = e as Error;
+    // Recording is best effort: a run node's token cannot report a step without an agent (403), and
+    // that refusal must not replace the error code the caller needs (for example `mcp_tools_changed`).
     await step({
       kind: 'error',
       agentId: null,
       name: 'executor',
       status: 'error',
       output: { message: err.message },
-    });
+    }).catch(() => undefined);
     return {
       status: 'failed',
       outputs,

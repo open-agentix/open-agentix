@@ -33,8 +33,9 @@ export const StepHandoverSchema = z.strictObject({
   attempt: z.number().int().positive(),
   run: StepRunInfoSchema,
   /**
-   * MCP connections the step holds grants for, with all secret references stripped; values arrive
-   * through the credential broker.
+   * MCP connections the step holds grants for, with all secret references stripped; the values of
+   * stdio servers arrive through the credential broker, HTTP servers are reached through the relay
+   * and carry neither url nor headers.
    */
   mcp: z.array(McpServerConfigSchema),
   /**
@@ -50,12 +51,13 @@ export const StepHandoverSchema = z.strictObject({
     })
     .optional(),
   /**
-   * Which HTTP MCP servers of the step a tenant defined (ADR 0016 S1): the node applies the tenant
-   * destination rules to them and treats the others as operator configuration. Always sent by the
-   * control node; a handover without the field makes the node treat every HTTP server as tenant
-   * defined (fail closed).
+   * `relay: true` announces that every HTTP MCP server of the step is reached through the control
+   * node's relay (ADR 0016 section 6): the url, headers and secret references of those connections
+   * are not part of `mcp`. A node refuses a handover with HTTP servers and without this field (an
+   * older control node would also have handed out header secrets), and an older node rejects the
+   * field and fails closed.
    */
-  http: z.strictObject({ tenantServers: z.array(z.string()) }).optional(),
+  http: z.strictObject({ relay: z.literal(true) }).optional(),
   /**
    * Pinned tool definitions of the step's HTTP MCP servers (ADR 0016 section 5): per server, the
    * grants of the published version and every digest of the granted tools the run may accept. The

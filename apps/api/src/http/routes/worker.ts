@@ -8,6 +8,7 @@ import {
 } from '@openagentix/providers';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { bearerOf } from '../app.js';
 import { HttpError } from '../../errors.js';
@@ -36,6 +37,9 @@ import {
   StepHandoverResultBody,
   StepHandoverSchema,
   ToolsChangedBody,
+  McpRelayAnswer,
+  McpRelayMessage,
+  McpRelayParams,
 } from '../schemas.js';
 import type { ZApp } from '../zapp.js';
 
@@ -321,6 +325,8 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
     },
   );
 
+  registerMcpRelayRoute(app, deps);
+
   app.post(
     '/v1/worker/runs/:id/credentials',
     {
@@ -349,6 +355,88 @@ export function registerWorkerRoutes(app: ZApp, deps: Deps): void {
   );
 
   registerModelRoutes(app, deps);
+}
+
+/**
+ * The MCP relay for run nodes (ADR 0016 section 6). Own scope: a strict JSON parser (no duplicate
+ * keys, no prototype keys, bounded depth) and the relay's body limit apply here only. The route
+ * accepts the step-scoped run token and nothing else; a missing, forged or expired token and every refusal that could tell a node
+ * something about other runs, tenants or connections is the same 404 as an unknown server.
+ */
+function registerMcpRelayRoute(app: ZApp, deps: Deps): void {
+  const { ctx, services } = deps;
+  const limit = ctx.config.mcp.relay.maxRequestBytes;
+  app.addHook('onClose', async () => services.mcpRelay.close());
+  void app.register(async (scope) => {
+    // A node has `bodyReadMs` to deliver its body: the server has no request timeout of its own, and
+    // a trickle of bytes would otherwise hold a connection (and its parse buffer) forever.
+    scope.addHook('onRequest', async (req) => {
+      const timer = setTimeout(() => {
+        if (!req.raw.complete) req.raw.destroy();
+      }, ctx.config.mcp.relay.bodyReadMs);
+      timer.unref();
+      req.raw.once('end', () => clearTimeout(timer));
+      req.raw.once('close', () => clearTimeout(timer));
+    });
+    scope.removeAllContentTypeParsers();
+    scope.addContentTypeParser(
+      'application/json',
+      { parseAs: 'string', bodyLimit: limit },
+      (_req, body, done) => {
+        try {
+          done(null, parseStrictJson(String(body)));
+        } catch {
+          done(Object.assign(new Error('the request body is not valid JSON'), { statusCode: 400 }));
+        }
+      },
+    );
+    const typed = scope.withTypeProvider<ZodTypeProvider>();
+    typed.post(
+      '/v1/worker/runs/:id/mcp/:server',
+      {
+        config: { access: 'run-token', relay: true },
+        bodyLimit: limit,
+        schema: {
+          tags,
+          summary:
+            'Run node: one JSON-RPC message for an HTTP MCP server, relayed by the control node',
+          description:
+            'The node never connects to the server and never holds its credentials. Allowed: `initialize`, `ping`, `tools/list`, `tools/call` and the notifications `notifications/initialized` and `notifications/cancelled`. `tools/call` is decided by the policy gate again, needs a granted approval where the decision says so, is checked against the pinned tool definitions and leaves through the same outbound dispatcher as an in-process call. Sampling, elicitation and roots are not relayed (`mcp_capability_unsupported`). A revoked or expired session, a server the step has no grant on, a connection of another tenant and a foreign run answer alike (404). Limits per session: concurrency, calls per minute, request and result size, call timeout.',
+          security: sec,
+          params: McpRelayParams,
+          body: McpRelayMessage,
+          response: {
+            200: McpRelayAnswer,
+            202: z.null(),
+            400: ErrorSchema,
+            401: ErrorSchema,
+            404: ErrorSchema,
+            413: ErrorSchema,
+            429: ErrorSchema,
+            503: ErrorSchema,
+          },
+        },
+      },
+      async (req, reply) => {
+        reply.header('cache-control', 'no-store');
+        const gone = new AbortController();
+        reply.raw.once('close', () => {
+          if (!reply.raw.writableFinished) gone.abort('client_abort');
+        });
+        const answer = await services.mcpRelay.handle({
+          // the onRequest hook verified the token's signature and expiry; the service the rest
+          token: bearerOf(req) ?? '',
+          runId: req.params.id,
+          server: req.params.server,
+          body: req.body,
+          traceparent: inbound(req),
+          signal: gone.signal,
+        });
+        if (answer.status === 202) return reply.status(202).send(undefined as never);
+        return answer.body as z.infer<typeof McpRelayAnswer>;
+      },
+    );
+  });
 }
 
 /** Writes Server-Sent Events to a hijacked reply; never throws, never writes after close. */

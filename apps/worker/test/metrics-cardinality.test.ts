@@ -144,6 +144,22 @@ const ALLOWED: Record<string, Record<string, Set<string> | RegExp>> = {
   mcp_stdio_violations: {},
   mcp_stdio_refused_total: { code: slug },
   mcp_tools_changed_total: {},
+  mcp_relay_requests_total: {
+    method: oneOf('initialize', 'tools_list', 'tools_call', 'other'),
+    outcome: oneOf(
+      'ok',
+      'refused',
+      'denied',
+      'approval_required',
+      'tools_changed',
+      'unsupported',
+      'rate_limited',
+      'busy',
+      'timeout',
+      'error',
+    ),
+  },
+  mcp_relay_sessions: {},
   role_bindings_reconcile_fixes_total: { kind: slug, trigger: slug },
   role_bindings_reconcile_runs_total: { trigger: slug, outcome: slug },
 };

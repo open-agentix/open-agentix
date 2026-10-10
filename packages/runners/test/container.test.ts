@@ -332,7 +332,8 @@ describe('startNode: lifecycle', () => {
     expect(e.calls[1]!.path).toContain(`name=oax-node-${NODE}`);
     // attach happens between create and start, so the node cannot miss its token
     expect(e.attached).toEqual([`/containers/${CID}/attach?stream=1&stdin=1`]);
-    expect(e.stdin).toEqual(['oaxrt.payload.signature\n']); // written once, then EOF
+    // written once, then EOF: the token and the bundle marker, no account without egress
+    expect(e.stdin).toEqual(['oaxrt.payload.signature\noax-bundle:v3\n\n']);
     // the token is nowhere in what the engine can show through inspect
     for (const call of e.calls) expect(String(call.body ?? '')).not.toContain('oaxrt.');
     const waiting = handle.wait();
@@ -392,7 +393,7 @@ describe('startNode: lifecycle', () => {
     const [lines] = e.stdin as string[];
     const [token, marker, proxyLine] = lines!.split('\n');
     expect(token).toBe('oaxrt.payload.signature');
-    expect(marker).toBe('oax-bundle:v2');
+    expect(marker).toBe('oax-bundle:v3');
     const u = new URL(proxyLine!);
     expect(decodeURIComponent(u.username)).toBe(NODE);
     const claims = verifyEgressGrant(GRANT_SECRET, NODE, decodeURIComponent(u.password));
@@ -429,7 +430,7 @@ describe('startNode: lifecycle', () => {
     const e = fakeEngine();
     const h = await runner(e, withEgress).startNode(spec());
     await new Promise((r) => setTimeout(r, 10));
-    expect(e.stdin).toEqual(['oaxrt.payload.signature\n']);
+    expect(e.stdin).toEqual(['oaxrt.payload.signature\noax-bundle:v3\n\n']);
     await h.stop('step_end');
   });
 });
@@ -716,7 +717,7 @@ describe('per-server egress grants for stdio MCP servers (ADR 0016 S2)', () => {
       ],
     });
     expect(token).toBe('oaxrt.payload.signature');
-    expect(marker).toBe('oax-bundle:v2');
+    expect(marker).toBe('oax-bundle:v3');
     expect(step).toBe(''); // no step egress: no step account
     const parsed = rest.filter(Boolean).map((l) => {
       const [name, url] = l.split(' ') as [string, string];
@@ -752,7 +753,13 @@ describe('per-server egress grants for stdio MCP servers (ADR 0016 S2)', () => {
   });
 
   it('a server without egress is not listed: no grant, no proxy line', async () => {
-    expect(await lines({ egress: [], mcpEgress: [] })).toEqual(['oaxrt.payload.signature', '']); // bare token, no marker
+    // the marker is always there (an older node must fail closed), but no account line
+    expect(await lines({ egress: [], mcpEgress: [] })).toEqual([
+      'oaxrt.payload.signature',
+      'oax-bundle:v3',
+      '',
+      '',
+    ]);
   });
 
   it('fails closed before anything is created', async () => {

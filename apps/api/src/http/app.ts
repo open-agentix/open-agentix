@@ -24,7 +24,7 @@ import {
 } from 'fastify-type-provider-zod';
 import type { AppContext } from '../context.js';
 import { LOG_REDACT_PATHS } from '../context.js';
-import { HttpError, forbidden, registerErrorHandler } from '../errors.js';
+import { HttpError, forbidden, mcpRelayRefusal, registerErrorHandler } from '../errors.js';
 import type { Services } from '../services/index.js';
 import { VERSION } from '../version.js';
 import { verifyStreamToken } from '../auth/stream-token.js';
@@ -53,6 +53,8 @@ declare module 'fastify' {
     access?: RouteAccess;
     /** Accept a short-lived stream token in `?access_token=` (EventSource cannot set headers). */
     streamToken?: boolean;
+    /** MCP relay route: a bad run token is refused like an unknown server, not with a 401. */
+    relay?: boolean;
   }
   interface FastifyRequest {
     principal?: Principal;
@@ -247,6 +249,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       try {
         verifyRunToken(ctx.config.runToken.secret, token ?? '', ctx.now().getTime());
       } catch (e) {
+        if (req.routeOptions.config?.relay) throw mcpRelayRefusal();
         throw new HttpError(401, (e as OaxError).code, 'valid run token required');
       }
       return;

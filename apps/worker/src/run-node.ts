@@ -19,6 +19,7 @@ import {
   stdioError,
   type InMemoryTransportFactory,
   type McpServerConfig,
+  type RelayPost,
 } from '@openagentix/mcp';
 import { ProviderRegistry, type ModelProvider } from '@openagentix/providers';
 import {
@@ -225,14 +226,30 @@ async function readBundle(
 }
 
 /**
- * Who defined each HTTP MCP server of the step. Without the `http` field every server counts as
- * tenant defined (fail closed).
+ * ADR 0016 section 6: a node reaches HTTP MCP servers only through the control node's relay, which
+ * the handover announces. A handover with HTTP servers and without the announcement comes from a
+ * control node that predates the relay (it would also have handed out header secrets): refuse it.
  */
-export function httpOriginFor(
-  handover: Pick<StepHandover, 'http'>,
-): (server: string) => 'platform' | 'tenant' {
-  const tenant = handover.http ? new Set(handover.http.tenantServers) : undefined;
-  return (server) => (tenant && !tenant.has(server) ? 'platform' : 'tenant');
+export function assertRelayAnnounced(handover: Pick<StepHandover, 'mcp' | 'http'>): void {
+  if (handover.mcp.some((c) => c.transport === 'streamable-http') && handover.http?.relay !== true)
+    throw new OaxError(
+      'run_node_invalid',
+      'the control node did not announce the MCP relay for the HTTP servers of this step',
+    );
+}
+
+/**
+ * The node's side of the relay: posts one JSON-RPC message of the MCP client to the control node.
+ * Whatever comes back must be a JSON-RPC object; anything else fails that request at once.
+ */
+export function relayPostFor(control: HttpControlPlane, runId: string): RelayPost {
+  return async (server, message, signal) => {
+    const answer = await control.relayMcp(runId, server, message, signal);
+    if (answer === undefined) return undefined;
+    if (!answer || typeof answer !== 'object' || Array.isArray(answer))
+      throw new OaxError('mcp_relay_failed', 'the MCP relay answered with an unexpected body');
+    return answer as NonNullable<Awaited<ReturnType<RelayPost>>>;
+  };
 }
 
 /** Proxy variables of one process, in the spellings the common HTTP stacks read. */
@@ -244,8 +261,9 @@ const PROXY_VARIABLES = /^(https?_proxy|all_proxy|ftp_proxy|socks_proxy|no_proxy
 
 /**
  * Merges the broker's values into the MCP connections of the step: stdio servers get their
- * `env` values plus the step's declared credentials, HTTP servers their header values. Secret
- * references were stripped by the control node already, so no resolver is needed.
+ * `env` values plus the step's declared credentials. HTTP servers get nothing: the broker no
+ * longer carries header values, the relay uses them on the control node (ADR 0016 section 6).
+ * Secret references were stripped by the control node already, so no resolver is needed.
  *
  * Network access of a stdio server (ADR 0016 section 4.2): `proxyFor(server)` is that server's own
  * egress account, or `undefined` when it has none. Whatever the connection, the broker or the
@@ -266,8 +284,7 @@ export function mergeCredentials(
       for (const k of Object.keys(merged)) if (PROXY_VARIABLES.test(k)) delete merged[k];
       return { ...cfg, env: { ...merged, ...proxyEnvOf(proxyFor(cfg.name)) }, envSecrets: {} };
     }
-    if (cfg.transport === 'streamable-http')
-      return { ...cfg, headers: { ...cfg.headers, ...c?.headers }, headerSecrets: {} };
+    if (cfg.transport === 'streamable-http') return { ...cfg, headerSecrets: {} };
     return cfg;
   });
 }
@@ -551,9 +568,6 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
         opts,
         opts.env ?? process.env,
       );
-    // The step's account serves this process only (HTTP MCP servers until the relay of S4); stdio
-    // children get their own account from `serverProxies`, never this one.
-    const proxyEnv = proxyEnvOf(proxyUrl);
     // Everything this node holds in secret form is known to the guard: brokered credentials, the
     // step's run token. The model token never reaches the node process itself (harness only).
     const guard = contextGuardFromEnv(opts.env ?? process.env, [
@@ -562,11 +576,9 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
       ...(proxyUrl ? [proxyUrl] : []),
       ...serverProxies.values(),
       ...creds.credentials.map((c) => c.value),
-      ...creds.connections.flatMap((c) => [
-        ...Object.values(c.env ?? {}),
-        ...Object.values(c.headers ?? {}),
-      ]),
+      ...creds.connections.flatMap((c) => Object.values(c.env ?? {})),
     ]);
+    assertRelayAnnounced(handover);
     const stdioGuard = stdioGuardFor(handover, opts.resolveStdioPath, opts.stdioWritable);
     // Fail before any server starts, with the offending connection named.
     for (const cfg of handover.mcp) if (cfg.transport === 'stdio') stdioGuard(cfg);
@@ -574,12 +586,10 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
       mergeCredentials(handover.mcp, creds, (server) => serverProxies.get(server)),
       {
         secrets: new StaticSecretResolver({}),
-        env: proxyEnv,
         stdioGuard,
-        // Tenant-defined HTTP servers get the tenant destination rules; the node cannot resolve
-        // external names (the egress proxy does), so the DNS check is the proxy's (ADR 0016 4.5).
-        originFor: httpOriginFor(handover),
-        proxyChecksDestination: Boolean(proxyUrl),
+        // Every HTTP server goes through the control node's relay: the node holds no url, no
+        // header and no token for them, and the destination checks run there (ADR 0016 section 6).
+        relay: relayPostFor(control, env.runId),
         ...(opts.inMemoryMcp ? { inMemory: opts.inMemoryMcp } : {}),
       },
       guard,

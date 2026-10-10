@@ -20,6 +20,19 @@ export const BUDGET_LIMITS = set('tokens', 'usd', 'steps', 'tool_calls', 'timeou
 export const GUARD_SOURCES = set('input', 'tool_result', 'tool_error');
 export const GUARD_CLASSES = set('secret', 'invisible');
 export const NODE_REPORT_RESULTS = set('accepted', 'refused', 'dropped');
+export const RELAY_METHOD_LABELS = set('initialize', 'tools_list', 'tools_call', 'other');
+export const RELAY_OUTCOMES = set(
+  'ok',
+  'refused',
+  'denied',
+  'approval_required',
+  'tools_changed',
+  'unsupported',
+  'rate_limited',
+  'busy',
+  'timeout',
+  'error',
+);
 export const EVENT_KINDS = set('webhook', 'mail', 'kafka', 'cron');
 export const TRIGGER_KINDS = set('manual', 'webhook', 'mail', 'kafka', 'cron', 'demo');
 export const RUN_STATUS_LABELS = set(...RUN_STATUSES);
