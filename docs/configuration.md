@@ -326,6 +326,7 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 | `OAX_METRICS_TOKEN` | – (*secret*) | If set, `GET /metrics` (API and worker) requires `Authorization: Bearer <token>` (ServiceMonitor `bearerTokenSecret`). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | – | Collector base URL (`<endpoint>/v1/traces`); unset = no export. `https://`, or `http://` for loopback / with `OAX_OTEL_INSECURE`. No credentials, query or fragment in the URL. |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` | `http/protobuf` or `http/json`. |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` | `none` | `none` or `gzip` (request body). |
 | `OTEL_SERVICE_NAME` | `openagentix-api` / `openagentix-worker` | Service name in traces. |
 | `OAX_OTEL_RESOURCE_ATTRIBUTES` | – | Static `key=value,...` resource attributes (validated: lower-case dotted keys, no `service.name`, no `oax.tenant.*`, nothing secret-like; at most 32). |
 | `OAX_OTEL_HEADERS_SECRET` | – | Name of the secret that holds the exporter headers (`Name=value,Name2=value2`), resolved like any secret reference; never logged. |

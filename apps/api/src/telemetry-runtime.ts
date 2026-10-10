@@ -27,7 +27,7 @@ export interface TelemetryStats {
 
 export type InboundContextResult = 'ignored' | 'linked' | 'invalid';
 
-export type ExportFailureReason = 'timeout' | 'network' | 'http' | 'other';
+export type ExportFailureReason = 'timeout' | 'network' | 'http' | 'too_large' | 'denied' | 'other';
 
 export const NOOP_STATS: TelemetryStats = {
   attributesDropped: () => undefined,

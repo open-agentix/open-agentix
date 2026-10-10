@@ -21,6 +21,7 @@ export type KeepClass = (typeof KEEP_CLASSES)[number];
 export const OTEL_ENV_SHAPE = {
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
   OTEL_EXPORTER_OTLP_PROTOCOL: z.enum(['http/protobuf', 'http/json']).default('http/protobuf'),
+  OTEL_EXPORTER_OTLP_COMPRESSION: z.enum(['none', 'gzip']).default('none'),
   OTEL_SERVICE_NAME: z.string().optional(),
   OAX_OTEL_RESOURCE_ATTRIBUTES: z.string().optional(),
   OAX_OTEL_HEADERS_SECRET: z.string().optional(),
@@ -43,6 +44,7 @@ export const OTEL_ENV_SHAPE = {
 export interface OtelConfig {
   endpoint: string | undefined;
   protocol: 'http/protobuf' | 'http/json';
+  compression: 'none' | 'gzip';
   serviceName: string;
   resourceAttributes: Record<string, string>;
   /** Reference (never the value) of the secret that holds the exporter headers. */
@@ -66,6 +68,8 @@ export interface OtelConfig {
  * second configuration path next to ours. The SDK reads them implicitly (`otlp-exporter-base`),
  * merges headers with what the code passes and loads certificate files, so they are refused rather
  * than ignored: exactly one path (`OAX_OTEL_HEADERS_SECRET`, the network configuration) exists.
+ * The exporter no longer reads them (it is our own sender since slice S7), so refusing them is
+ * policy: a second, unreviewed configuration path must not appear to work.
  */
 const REFUSED: Record<string, string> = {};
 for (const [suffix, instead] of [
@@ -228,6 +232,7 @@ export function buildOtelConfig(
   return {
     endpoint,
     protocol: e.OTEL_EXPORTER_OTLP_PROTOCOL,
+    compression: e.OTEL_EXPORTER_OTLP_COMPRESSION,
     serviceName: e.OTEL_SERVICE_NAME || defaultServiceName,
     resourceAttributes: parseResourceAttributes(e.OAX_OTEL_RESOURCE_ATTRIBUTES),
     headersSecret: e.OAX_OTEL_HEADERS_SECRET?.trim() || undefined,

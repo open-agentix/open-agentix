@@ -1,7 +1,7 @@
 # ADR 0015: Observability with OpenTelemetry GenAI semantic conventions
 
 - Status: Proposed. Slices S1 to S5 are implemented (see "Implementation notes S2/S3/S4/S5"
-  below and [`observability.md`](../observability.md)); S6 is implemented (notes below); S7 to S10 are open.
+  below and [`observability.md`](../observability.md)); S6 and S7 are implemented (notes below); S8 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W3-5 (#37, "Observability completion: step, model and tool spans and the missing
   metrics"); RM-53 of the roadmap gap list; replaces the span list in the W3-5 acceptance
@@ -775,6 +775,31 @@ Decisions taken while implementing slice S6 (#211) where the text above left roo
   `oax_otel_keep_evicted_total{reason}` have closed label sets and are in the cardinality
   allowlist.
 - **Stored `traceparent`** for nodes still carries the sampled flag (`01`) whatever the decision.
+- No migration.
+
+## Implementation notes S7
+
+Decisions taken while implementing slice S7 (#212, with #220) where the text above left room:
+
+- **Minimal sender, not `nodeAgents`.** The pinned exporter (0.222) can take an agent factory, but
+  its transport follows none of the dispatcher's rules for redirects, response size and total time.
+  The exporter is therefore `DispatcherSpanExporter` (`apps/api/src/telemetry-transport.ts`): the
+  OpenTelemetry serializers (`@opentelemetry/otlp-transformer`) plus `dispatcher.fetch` with the
+  purpose `telemetry`. The stock OTLP exporter packages are no longer dependencies. The
+  guarded exporter, the batch processor and the counters are unchanged.
+- **Route resolved at start-up** (`dispatcher.plan`): a denied route, a metadata address or a missing
+  proxy/mTLS secret refuses start-up with a fixed message. Secrets referenced by the network file are
+  loaded once into a snapshot (the dispatcher reads secrets synchronously) and registered with the
+  guard. No DNS pinning: a collector usually sits at a private address.
+- **Air-gap order (#220).** `activateAirgap` runs in the entry points before `initTelemetry`; the
+  static check (`airgap_violation`) then runs before the header secret is resolved or any exporter
+  exists. It does not count as a blocked egress attempt (nothing was contacted).
+- **No retry.** The stock exporter retried up to five times within the timeout; the sender drops the
+  batch (counted in `oax_otel_export_failures_total`), which keeps the bound simple. At most two
+  requests are in flight. `OTEL_EXPORTER_OTLP_COMPRESSION` (`none`, `gzip`) is now parsed by the
+  configuration.
+- **Errors** leaving the sender are fixed shapes (name and code); the original error, which can name
+  the destination, is dropped. `gRPC` was not added (owner question 3 is open).
 - No migration.
 
 ## Open questions (owner decisions needed)
