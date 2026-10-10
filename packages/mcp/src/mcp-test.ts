@@ -90,6 +90,12 @@ export function categorizeMcpError(e: unknown): Pick<McpTestResult, 'category' |
     if (typeof code === 'string') {
       if (code === 'egress_denied' || code === 'mcp_egress_denied')
         return { category: 'egress_denied' };
+      if (
+        code === 'mcp_auth_required' ||
+        code === 'mcp_insufficient_scope' ||
+        code === 'mcp_resource_mismatch'
+      )
+        return { category: 'auth_failed' };
       if (code.startsWith('mcp_')) return { category: 'config_invalid' };
       if (code === 'proxy_connect_refused') return { category: 'proxy_refused' };
       if (code === 'connect_timeout') return { category: 'timeout' };

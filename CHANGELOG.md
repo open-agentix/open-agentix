@@ -8,6 +8,26 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **OAuth for HTTP MCP connections (ADR 0016 S6, #236)**: `auth` on streamable-HTTP connections
+  (`none | static | oauth`; absent means `static`), `oauth` with the client-credentials grant and a
+  pre-registered client (`private_key_jwt` or `client_secret_basic`). `oauth` or `none` together with an
+  `authorization` header is refused (`auth_conflict`). Discovery in specification order (WWW-Authenticate
+  `resource_metadata`, protected resource metadata with path then root, RFC 8414 and OpenID Connect
+  variants) through the outbound dispatcher: https only, DNS pinning, no redirects, 64 KiB, 5 s, JSON only;
+  the resource must equal the canonical URI, the metadata issuer the requested issuer; issuer and
+  endpoints are pinned per connection, pass the tenant destination checks and join the effective egress;
+  a change needs a new authorization. `resource` (RFC 8707) is sent on every token request; scopes come from
+  the profiles (`tools.<name>.scopes`). Renewal is single flight (process and PostgreSQL advisory lock),
+  rotated refresh tokens are stored atomically, `invalid_grant` sets `reauthorization_required`.
+  Revocation (RFC 7009) on disconnect, deletion and URL, client or issuer change. New routes
+  `GET /v1/connections/{id}/oauth`, `POST .../oauth/authorize`, `POST .../oauth/disconnect`; audit
+  `mcp.oauth.discovered | authorized | refreshed | refresh_failed | revoked | denied` (names and ids only);
+  metric `oax_mcp_oauth_refresh_total{outcome}`; migration `0027_mcp_oauth_client_credentials` (additive).
+  Tokens stay in the api and the trusted worker: the relay attaches them on the control node and run nodes
+  never receive them (the run-node canary now exercises a real token flow, #305). `client_secret_basic`
+  needs `auth.issuer` (the secret goes to the token endpoint the metadata names); a pinned issuer survives a
+  failed renewal; client-credentials connections never use refresh tokens. See
+  [docs/mcp.md](docs/mcp.md#oauth-for-http-mcp-connections).
 - **Tenant-owned telemetry exporters** (ADR 0015 S10, #215): the new connection type `telemetry`
   (ADR 0012) lets a tenant admin (`settings:write`) send a copy of its own tenant's spans to its own
   OTLP collector. Off unless the operator sets `OAX_OTEL_TENANT_EXPORTERS=allow`. Tenant scope only;

@@ -724,6 +724,16 @@ export const mcpOauthTokens = pgTable(
     refreshTokenEnc: text('refresh_token_enc'),
     expiresAt: ts('expires_at'),
     status: text('status').notNull().default('active'),
+    /** OAuth grant the tokens were obtained with (ADR 0016 section 7.2). */
+    grantType: text('grant_type').notNull().default('client_credentials'),
+    /**
+     * The authorization server endpoints pinned at the authorization (ADR 0016 section 7.3):
+     * `{ tokenEndpoint, revocationEndpoint?, authorizationEndpoint?, registrationEndpoint?,
+     * jwksUri? }`. A later difference requires a new authorization. URLs only, no secrets.
+     */
+    endpoints: jsonb('endpoints').$type<Record<string, string>>().notNull().default({}),
+    /** Closed code of the last failed refresh (never a server text). */
+    lastError: text('last_error'),
     authorizedBy: uuid('authorized_by'),
     authorizedAt: ts('authorized_at').notNull().defaultNow(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
@@ -736,6 +746,10 @@ export const mcpOauthTokens = pgTable(
     }).onDelete('cascade'),
     uniqueIndex('mcp_oauth_tokens_connection_version_uq').on(t.connectionId, t.credentialVersion),
     index('mcp_oauth_tokens_tenant_idx').on(t.tenantId, t.status),
+    check(
+      'mcp_oauth_tokens_grant',
+      sql`${t.grantType} in ('client_credentials', 'authorization_code')`,
+    ),
     check(
       'mcp_oauth_tokens_status',
       sql`${t.status} in ('active', 'refresh_failed', 'reauthorization_required', 'revoked')`,

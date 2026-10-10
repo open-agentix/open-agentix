@@ -6,6 +6,7 @@ import { processSecrets, type SecretRegistry } from './secret-registry.js';
 import { McpOauthClientStore, McpOauthTokenStore } from './token-store.js';
 
 export interface McpOauthStores {
+  registry: SecretRegistry;
   keys: KeyService;
   tokens: McpOauthTokenStore;
   clients: McpOauthClientStore;
@@ -22,6 +23,7 @@ export function createMcpOauth(
   const keys = new KeyService(ctx.db, kek, ctx.now);
   const tokens = new McpOauthTokenStore(ctx.db, keys, registry, ctx.now);
   return {
+    registry,
     keys,
     tokens,
     clients: new McpOauthClientStore(ctx.db, keys),
@@ -42,5 +44,6 @@ export {
   stringifyScrubbed,
 } from './scrub.js';
 export { canonicalResource } from './resource.js';
+export type { TokenRefresher } from './credentials.js';
 export { assertTokenShape } from './token-shape.js';
 export { RegistryGuard } from './telemetry-guard.js';

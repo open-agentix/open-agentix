@@ -12,3 +12,5 @@ export * from './http-policy.js';
 export * from './mcp-test.js';
 export * from './trace-context.js';
 export * from './relay.js';
+export * from './resource.js';
+export * from './oauth.js';

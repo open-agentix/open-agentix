@@ -10,7 +10,10 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerConfig } from './config.js';
+import { authKindOf } from './config.js';
 import { assertHttpConfig } from './http-policy.js';
+import { canonicalResource } from './resource.js';
+import type { McpTokenSource } from './oauth.js';
 import {
   MCP_PROTOCOL_VERSIONS,
   type McpPropagationPolicy,
@@ -92,6 +95,11 @@ export interface ConnectDeps {
    * for it, so a node holds no credential of an HTTP server and needs no egress for it.
    */
   relay?: RelayPost | undefined;
+  /**
+   * Token source of a server with `auth.kind: oauth` (ADR 0016 section 7.5), by server name. Only
+   * the trusted processes pass one; without it such a server fails closed with `mcp_auth_required`.
+   */
+  tokens?: ((server: string) => McpTokenSource | undefined) | undefined;
 }
 
 /** Slack on top of a connection's `timeoutMs` before the relay POST itself is cut off. */
@@ -108,11 +116,17 @@ type HttpConfig = Extract<McpServerConfig, { transport: 'streamable-http' }>;
  */
 export function createMcpFetch(
   cfg: HttpConfig,
-  deps: Pick<ConnectDeps, 'outbound' | 'originFor' | 'env' | 'proxyChecksDestination' | 'lookup'>,
+  deps: Pick<
+    ConnectDeps,
+    'outbound' | 'originFor' | 'env' | 'proxyChecksDestination' | 'lookup' | 'tokens'
+  >,
 ): (input: string | URL, init?: RequestInit) => Promise<Response> {
   const allowed = new URL(cfg.url).origin;
   const origin = deps.originFor?.(cfg.name) ?? 'tenant';
   const outbound = deps.outbound ?? sharedOutboundDispatcher(deps.env ?? process.env);
+  const oauth = authKindOf(cfg) === 'oauth';
+  const source = oauth ? deps.tokens?.(cfg.name) : undefined;
+  const resource = oauth ? canonicalResource(cfg.url) : undefined;
   return async (input, init) => {
     let target: URL;
     try {
@@ -125,12 +139,53 @@ export function createMcpFetch(
         'mcp_egress_denied',
         `MCP server "${cfg.name}": requests are limited to the origin of the connection url`,
       );
-    return outbound.fetch(target, init, {
+    let request = init;
+    let sent: string | undefined;
+    if (oauth) {
+      if (!source)
+        throw new OaxError(
+          'mcp_auth_required',
+          `MCP server "${cfg.name}": no credentials service is available for its OAuth token`,
+        );
+      // The token is requested per request (refresh happens behind the call) and is sent to
+      // the one resource it was issued for: the connection url may have changed meanwhile.
+      const { token, resource: issuedFor } = await source.accessToken();
+      if (issuedFor !== resource)
+        throw new OaxError(
+          'mcp_resource_mismatch',
+          `MCP server "${cfg.name}": the token was issued for another resource`,
+        );
+      const headers = new Headers(init?.headers);
+      headers.set('authorization', `Bearer ${token}`);
+      sent = token;
+      request = { ...init, headers };
+    }
+    const res = await outbound.fetch(target, request, {
       purpose: 'mcp',
       scope: { origin },
       ...(deps.proxyChecksDestination ? { proxyChecksDestination: true } : {}),
       ...(deps.lookup ? { pin: { lookup: deps.lookup } } : {}),
     });
+    if (oauth && res.status === 401) {
+      await res.body?.cancel().catch(() => undefined);
+      if (sent) source?.rejected?.(sent);
+      throw new OaxError(
+        'mcp_auth_required',
+        `MCP server "${cfg.name}" rejected the access token; the connection needs to be authorized again`,
+      );
+    }
+    if (
+      oauth &&
+      res.status === 403 &&
+      /error\s*=\s*"?insufficient_scope/i.test(res.headers.get('www-authenticate') ?? '')
+    ) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new OaxError(
+        'mcp_insufficient_scope',
+        `MCP server "${cfg.name}" needs more scopes than the connection was authorized for`,
+      );
+    }
+    return res;
   };
 }
 
@@ -156,7 +211,10 @@ export async function createTransport(cfg: McpServerConfig, deps: ConnectDeps): 
       // Stored connections that predate the rules fail closed here instead of being repaired.
       assertHttpConfig(cfg.name, cfg);
       const headers: Record<string, string> = { ...cfg.headers };
-      for (const [h, ref] of Object.entries(cfg.headerSecrets)) {
+      // `oauth` takes its credentials from the token source, `none` sends none; only `static`
+      // (and an absent `auth`) resolves header secrets.
+      const secretHeaders = authKindOf(cfg) === 'static' ? Object.entries(cfg.headerSecrets) : [];
+      for (const [h, ref] of secretHeaders) {
         const value = await deps.secrets.resolve(ref);
         // eslint-disable-next-line no-control-regex
         if (/[\u0000-\u0008\u000a-\u001f\u007f]/.test(value))

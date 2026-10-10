@@ -428,6 +428,18 @@ the platform refuses to use the stored client and marks the connection `reauthor
   over its quota loses its own values first). Audit, responses and streams are scrubbed with the values
   of the tenant only; logs, stdout and span attributes with the values that also pass the stricter
   tenant-less rule (long, high entropy, not UUID or digest shaped); see `docs/mcp.md`.
+- **Implementation notes (S6, #236).** Client credentials with a pre-registered client are in; the
+  authorization-code flow, CIMD and DCR are later slices. Authorization is an explicit administrator action
+  (`POST /v1/connections/{id}/oauth/authorize`): the issuer is chosen (or must be named when the resource
+  lists several) and pinned together with the endpoints in `mcp_oauth_tokens` (migration 0027). Renewal
+  re-fetches both metadata documents at most hourly and compares them with the pin; a difference sends no
+  request and sets `reauthorization_required`. A client-credentials token is renewed with a new
+  client-credentials grant; a stored refresh token is used with `refresh_token` and rotated in the same
+  transaction as the advisory lock. Deviations: `aud` of a client assertion is the endpoint it is sent to;
+  the query of an `oauth` connection URL is refused; a renewal that fails for a transient reason keeps the
+  old token until it expires (`mcp_auth_refresh_failed` afterwards); the audit code `endpoints_changed`
+  and `resource_metadata_origin` extend the list of `mcp.oauth.denied`. Grant revocation (ADR 0012) has no
+  caller on `main`; the revoke hook exists. See [docs/mcp.md](../mcp.md#oauth-for-http-mcp-connections).
 - **Revocation**: deleting or disabling a connection, revoking a grant (ADR 0012), rotating the
   client secret, changing the URL or issuer, and an admin's "disconnect" delete the stored tokens
   and call the authorization server's revocation endpoint (RFC 7009) when advertised (best effort,

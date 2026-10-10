@@ -354,7 +354,8 @@ platform stores. Nothing is stored in plaintext.
   from the run-node entry point (bare, subpath, `require` and dynamic imports) and fails if they
   reach this module. Expired, revoked or re-authorization-pending tokens, a moved URL, missing scopes
   and a destroyed tenant key fail closed (`mcp_auth_required`, `mcp_resource_mismatch`,
-  `mcp_insufficient_scope`). Refresh follows with the OAuth flows (S6).
+  `mcp_insufficient_scope`). A token that expires within a minute is renewed first (see
+  [OAuth for HTTP MCP connections](#oauth-for-http-mcp-connections)).
 - **Credential version.** Changing the connection URL to another canonical URI bumps
   `credential_version` and deletes the stored tokens in one transaction; writing a token locks the
   connection row and re-checks the version, so a write racing the bump cannot leave an orphan.
@@ -398,6 +399,193 @@ platform stores. Nothing is stored in plaintext.
 - **Where the KEK lives.** Keep the key file outside `OAX_SECRETS_DIR` (start-up refuses it there, also through symlinks or a link inside the directory that leads to it: the default secret resolver serves every file below it as a secret reference). Give it to the api and the worker only; the worker process reads it into
   memory, so keep key-holding workers on hosts or node pools that do not run untrusted run nodes (use
   the container or Kubernetes runner for those).
+
+## OAuth for HTTP MCP connections
+
+ADR 0016 section 7, slice S6. A `streamable-http` connection has an `auth` block: `none` (no
+credential), `static` (the `headerSecrets` of earlier versions; also the meaning of an absent `auth`) or
+`oauth`. This slice implements the **client credentials** grant with a **pre-registered** client. The
+authorization-code flow with PKCE, client ID metadata documents and dynamic client registration are
+later slices; the schema refuses them today.
+
+```jsonc
+{
+  "transport": "streamable-http",
+  "url": "https://mcp.example.com/mcp",
+  "auth": {
+    "kind": "oauth",
+    "grant": "client_credentials",
+    "client": {
+      "clientIdSecret": "acme.jira-client-id",       // secret references, never values
+      "clientAuth": "private_key_jwt",               // or "client_secret_basic"
+      "keySecret": "acme.jira-client-key",           // PEM: RSA, P-256 or Ed25519 (private_key_jwt)
+      "keyId": "k1"                                  // optional `kid`
+      // "clientSecretSecret": "acme.jira-client-secret"  (client_secret_basic)
+    },
+    "scopes": "from-profiles",                       // or an explicit list
+    "issuer": "https://auth.example.com"             // optional pin
+  },
+  "tools": { "get_issue": { "access": "read", "scopes": ["issues.read"] } },
+  "profiles": { "read": ["get_issue"] }
+}
+```
+
+**`client_secret_basic` needs `auth.issuer`.** The client secret is sent to the token endpoint that the
+authorization server metadata names, and the metadata is reached through the MCP server's own
+documents: without an operator-pinned issuer a hostile or hijacked MCP server could name a token server
+of its own and collect the secret. With `private_key_jwt` nothing reusable is sent: the assertion is
+signed for exactly the endpoint it is sent to (`aud`), so another server cannot replay it, and the
+issuer pin is optional (but still recommended).
+
+Rules checked when the connection is saved (`400`): `oauth` or `none` together with an `authorization`
+header, plain or secret-backed in any spelling, is `auth_conflict`; an `oauth` connection needs an
+`https` URL without a query (the resource identifier is scheme, host and path); the client block needs
+exactly the secret that its `clientAuth` uses, and `client_secret_basic` also an `auth.issuer`; the secret references follow the tenant prefix rules.
+
+### Authorize, status, disconnect
+
+| Route | Permission | Meaning |
+| --- | --- | --- |
+| `POST /v1/connections/{id}/oauth/authorize` | `connections:write` | Discovers the authorization server, pins it, requests a token. Body `{ "issuer"?: "https://..." }` (needed when the resource names several servers: `409 mcp_oauth_issuer_required` lists them). Rate limited like the connection test. |
+| `GET /v1/connections/{id}/oauth` | `connections:read` | Status, pinned issuer, scopes, expiry, last renewal error code, the authorization server hosts, `scopesWider`. Never a token. |
+| `POST /v1/connections/{id}/oauth/disconnect` | `connections:write` | Deletes the stored tokens and revokes them at the issuer. |
+
+Consent is explicit: runs never authorize a connection by themselves. A pin outlives a failed
+renewal: when a connection needs a new authorization and the resource now names a different server than
+the one pinned (by `auth.issuer`, or by the earlier authorization), `authorize` answers
+`409 mcp_oauth_issuer_required` and contacts nobody; an administrator confirms a move by naming the new
+issuer in the body (never possible against an `auth.issuer` in the configuration). A connection that was not
+authorized fails with `mcp_auth_required`.
+
+### Discovery (SSRF-safe)
+
+In specification order: an unauthenticated `initialize` (`purpose mcp`) that answers `401` with
+`WWW-Authenticate: Bearer resource_metadata="..."` and optionally `scope`; otherwise the protected
+resource metadata at `/.well-known/oauth-protected-resource/<path>` and then
+`/.well-known/oauth-protected-resource` (RFC 9728). Then, for the chosen issuer, RFC 8414 with path
+insertion, OpenID Connect discovery with path insertion and with path appending (the two root forms for an
+issuer without a path). A `404` moves to the next candidate; everything else (denial, redirect, size,
+time, wrong type) stops.
+
+Every request leaves through the outbound dispatcher ([ADR 0011](adr/0011-outbound-network-proxies-and-private-endpoints.md)):
+purpose `mcp` for the resource server and `identity` for authorization server metadata, token and
+revocation requests; the origin class of the connection decides the destination rules (tenant
+connections: https only, no private, loopback, link-local or metadata address in any spelling, DNS
+pinned at connect time, `redirect: error`). On top of that: the answer is cut at 64 KiB, the whole
+exchange at 5 s (token requests 10 s), only `application/json` objects are parsed (wrong types are
+refused, unknown members ignored) and error texts name a host, never a path, query or response body.
+
+Checks on what the documents say:
+
+- the `resource` of the protected resource metadata must equal the canonical URI of the connection
+  (`mcp_resource_mismatch`; host case and default port do not matter, a trailing slash does);
+- a `resource_metadata` URL from a challenge must be `https` and on the origin of the MCP server
+  (`mcp_resource_metadata_origin`);
+- `issuer` in the authorization server metadata must equal the issuer it was fetched for, character for
+  character (`mcp_issuer_mismatch`, the mix-up defence of RFC 8414 section 3.3); the issuer must be one
+  the resource names and, when `auth.issuer` is set, that one;
+- every endpoint in the metadata (token, revocation, authorization, registration, JWKS) must be `https` and
+  pass the tenant destination rules and the air-gapped allowlist (`egress_denied`), also those the
+  platform does not call today;
+- the server must support `client_credentials` and the configured client authentication method when it
+  publishes the lists (`mcp_oauth_unsupported`); RFC 9207's `iss` check is available as
+  `verifyIssuerParameter` for the authorization-code callback.
+
+Refusals are audited as `mcp.oauth.denied` with a closed `code` (`issuer_mismatch`, `resource_mismatch`,
+`resource_metadata_origin`, `endpoints_changed`, `egress_denied`).
+
+### Pinning
+
+The first successful authorization pins the **issuer** and the **endpoints** with the tokens
+(`mcp_oauth_tokens.issuer`, `endpoints`; migration `0027_mcp_oauth_client_credentials`). They become part of the
+connection's effective egress with purpose `identity`: the status shows their hosts, the air-gapped
+start-up check requires them (and `auth.issuer`) on `OAX_AIRGAPPED_ALLOW`. Before a token is renewed, the
+resource metadata and the authorization server metadata are fetched again (at most once an hour per
+connection and credential version) and compared with the pin (issuer, token endpoint and revocation
+endpoint: the endpoints the platform calls; the others are stored for display and the air-gapped check). If the resource names another issuer, or any
+pinned endpoint moved, **no request is sent**, the token becomes `reauthorization_required` and an
+administrator must authorize again (which revokes the old tokens at the old issuer). Changing the URL, the
+client block or `auth.issuer` of the connection is the same event: the credential version is bumped, the
+tokens are deleted in the same transaction and revoked afterwards. Changing only the scopes keeps the
+authorization (a server that wants more answers `insufficient_scope`: `mcp_insufficient_scope`).
+
+### Tokens and scopes
+
+- Every token request carries `grant_type`, `resource` (RFC 8707, the canonical URI, also when the server
+  does not advertise support) and `scope`. The client authenticates with `client_secret_basic` (id and
+  secret form-encoded before base64, RFC 6749 section 2.3.1) or with `private_key_jwt` (RFC 7523:
+  `iss` = `sub` = client id, `aud` = the token endpoint, 60 s lifetime, random `jti`, RS256, PS256, ES256
+  with P-256 or EdDSA by key type and what the server lists). Only `Bearer` tokens are accepted; DPoP and
+  other types are refused.
+- `scopes: "from-profiles"` requests the union of `tools.<name>.scopes` over the tools of the connection's
+  profiles; without a mapping the challenge `scope`, else the `scopes_supported` of the resource metadata.
+  An explicit list wins. The granted scopes are what the server returns (or what was requested). The
+  status flags `scopesWider` when they exceed what the profiles need.
+- A server-issued token (access and refresh) must satisfy the
+  [token shape rules](#stored-oauth-tokens-and-the-key-service) (length, alphabet, entropy, no
+  identifiers) and its `scope` must be valid scope tokens; otherwise the response is refused
+  (`mcp_oauth_token_rejected`) before anything is stored or registered with a redactor, so a hostile
+  server cannot make the redactors blank ordinary text (a host name, an error code) of the tenant. Client
+  secrets and minted assertions are registered with the redactors only if they have that shape too; a weak
+  secret stays protected by the run's guard only.
+- The token is attached by the **control node** (relay, connection test) or by the **trusted worker**
+  (in-process steps), per request, to the exact resource it was issued for; a connection whose URL changed
+  meanwhile gets `mcp_resource_mismatch` and no request. A run node never holds a token: the relay answers
+  it, with the token redacted from anything the server echoes. A `401` from the server marks the stored
+  token expired and fails the call with `mcp_auth_required`; a `403` with `insufficient_scope` fails with
+  `mcp_insufficient_scope`.
+
+### Renewal
+
+A token is renewed before use when it expires within 60 s, but never earlier than half of its
+lifetime (a 30 s token is renewed after 15 s). One renewal runs at a time per connection: a
+process-local single flight plus a PostgreSQL transaction-scoped advisory lock across replicas; a replica
+that waited for the lock re-reads the row and finds the new token. A client-credentials connection is always renewed with a
+new client-credentials grant (RFC 6749 section 4.4.3); a refresh token such a server may issue is ignored,
+so a lost rotated token can never force a manual re-authorization. For the authorization-code grant
+(later slice) a stored refresh token is used and a rotated one is written together with the new access
+token in one row update inside the lock's transaction (a failure before the commit leaves the previous
+pair untouched). The renewal only ever UPDATEs the row it read under the lock and never inserts, and every
+deletion of the tokens (disconnect, URL or client change) takes the same advisory lock, so a renewal can
+neither overlap a deletion nor bring the token back afterwards. Errors are reduced to the
+closed RFC 6749 error code; `error_description` is dropped.
+
+| Outcome | Stored status | Effect |
+| --- | --- | --- |
+| success | `active` | new token used |
+| `invalid_grant`, `invalid_client`, `unauthorized_client`, `invalid_target`, `unsupported_grant_type`, moved issuer or endpoints | `reauthorization_required` | calls fail closed with `mcp_auth_required` until an administrator authorizes again |
+| anything else (network, `5xx`, `temporarily_unavailable`) | `active` while the old token is valid, `refresh_failed` once it expired | the old token keeps being used until it expires; the next attempt waits 30 s; an expired token fails with `mcp_auth_refresh_failed` |
+
+Audit: `mcp.oauth.refreshed` / `mcp.oauth.refresh_failed` (connection and closed code). Metric:
+`oax_mcp_oauth_refresh_total{outcome}` (`ok`, `invalid_grant`, `reauthorization_required`, `failed`,
+`skipped`; no tenant or connection label).
+
+### Revocation
+
+RFC 7009 requests to the pinned revocation endpoint (access token and refresh token, client
+authenticated, through the dispatcher), best effort and audited as `mcp.oauth.revoked` with the reason
+(`disconnect`, `config_changed`, `connection_deleted`, `reauthorized`) and the remote result (`ok`,
+`failed`, `skipped` when the server publishes no endpoint). The local tokens are deleted whatever the
+remote result is. A central grant revocation (ADR 0012) has no caller on `main` yet; it will call the same
+`prepareRevoke` hook.
+
+### Audit and what is never recorded
+
+`mcp.oauth.discovered` (connection, issuer, resource, endpoint hosts), `mcp.oauth.authorized` (connection,
+issuer, grant, scopes, user), `mcp.oauth.refreshed`, `mcp.oauth.refresh_failed`, `mcp.oauth.revoked`,
+`mcp.oauth.denied`. Names, ids, hosts and closed codes only: never a token, a client secret, a key, an
+assertion, a URL path or a server text. Client secrets and minted assertions are registered with the
+redactors when they are read, fresh tokens when they are issued (before they are stored or used).
+
+### Known limits
+
+- The redactor registry is per process (#304); a platform connection used by a tenant's run keeps its
+  token under the platform tenant, so tenant-scoped scrubbing of that tenant's audit/response text does not
+  know it (the run's guard and the tenant-less log rule still do).
+- For the authorization-code grant (later slice), a commit failure after the authorization server rotated
+  a refresh token loses that token; the connection then needs a new authorization. Client-credentials
+  connections are not affected (they never use a refresh token).
+- Authorization code with PKCE, CIMD, DCR and `authorization_code` on central instances are later slices.
 
 ## Control-node relay for run nodes
 
