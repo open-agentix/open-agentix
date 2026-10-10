@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ContainerRunner,
   assertSafeCreateBody,
+  egressAccount,
   proxyUrlWithCredentials,
   verifyEgressGrant,
   type ContainerRunnerConfigInput,
@@ -369,8 +370,9 @@ describe('startNode: lifecycle', () => {
     const handle = await runner(e, withEgress).startNode(spec({ egress: ['jira.example.com'] }));
     await new Promise((r) => setTimeout(r, 10));
     const [lines] = e.stdin as string[];
-    const [token, proxyLine] = lines!.split('\n');
+    const [token, marker, proxyLine] = lines!.split('\n');
     expect(token).toBe('oaxrt.payload.signature');
+    expect(marker).toBe('oax-bundle:v2');
     const u = new URL(proxyLine!);
     expect(decodeURIComponent(u.username)).toBe(NODE);
     const claims = verifyEgressGrant(GRANT_SECRET, NODE, decodeURIComponent(u.password));
@@ -638,6 +640,147 @@ describe('memory classes and image separation (DOG-1 review)', () => {
       toolboxImages: { trivy: HARNESS_IMG },
     });
     const h = await shared.startNode(spec({ image: HARNESS_IMG }));
+    await h.stop('step_end');
+  });
+});
+
+describe('DNS lockdown (ADR 0016 section 4.5)', () => {
+  it('points the node at a resolver where nothing listens, nothing else', () => {
+    const body = runner(fakeEngine()).buildCreateBody(spec());
+    const h = body.HostConfig;
+    expect(h.Dns).toEqual(['127.0.0.1']);
+    expect(h).not.toHaveProperty('DnsSearch');
+    expect(h).not.toHaveProperty('DnsOptions');
+    expect(h).not.toHaveProperty('ExtraHosts');
+  });
+  it.each([
+    ['no resolver set (the engine would inherit the host resolvers)', undefined],
+    ['a forwarding resolver', ['1.1.1.1']],
+    ['loopback plus a forwarder', ['127.0.0.1', '8.8.8.8']],
+    ['an empty list', []],
+  ])('assertSafeCreateBody refuses %s', (_name, dns) => {
+    const body = runner(fakeEngine()).buildCreateBody(spec());
+    const h = { ...body.HostConfig } as Record<string, unknown>;
+    if (dns === undefined) delete h.Dns;
+    else h.Dns = dns;
+    expect(() => assertSafeCreateBody({ ...body, HostConfig: h })).toThrow(/HostConfig\.Dns/);
+  });
+  it('refuses search domains and resolver options', () => {
+    const body = runner(fakeEngine()).buildCreateBody(spec());
+    for (const extra of [{ DnsSearch: ['evil.example'] }, { DnsOptions: ['ndots:5'] }])
+      expect(() =>
+        assertSafeCreateBody({ ...body, HostConfig: { ...body.HostConfig, ...extra } }),
+      ).toThrow(/HostConfig\.Dns/);
+  });
+});
+
+describe('per-server egress grants for stdio MCP servers (ADR 0016 S2)', () => {
+  const withCeiling: Partial<ContainerRunnerConfigInput> = {
+    ...withEgress,
+    egressAllow: ['jira.example.com', 'crm.example.com', '*.corp.example'],
+  };
+  const lines = async (over: Partial<RunNodeSpec>, cfg = withCeiling) => {
+    const e = fakeEngine();
+    const h = await runner(e, cfg).startNode(spec(over));
+    await new Promise((r) => setTimeout(r, 10));
+    await h.stop('step_end');
+    return (e.stdin as string[])[0]!.split('\n');
+  };
+
+  it('mints one grant per server, under its own account and with only its own list', async () => {
+    const [token, marker, step, ...rest] = await lines({
+      egress: [],
+      mcpEgress: [
+        { server: 'jira', egress: ['jira.example.com'] },
+        { server: 'crm', egress: ['crm.example.com', '*.corp.example'] },
+      ],
+    });
+    expect(token).toBe('oaxrt.payload.signature');
+    expect(marker).toBe('oax-bundle:v2');
+    expect(step).toBe(''); // no step egress: no step account
+    const parsed = rest.filter(Boolean).map((l) => {
+      const [name, url] = l.split(' ') as [string, string];
+      const u = new URL(url);
+      return { name, user: decodeURIComponent(u.username), pass: decodeURIComponent(u.password) };
+    });
+    expect(parsed.map((p) => p.name)).toEqual(['jira', 'crm']);
+    for (const p of parsed) {
+      expect(p.user).toBe(egressAccount(NODE, p.name));
+      const claims = verifyEgressGrant(GRANT_SECRET, p.user, p.pass);
+      expect(claims).toMatchObject({ n: NODE, s: p.name });
+    }
+    expect(verifyEgressGrant(GRANT_SECRET, parsed[0]!.user, parsed[0]!.pass)!.e).toEqual([
+      'jira.example.com',
+    ]);
+    expect(verifyEgressGrant(GRANT_SECRET, parsed[1]!.user, parsed[1]!.pass)!.e).toEqual([
+      'crm.example.com',
+      '*.corp.example',
+    ]);
+    // a server's grant does not open under another account
+    expect(verifyEgressGrant(GRANT_SECRET, parsed[1]!.user, parsed[0]!.pass)).toBeNull();
+  });
+
+  it('keeps the step account and the server accounts apart', async () => {
+    const [, , step, server] = await lines({
+      egress: ['jira.example.com'],
+      mcpEgress: [{ server: 'crm', egress: ['crm.example.com'] }],
+    });
+    const stepUrl = new URL(step!);
+    expect(decodeURIComponent(stepUrl.username)).toBe(NODE);
+    expect(server!.startsWith('crm ')).toBe(true);
+    expect(server).not.toContain(stepUrl.password);
+  });
+
+  it('a server without egress is not listed: no grant, no proxy line', async () => {
+    expect(await lines({ egress: [], mcpEgress: [] })).toEqual(['oaxrt.payload.signature', '']); // bare token, no marker
+  });
+
+  it('fails closed before anything is created', async () => {
+    const bad: Partial<RunNodeSpec>[] = [
+      { mcpEgress: [{ server: 'jira', egress: ['evil.example.com'] }] }, // outside the ceiling
+      { mcpEgress: [{ server: 'jira', egress: ['*.com'] }] },
+      { mcpEgress: [{ server: 'jira', egress: [] }] }, // empty lists are not listed
+      { mcpEgress: [{ server: 'Jira', egress: ['jira.example.com'] }] }, // not a slug
+      { mcpEgress: [{ server: 'a.b', egress: ['jira.example.com'] }] }, // would collide with accounts
+      {
+        mcpEgress: [
+          { server: 'jira', egress: ['jira.example.com'] },
+          { server: 'jira', egress: ['jira.example.com'] },
+        ],
+      },
+    ];
+    for (const over of bad) {
+      const e = fakeEngine();
+      await expect(runner(e, withCeiling).startNode(spec(over))).rejects.toBeTruthy();
+      expect(e.calls).toHaveLength(0);
+    }
+  });
+
+  it('without an egress proxy a server with egress is refused (deny by default)', async () => {
+    const e = fakeEngine();
+    expect(
+      await code(
+        runner(e).startNode(
+          spec({ mcpEgress: [{ server: 'jira', egress: ['jira.example.com'] }] }),
+        ),
+      ),
+    ).toBe('egress_proxy_missing');
+    expect(e.calls).toHaveLength(0);
+  });
+
+  it('a harness step gets no server egress unless the operator opened harness egress', async () => {
+    const harnessImg = `ghcr.io/open-agentix/open-agentix-run-node-claude-code@sha256:${'c'.repeat(64)}`;
+    const cfg = { ...withCeiling, harnessImages: { 'claude-code': harnessImg } };
+    const over = {
+      image: harnessImg,
+      harness: 'claude-code' as const,
+      mcpEgress: [{ server: 'jira', egress: ['jira.example.com'] }],
+    };
+    const e = fakeEngine();
+    expect(await code(runner(e, cfg).startNode(spec(over)))).toBe('harness_egress_denied');
+    expect(e.calls).toHaveLength(0);
+    const ok = fakeEngine();
+    const h = await runner(ok, { ...cfg, harnessEgressAllowed: true }).startNode(spec(over));
     await h.stop('step_end');
   });
 });

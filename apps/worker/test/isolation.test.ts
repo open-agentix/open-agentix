@@ -22,6 +22,9 @@ const base = {
   OAX_TOOLBOX_ALLOWLIST: 'trivy',
   OAX_TOOLBOX_REQUIRE_SIGNATURE: 'false',
   OAX_K8S_NAMESPACE: 'runs',
+  // the control URL above is a host name, which needs DNS in the Pod (ADR 0016 section 4.5)
+  OAX_K8S_DNS_EGRESS: 'true',
+  OAX_K8S_DNS_EGRESS_ACK: 'true',
 };
 
 /** In-memory Kubernetes API: records every call and the objects that exist. */

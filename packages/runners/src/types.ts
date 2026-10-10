@@ -186,6 +186,15 @@ export interface RunNodeSpec {
   egress: string[];
   /** Set for a harness step (`runtime.harness`): selects the harness image and its limits. */
   harness?: HarnessKind;
+  /**
+   * Effective egress of the stdio MCP servers of the step that need a network (ADR 0016 section
+   * 4.1), by connection name; servers without egress are not listed and get no network. Decided
+   * by the control node from the stored connections (within the operator's per-program grant) and
+   * only ever bounded further by the runner's ceiling. The container runner mints one egress grant
+   * per entry and hands it to that server's process only; the Kubernetes runner cannot separate
+   * servers inside a Pod and refuses an entry the step's own `egress` does not cover.
+   */
+  mcpEgress?: { server: string; egress: string[] }[];
 }
 
 export type RunNodeStopReason = 'step_end' | 'cancelled' | 'timeout' | 'lease_lost';

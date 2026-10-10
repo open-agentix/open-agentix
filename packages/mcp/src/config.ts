@@ -56,6 +56,14 @@ export const McpServerConfigSchema = z
       env: z.record(z.string(), z.string()).default({}),
       /** Environment variable name -> secret reference. */
       envSecrets: z.record(z.string(), z.string()).default({}),
+      /**
+       * Hosts this server itself needs (ADR 0016 section 4.1), in the grammar of `runtime.egress`.
+       * Empty or absent means NO network: the child gets no proxy variables. The container runner
+       * mints one egress grant per (node, connection) from it; it is bounded by the operator's
+       * per-program grant (`OAX_MCP_STDIO_EGRESS`, tenants), the runner ceiling and the air-gapped
+       * allowlist. Checked by the API when saved and again by the control node before each step.
+       */
+      egress: z.array(z.string().min(1).max(255)).max(16).optional(),
       timeoutMs: z.number().int().positive().default(30_000),
       maxResultBytes: z
         .number()

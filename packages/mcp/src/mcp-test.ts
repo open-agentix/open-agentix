@@ -157,7 +157,13 @@ export async function testMcpServer(
     const tools = await Promise.race([work, deadline]);
     return { ok: true, category: 'ok', latency: bucket(now() - started), toolCount: tools.length };
   } catch (e) {
-    return { ok: false, ...categorizeMcpError(e), latency: bucket(now() - started) };
+    const failed = categorizeMcpError(e);
+    // A tenant must not learn from the category which internal names exist (split-horizon DNS):
+    // an unresolvable name and a name that resolves to a private address read the same.
+    // Only the operator's own (platform) connections keep the finer answer.
+    if (failed.category === 'dns_failed' && (deps.originFor?.(cfg.name) ?? 'tenant') !== 'platform')
+      failed.category = 'egress_denied';
+    return { ok: false, ...failed, latency: bucket(now() - started) };
   } finally {
     clearTimeout(timer);
     // Closes the connection whenever it exists, also one that completes after the deadline.

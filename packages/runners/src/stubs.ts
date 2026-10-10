@@ -13,7 +13,7 @@ const selector = z
   .record(z.string(), z.string())
   .refine((r) => Object.keys(r).length > 0, 'selector must not be empty');
 
-export const KubernetesJobRunnerConfigSchema = z.strictObject({
+const KubernetesJobRunnerConfigShape = z.strictObject({
   namespace: z.string().default('openagentix-runs'),
   /** ServiceAccount of the Job; on EKS annotate it for IRSA (`eks.amazonaws.com/role-arn`). */
   serviceAccountName: z.string().default('openagentix-run-node'),
@@ -57,8 +57,16 @@ export const KubernetesJobRunnerConfigSchema = z.strictObject({
   runAsUser: z.number().int().min(1).default(65532),
   /** Name of the static namespace-wide default-deny NetworkPolicy that must exist before a step starts. */
   defaultDenyPolicy: z.string().default('default-deny-all'),
-  /** Allow DNS to kube-dns in `kube-system` (needed to resolve the control node). */
-  dnsEgress: z.boolean().default(true),
+  /**
+   * Allow DNS to kube-dns (needed to resolve the control node by name). Off by default: the
+   * cluster resolver forwards ANY name, which lets a compromised step carry data out in query names
+   * (DNS exfiltration, ADR 0016 section 4.5). Turning it on requires `dnsEgressAcknowledged`
+   * (`OAX_K8S_DNS_EGRESS_ACK=true`); an egress gateway that resolves names itself, or an
+   * IP-addressed control node, avoids the channel.
+   */
+  dnsEgress: z.boolean().default(false),
+  /** The operator accepts the DNS exfiltration channel that `dnsEgress: true` opens. */
+  dnsEgressAcknowledged: z.boolean().default(false),
   /** Where the control node lives; the only cluster-internal destination a step may reach. */
   controlPlane: z
     .strictObject({
@@ -72,6 +80,18 @@ export const KubernetesJobRunnerConfigSchema = z.strictObject({
     })
     .default({ cidrs: [], ports: [443] }),
 });
+
+export const KubernetesJobRunnerConfigSchema = KubernetesJobRunnerConfigShape.superRefine(
+  (c, ctx) => {
+    if (c.dnsEgress && !c.dnsEgressAcknowledged)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['dnsEgress'],
+        message:
+          'dnsEgress opens the cluster resolver to the step Pod, which forwards any name (a DNS exfiltration channel); acknowledge it with OAX_K8S_DNS_EGRESS_ACK=true or set OAX_K8S_DNS_EGRESS=false',
+      });
+  },
+);
 
 export const AwsLambdaRunnerConfigSchema = z.strictObject({
   region: z.string(),

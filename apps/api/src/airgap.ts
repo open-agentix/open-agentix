@@ -12,6 +12,7 @@ import {
 } from '@openagentix/core';
 import { installNetworkGuard, type NetworkGuard } from '@openagentix/providers';
 import type { Config } from './config.js';
+import { stdioEgressIssues } from './stdio-egress.js';
 
 /**
  * Air-gapped mode (`OAX_AIRGAPPED=true`): fail-closed start-up self-check plus a process-wide
@@ -215,6 +216,14 @@ export function checkStoredConnections(
         },
       );
       if (p) problems.push(p);
+      // Egress of stdio servers (ADR 0016 section 4.1) must be on the allowlist too.
+      const cfg = r.config as { transport?: string; egress?: unknown } | null;
+      if (cfg?.transport === 'stdio' && Array.isArray(cfg.egress))
+        for (const i of stdioEgressIssues(cfg as Parameters<typeof stdioEgressIssues>[0], false, {
+          grants: new Map(),
+          airgap: policy,
+        }))
+          problems.push(`MCP connection "${r.name}" ${i.path}: ${i.message}`);
     }
     for (const ep of connectionEndpoints(r.kind, r.name, r.config)) {
       try {

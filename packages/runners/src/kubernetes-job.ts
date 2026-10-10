@@ -169,6 +169,22 @@ export function planEgress(
   };
 }
 
+/**
+ * A NetworkPolicy applies to a whole Pod, so the Kubernetes runner cannot give one stdio MCP server
+ * a network of its own (ADR 0016 section 4.2). A server's egress is therefore honoured only where
+ * the step's own `egress` already lists it, and a server that needs more is refused instead of
+ * silently widening the Pod's policy or silently not working.
+ */
+export function assertMcpEgressWithinStep(spec: Pick<RunNodeSpec, 'egress' | 'mcpEgress'>): void {
+  const step = new Set(spec.egress.map((e) => e.trim().toLowerCase()));
+  for (const m of spec.mcpEgress ?? [])
+    for (const e of m.egress)
+      if (!step.has(e.trim().toLowerCase()))
+        throw bad(
+          `MCP server "${m.server}" needs egress "${e}", which the step's runtime.egress does not list; the Kubernetes runner applies one NetworkPolicy to the whole Pod and cannot give a server its own network (use the container runner, or list the entry in runtime.egress)`,
+        );
+}
+
 /** Parses a Kubernetes cpu quantity (`500m`, `2`) into cores. */
 export function parseCpu(q: string): number {
   const m = /^(\d+(?:\.\d+)?)(m?)$/.exec(q.trim());
@@ -593,6 +609,7 @@ export class KubernetesJobRunner implements IsolatingRunner {
     if (ctx.signal?.aborted) throw bad('start aborted');
     const ns = this.config.namespace;
     // Build and validate everything before the first API call.
+    assertMcpEgressWithinStep(spec);
     const job = buildJob(spec, this.config);
     const policy = buildNetworkPolicy(spec, this.config);
     const secret = buildSecret(spec, ns);

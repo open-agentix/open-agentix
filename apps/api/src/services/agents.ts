@@ -146,8 +146,21 @@ export class AgentsService {
       agentId: '',
     });
     const all = [...errors, ...stdio.map(({ path, message }) => ({ path, message }))];
-    if (all.length === 0) return result;
-    return { ...result, valid: false, definition: null, errors: [...result.errors, ...all] };
+    // ADR 0016 S2 lint: MCP hosts that a step still lists in runtime.egress (advisory).
+    const unused = await this.catalog.egressUnused(result.definition, {
+      tenantId: principal.tenantId,
+      teamId: await this.teamIdForOwner(principal.tenantId, result.definition.owner),
+      agentId: '',
+    });
+    const withLint =
+      unused.length > 0 ? { ...result, warnings: [...result.warnings, ...unused] } : result;
+    if (all.length === 0) return withLint;
+    return {
+      ...withLint,
+      valid: false,
+      definition: null,
+      errors: [...result.errors, ...all],
+    };
   }
 
   /** `opts.id` fixes the agent id (deterministic demo seed); random when omitted. */
