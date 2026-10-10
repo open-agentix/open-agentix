@@ -109,7 +109,7 @@ async function dispatch(ws: Workspace, name: WorkspaceToolName, args: unknown) {
 /** MCP server (server name `workspace`) over one confined workspace. */
 export function createWorkspaceMcpServer(ws: Workspace): Server {
   const server = new Server(
-    { name: SERVER_NAME, version: '0.1.0' },
+    { name: SERVER_NAME, version: '0.2.0-alpha.1' },
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
