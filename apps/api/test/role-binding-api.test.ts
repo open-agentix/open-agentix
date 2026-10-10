@@ -808,17 +808,25 @@ describe.each(sqlTargets)('role-binding API (%s)', (_kind, enabled, open) => {
       ).toBe(403);
     });
 
-    it('an inheriting administrator may grant below only once the clamp is lifted (S5)', async () => {
+    it('an inheriting administrator grants below its own node, within its coverage (S5)', async () => {
+      // the legacy read path reaches the home node only (flag semantics are unchanged)
       if (n.ctx.config.auth.roleBindingsRead !== 'bindings') return;
       // root-inh was opted in earlier and handed back; give it an inheriting grant on org-a
       const g = await post(null, 'org-a', grant('root-inh', 'admin', true));
       expect(g.statusCode).toBe(201);
-      // inherited authority is read-only for now (INHERITED_READ_ONLY): no users:write at div-1
+      // write inheritance: users:write reaches div-1 although the binding sits on org-a
       const r = await post('root-inh', 'div-1', grant('m-d1', 'viewer'));
-      expect(r.statusCode).toBe(403);
-      // directly on the node it holds, the inheriting grant covers the subtree
-      const ok = await post('root-inh', 'org-a', grant('m-d1', 'viewer', true));
+      expect(r.statusCode).toBe(201);
+      // a subtree grant below is covered by the inheriting binding above
+      const sub = await post('root-inh', 'div-1', grant('m-d1', 'operator', true));
+      expect(sub.statusCode).toBe(201);
+      // and directly on the node it holds
+      const ok = await post('root-inh', 'org-a', grant('m-d1', 'auditor', true));
       expect(ok.statusCode).toBe(201);
+      // never to itself, whatever the node
+      const self = await post('root-inh', 'div-1', grant('root-inh', 'viewer'));
+      expect(self.statusCode).toBe(403);
+      expect(self.json().error).toBe('self_grant');
     });
   });
 });

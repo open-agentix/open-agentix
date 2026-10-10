@@ -38,7 +38,7 @@ export type TenantReach =
       /** Visible node ids, the home node included. */
       ids: ReadonlySet<string>;
       snapshot: TreeSnapshot;
-      /** What the principal holds at a node of the snapshot (the resolver, read-only clamp on). */
+      /** What the principal holds at a node of the snapshot (the resolver). */
       appliedAt: (node: SnapNode) => AppliedBinding[];
     };
 
