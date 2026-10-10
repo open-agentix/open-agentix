@@ -383,6 +383,20 @@ describe('connection test returns categories only', () => {
     expect(['protocol_error', 'error']).toContain(r.category);
   });
 
+  it('a whole test is bounded even when every single request stays under its timeout', async () => {
+    // The server accepts the request and never answers; the per-request timeout is far away.
+    const srv = await listen((_req, res) => void setTimeout(() => res.destroy(), 3_000));
+    const t0 = Date.now();
+    const r = await testMcpServer(
+      http({ url: `http://127.0.0.1:${srv.port}/mcp`, timeoutMs: 60_000 }),
+      deps(dispatcher()),
+      Date.now,
+      300,
+    );
+    expect(r).toMatchObject({ ok: false, category: 'timeout' });
+    expect(Date.now() - t0).toBeLessThan(2_000);
+  });
+
   it('a closed port is connect_failed', async () => {
     const srv = await listen((_q, res) => res.end());
     const port = srv.port;

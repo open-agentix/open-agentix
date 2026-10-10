@@ -147,6 +147,7 @@ tool name or description and no exact timing in the answer or the audit entry (`
 with the category). It takes no URL (only a stored connection), is limited to 10 tests per minute
 per user and replica, needs `connections:write`, tests a platform connection only for platform
 operators, and refuses stdio connections (`400 mcp_test_unsupported`: a test would start a process).
+A test ends after 30 seconds in total (`timeout`) and reads at most 8 MiB per response.
 
 ## Stdio MCP servers
 

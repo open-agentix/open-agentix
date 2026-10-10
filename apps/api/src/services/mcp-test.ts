@@ -16,6 +16,8 @@ import type { RunNodesService } from './run-nodes.js';
 /** Tests per user and window: the test dials a destination that a tenant chose. */
 const LIMIT = 10;
 const WINDOW_MS = 60_000;
+/** Response cap of a test: a `tools/list` page is small, a tenant server could send 64 MiB. */
+const TEST_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 /**
  * Connectivity test of a stored HTTP MCP connection (ADR 0016 section 4.3).
@@ -71,6 +73,7 @@ export class McpTestService {
       createOutboundDispatcher({
         ...(settings ? { network: settings.net } : {}),
         allowPlainHttpForPlatform: true,
+        limits: { maxResponseBytes: TEST_MAX_RESPONSE_BYTES },
       });
     const platform = row.scope === 'platform';
     let result: McpTestResult;

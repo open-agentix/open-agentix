@@ -124,23 +124,44 @@ export function isTestableMcpConfig(
 }
 
 const TEST_TIMEOUT_MS = 15_000;
+/**
+ * Upper bound of a whole test. `timeoutMs` bounds each request, but `initialize` plus up to 50
+ * `tools/list` pages of a slow (tenant-chosen) server would otherwise hold the API request and its
+ * connection for many minutes.
+ */
+export const MCP_TEST_TOTAL_MS = 30_000;
 
 /** `initialize` + `tools/list` against a stored HTTP connection; returns a category only. */
 export async function testMcpServer(
   cfg: Extract<McpServerConfig, { transport: 'streamable-http' }>,
   deps: ConnectDeps,
   now: () => number = Date.now,
+  totalMs: number = MCP_TEST_TOTAL_MS,
 ): Promise<McpTestResult> {
   const started = now();
-  let conn: McpConnection | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  const bounded = { ...cfg, timeoutMs: Math.min(cfg.timeoutMs, TEST_TIMEOUT_MS, totalMs) };
+  const connecting = McpConnection.connect(bounded, deps);
+  const work = connecting.then((conn) => conn.listTools());
+  // Neither may surface as an unhandled rejection once the deadline has won the race.
+  connecting.catch(() => undefined);
+  work.catch(() => undefined);
   try {
-    const bounded = { ...cfg, timeoutMs: Math.min(cfg.timeoutMs, TEST_TIMEOUT_MS) };
-    conn = await McpConnection.connect(bounded, deps);
-    const tools = await conn.listTools();
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        reject(new OaxError('tool_timeout', 'the connection test took too long'));
+      }, totalMs);
+    });
+    const tools = await Promise.race([work, deadline]);
     return { ok: true, category: 'ok', latency: bucket(now() - started), toolCount: tools.length };
   } catch (e) {
     return { ok: false, ...categorizeMcpError(e), latency: bucket(now() - started) };
   } finally {
-    await conn?.close().catch(() => undefined);
+    clearTimeout(timer);
+    // Closes the connection whenever it exists, also one that completes after the deadline.
+    const closing = connecting.then((conn) => conn.close()).catch(() => undefined);
+    if (!timedOut) await closing;
   }
 }
