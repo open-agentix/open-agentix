@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ExportResultCode } from '@opentelemetry/core';
-import { trace } from '@opentelemetry/api';
+import { context, createTraceState, trace } from '@opentelemetry/api';
 import {
   BatchSpanProcessor,
   InMemorySpanExporter,
@@ -118,6 +118,30 @@ describe('a thrown error never reaches an exported span (end to end over OTLP)',
       expect(c.requests[0]!.headers['content-type']).toContain('application/x-protobuf');
     }
     expect(warnings).toEqual([]);
+    await c.close();
+  });
+
+  it('never exports tracestate of a parent or a link (free text from whoever sent it)', async () => {
+    const c = await collector();
+    const t = await initTelemetry(
+      otel({ OTEL_EXPORTER_OTLP_ENDPOINT: c.url, OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json' }),
+    );
+    const remote = {
+      traceId: '0af7651916cd43dd8448eb211c80319c',
+      spanId: 'b7ad6b7169203331',
+      traceFlags: 1,
+      isRemote: true,
+      traceState: createTraceState(`vendor=${BODY_CANARY}`),
+    };
+    const parent = trace.setSpanContext(context.active(), remote);
+    tracer()
+      .startSpan('oax.run', { links: [{ context: remote }] }, parent)
+      .end();
+    await t.shutdown();
+    const wire = c.requests.map((r) => r.body.toString()).join('');
+    expect(wire).toContain('oax.run');
+    expect(wire).not.toContain(BODY_CANARY);
+    expect(wire).not.toContain('traceState');
     await c.close();
   });
 

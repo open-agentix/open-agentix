@@ -1,5 +1,5 @@
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
-import type { Context } from '@opentelemetry/api';
+import type { Context, SpanContext } from '@opentelemetry/api';
 import type {
   BatchSpanProcessor,
   ReadableSpan,
@@ -43,6 +43,20 @@ function sanitizeStatus(
     : { code: status.code };
 }
 
+/**
+ * The ids and flags of a context without its `tracestate`: vendor entries come from whoever sent
+ * the context (an inbound `traceparent`/`tracestate`, a node) and are free text, so they are never
+ * exported.
+ */
+function withoutTraceState(c: SpanContext): SpanContext {
+  return {
+    traceId: c.traceId,
+    spanId: c.spanId,
+    traceFlags: c.traceFlags,
+    ...(c.isRemote === undefined ? {} : { isRemote: c.isRemote }),
+  };
+}
+
 /** A span with the same identity and timing but only allowlisted attributes, events and status. */
 export function sanitizeReadableSpan(span: ReadableSpan, rt: TelemetryRuntime): ReadableSpan {
   const kind = spanKindFromName(span.name);
@@ -59,8 +73,9 @@ export function sanitizeReadableSpan(span: ReadableSpan, rt: TelemetryRuntime): 
     });
   const dropped = span.events.length - events.length;
   if (dropped > 0) rt.stats.attributesDropped('overflow', dropped);
-  // Link attributes are not part of the allowlist: a link keeps its context only.
-  const links = span.links.map((l) => ({ context: l.context, attributes: {} }));
+  // Link attributes are not part of the allowlist: a link keeps its ids and flags only.
+  const links = span.links.map((l) => ({ context: withoutTraceState(l.context), attributes: {} }));
+  const context = withoutTraceState(span.spanContext());
   const name = sanitizeSpanName(span.name, rt.guard);
   const attributes = name.redacted
     ? { ...attrs.attributes, 'oax.redacted': true }
@@ -71,6 +86,7 @@ export function sanitizeReadableSpan(span: ReadableSpan, rt: TelemetryRuntime): 
     events: { value: events, enumerable: true },
     links: { value: links, enumerable: true },
     status: { value: sanitizeStatus(span.status, rt), enumerable: true },
+    spanContext: { value: () => context },
   }) as ReadableSpan;
 }
 
