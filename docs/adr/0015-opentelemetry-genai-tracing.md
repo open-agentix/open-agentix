@@ -876,9 +876,18 @@ tenant. No migration: the existing `connections` table takes the new `kind = 'te
 - **Authorisation.** `connections:write` is not enough: create, change and delete of a `telemetry`
   connection need `settings:write` (the S8 pattern for `telemetry.propagate`). Tenant scope only
   (400 otherwise); a tenant can neither see nor change another tenant's connection (existing
-  visibility rules). The header secret is a reference in the tenant's own namespace (same rule as
-  every tenant secret reference; the default tenant, the operator's home, is exempt as elsewhere)
-  and is read when the exporter is built.
+  visibility rules). The header secret is stricter than for other connection types, because the
+  value is sent to a destination the tenant chose: it must not be a platform secret
+  (`platformSecretRefs`, extended with the operator's `OAX_OTEL_HEADERS_SECRET` and the network
+  file's secrets), must be in the tenant's namespace and must be opened by `tenants.secret_refs`;
+  there is no exemption for the default tenant. Checked on save and on every refresh of the
+  exporters.
+- **Review hardening (security review of #308).** Tenant copies are sanitised with the process
+  guard first, never carry exception text, and carry `service.name` only as resource; content is
+  scanned within a character budget and the opt-in lookup is time limited; content captured under
+  one set of terms is sent only to an exporter with the same terms (fingerprint); content held for
+  queued spans is capped per process; PII detection normalises Unicode; pass-through reasoning
+  blocks are never captured.
 - **Content never rides on the span.** The model proxy builds the two attributes after a successful
   call (`captureModelContent`, native and pass-through surfaces, JSON and stream) and parks them
   in a bounded in-process channel keyed by the `chat` span (one minute, taken once). Only

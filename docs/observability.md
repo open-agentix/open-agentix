@@ -548,10 +548,17 @@ curl -X POST "$OAX/v1/connections" -H "authorization: Bearer $ADMIN_TOKEN" \
   tenant sees and changes only its own `telemetry` connections.
 - **Fields:** the schema is closed, an unknown key is a 400. `endpoint` is an `https://` base URL
   (`/v1/traces` is appended) without credentials, query or fragment. `headersSecret` is a secret
-  **reference** whose value is `Name=value,Name2=value2`; it must live in the tenant's own namespace
-  (`<tenant-slug>.<name>`, like every tenant secret reference) and the value is read when the
-  exporter is built, never stored in the config, returned by the API or written to a log, audit
-  entry or span. `region` (`[a-z0-9-]`, up to 32 characters) states where the collector processes
+  **reference** whose value is `Name=value,Name2=value2`. It is refused (400) unless it (1) is not a
+  platform secret (provider keys, event source secrets, secrets of platform connections, the
+  operator's `OAX_OTEL_HEADERS_SECRET` and the secrets of the network file: proxy authentication,
+  trust bundles, client certificates and keys), (2) lives in the tenant's own namespace
+  (`<tenant-slug>.<name>`) and (3) is opened by the tenant's `secret_refs` allowlist. This holds for
+  **every** tenant including the default (home) tenant: a tenant opens no secret by default, so the
+  operator sets `secret_refs` (for example `default.*`) before an exporter can use a credential. The
+  rules are checked again each time the exporters are refreshed. The value is read when the exporter
+  is built, never stored in the config, returned by the API or written to a log, audit entry or
+  span. Do not put credentials in the endpoint path either: the path is stored and shown in the
+  config (only the host is audited). `region` (`[a-z0-9-]`, up to 32 characters) states where the collector processes
   data. `clearance` (`public`, `internal`, `confidential`, `restricted`, default `internal`) is the
   highest classification of a run whose content this exporter may receive. `enabled: false` keeps
   the connection but stops every export to it. There is no connection test for this type.
@@ -571,14 +578,19 @@ curl -X POST "$OAX/v1/connections" -H "authorization: Bearer $ADMIN_TOKEN" \
   a connection must declare a region from the list (422 `region_not_allowed` otherwise, and an
   exporter whose region is not on the list is not used); empty means no restriction.
 - **What is sent:** a copy of the spans of the tenant that owns the connection, rebuilt from the
-  attribute allowlist for that exporter (same sanitiser as the operator's pipeline, plus the
-  exporter's own secret values in the guard). A span is routed by its `oax.tenant.id`, which the
+  attribute allowlist for that exporter: first with the process guard (so the operator's secrets
+  are redacted: exporter headers, proxy and certificate secrets), then with the exporter's own
+  header values. Exception text (`OAX_OTEL_EXCEPTION_DETAIL`) is never sent to a tenant, and the
+  resource is `service.name` only (the operator's `OAX_OTEL_RESOURCE_ATTRIBUTES` stay with the
+  operator). A span is routed by its `oax.tenant.id`, which the
   control plane sets from the run; a span without it goes nowhere. The operator's pipeline is
   unchanged, a tenant with an exporter still appears in the operator's collector (metadata only).
   Sampling applies as for the operator's pipeline (the always-keep path of the operator is not
   repeated for tenants).
 - **Freshness:** changes made through the API take effect in the api process at once; other
-  processes (a worker, another api replica) refresh their view every 15 seconds.
+  processes (a worker, another api replica) refresh their view every 15 seconds. That includes
+  disabling or deleting a connection: spans may still be copied to it for up to 15 seconds in
+  another process. Content is not affected by that window (see the `terms` rule below).
 
 ### Content (`OAX_OTEL_CONTENT=redacted`)
 
@@ -591,11 +603,15 @@ is sent to that tenant's exporter with two more attributes: `gen_ai.input.messag
 | --- | --- |
 | Model input and output text only | The system text, `user` and `assistant` message text, and the response text. Messages of the `tool` role, the tool calls of assistant messages (arguments) and any non-text content are never read, so tool arguments and results cannot reach a span through this path. |
 | Secrets | Every text passes the ContextGuard (resolved provider keys of the call, token shapes, invisible characters) and passes it again for the exporter, including that exporter's own header values. |
-| Personal data | Every text passes the ADR 0012 PII redactor (e-mail, IBAN, payment card, IP address, phone number) and is replaced by `[pii:<kind>]`. Detection is pattern based, not complete: it does not find names or free-form personal data. |
+| Personal data | Every text is Unicode-normalised (NFKC: fullwidth digits, no-break spaces and look-alike dots become their ASCII forms) and passes the ADR 0012 PII redactor (e-mail, IBAN, payment card, IP address, phone number), replaced by `[pii:<kind>]`. Detection is pattern based and not complete: it does not find names, addresses or free-form personal data, nor numbers split by unusual separators or words. |
+| Reasoning | Pass-through requests that fold reasoning blocks (`thinking`, `signature`, `redacted_thinking`) into a message for the token estimate keep the visible text apart (`captureText`); only that is captured. |
+| Cost | Scanning is bounded by a character budget (64k characters per attribute, newest messages first, and it stops once more than twice the cap is cleaned), not by what the caller sent; the opt-in lookup on the request path has a 250 ms limit and fails closed (no capture). |
 | Size | At most 8 KiB (UTF-8) per attribute; for a long conversation the newest messages are kept and a cut text is truncated. A value that cannot be kept within the cap is dropped, never sent cut inside a secret. |
 | Classification | Content is sent only when the run's published classification is at most the `clearance` of the exporter; otherwise the metadata span is sent without content (`oax_otel_content_total{result="dropped_classification"}`). |
 | Operator and tenant | No capture without `OAX_OTEL_CONTENT=redacted` (whatever a tenant stored) and no export without the tenant's `content: "redacted"` on an enabled connection. The opt-in is read from the database for every call (not cached), and an opt-out through the API also withdraws content from spans that are already queued. |
 | Only the tenant's own exporter | Content is not a span attribute. The model proxy parks it next to the span (bounded, one minute, taken once) and only the tenant exporter stage of the same tenant can attach it, per exporter, when the gates above hold at the moment of the export. The operator's pipeline cannot see it; a test asserts this. |
+| Terms | The model proxy records, per opted-in connection, a fingerprint of its terms (endpoint, credential reference, protocol, region, clearance) when it captures content; the exporter must show the same fingerprint when it sends, so a connection changed in between, or an exporter that has not refreshed yet, never receives content captured under other terms. |
+| Memory | Content held for queued spans is limited to 8 MiB per process; beyond it the span is sent without content (`oax_otel_content_total{result="dropped_budget"}`). Each tenant has at most 4 exporters and 512 spans waiting for a lookup. |
 | Region | An exporter whose region the operator does not allow is not used at all. |
 
 Every change of the opt-in is audited in the tenant's partition: `telemetry.content_enabled` (when
@@ -607,14 +623,16 @@ the same transaction as the change.
 Counters (no label holds a tenant, connection or host): `oax_otel_tenant_export_failures_total{reason}`,
 `oax_otel_tenant_spans_dropped_total{reason}` (`queue_full`, `pending_cap`, `no_capacity`, `region`,
 `denied`, `operator`) and `oax_otel_content_total{result}` (`attached`, `dropped_classification`,
-`dropped_opt_out`, `dropped_region`, `dropped_operator`, `dropped_no_exporter`).
+`dropped_opt_out`, `dropped_region`, `dropped_operator`, `dropped_no_exporter`, `dropped_budget`).
 
 Limits you should know: the redactor and the guard reduce the risk, they do not remove it, and a
 user message can contain whatever the user (or a harness) wrote. Treat the destination as a
 processor of the tenant's data: enable content only for a collector the tenant controls and
 record it in the record of processing. A harness that formats tool output into a `user` message
 before it calls the proxy puts that text into the content (the proxy cannot tell); keep
-`clearance` low for such agents.
+`clearance` low for such agents. "Tool results are never captured" holds per call and per message
+role: assistant text and later steps can quote tool output in their own words, and that is content.
+A classification the platform does not know is treated as above every clearance (fail closed).
 
 ## MCP trace context and shared collectors
 
@@ -1002,7 +1020,7 @@ before it is recorded, so a caller that passes a free text by mistake produces t
 | `oax_otel_node_context_mismatch_total` | counter | – | Run node requests whose `traceparent` is not the session's stored trace (ignored; a cheap signal for a tampered node). |
 | `oax_otel_tenant_export_failures_total` | counter | `reason` (as for `oax_otel_export_failures_total`) | Failed exports to tenant-owned exporters (slice S10). |
 | `oax_otel_tenant_spans_dropped_total` | counter | `reason` (`queue_full`, `pending_cap`, `no_capacity`, `region`, `denied`, `operator`) | Spans not handed to a tenant-owned exporter. |
-| `oax_otel_content_total` | counter | `result` (`attached`, `dropped_classification`, `dropped_opt_out`, `dropped_region`, `dropped_operator`, `dropped_no_exporter`) | Outcome of the content gates for a model call span. |
+| `oax_otel_content_total` | counter | `result` (`attached`, `dropped_classification`, `dropped_opt_out`, `dropped_region`, `dropped_operator`, `dropped_no_exporter`, `dropped_budget`) | Outcome of the content gates for a model call span. |
 
 The older families (`oax_http_request_duration_seconds`, `oax_runs_by_status`, `oax_policy_decisions_total`,
 `oax_model_proxy_*`, `oax_worker_active_runs`, ...) are unchanged. The model proxy's `provider` label is the

@@ -28,6 +28,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Telemetry connection header secrets must not be platform secrets, must be in the tenant's
+  namespace and opened by its `secret_refs`, for every tenant including the default one.
 - `OAX_OTEL_CONTENT` accepts `redacted` besides `off`; `redacted` without
   `OAX_OTEL_TENANT_EXPORTERS=allow` refuses start-up. The tenant destination rules for purpose
   `telemetry` require TLS (no effect on the operator's own exporter).
