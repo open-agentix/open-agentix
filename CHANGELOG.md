@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Roadmap**: new planned wave W14 (agent lifecycle governance: four-eyes publish approval with review
+  comments, development vs published agents, scoped and encrypted secrets, Vault and AWS Secrets Manager
+  backends; design in ADR 0017, issues #244 to #252) in v0.4, with notes on W5-3, W6-3, W7-2 and W9-2.
+  Nothing of it is built yet.
+
 ## [0.2.0-alpha.1] - 2026-10-10
 
 This is the first pre-release that ships release images (signed `api`, `worker` and `ui` images on
