@@ -13,7 +13,13 @@ import { OaxError, type StepCredentials } from '@openagentix/core';
 import { McpServerConfigSchema, type McpServerConfig } from '@openagentix/mcp';
 import type { FetchFn } from '@openagentix/runners';
 import { describe, expect, it } from 'vitest';
-import { mergeCredentials, parseNodeEnv, runNode, stdioGuardFor } from '../src/run-node.js';
+import {
+  httpOriginFor,
+  mergeCredentials,
+  parseNodeEnv,
+  runNode,
+  stdioGuardFor,
+} from '../src/run-node.js';
 
 const RUN = '99999999-2222-4333-8444-555555555555';
 const env = (over: Record<string, string | undefined> = {}): NodeJS.ProcessEnv => ({
@@ -92,6 +98,17 @@ describe('mergeCredentials', () => {
       Extract<McpServerConfig, { transport: 'stdio' }>,
     ];
     expect(j.env).toEqual({ A: '1' });
+  });
+});
+
+describe('httpOriginFor (ADR 0016 S1)', () => {
+  it('treats only servers the control node did not name as tenant defined as platform', () => {
+    const origin = httpOriginFor({ http: { tenantServers: ['crm'] } });
+    expect(origin('crm')).toBe('tenant');
+    expect(origin('platform-one')).toBe('platform');
+  });
+  it('fails closed without the field: every HTTP server counts as tenant defined', () => {
+    expect(httpOriginFor({})('anything')).toBe('tenant');
   });
 });
 

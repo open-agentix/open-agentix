@@ -15,7 +15,6 @@ import { describe, expect, it } from 'vitest';
 export const ALLOWED: Record<string, string> = {
   // --- to be migrated to the factory (#100) ---
   'packages/providers/src/proxy.ts': 'legacy proxy-aware fetch, used by the clients below',
-  'packages/mcp/src/connection.ts': 'MCP client transports use createProxyAwareFetch (#100)',
   'packages/events/src/change-gate.ts': 'change-gate webhook call (#100)',
   'packages/runners/src/http-control-plane.ts': 'run-node control plane client (#103)',
   'apps/api/src/auth/oidc.ts': 'OIDC discovery/token via createProxyAwareFetch (#100)',

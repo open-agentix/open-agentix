@@ -140,11 +140,21 @@ function portOf(u: URL): number | null {
 
 /** Endpoints a stored connection (`mcp` streamable HTTP server or `model` provider) contacts. */
 export function connectionEndpoints(kind: string, name: string, config: unknown): AirgapEndpoint[] {
-  const cfg = (config ?? {}) as { transport?: string; url?: string };
-  if (kind === 'mcp')
-    return cfg.transport === 'streamable-http' && cfg.url
-      ? [{ purpose: `MCP connection "${name}"`, url: cfg.url }]
-      : [];
+  const cfg = (config ?? {}) as { transport?: string; url?: string; egress?: unknown };
+  if (kind === 'mcp') {
+    if (cfg.transport !== 'streamable-http') return [];
+    const out: AirgapEndpoint[] = [];
+    if (cfg.url) out.push({ purpose: `MCP connection "${name}"`, url: cfg.url });
+    // Egress entries (ADR 0016 4.6) must be on the allowlist as well. An entry is a host or
+    // host:port; anything else is reported as an invalid endpoint instead of being skipped.
+    if (Array.isArray(cfg.egress))
+      for (const e of cfg.egress)
+        out.push({
+          purpose: `MCP connection "${name}" egress`,
+          url: typeof e === 'string' && !e.includes('://') ? `https://${e}` : String(e),
+        });
+    return out;
+  }
   if (kind === 'model') return providerEndpoints(config, `model connection "${name}"`);
   return [];
 }

@@ -93,6 +93,14 @@ export interface OutboundContext {
   pin?: { allow?: readonly string[] | undefined; lookup?: HostLookup | undefined } | undefined;
   /** Total time limit for this request in addition to the dispatcher timeouts (ms). */
   timeoutMs?: number | undefined;
+  /**
+   * Only for a caller that sits behind an egress proxy of the control node, in a process that
+   * cannot resolve external names itself (a run node, ADR 0016 section 4.5): the pre-request DNS
+   * check of tenant destinations behind a proxy is skipped because the proxy resolves and enforces
+   * the destination rules. The name and literal-address checks of the resolver still apply. Never
+   * set it from tenant-controlled input.
+   */
+  proxyChecksDestination?: boolean | undefined;
 }
 
 /** Routing decision for logs and audit. Contains no credentials, paths or query strings. */
@@ -467,7 +475,11 @@ export function createOutboundDispatcher(opts: OutboundOptions = {}): OutboundDi
       // Behind a proxy the proxy resolves the name, so a tenant destination cannot be pinned:
       // resolve it once here and refuse non-public answers (residual: the proxy may resolve
       // differently, see ADR 0011 amendment 3).
-      if (route.decision === 'proxy' && ctx.scope?.origin === 'tenant')
+      if (
+        route.decision === 'proxy' &&
+        ctx.scope?.origin === 'tenant' &&
+        !ctx.proxyChecksDestination
+      )
         await assertPublicDestination(new URL(String(url)).hostname, {
           allow: [...(ctx.pin?.allow ?? []), ...net().config.privateAllow],
           ...(ctx.pin?.lookup ? { lookup: ctx.pin.lookup } : {}),

@@ -4126,7 +4126,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Send one tiny completion through a model connection (audited, costs a few tokens) */
+        /** Test a connection (audited). Model connection: one tiny completion (costs a few tokens, needs `model`). MCP connection (streamable-http): `initialize` and `tools/list` through the outbound dispatcher, answered with a category only; rate limited to 10 per minute per user */
         post: {
             parameters: {
                 query?: never;
@@ -4139,7 +4139,7 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        model: string;
+                        model?: string;
                     };
                 };
             };
@@ -4157,6 +4157,32 @@ export interface paths {
                             outputTokens: number;
                             costMicros: number;
                             error: string | null;
+                        } | {
+                            ok: boolean;
+                            /** @enum {string} */
+                            category: "ok" | "config_invalid" | "egress_denied" | "dns_failed" | "connect_failed" | "proxy_refused" | "tls_untrusted" | "tls_hostname_mismatch" | "auth_failed" | "http_error" | "protocol_error" | "timeout" | "error";
+                            /**
+                             * @description status class of an HTTP error only
+                             * @enum {string}
+                             */
+                            httpClass?: "4xx" | "5xx";
+                            /** @enum {string} */
+                            latency: "<100ms" | "<1s" | ">=1s";
+                            /** @description number of listed tools, never their names */
+                            toolCount?: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
                         };
                     };
                 };
@@ -4180,6 +4206,19 @@ export interface paths {
                 };
                 /** @description Default Response */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -7765,6 +7804,10 @@ export interface paths {
                             stdio?: {
                                 tenantServers: string[];
                                 allowlist: string[];
+                            };
+                            /** @description tenant-defined streamable-http servers of the step (ADR 0016) */
+                            http?: {
+                                tenantServers: string[];
                             };
                         };
                     };

@@ -72,6 +72,11 @@ export const McpServerConfigSchema = z
       headers: z.record(z.string(), z.string()).default({}),
       /** Header name -> secret reference (e.g. `authorization`). */
       headerSecrets: z.record(z.string(), z.string()).default({}),
+      /**
+       * Hosts the server needs. An HTTP server is contacted at its `url` only, so this may list
+       * the host of the url and nothing else (ADR 0016 section 4.1); `checkHttpConfig` enforces it.
+       */
+      egress: z.array(z.string().min(1).max(255)).max(16).optional(),
       timeoutMs: z.number().int().positive().default(30_000),
       maxResultBytes: z
         .number()

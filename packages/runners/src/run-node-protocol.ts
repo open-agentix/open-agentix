@@ -47,6 +47,13 @@ export const StepHandoverSchema = z.strictObject({
       allowlist: z.array(z.string()),
     })
     .optional(),
+  /**
+   * Which HTTP MCP servers of the step a tenant defined (ADR 0016 S1): the node applies the tenant
+   * destination rules to them and treats the others as operator configuration. Always sent by the
+   * control node; a handover without the field makes the node treat every HTTP server as tenant
+   * defined (fail closed).
+   */
+  http: z.strictObject({ tenantServers: z.array(z.string()) }).optional(),
 });
 export type StepHandover = z.infer<typeof StepHandoverSchema>;
 

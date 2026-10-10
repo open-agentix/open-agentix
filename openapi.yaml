@@ -5888,7 +5888,7 @@ paths:
                 $ref: "#/components/schemas/Error"
   /v1/connections/{id}/test:
     post:
-      summary: Send one tiny completion through a model connection (audited, costs a few tokens)
+      summary: "Test a connection (audited). Model connection: one tiny completion (costs a few tokens, needs `model`). MCP connection (streamable-http): `initialize` and `tools/list` through the outbound dispatcher, answered with a category only; rate limited to 10 per minute per user"
       tags:
         - connections
       requestBody:
@@ -5902,8 +5902,6 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 200
-              required:
-                - model
       parameters:
         - schema:
             type: string
@@ -5920,37 +5918,97 @@ paths:
           content:
             application/json:
               schema:
+                anyOf:
+                  - type: object
+                    properties:
+                      ok:
+                        type: boolean
+                      latencyMs:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      inputTokens:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      outputTokens:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      costMicros:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      error:
+                        type:
+                          - string
+                          - "null"
+                    required:
+                      - ok
+                      - latencyMs
+                      - inputTokens
+                      - outputTokens
+                      - costMicros
+                      - error
+                    additionalProperties: false
+                  - type: object
+                    properties:
+                      ok:
+                        type: boolean
+                      category:
+                        type: string
+                        enum:
+                          - ok
+                          - config_invalid
+                          - egress_denied
+                          - dns_failed
+                          - connect_failed
+                          - proxy_refused
+                          - tls_untrusted
+                          - tls_hostname_mismatch
+                          - auth_failed
+                          - http_error
+                          - protocol_error
+                          - timeout
+                          - error
+                      httpClass:
+                        description: status class of an HTTP error only
+                        type: string
+                        enum:
+                          - 4xx
+                          - 5xx
+                      latency:
+                        type: string
+                        enum:
+                          - <100ms
+                          - <1s
+                          - ">=1s"
+                      toolCount:
+                        description: number of listed tools, never their names
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                    required:
+                      - ok
+                      - category
+                      - latency
+                    additionalProperties: false
+                    description: "categorized result of an MCP connection test: no body, header, address or tool text"
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
                 type: object
                 properties:
-                  ok:
-                    type: boolean
-                  latencyMs:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  inputTokens:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  outputTokens:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  costMicros:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
                   error:
-                    type:
-                      - string
-                      - "null"
+                    type: string
+                  message:
+                    type: string
+                  details: {}
                 required:
-                  - ok
-                  - latencyMs
-                  - inputTokens
-                  - outputTokens
-                  - costMicros
                   - error
+                  - message
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -5965,6 +6023,22 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "429":
           description: Default Response
           content:
             application/json:
@@ -10230,6 +10304,17 @@ paths:
                     required:
                       - tenantServers
                       - allowlist
+                    additionalProperties: false
+                  http:
+                    description: tenant-defined streamable-http servers of the step (ADR 0016)
+                    type: object
+                    properties:
+                      tenantServers:
+                        type: array
+                        items:
+                          type: string
+                    required:
+                      - tenantServers
                     additionalProperties: false
                 required:
                   - agentId

@@ -6,6 +6,7 @@ import {
   STEP_KINDS,
 } from '@openagentix/core';
 import { AGENT_STATUSES } from '../services/agent-filters.js';
+import { MCP_TEST_CATEGORIES } from '@openagentix/mcp';
 import { PatchAttachmentSchema } from '@openagentix/runners';
 import { z } from 'zod';
 
@@ -378,7 +379,8 @@ export const ModelProposalSchema = z.object({
   toolCall: z.boolean().nullable(),
   priceSource: z.enum(['catalog', 'local', 'unknown']),
 });
-export const ConnectionTestBody = z.object({ model: z.string().min(1).max(200) });
+/** `model` is required for model connections and ignored for MCP connections. */
+export const ConnectionTestBody = z.object({ model: z.string().min(1).max(200).optional() });
 export const ConnectionTestResultSchema = z.object({
   ok: z.boolean(),
   latencyMs: z.number().int(),
@@ -387,6 +389,15 @@ export const ConnectionTestResultSchema = z.object({
   costMicros: z.number().int(),
   error: z.string().nullable(),
 });
+export const McpConnectionTestResultSchema = z
+  .object({
+    ok: z.boolean(),
+    category: z.enum(MCP_TEST_CATEGORIES),
+    httpClass: z.enum(['4xx', '5xx']).optional().describe('status class of an HTTP error only'),
+    latency: z.enum(['<100ms', '<1s', '>=1s']),
+    toolCount: z.number().int().optional().describe('number of listed tools, never their names'),
+  })
+  .describe('categorized result of an MCP connection test: no body, header, address or tool text');
 export const ConnectionUpdateBody = z.object({ config: z.record(z.string(), z.unknown()) });
 
 export const PolicySchema = z.object({
@@ -841,6 +852,10 @@ export const StepHandoverSchema = z.object({
     .object({ tenantServers: z.array(z.string()), allowlist: z.array(z.string()) })
     .optional()
     .describe('tenant-defined stdio servers of the step and the command allowlist (ADR 0016)'),
+  http: z
+    .object({ tenantServers: z.array(z.string()) })
+    .optional()
+    .describe('tenant-defined streamable-http servers of the step (ADR 0016)'),
 });
 export const StepHandoverResultBody = z.object({
   agentId: z.string(),

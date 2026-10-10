@@ -12,6 +12,7 @@ import { IdentityService } from './identity.js';
 import { IngestService } from './ingest.js';
 import { ModelAccountingService } from './model-accounting.js';
 import { ModelProxyService } from './model-proxy.js';
+import { McpTestService } from './mcp-test.js';
 import { ModelsService } from './models.js';
 import { RunNodesService } from './run-nodes.js';
 import { RunsService } from './runs.js';
@@ -34,6 +35,7 @@ export interface Services {
   guidelines: GuidelinesService;
   tenants: TenantsService;
   models: ModelsService;
+  mcpTest: McpTestService;
   agentCheck: AgentCheckService;
 }
 
@@ -95,6 +97,7 @@ export function createServices(ctx: AppContext): Services {
     guidelines,
     tenants,
     models,
+    mcpTest: new McpTestService(ctx, catalog, runNodes, audit),
     agentCheck,
   };
 }

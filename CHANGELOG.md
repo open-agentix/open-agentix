@@ -40,6 +40,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **HTTP MCP servers go through the outbound dispatcher with tenant destination checks (ADR 0016
+  slice S1, #231)**: the MCP streamable-HTTP transport used a bare proxy-aware `fetch`, so a tenant
+  MCP URL could reach cloud metadata, private ranges and localhost, follow redirects to internal
+  hosts and be rebound by DNS. Every request now uses `createOutboundDispatcher` (purpose `mcp`,
+  tenant scope for tenant, team and agent connections: https only, public addresses only, pinned
+  DNS, `redirect: error`, 64 MiB cap), is limited to the origin of the connection URL
+  (`mcp_egress_denied`), and tenant URLs are checked when a connection is saved (`422
+  egress_denied`, all numeric and IPv6 spellings). Platform-owned headers, credentials in the URL
+  and header duplicates are refused. New `POST /v1/connections/{id}/test` mode for MCP connections
+  (`initialize` + `tools/list`, category only, rate limited, audited). Air-gapped start-up check and
+  connect time cover MCP `egress` entries. See `docs/mcp.md` ("HTTP MCP servers").
+
 - **Tenant stdio MCP servers no longer run next to the worker (ADR 0016 slice S0, #230)**: any
   tenant admin could create a `stdio` MCP connection with an arbitrary `command`, and in-process
   steps (the default runner) started it as a child of the trusted worker, with the worker's
@@ -53,6 +65,15 @@ All notable changes to this project are documented here. The format follows
   stdio config could reach a node unchecked.
 
 ### Breaking
+
+- **HTTP MCP connections (ADR 0016 S1, #231)**: tenant, team and agent `streamable-http` connections
+  must use `https://` and a public destination (`422 egress_denied` on create/update, and at run
+  time for stored ones that no longer pass); URLs with credentials and the platform-owned headers
+  listed in `docs/mcp.md` are refused (`400 mcp_url_invalid`, `400 mcp_header_forbidden`; stored
+  connections that break them fail at run time); `POST /v1/connections/{id}/test` takes `model`
+  only for model connections. In-cluster HTTP MCP servers need a platform connection (or
+  `privateAllow` in the network configuration). The run-node handover has a new field
+  `http.tenantServers`; nodes of an older version reject it and fail closed.
 
 - **Tenant stdio MCP connections (ADR 0016 S0, #230)**: (1) `command` of a tenant, team or agent
   `stdio` connection must be an absolute path that matches `OAX_MCP_STDIO_COMMANDS` (default empty:
