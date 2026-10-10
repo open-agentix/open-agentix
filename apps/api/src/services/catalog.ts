@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
   getEgressPolicy,
+  hasPermission,
   hasTenantPrefix,
   pinnedToolsOf,
   resolveRoute,
@@ -42,7 +43,7 @@ import {
   type ModelEntry,
 } from '@openagentix/providers';
 import { legacyNetwork } from '@openagentix/providers';
-import { and, asc, desc, eq, gt, inArray, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import {
@@ -640,6 +641,7 @@ export class CatalogService {
     const scopeId = input.scopeId ?? null;
     await this.assertScope(actor, scope, scopeId);
     const config = await this.prepareConfig(actor, input.kind, input.name, scope, input.config);
+    this.assertPropagationAllowed(actor, input.kind, scope, config, undefined);
     const [exists] = await this.ctx.db
       .select({ id: connections.id })
       .from(connections)
@@ -685,6 +687,49 @@ export class CatalogService {
     return row;
   }
 
+  /**
+   * ADR 0015 S8: turning `telemetry.propagate` on sends the run's trace id to a server the platform
+   * does not control, so it is not part of the integrator's `connections:write`. A platform
+   * connection is operator-only already (`assertScope`, `getOwnConnection`); every other scope needs
+   * a tenant-wide admin binding (`settings:write`). Switching it off, or saving a connection that
+   * already had it on, needs nothing extra.
+   */
+  private assertPropagationAllowed(
+    actor: Principal,
+    kind: ConnectionKind,
+    scope: ConnectionScope,
+    next: Record<string, unknown>,
+    previous: unknown,
+  ): void {
+    if (kind !== 'mcp' || scope === 'platform') return;
+    const on = (c: unknown) =>
+      (c as { telemetry?: { propagate?: unknown } } | null)?.telemetry?.propagate === true;
+    if (!on(next)) return;
+    // Already on and still pointing at the same destination: nothing new is exposed. A changed
+    // transport, url, command, args, env, envSecrets or egress sends the trace id somewhere else (or
+    // lets the process reach more), which needs the admin again. Keys are sorted so that the order
+    // jsonb returns them in does not matter.
+    const stable = (v: unknown): unknown =>
+      Array.isArray(v)
+        ? v.map(stable)
+        : v && typeof v === 'object'
+          ? Object.fromEntries(
+              Object.entries(v as Record<string, unknown>)
+                .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+                .map(([k, x]) => [k, stable(x)]),
+            )
+          : v;
+    const target = (c: unknown) => {
+      const o = (c ?? {}) as Record<string, unknown>;
+      return JSON.stringify(
+        stable([o.transport, o.url, o.command, o.args, o.env, o.envSecrets, o.egress]),
+      );
+    };
+    if (on(previous) && target(previous) === target(next)) return;
+    if (!hasPermission(actor, 'settings:write', null))
+      throw forbidden('enabling telemetry.propagate needs a tenant admin');
+  }
+
   private async invalidateConnections(): Promise<void> {
     await this.ctx.cache.delPrefix('connections:');
   }
@@ -698,11 +743,35 @@ export class CatalogService {
       current.scope as ConnectionScope,
       config,
     );
+    this.assertPropagationAllowed(
+      actor,
+      current.kind as ConnectionKind,
+      current.scope as ConnectionScope,
+      parsed,
+      current.config,
+    );
     const [row] = await this.ctx.db
       .update(connections)
       .set({ config: parsed, updatedAt: this.ctx.now() })
-      .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)))
+      .where(
+        and(
+          eq(connections.id, id),
+          eq(connections.tenantId, actor.tenantId),
+          // Compare and swap: the checks above were made against the config read at the start. If
+          // someone changed it meanwhile, nothing is written (409) instead of skipping the checks.
+          sql`${connections.config} = ${JSON.stringify(current.config)}::jsonb`,
+        ),
+      )
       .returning();
+    if (!row) {
+      // Gone (deleted meanwhile) is a 404; present but different is a 409.
+      const [still] = await this.ctx.db
+        .select({ id: connections.id })
+        .from(connections)
+        .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)));
+      if (!still) throw notFound('connection');
+      throw conflict(`connection "${current.name}" was changed meanwhile; reload and try again`);
+    }
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,

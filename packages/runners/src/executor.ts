@@ -764,10 +764,33 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
                       ...toolAttrs,
                     },
                     async (ts) => {
+                      const traceparent = ts.traceparent?.();
                       const r = await ctx.tools.call(
                         call,
                         { decide: async () => decision },
-                        { approved, ...(signal ? { signal } : {}) },
+                        {
+                          approved,
+                          ...(signal ? { signal } : {}),
+                          // Offered, not sent: the gateway checks both opt-ins (ADR 0015 S8).
+                          ...(traceparent
+                            ? {
+                                trace: {
+                                  traceparent,
+                                  onPropagated: (info: {
+                                    method: 'tools/call';
+                                    protocolVersion?: string;
+                                  }) =>
+                                    ts.setAttributes({
+                                      'mcp.method.name': info.method,
+                                      ...(info.protocolVersion
+                                        ? { 'mcp.protocol.version': info.protocolVersion }
+                                        : {}),
+                                      'oax.mcp.propagated': true,
+                                    }),
+                                },
+                              }
+                            : {}),
+                        },
                       );
                       // Sizes and flags only: the result text and the arguments are never exported.
                       if (r.status === 'ok')

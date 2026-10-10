@@ -92,7 +92,8 @@ registered and no socket is opened.
   `OAX_OTEL_SAMPLE_RATIO`, see [Sampling](#sampling)), the span limits (`OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*`), the
   batch settings (`OTEL_BSP_*`) and the export timeout. No global propagator is registered
   (`OTEL_PROPAGATORS` is not read): nothing injects `traceparent` or `baggage` into outbound
-  requests. `OTEL_EXPORTER_OTLP_COMPRESSION` is still applied by the exporter (it changes only
+  requests. The one exception is the opt-in MCP `tools/call` context of
+  [MCP trace context](mcp.md#trace-context-propagation-opt-in) (default off). `OTEL_EXPORTER_OTLP_COMPRESSION` is still applied by the exporter (it changes only
   the encoding of the payload).
 - **No auto-instrumentation.** When another OpenTelemetry SDK is registered in the process (for
   example `@opentelemetry/auto-instrumentations-node` loaded with `NODE_OPTIONS=--require ...`,
@@ -209,7 +210,7 @@ Steps that a run node executes (isolated runners, harnesses) are not instrumente
 | `chat` | `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature`, `gen_ai.response.finish_reasons`, `gen_ai.usage.*` tokens (including cache read/write when reported), `oax.cost.micro_usd`, `oax.cost.priced`, `oax.usage.source`, `oax.model.via`, `oax.reservation.result` (`reserved`, `none`), `oax.provider.instance` |
 | `oax.policy.check` | `gen_ai.tool.name`, `oax.mcp.server`, `oax.policy.effect`, `oax.policy.reason_codes` (codes, never messages) |
 | `oax.approval.wait` | `oax.approval.outcome` (`approved`, `rejected`, `timeout`) |
-| `execute_tool` | `gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.tool.type=extension`, `gen_ai.tool.call.id` (only in the safe shape), `oax.mcp.server`, `oax.tool.result_bytes`, `oax.tool.truncated`, `oax.tool.is_error`, `oax.cost.micro_usd`; `error.type` for a refused or failed call |
+| `execute_tool` | `gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.tool.type=extension`, `gen_ai.tool.call.id` (only in the safe shape), `oax.mcp.server`, `mcp.method.name` (`tools/call`), `mcp.protocol.version` (closed list) and `oax.mcp.propagated` (all three only when the call carried a `traceparent`), `oax.tool.result_bytes`, `oax.tool.truncated`, `oax.tool.is_error`, `oax.cost.micro_usd`; `error.type` for a refused or failed call |
 
 Every span also carries `oax.run.id`, `oax.tenant.id` and `oax.tenant.root_id`.
 
@@ -356,6 +357,17 @@ changing `otel` in a stored entry breaks the chain like any other payload change
 principals that may read the run (same tenant and permission as the rest of the run); the run
 list, the trigger response and the other run endpoints do not contain them.
 
+## MCP trace context and shared collectors
+
+With [MCP trace context propagation](mcp.md#trace-context-propagation-opt-in) switched on for a
+connection, the MCP server learns the run's trace id (and the span id of each `execute_tool` span; an
+unsampled span goes out with flags `00`). The platform never ingests the server's spans, but a
+server that can reach your collector could send spans with that trace id (trace poisoning) and set
+attributes of its own, including `oax.tenant.id` (tenant spoofing). In a collector shared by tenants,
+route and separate by the authenticated resource or ingestion endpoint, not by `oax.tenant.id` of
+spans you did not produce, and keep the collector unreachable from MCP servers. A running run keeps
+the connection config it started with, so switching `propagate` off takes effect for new runs.
+
 ## Sampling
 
 Volume is driven by the number of runs, so the default is `OAX_OTEL_SAMPLE_RATIO=1` (every run
@@ -456,9 +468,7 @@ Every log line written inside a span carries `trace_id` and `span_id` (hex, ids 
 
 ## Configuration
 
-See [`configuration.md`](configuration.md#observability) for the table of variables. Keys whose
-feature lands in a later slice (MCP propagation) are parsed and validated now and have no effect
-yet; the sampling keys are in use since slice S6; `OAX_OTEL_NODE_EVENTS_MAX` is in use since slice S4 and
+See [`configuration.md`](configuration.md#observability) for the table of variables. The sampling keys are in use since slice S6; `OAX_OTEL_NODE_EVENTS_MAX` is in use since slice S4 and
 `OAX_OTEL_GENAI_METRICS` since slice S5.
 
 ## Metrics
