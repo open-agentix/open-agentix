@@ -10,6 +10,7 @@ import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
 import type { PublicUser, TeamRow, TenantRow, TokenInfo } from '../services/identity.js';
 import type { EventRow, SourceRow } from '../services/ingest.js';
 import type { ApprovalRow, RunRow, StepRow } from '../services/runs.js';
+import type { BindingView } from '../services/tenant-role-bindings.js';
 
 const iso = (d: Date | string) => (typeof d === 'string' ? d : d.toISOString());
 const isoOrNull = (d: Date | string | null | undefined) => (d ? iso(d) : null);
@@ -215,6 +216,19 @@ export const tenantDto = (t: TenantRow, slugPath: string) => ({
   monthlyBudgetUsd: t.monthlyBudgetMicros === null ? null : Number(t.monthlyBudgetMicros) / 1e6,
   secretRefs: t.secretRefs,
   createdAt: iso(t.createdAt),
+});
+
+export const roleBindingDto = (b: BindingView) => ({
+  id: b.id,
+  tenantId: b.tenantId,
+  user: b.user,
+  role: b.role,
+  useCase: b.useCase,
+  inherit: b.inherit,
+  expiresAt: isoOrNull(b.expiresAt),
+  source: b.source,
+  grantedBy: b.grantedBy,
+  createdAt: iso(b.createdAt),
 });
 
 export const checkpointDto = (c: AuditCheckpoint) => c;

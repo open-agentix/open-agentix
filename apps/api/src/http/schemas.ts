@@ -716,6 +716,79 @@ export const TenantPatchBody = z.object({
     .optional()
     .describe('secret reference globs (`*` wildcard only); an empty list allows no secret'),
 });
+export const RoleBindingSchema = z.object({
+  id: Id,
+  tenantId: Id.describe('the node the role is bound on'),
+  user: z.object({ id: Id, email: z.string(), displayName: z.string() }),
+  role: z.string(),
+  useCase: z.string().nullable().describe('always null until use-case bindings arrive (S8)'),
+  inherit: z
+    .boolean()
+    .describe('true: the role also applies at every descendant of the node (ADR 0014 section 2)'),
+  expiresAt: Iso.nullable(),
+  source: z
+    .enum(['mirror', 'grant'])
+    .describe(
+      '`mirror` follows the global roles of the user (home node); `grant` was created through this API',
+    ),
+  grantedBy: Id.nullable(),
+  createdAt: Iso,
+});
+export const RoleBindingParams = z.object({ id: Id, bindingId: Id });
+export const RoleBindingListQuery = z.object({
+  userId: Id.optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  cursor: z.string().max(200).optional(),
+});
+export const RoleBindingCreateBody = z.object({
+  userId: Id,
+  role: RoleSchema,
+  inherit: z
+    .boolean()
+    .describe('required: `false` = this tenant only, `true` = this tenant and all sub-tenants'),
+  expiresAt: z.string().datetime({ offset: true }).nullish(),
+  useCase: z
+    .string()
+    .min(1)
+    .max(200)
+    .nullish()
+    .describe('refused with 422 `use_case_bindings_unsupported` until ADR 0014 S8'),
+});
+export const RoleBindingPatchBody = z
+  .object({
+    role: RoleSchema.optional(),
+    inherit: z.boolean().optional(),
+    expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
+  })
+  .refine((b) => b.role !== undefined || b.inherit !== undefined || b.expiresAt !== undefined, {
+    message: 'nothing to change',
+  });
+export const EnableInheritanceBody = z.object({
+  roles: z.array(RoleSchema).min(1).max(GRANTABLE_ROLES.length),
+  dryRun: z
+    .boolean()
+    .default(true)
+    .describe('report who and which nodes would gain access without changing anything'),
+});
+const NodeStub = z.object({ id: Id, slug: z.string(), slugPath: z.string(), name: z.string() });
+export const EnableInheritanceSchema = z.object({
+  dryRun: z.boolean(),
+  roles: z.array(RoleSchema),
+  bindings: z.number().int().describe('bindings that become (or would become) inheriting'),
+  users: z.number().int(),
+  truncated: z.boolean().describe('`items` lists the first 500 bindings only'),
+  items: z.array(
+    z.object({
+      bindingId: Id,
+      role: z.string(),
+      source: z.enum(['mirror', 'grant']),
+      user: z.object({ id: Id, email: z.string(), displayName: z.string() }),
+      tenant: NodeStub.describe('the node the binding is bound on'),
+      nodeCount: z.number().int().describe('descendants that gain access'),
+      nodes: z.array(NodeStub).describe('the first 50 of them'),
+    }),
+  ),
+});
 export const TenantRefSchema = z.object({ id: Id, slug: z.string(), name: z.string() });
 export const ActingTenantSchema = z.object({
   id: Id,

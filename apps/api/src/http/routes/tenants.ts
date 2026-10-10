@@ -2,10 +2,17 @@ import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import type { TenantRow } from '../../services/tenants.js';
-import { tenantDto } from '../dto.js';
+import { roleBindingDto, tenantDto } from '../dto.js';
 import {
+  EnableInheritanceBody,
+  EnableInheritanceSchema,
   ErrorSchema,
   IdParams,
+  RoleBindingCreateBody,
+  RoleBindingListQuery,
+  RoleBindingParams,
+  RoleBindingPatchBody,
+  RoleBindingSchema,
   TenantCreateBody,
   TenantPatchBody,
   TenantSchema,
@@ -20,7 +27,7 @@ const sec = [{ bearer: [] }];
 const tags = ['tenants'];
 
 export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
-  const { tenants } = services;
+  const { tenants, roleBindings } = services;
   const view = async (row: TenantRow) =>
     tenantDto(row, (await tenants.slugPaths([row])).get(row.id)!);
 
@@ -161,5 +168,168 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => view(await tenants.update(principalOf(req), req.params.id, req.body)),
+  );
+
+  const asDate = (v: string | null | undefined) =>
+    v === undefined ? undefined : v === null ? null : new Date(v);
+
+  app.get(
+    '/v1/tenants/:id/role-bindings',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['role-bindings'],
+        summary: 'List the role bindings bound on a tenant',
+        description:
+          'Needs `users:read` on the tenant (directly or through an inheriting binding above it). A ' +
+          'tenant the caller cannot see is 404. `source` tells mirror rows (the global roles of ' +
+          'the user) from grants made through this API (ADR 0014 section 4).',
+        security: sec,
+        params: IdParams,
+        querystring: RoleBindingListQuery,
+        response: {
+          200: z.object({
+            items: z.array(RoleBindingSchema),
+            nextCursor: z.string().nullable(),
+          }),
+          403: ErrorSchema,
+          404: ErrorSchema,
+        },
+      },
+    },
+    async (req) => {
+      const r = await roleBindings.list(principalOf(req), req.params.id, req.query);
+      return { items: r.items.map(roleBindingDto), nextCursor: r.nextCursor };
+    },
+  );
+
+  app.post(
+    '/v1/tenants/:id/role-bindings',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['role-bindings'],
+        summary: 'Bind a role to a user on a tenant',
+        description:
+          'The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above ' +
+          "one's own permissions, an inheriting grant needs an inheriting binding of at least the " +
+          'same role on the tenant or above, no grant to oneself (platform operators excepted), ' +
+          'the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown ' +
+          'id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. ' +
+          'Audited as `tenant.role_bound` in the partition of the tenant.',
+        security: sec,
+        params: IdParams,
+        body: RoleBindingCreateBody,
+        response: {
+          201: RoleBindingSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+          422: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const b = req.body;
+      const created = await roleBindings.create(principalOf(req), req.params.id, {
+        userId: b.userId,
+        role: b.role,
+        inherit: b.inherit,
+        expiresAt: asDate(b.expiresAt) ?? null,
+        useCase: b.useCase ?? null,
+      });
+      return reply.status(201).send(roleBindingDto(created));
+    },
+  );
+
+  app.patch(
+    '/v1/tenants/:id/role-bindings/:bindingId',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['role-bindings'],
+        summary: 'Change the role, inheritance or expiry of a binding',
+        description:
+          'Every change re-checks all grant rules for the old and the new state (who may grant ' +
+          'may revoke). Mirror rows (`source: mirror`) accept `inherit` only; their role follows ' +
+          "the user's global roles. Narrowing or removing the last inheriting administrator of an " +
+          'organisation is 409 `last_admin`. Audited as `tenant.role_binding_changed`.',
+        security: sec,
+        params: RoleBindingParams,
+        body: RoleBindingPatchBody,
+        response: {
+          200: RoleBindingSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+          422: ErrorSchema,
+        },
+      },
+    },
+    async (req) => {
+      const b = req.body;
+      return roleBindingDto(
+        await roleBindings.update(principalOf(req), req.params.id, req.params.bindingId, {
+          role: b.role,
+          inherit: b.inherit,
+          expiresAt: asDate(b.expiresAt),
+        }),
+      );
+    },
+  );
+
+  app.delete(
+    '/v1/tenants/:id/role-bindings/:bindingId',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['role-bindings'],
+        summary: 'Remove a role binding',
+        description:
+          'Needs `users:write` and the same authority as granting it; a user may always remove ' +
+          'their own binding (`reason: self`). The last inheriting administrator of an ' +
+          'organisation cannot be removed (409 `last_admin`, platform operators excepted). Mirror ' +
+          'rows are removed by changing the global roles of the user (409 `mirror_binding`). ' +
+          'Audited as `tenant.role_unbound`.',
+        security: sec,
+        params: RoleBindingParams,
+        response: {
+          204: z.null(),
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      await roleBindings.remove(principalOf(req), req.params.id, req.params.bindingId);
+      return reply.status(204).send(null);
+    },
+  );
+
+  app.post(
+    '/v1/tenants/:id/role-bindings/enable-inheritance',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['role-bindings'],
+        summary: 'Bulk opt-in: make the plain bindings of some roles inherit (platform operators)',
+        description:
+          'For an organisation root. Reports the bindings, users and nodes that gain access; ' +
+          'with `dryRun` (the default) nothing changes. Bindings of disabled users and expired ' +
+          'bindings are left alone. Audited as `tenant.inheritance_enabled` plus one ' +
+          '`tenant.role_binding_changed` per binding.',
+        security: sec,
+        params: IdParams,
+        body: EnableInheritanceBody,
+        response: {
+          200: EnableInheritanceSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          422: ErrorSchema,
+        },
+      },
+    },
+    async (req) => roleBindings.enableInheritance(principalOf(req), req.params.id, req.body),
   );
 }

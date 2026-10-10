@@ -7009,6 +7009,596 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/tenants/{id}/role-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the role bindings bound on a tenant
+         * @description Needs `users:read` on the tenant (directly or through an inheriting binding above it). A tenant the caller cannot see is 404. `source` tells mirror rows (the global roles of the user) from grants made through this API (ADR 0014 section 4).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    userId?: string;
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description the node the role is bound on
+                                 */
+                                tenantId: string;
+                                user: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    email: string;
+                                    displayName: string;
+                                };
+                                role: string;
+                                /** @description always null until use-case bindings arrive (S8) */
+                                useCase: string | null;
+                                /** @description true: the role also applies at every descendant of the node (ADR 0014 section 2) */
+                                inherit: boolean;
+                                expiresAt: string | null;
+                                /**
+                                 * @description `mirror` follows the global roles of the user (home node); `grant` was created through this API
+                                 * @enum {string}
+                                 */
+                                source: "mirror" | "grant";
+                                grantedBy: string | null;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            }[];
+                            nextCursor: string | null;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Bind a role to a user on a tenant
+         * @description The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. Audited as `tenant.role_bound` in the partition of the tenant.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        userId: string;
+                        /** @enum {string} */
+                        role: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer";
+                        /** @description required: `false` = this tenant only, `true` = this tenant and all sub-tenants */
+                        inherit: boolean;
+                        expiresAt?: string | null;
+                        /** @description refused with 422 `use_case_bindings_unsupported` until ADR 0014 S8 */
+                        useCase?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description the node the role is bound on
+                             */
+                            tenantId: string;
+                            user: {
+                                /** Format: uuid */
+                                id: string;
+                                email: string;
+                                displayName: string;
+                            };
+                            role: string;
+                            /** @description always null until use-case bindings arrive (S8) */
+                            useCase: string | null;
+                            /** @description true: the role also applies at every descendant of the node (ADR 0014 section 2) */
+                            inherit: boolean;
+                            expiresAt: string | null;
+                            /**
+                             * @description `mirror` follows the global roles of the user (home node); `grant` was created through this API
+                             * @enum {string}
+                             */
+                            source: "mirror" | "grant";
+                            grantedBy: string | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{id}/role-bindings/{bindingId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a role binding
+         * @description Needs `users:write` and the same authority as granting it; a user may always remove their own binding (`reason: self`). The last inheriting administrator of an organisation cannot be removed (409 `last_admin`, platform operators excepted). Mirror rows are removed by changing the global roles of the user (409 `mirror_binding`). Audited as `tenant.role_unbound`.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    bindingId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Change the role, inheritance or expiry of a binding
+         * @description Every change re-checks all grant rules for the old and the new state (who may grant may revoke). Mirror rows (`source: mirror`) accept `inherit` only; their role follows the user's global roles. Narrowing or removing the last inheriting administrator of an organisation is 409 `last_admin`. Audited as `tenant.role_binding_changed`.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    bindingId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        role?: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer";
+                        inherit?: boolean;
+                        expiresAt?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /**
+                             * Format: uuid
+                             * @description the node the role is bound on
+                             */
+                            tenantId: string;
+                            user: {
+                                /** Format: uuid */
+                                id: string;
+                                email: string;
+                                displayName: string;
+                            };
+                            role: string;
+                            /** @description always null until use-case bindings arrive (S8) */
+                            useCase: string | null;
+                            /** @description true: the role also applies at every descendant of the node (ADR 0014 section 2) */
+                            inherit: boolean;
+                            expiresAt: string | null;
+                            /**
+                             * @description `mirror` follows the global roles of the user (home node); `grant` was created through this API
+                             * @enum {string}
+                             */
+                            source: "mirror" | "grant";
+                            grantedBy: string | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/v1/tenants/{id}/role-bindings/enable-inheritance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk opt-in: make the plain bindings of some roles inherit (platform operators)
+         * @description For an organisation root. Reports the bindings, users and nodes that gain access; with `dryRun` (the default) nothing changes. Bindings of disabled users and expired bindings are left alone. Audited as `tenant.inheritance_enabled` plus one `tenant.role_binding_changed` per binding.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        roles: ("admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer")[];
+                        /**
+                         * @description report who and which nodes would gain access without changing anything
+                         * @default true
+                         */
+                        dryRun?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            dryRun: boolean;
+                            roles: ("admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer")[];
+                            /** @description bindings that become (or would become) inheriting */
+                            bindings: number;
+                            users: number;
+                            /** @description `items` lists the first 500 bindings only */
+                            truncated: boolean;
+                            items: {
+                                /** Format: uuid */
+                                bindingId: string;
+                                role: string;
+                                /** @enum {string} */
+                                source: "mirror" | "grant";
+                                user: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    email: string;
+                                    displayName: string;
+                                };
+                                /** @description the node the binding is bound on */
+                                tenant: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    slugPath: string;
+                                    name: string;
+                                };
+                                /** @description descendants that gain access */
+                                nodeCount: number;
+                                /** @description the first 50 of them */
+                                nodes: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slug: string;
+                                    slugPath: string;
+                                    name: string;
+                                }[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/demo/scenarios": {
         parameters: {
             query?: never;
