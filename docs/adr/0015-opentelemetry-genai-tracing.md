@@ -1,7 +1,7 @@
 # ADR 0015: Observability with OpenTelemetry GenAI semantic conventions
 
-- Status: Proposed. Slices S1, S2, S3 and S4 are implemented (see "Implementation notes S2/S3/S4"
-  below and [`observability.md`](../observability.md)); S5 to S10 are open.
+- Status: Proposed. Slices S1 to S5 are implemented (see "Implementation notes S2/S3/S4/S5"
+  below and [`observability.md`](../observability.md)); S6 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W3-5 (#37, "Observability completion: step, model and tool spans and the missing
   metrics"); RM-53 of the roadmap gap list; replaces the span list in the W3-5 acceptance
@@ -712,6 +712,43 @@ Decisions taken while implementing slice S4 (#209) where the text above left roo
 - **Not part of S4:** `oax_node_reports_total{kind,result}` (slice S5), `oax.policy.bundle_digests`,
   audit `payload.otel.spanId` pointing at the node spans (`policy.decision` and `step.model_call`
   entries of nodes link to the run's root span as before).
+
+## Implementation notes S5
+
+Decisions taken while implementing slice S5 (#210) where the text above left room:
+
+- **One place per fact.** Cost and token counters are recorded from the step writer's result
+  (`StepMetric`), which both the in-process path and the model proxy go through, so
+  `oax_tokens_total{via}` and `oax_cost_micro_usd_total` cannot disagree between the paths.
+  Tool calls, approvals and step durations come from `ExecutorObserver` hooks
+  (`RunnerContext.observer`, like the span hooks and independent of tracing); guard hits, budget
+  kills, run durations and node reports come from the control plane's `recordStep` and
+  `completeRun`; budget refusals at reservation come from the accounting service, where the
+  scope (`run`, `step`, `team`, `use_case`, `tenant`) and the limit are known.
+- **Provider family.** The step row keeps the provider instance name (the ledger and the API need
+  it). The metric label is resolved from the run's scope (`ModelsService.providerLabel`: the
+  connection that wins for the name, else the platform provider, mapped by `genAiProviderName`) and
+  closed again against the fixed set; a failed lookup is `other`, never the instance name.
+- **Normalisation at the recording method.** `Metrics` methods (`toolCall`, `tokens`, `cost`, ...)
+  pass every label value through `closed(set, value, fallback)`. The cardinality suite also fails a
+  new `oax_` metric that is not declared in its allowlist table.
+- **`trigger` labels.** `oax_runs_created_total`, `oax_runs_refused_total` and
+  `oax_run_duration_seconds` use the trigger family only (`manual`, `webhook`, `mail`, `kafka`,
+  `cron`, `demo`, else `other`). This narrows two existing labels (listed under Breaking in the
+  changelog).
+- **Approximations that are documented, not hidden.** A run node reports only tool calls its gate
+  allowed, so `oax_tool_calls_total` for nodes is `decision="allow"`; its denials are visible in
+  `oax_policy_decisions_total`. The `step` budget scope is emitted by the reservation check
+  (step budgets of `budget:` in the definition). `oax_budget_exhausted_total{limit="tool_calls"}`
+  and `{limit="timeout"}` come from the control agent's kill rules.
+- **`oax_node_reports_total`** counts the node *step* reports (accepted, refused, dropped). The
+  node *event* path of slice S4 keeps its own counters `oax_otel_node_events_dropped_total` and
+  `oax_otel_node_context_mismatch_total`.
+- **GenAI metrics** use one histogram per operation (`execute_tool`, `invoke_agent`,
+  `invoke_workflow`) with the labels operation and `error_type`; the inference series carry the
+  provider family and the catalog-bounded model. The durations of run-node tool reports are not
+  observed (the node's own claim).
+- No migration.
 
 ## Open questions (owner decisions needed)
 

@@ -316,10 +316,7 @@ export class IngestService {
         now: () => this.ctx.now().getTime(),
       }));
     } catch (e) {
-      this.ctx.metrics.eventsIngested.inc({
-        source: source.name,
-        outcome: e instanceof WebhookError ? e.code : 'error',
-      });
+      this.ctx.metrics.eventIngested(kind, e instanceof WebhookError ? e.code : 'error');
       throw e;
     }
     let event: OaxEvent;
@@ -383,7 +380,9 @@ export class IngestService {
         });
       runId = latest?.id ?? null;
     }
-    this.ctx.metrics.eventsIngested.inc({ source: source.name, outcome: 'accepted' });
+    // The kind (webhook, mail, kafka, cron) is the prefix of `triggeredBy`; the source name that
+    // follows it is tenant-chosen and never a metric label.
+    this.ctx.metrics.eventIngested(triggeredBy.split(':')[0] ?? '', 'accepted');
     return { eventId, runId, reason, status: 'accepted' };
   }
 

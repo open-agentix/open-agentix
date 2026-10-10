@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 // Benchmark of the control node hot paths with autocannon.
-// Usage: pnpm build && node scripts/bench.mjs [--duration 10] [--connections 10]
+// Usage: pnpm build && node scripts/bench.mjs [--duration 10] [--connections 10] [--otel] [--write]
+// --otel: run with the OpenTelemetry exporter on, against a local fake collector (ADR 0015
+// section 13). With --write the result is stored as the `otel` row of docs/performance-baseline.json
+// and the plain baseline is kept; compare the two rows for the overhead of tracing.
 // Uses embedded PGlite unless OAX_DATABASE_URL points to PostgreSQL. No external network.
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import autocannon from 'autocannon';
-import { createControlNode, loadConfig } from '../apps/api/dist/index.js';
+import { createControlNode, initTelemetry, loadConfig } from '../apps/api/dist/index.js';
 import { signWebhook } from '../packages/events/dist/index.js';
 
 const arg = (name, def) => {
@@ -15,8 +19,27 @@ const arg = (name, def) => {
 const duration = arg('duration', 10);
 const connections = arg('connections', 10);
 
+const withOtel = process.argv.includes('--otel');
+// Fake OTLP collector on loopback: accepts every export and counts the payload bytes.
+const collector = { requests: 0, bytes: 0 };
+let collectorServer = null;
+let collectorUrl = null;
+if (withOtel) {
+  collectorServer = createServer((req, res) => {
+    req.on('data', (chunk) => (collector.bytes += chunk.length));
+    req.on('end', () => {
+      collector.requests++;
+      res.statusCode = 200;
+      res.end();
+    });
+  });
+  await new Promise((resolve) => collectorServer.listen(0, '127.0.0.1', resolve));
+  collectorUrl = `http://127.0.0.1:${collectorServer.address().port}`;
+}
+
 process.env.OAX_SECRET_BENCH_HOOK = 'bench-secret';
 const config = loadConfig({
+  ...(collectorUrl ? { OTEL_EXPORTER_OTLP_ENDPOINT: collectorUrl } : {}),
   NODE_ENV: 'test',
   OAX_DATABASE_URL: process.env.OAX_DATABASE_URL ?? 'memory://',
   OAX_LOG_LEVEL: 'silent',
@@ -25,7 +48,12 @@ const config = loadConfig({
   OAX_BOOTSTRAP_ADMIN_PASSWORD: 'bench-password-123',
   OAX_RUN_TOKEN_SECRET: 'b'.repeat(40),
 });
+const telemetry = await initTelemetry(config.otel, {
+  warn: (fields, message) =>
+    console.warn(JSON.stringify({ level: 'warn', ...fields, msg: message })),
+});
 const node = await createControlNode(config);
+telemetry.attachStats(node.ctx.metrics.otel);
 const { app, services } = node;
 const address = await app.listen({ host: '127.0.0.1', port: 0 });
 const login = await app.inject({
@@ -141,6 +169,8 @@ results.push(
 
 await app.close();
 await node.ctx.database.close();
+await telemetry.shutdown();
+if (collectorServer) await new Promise((resolve) => collectorServer.close(resolve));
 
 const meta = {
   date: new Date().toISOString(),
@@ -148,6 +178,7 @@ const meta = {
   database: node.ctx.database.kind,
   duration,
   connections,
+  otel: withOtel,
 };
 console.log(`\n${JSON.stringify(meta)}\n`);
 console.log('| Endpoint | req/s | p50 ms | p95 ms | p99 ms | non-2xx | errors |');
@@ -157,8 +188,13 @@ for (const r of results)
     `| \`${r.name}\` | ${r.rps} | ${r.p50} | ${r.p95} | ${r.p99} | ${r.non2xx} | ${r.errors} |`,
   );
 console.log(JSON.stringify(results.map((r) => [r.name, r.statuses])));
-if (process.argv.includes('--write'))
-  writeFileSync(
-    new URL('../docs/performance-baseline.json', import.meta.url),
-    `${JSON.stringify({ meta, results }, null, 2)}\n`,
-  );
+if (withOtel)
+  console.log(`collector received ${collector.requests} exports, ${collector.bytes} bytes`);
+if (process.argv.includes('--write')) {
+  const file = new URL('../docs/performance-baseline.json', import.meta.url);
+  const current = JSON.parse(readFileSync(file, 'utf8'));
+  const next = withOtel
+    ? { ...current, otel: { meta, results, collector } }
+    : { meta, results, ...(current.otel ? { otel: current.otel } : {}) };
+  writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`);
+}

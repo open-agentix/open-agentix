@@ -68,6 +68,7 @@ export function createServices(ctx: AppContext): Services {
       graceMs: mp.graceSeconds * 1000,
       defaultDeadlineMs: mp.maxCallSeconds * 1000,
       priceFor: (scope, provider, model) => models.priceFor(scope, provider, model),
+      providerLabel: (scope, name) => models.providerLabel(scope, name),
     },
   );
   const control = new ControlPlaneService(

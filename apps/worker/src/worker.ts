@@ -219,6 +219,12 @@ export class Worker {
           costModel: await this.services.models.costModelFor(scope),
           // Executor spans (ADR 0015 S3); none without a registered SDK.
           ...(telemetry ? { telemetry } : {}),
+          // Metric hooks (ADR 0015 S5): closed-set values and durations only.
+          observer: {
+            toolCall: (decision, result) => this.ctx.metrics.toolCall(decision, result),
+            approval: (outcome, seconds) => this.ctx.metrics.approval(outcome, seconds),
+            step: (runner, ok, seconds, code) => this.ctx.metrics.step(runner, ok, seconds, code),
+          },
           signal: abort.signal,
           // Without isolation configured, a step that asks for an isolating runner has nowhere
           // to run: the dispatcher still exists and fails it closed instead of running it inline.
