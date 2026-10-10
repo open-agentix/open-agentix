@@ -5,6 +5,7 @@ import {
   CostModel,
   contextGuardFromEnv,
   OaxError,
+  parseTraceparent,
   StaticSecretResolver,
   type AgentDefinition,
   type HarnessKind,
@@ -491,7 +492,13 @@ async function removeRegularFile(path: string): Promise<void> {
 
 /** Runs one step; returns the process exit code (0 only when the result was accepted). */
 export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
-  const log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  const write = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  // `TRACEPARENT` is for log correlation only (ADR 0015 6.1): the node has no exporter and sends no
+  // trace header. Only a well-formed value is used, and only to tag the node's own log lines.
+  const context = parseTraceparent((opts.env ?? process.env).TRACEPARENT);
+  const log = context
+    ? (line: string) => write(`${line} trace_id=${context.traceId} span_id=${context.spanId}`)
+    : write;
   const read = opts.readFile ?? ((p: string) => readFile(p, 'utf8'));
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let env: NodeEnv;

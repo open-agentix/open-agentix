@@ -63,7 +63,8 @@ export function tracer(): Tracer {
 /** The only span surface callers get: no raw `setAttribute`, `recordException` or `setStatus`. */
 export interface GuardedSpan {
   setAttributes(attributes: Record<string, unknown>): void;
-  addEvent(name: string, attributes?: Record<string, unknown>): void;
+  /** `at` backdates the event (a receipt time taken from the clock of this platform). */
+  addEvent(name: string, attributes?: Record<string, unknown>, at?: Date): void;
   spanContext(): SpanContext;
 }
 
@@ -95,6 +96,8 @@ export interface SpanSpec {
   links?: readonly StoredSpanIds[];
   /** Link the span that is active now (admission links the request span, ADR 0015 section 2). */
   linkActive?: boolean;
+  /** Backdated start (the node session span is built when the session ends). */
+  startTime?: Date;
 }
 
 const EVENT_NAME = /^[a-z][a-z0-9_.]{0,63}$/;
@@ -107,9 +110,9 @@ function guardedSpan(span: Span, kind: SpanKind, guard: ContextGuard | undefined
     setAttributes(attributes) {
       span.setAttributes(sanitizeForSpan(kind, attributes, guard));
     },
-    addEvent(name, attributes = {}) {
+    addEvent(name, attributes = {}, at) {
       if (!EVENT_NAME.test(name)) return;
-      span.addEvent(name, sanitizeForSpan(kind, attributes, guard));
+      span.addEvent(name, sanitizeForSpan(kind, attributes, guard), at);
     },
     spanContext: () => span.spanContext(),
   };
@@ -224,8 +227,8 @@ export interface OpenSpan {
   span: GuardedSpan;
   /** Runs `fn` with this span as the active one. */
   run<T>(fn: () => T): T;
-  /** Ends the span; a failure is recorded as a code and a class name only. */
-  end(failure?: unknown): void;
+  /** Ends the span (at `endTime` when given); a failure is recorded as a code and a class name only. */
+  end(failure?: unknown, endTime?: Date): void;
 }
 
 function openSpan(spec: SpanSpec, attributes: Record<string, unknown>): OpenSpan {
@@ -243,6 +246,7 @@ function openSpan(spec: SpanSpec, attributes: Record<string, unknown>): OpenSpan
           ? OtelSpanKind.CLIENT
           : OtelSpanKind.INTERNAL,
     links: linksOf(spec),
+    ...(spec.startTime ? { startTime: spec.startTime } : {}),
   };
   let parent: Context = context.active();
   if (spec.root || spec.newTrace) parent = ROOT_CONTEXT;
@@ -267,7 +271,7 @@ function openSpan(spec: SpanSpec, attributes: Record<string, unknown>): OpenSpan
   return {
     span: guardedSpan(raw, spec.kind, spec.guard),
     run: (fn) => context.with(spanContext, fn),
-    end(failure) {
+    end(failure, endTime) {
       if (ended) return;
       ended = true;
       if (failure !== undefined) {
@@ -277,7 +281,7 @@ function openSpan(spec: SpanSpec, attributes: Record<string, unknown>): OpenSpan
           // Telemetry must never replace or hide the caller's error (e.g. a throwing message getter).
         }
       }
-      raw.end();
+      raw.end(endTime);
     },
   };
 }

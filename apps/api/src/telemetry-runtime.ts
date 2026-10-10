@@ -15,6 +15,10 @@ export interface TelemetryStats {
   exportFailed(reason: ExportFailureReason): void;
   /** An inbound `traceparent` was seen (ADR 0015 section 2); it is never a parent. */
   inboundContext(result: InboundContextResult, n: number): void;
+  /** Node reports that did not become a span event because the session reached its cap. */
+  nodeEventsDropped(n: number): void;
+  /** A run node sent a `traceparent` that is not the one stored for its session (ADR 0015 6.1). */
+  nodeContextMismatch(n: number): void;
 }
 
 export type InboundContextResult = 'ignored' | 'linked' | 'invalid';
@@ -27,6 +31,8 @@ export const NOOP_STATS: TelemetryStats = {
   spansDropped: () => undefined,
   exportFailed: () => undefined,
   inboundContext: () => undefined,
+  nodeEventsDropped: () => undefined,
+  nodeContextMismatch: () => undefined,
 };
 
 export interface TelemetryRuntime {
@@ -70,6 +76,8 @@ function safeStats(stats: TelemetryStats): TelemetryStats {
     spansDropped: call((n: number) => stats.spansDropped(n)),
     exportFailed: call((r: ExportFailureReason) => stats.exportFailed(r)),
     inboundContext: call((r: InboundContextResult, n: number) => stats.inboundContext(r, n)),
+    nodeEventsDropped: call((n: number) => stats.nodeEventsDropped(n)),
+    nodeContextMismatch: call((n: number) => stats.nodeContextMismatch(n)),
   };
 }
 

@@ -70,6 +70,7 @@ describe('OpenTelemetry configuration (ADR 0015 section 14)', () => {
   it.each([
     ['OAX_OTEL_SAMPLE_RATIO', '1.5'],
     ['OAX_OTEL_MAX_QUEUE', '0'],
+    ['OAX_OTEL_NODE_EVENTS_MAX', '1001'],
     ['OAX_OTEL_INBOUND_CONTEXT', 'trust'],
     ['OAX_OTEL_EXCEPTION_DETAIL', 'full'],
     ['OAX_OTEL_KEEP', 'error,everything'],

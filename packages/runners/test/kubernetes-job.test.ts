@@ -210,6 +210,20 @@ describe('manifests', () => {
     );
   });
 
+  it('gives the node TRACEPARENT for log correlation only, and only when well formed', () => {
+    const tp = `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`;
+    const env = (spec_: RunNodeSpec) =>
+      ((buildJob(spec_, cfg()) as any).spec.template.spec.containers[0].env as {
+        name: string;
+        value: string;
+      }[]) ?? [];
+    expect(env(spec({ traceparent: tp })).filter((e) => /trace/i.test(e.name))).toEqual([
+      { name: 'TRACEPARENT', value: tp },
+    ]);
+    expect(env(spec()).some((e) => /trace/i.test(e.name))).toBe(false);
+    expect(env(spec({ traceparent: `${tp}\nX=1` })).some((e) => /trace/i.test(e.name))).toBe(false);
+  });
+
   it('caps the deadline by the configured maximum and applies pull secrets/node selector', () => {
     const j = buildJob(
       spec({ limits: { cpus: 1, memoryMb: 128, timeoutSeconds: 99999, pids: 1 } }),

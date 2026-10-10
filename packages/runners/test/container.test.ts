@@ -189,6 +189,26 @@ describe('create options (hardening)', () => {
     expect(body.StdinOnce).toBe(true);
     expect(body.Env.some((e) => /SECRET|PASSWORD|API_KEY/i.test(e))).toBe(false);
   });
+  it('passes a well-formed traceparent as TRACEPARENT and nothing else of it (ADR 0015 6.1)', () => {
+    const tp = `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`;
+    const body = runner(fakeEngine()).buildCreateBody(spec({ traceparent: tp }));
+    expect(body.Env).toContain(`TRACEPARENT=${tp}`);
+    expect(body.Env.filter((e) => /trace/i.test(e))).toEqual([`TRACEPARENT=${tp}`]);
+    expect(() => assertSafeCreateBody(body)).not.toThrow();
+    // no context without a value, and no tracestate or baggage ever
+    const plain = runner(fakeEngine()).buildCreateBody(spec());
+    expect(plain.Env.some((e) => /trace|baggage/i.test(e))).toBe(false);
+  });
+  it.each([
+    'garbage',
+    `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01\nOAX_RUN_TOKEN=x`,
+    `00-${'0'.repeat(32)}-${'b'.repeat(16)}-01`,
+    `00-${'A'.repeat(32)}-${'b'.repeat(16)}-01`,
+    `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01,vendor=x`,
+  ])('refuses to put a malformed traceparent into the environment: %s', (bad) => {
+    const body = runner(fakeEngine()).buildCreateBody(spec({ traceparent: bad }));
+    expect(body.Env.some((e) => /trace/i.test(e))).toBe(false);
+  });
   it('clamps limits to the configured maxima', () => {
     const body = runner(fakeEngine(), {
       maxCpus: 1,

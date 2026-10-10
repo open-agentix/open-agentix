@@ -35,6 +35,8 @@ import type { GuidelinesService } from './guidelines.js';
 import type { ModelAccountingService } from './model-accounting.js';
 import type { RunNodesService } from './run-nodes.js';
 import { writeStepRows } from './step-writer.js';
+import { matchGrant, spanIdentity, storedParent } from './node-telemetry.js';
+import { tracingEnabled, withSpan } from '../telemetry.js';
 
 const ACTIVE = ['running', 'awaiting_approval'];
 /** Largest input or output a run node may attach to one step record. */
@@ -81,7 +83,12 @@ export class ControlPlaneService {
   }
 
   /** Verifies the token and that the run is currently leased by that worker. */
-  async authorize(token: string, runId: string): Promise<RunTokenClaims> {
+  async authorize(
+    token: string,
+    runId: string,
+    /** `traceparent` header of the request: compared with the node's stored context, never used. */
+    inboundTraceparent?: unknown,
+  ): Promise<RunTokenClaims> {
     let claims: RunTokenClaims;
     try {
       claims = verifyRunToken(this.ctx.config.runToken.secret, token, this.ctx.now().getTime());
@@ -93,7 +100,7 @@ export class ControlPlaneService {
     // Step-scoped token of an isolated run node: the session must be live; the lease belongs to
     // the orchestrator, so the lockedBy check below does not apply to it.
     if (claims.sid) {
-      await this.nodes.checkSession(claims, runId);
+      await this.nodes.checkSession(claims, runId, inboundTraceparent);
       return claims;
     }
     const [run] = await this.ctx.db
@@ -111,8 +118,9 @@ export class ControlPlaneService {
     token: string,
     runId: string,
     agentId: string | null,
+    inboundTraceparent?: unknown,
   ): Promise<RunTokenClaims> {
-    const claims = await this.authorize(token, runId);
+    const claims = await this.authorize(token, runId, inboundTraceparent);
     if (claims.sid) {
       if (agentId === null)
         throw new HttpError(403, 'credential_scope', 'a run node must name the agent it acts for');
@@ -122,8 +130,13 @@ export class ControlPlaneService {
   }
 
   /** Like {@link authorizeStep}, but only for step-scoped (run node) tokens. */
-  async authorizeNodeStep(token: string, runId: string, agentId: string): Promise<RunTokenClaims> {
-    const claims = await this.authorizeStep(token, runId, agentId);
+  async authorizeNodeStep(
+    token: string,
+    runId: string,
+    agentId: string,
+    inboundTraceparent?: unknown,
+  ): Promise<RunTokenClaims> {
+    const claims = await this.authorizeStep(token, runId, agentId, inboundTraceparent);
     if (!claims.sid)
       throw new HttpError(403, 'credential_scope', 'a step-scoped run node token is required');
     return claims;
@@ -327,6 +340,45 @@ export class ControlPlaneService {
     };
   }
 
+  /**
+   * The gate decision for a tool call of a run node, wrapped in `oax.policy.check` as a child of
+   * the span stored for the node's session (ADR 0015 3.1). The decision is the control node's own;
+   * the tool name on the span is the one of the step's grant, never the node's text, and a call
+   * that no grant covers is labelled `_unknown` (like a tool name the model invented).
+   */
+  async decideForNode(
+    claims: RunTokenClaims,
+    runId: string,
+    agentId: string,
+    call: ToolCallRequest,
+  ): Promise<PolicyDecision> {
+    if (!claims.sid || !tracingEnabled()) return this.decide(runId, agentId, call);
+    const session = await this.nodes.sessionById(claims.sid);
+    const parent = storedParent(session?.traceContext);
+    if (!session || !parent) return this.decide(runId, agentId, call);
+    const grants = (session.handover as Record<string, { agent?: { tools?: unknown } }> | null)?.[
+      agentId
+    ]?.agent?.tools;
+    const granted = matchGrant(grants, call.server, call.tool);
+    const label = granted ? `${granted.server}/${granted.tool}` : '_unknown';
+    const attributes = {
+      ...(await spanIdentity(this.ctx, runId, session.tenantId)),
+      ...(granted ? { 'gen_ai.tool.name': granted.tool, 'oax.mcp.server': granted.server } : {}),
+    };
+    return withSpan(
+      { name: `oax.policy.check ${label}`, kind: 'policy_check', parent },
+      attributes,
+      async (ps) => {
+        const d = await this.decide(runId, agentId, call);
+        ps.setAttributes({
+          'oax.policy.effect': d.effect,
+          'oax.policy.reason_codes': d.reasons.map((r) => r.code),
+        });
+        return d;
+      },
+    );
+  }
+
   async decide(runId: string, agentId: string, call: ToolCallRequest): Promise<PolicyDecision> {
     const { definition, tenantId } = await this.definitionForRun(runId);
     const agent = definition.agents.find((a) => a.id === agentId) ?? { id: agentId, tools: [] };
@@ -404,7 +456,7 @@ export class ControlPlaneService {
     runId: string,
     rawStep: StepInput,
     /** Set when an untrusted run node reports the step (never for the trusted worker). */
-    node?: { id: string },
+    node?: { id: string; sid?: string },
   ): Promise<void> {
     // A node may only report what it can observe itself. Everything that decides or documents the
     // run (conditions, handover validation, control decisions, policy decisions, approvals) is
@@ -436,6 +488,8 @@ export class ControlPlaneService {
         { provider: written.metric.provider },
         written.metric.costMicros,
       );
+    // An accepted report of a node becomes a bounded event of its session span (ADR 0015 6.2).
+    if (node?.sid && step.agentId) await this.nodes.noteReport(node.sid, step.agentId, step);
     // Redaction of secrets happens inside the audit entry creation.
     const special = node ? undefined : stepAuditEntry(step);
     await this.audit.append({

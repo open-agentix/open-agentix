@@ -346,6 +346,29 @@ describe('runNode', () => {
     expect(logs.join('\n')).not.toContain('not-a-token');
   });
 
+  it('tags its log lines with the TRACEPARENT of the environment, and only a well-formed one', async () => {
+    const { fetchImpl } = control();
+    const tp = `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`;
+    const tagged: string[] = [];
+    await runNode(
+      base(fetchImpl, {
+        env: env({ OAX_STEP_IDS: 'a,b', TRACEPARENT: tp }),
+        log: (l: string) => void tagged.push(l),
+      }),
+    );
+    expect(tagged).toHaveLength(1);
+    expect(tagged[0]).toContain(`trace_id=${'a'.repeat(32)} span_id=${'b'.repeat(16)}`);
+    const plain: string[] = [];
+    await runNode(
+      base(fetchImpl, {
+        env: env({ OAX_STEP_IDS: 'a,b', TRACEPARENT: 'garbage trace_id=x' }),
+        log: (l: string) => void plain.push(l),
+      }),
+    );
+    expect(plain[0]).not.toContain('trace_id');
+    expect(plain[0]).not.toContain('garbage');
+  });
+
   it('reports a handover for another step as a failure instead of running it', async () => {
     const probe = control();
     const wrong = {

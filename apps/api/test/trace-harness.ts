@@ -35,12 +35,17 @@ export function startTracing(): {
 export function countingStats(): TelemetryStats & {
   dropped: Record<string, number>;
   inbound: Record<string, number>;
+  node: { eventsDropped: number; mismatch: number };
 } {
   const dropped: Record<string, number> = {};
   const inbound: Record<string, number> = {};
+  const node = { eventsDropped: 0, mismatch: 0 };
   return {
     dropped,
     inbound,
+    node,
+    nodeEventsDropped: (n) => void (node.eventsDropped += n),
+    nodeContextMismatch: (n) => void (node.mismatch += n),
     attributesDropped: (c, n) => void (dropped[c] = (dropped[c] ?? 0) + n),
     redactions: () => undefined,
     spansDropped: () => undefined,
