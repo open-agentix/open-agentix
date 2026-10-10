@@ -50,6 +50,8 @@ export function countingStats(): TelemetryStats & {
     redactions: () => undefined,
     spansDropped: () => undefined,
     exportFailed: () => undefined,
+    keepKept: () => undefined,
+    keepEvicted: () => undefined,
     inboundContext: (r, n) => void (inbound[r] = (inbound[r] ?? 0) + n),
   };
 }

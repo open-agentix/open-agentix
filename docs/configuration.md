@@ -333,9 +333,9 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 | `OAX_OTEL_MAX_QUEUE` | `2048` | Export queue size; spans beyond it are dropped and counted. |
 | `OAX_OTEL_EXPORT_TIMEOUT_MS` | `10000` | Export timeout. |
 | `OAX_OTEL_EXCEPTION_DETAIL` | `off` | `guarded`: record `exception.message` after the ContextGuard, capped at 256 characters (the stack is never recorded). |
-| `OAX_OTEL_SAMPLE_RATIO` | `1` | Parsed only (slice S6). |
-| `OAX_OTEL_KEEP` | `error,deny,approval,budget,guard` | Parsed only (slice S6). |
-| `OAX_OTEL_KEEP_BUFFER_SPANS` | `512` | Parsed only (slice S6). |
+| `OAX_OTEL_SAMPLE_RATIO` | `1` | Share of runs whose traces are exported (0 to 1). The decision is a function of the run's trace id, so the api and the worker agree. `1` changes nothing. See `docs/observability.md#sampling`. |
+| `OAX_OTEL_KEEP` | `error,deny,approval,budget,guard` | Classes that are exported even when the run was not sampled (only with a ratio below 1). Empty turns the always-keep path off. |
+| `OAX_OTEL_KEEP_BUFFER_SPANS` | `512` | Finished spans buffered per not-sampled trace in one process (a process-wide cap of 4 MiB applies on top). |
 | `OAX_OTEL_NODE_EVENTS_MAX` | `128` | Node reports kept as span events per run node session (maximum accepted value 1000; larger values refuse start-up); further reports are counted, not exported. |
 | `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link`: what happens to a well-formed inbound `traceparent` on an API request. It is never a parent and never the run's trace. `link` records it as a span link on the request span (needs an exporter; ids only, no `tracestate`/baggage); `ignore` drops it. Either way it is counted in `oax_otel_inbound_context_total{result}`. |
 | `OAX_OTEL_MCP_PROPAGATION` | `deny` | `deny` or `allow`; parsed only (slice S8). |

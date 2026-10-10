@@ -1,7 +1,7 @@
 # ADR 0015: Observability with OpenTelemetry GenAI semantic conventions
 
 - Status: Proposed. Slices S1 to S5 are implemented (see "Implementation notes S2/S3/S4/S5"
-  below and [`observability.md`](../observability.md)); S6 to S10 are open.
+  below and [`observability.md`](../observability.md)); S6 is implemented (notes below); S7 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W3-5 (#37, "Observability completion: step, model and tool spans and the missing
   metrics"); RM-53 of the roadmap gap list; replaces the span list in the W3-5 acceptance
@@ -748,6 +748,33 @@ Decisions taken while implementing slice S5 (#210) where the text above left roo
   `invoke_workflow`) with the labels operation and `error_type`; the inference series carry the
   provider family and the catalog-bounded model. The durations of run-node tool reports are not
   observed (the node's own claim).
+- No migration.
+
+## Implementation notes S6
+
+Decisions taken while implementing slice S6 (#211) where the text above left room:
+
+- **Sampler.** `OaxRatioSampler` decides from the trace id alone (SDK `TraceIdRatioBased`) and
+  ignores the parent: stored remote contexts are always flagged sampled, so a parent-based sampler
+  would have sampled every attempt span. Ratio 1 keeps the former parent-based always-on sampler
+  and pipeline, so nothing changes without the setting.
+- **Not-sampled spans** are *recorded* (decision `RECORD`, no sampled flag) only when a keep class
+  is configured; with an empty `OAX_OTEL_KEEP` they are not recorded. The batch processor skips
+  them as before; `OaxKeepProcessor` sits in front of it and hands released spans over with the
+  sampled flag set, so they pass the unchanged guarded exporter.
+- **Buffers** are keyed by trace id in the local process and released (dropped) when the trace's
+  local end span finishes without a match: a parentless span (admission, HTTP request) or an
+  `invoke_workflow` attempt. Spans of the api that hang under a stored remote context (node
+  sessions, `chat`) have no such end, so their buffers leave by eviction. A kept trace leaves a
+  128 byte marker so later spans of it are exported as they end.
+- **Classes** compare fixed values only: status `ERROR`, `oax.policy.effect=deny`,
+  `oax.approval.outcome` other than `approved`, events `oax.budget.breach`, `oax.guard.report` and
+  `oax.node.guard`.
+- **Memory.** The size is an estimate (UTF-16 strings plus fixed costs); measured heap for a full
+  buffer is about 1.4 times the estimate. Counters `oax_otel_keep_kept_total{class}` and
+  `oax_otel_keep_evicted_total{reason}` have closed label sets and are in the cardinality
+  allowlist.
+- **Stored `traceparent`** for nodes still carries the sampled flag (`01`) whatever the decision.
 - No migration.
 
 ## Open questions (owner decisions needed)

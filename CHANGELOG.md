@@ -18,6 +18,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Sampling with always-keep classes (ADR 0015 slice S6, #211)**: `OAX_OTEL_SAMPLE_RATIO`
+  (default `1`, validated 0 to 1) samples by the run's trace id, so the api and the worker decide
+  alike. Below 1, `OAX_OTEL_KEEP` (default `error,deny,approval,budget,guard`) still exports the
+  trace of a not-sampled run that shows one of those classes, through a bounded `OaxKeepProcessor`
+  (`OAX_OTEL_KEEP_BUFFER_SPANS` spans per trace, 4 MiB per process, oldest traces evicted). New
+  metrics `oax_otel_keep_kept_total{class}` and `oax_otel_keep_evicted_total{reason}` (closed
+  labels, added to the cardinality allowlist). Ratio 1 changes nothing. `docs/observability.md`
+  documents the behaviour and a collector `tail_sampling` example. No migration.
+
 - **Role-binding API (ADR 0014 slice S4, #189, #226)**: `GET/POST /v1/tenants/{id}/role-bindings`,
   `PATCH/DELETE .../{bindingId}` (`inherit` required on POST) and the platform-operator bulk opt-in
   `POST /v1/tenants/{rootId}/role-bindings/enable-inheritance { roles, dryRun }` with a dry run that lists the
