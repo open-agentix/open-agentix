@@ -17,6 +17,7 @@ import { McpRelayService } from './mcp-relay.js';
 import { McpTestService } from './mcp-test.js';
 import { McpToolsService } from './mcp-tools.js';
 import { ModelsService } from './models.js';
+import { PentestService } from './pentest.js';
 import { RunNodesService } from './run-nodes.js';
 import { RunsService } from './runs.js';
 import { SubtreeScopes } from './subtree-scope.js';
@@ -41,6 +42,8 @@ export interface Services {
   guidelines: GuidelinesService;
   tenants: TenantsService;
   roleBindings: TenantRoleBindingsService;
+  /** Notices, session audit and expiry reaper of the `pentest` role (ADR 0014 S6). */
+  pentest: PentestService;
   accessExplain: AccessExplainService;
   models: ModelsService;
   mcpTest: McpTestService;
@@ -93,6 +96,7 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   );
   const costs = new CostsService(ctx);
   const tenants = new TenantsService(ctx, audit, identity);
+  const pentest = new PentestService(ctx, audit, identity);
   const modelProxy = new ModelProxyService(ctx, audit, agents, models, modelAccounting, runNodes);
   const agentCheck = new AgentCheckService(ctx, audit, catalog, models, budgets);
   const mcpTest = new McpTestService(ctx, catalog, runNodes, audit);
@@ -116,7 +120,8 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     costs,
     guidelines,
     tenants,
-    roleBindings: new TenantRoleBindingsService(ctx, audit, identity),
+    roleBindings: new TenantRoleBindingsService(ctx, audit, identity, pentest),
+    pentest,
     accessExplain: new AccessExplainService(ctx),
     models,
     mcpTest,
@@ -145,6 +150,7 @@ export {
   McpRelayService,
   McpToolsService,
   ModelsService,
+  PentestService,
   RunNodesService,
   RunsService,
   SubtreeScopes,

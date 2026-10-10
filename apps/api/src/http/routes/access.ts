@@ -1,7 +1,16 @@
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
-import { AccessQuery, AccessSchema, ErrorSchema, IdParams, UserAccessQuery } from '../schemas.js';
+import {
+  AccessQuery,
+  AccessSchema,
+  ErrorSchema,
+  IdParams,
+  NoticeQuery,
+  NoticeSchema,
+  UserAccessQuery,
+} from '../schemas.js';
 import type { AccessView } from '../../services/access-explain.js';
+import { z } from 'zod';
 import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
@@ -16,7 +25,31 @@ const accessDto = (v: AccessView) => ({
 
 /** Effective permissions with their sources (ADR 0014 section 14, slice S5). */
 export function registerAccessRoutes(app: ZApp, { services }: Deps): void {
-  const { accessExplain } = services;
+  const { accessExplain, pentest } = services;
+
+  app.get(
+    '/v1/me/notices',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['tenants'],
+        summary: 'Own in-app notices (newest first)',
+        description:
+          'The only notification channel there is: tenant administrators and the grantor get a ' +
+          'notice when a `pentest` role is granted, 24 hours before it ends and when it has ' +
+          'expired (ADR 0014 section 8). Kept 30 days; there is no mail or webhook delivery.',
+        security: sec,
+        querystring: NoticeQuery,
+        response: { 200: z.object({ items: z.array(NoticeSchema) }) },
+      },
+    },
+    async (req) => ({
+      items: (await pentest.listNotices(principalOf(req), req.query.limit)).map((n) => ({
+        ...n,
+        createdAt: n.createdAt.toISOString(),
+      })),
+    }),
+  );
 
   app.get(
     '/v1/me/access',
