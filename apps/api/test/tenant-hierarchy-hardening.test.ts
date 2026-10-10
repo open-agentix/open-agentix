@@ -7,6 +7,8 @@ import {
   auditLog,
   tenantRoleBindings,
   tenants as tenantsTable,
+  agentRoleBindings,
+  agents as agentsTable,
   teamMembers,
   users as usersTable,
 } from '../src/db/schema.js';
@@ -158,6 +160,15 @@ describe.each(sqlTargets)('hierarchy hardening (%s)', (_kind, enabled, open) => 
     await n.ctx.db
       .insert(teamMembers)
       .values({ teamId: rootTeam.id, userId: uid['root-team-member']!, role: 'viewer' });
+    // ... and one bound to an agent owned by the organisation root
+    await mkUser('root-agent-member', 'team-1');
+    const rootAgent = randomUUID();
+    await n.ctx.db
+      .insert(agentsTable)
+      .values({ id: rootAgent, name: 'root-agent', draftSource: '', tenantId: id['org-a']! });
+    await n.ctx.db
+      .insert(agentRoleBindings)
+      .values({ agentId: rootAgent, userId: uid['root-agent-member']!, role: 'viewer' });
     await mkUser('d-temp', 'org-d');
     await bind('d-temp', 'org-d', 'admin', true, { expiresAt: new Date(Date.now() + 3_600_000) });
   }, 180_000);
@@ -318,6 +329,18 @@ describe.each(sqlTargets)('hierarchy hardening (%s)', (_kind, enabled, open) => 
       );
       expect(r.statusCode).toBe(403);
       expect(await alive('root-team-member')).toBe(true);
+    });
+
+    it('agent bindings count too: a user bound to an agent above the manager is refused', async () => {
+      const r = await call(
+        'div-admin',
+        'PATCH',
+        `/v1/users/${uid['root-agent-member']}`,
+        { displayName: 'x' },
+        'team-1',
+      );
+      expect(r.statusCode).toBe(403);
+      expect(await alive('root-agent-member')).toBe(true);
     });
 
     it("last admin counts the user once: two admin rows of one user are not each other's co-admin", async () => {
@@ -584,6 +607,24 @@ describe.each(sqlTargets)('hierarchy hardening (%s)', (_kind, enabled, open) => 
           `/v1/tenants/${id['org-b']}/access?userId=${uid['lg-admin']}`,
         );
         expect(no.statusCode).toBe(403);
+        // The tables diverge from the global roles (an unreconciled grant): legacy ignores them.
+        await mkUser('lg-bound', 'org-b');
+        await bind('lg-bound', 'org-b', 'admin', false);
+        await bind('lg-viewer', 'org-b', 'admin', false);
+        const ghost = await call(
+          'lg-admin',
+          'GET',
+          `/v1/tenants/${id['org-b']}/access?userId=${uid['lg-bound']}`,
+        );
+        expect(ghost.statusCode).toBe(200);
+        expect(ghost.json().bindings).toEqual([]);
+        // users:read comes from the global roles (viewer), not from the extra admin grant
+        const still = await call(
+          'lg-viewer',
+          'GET',
+          `/v1/tenants/${id['org-b']}/access?userId=${uid['lg-admin']}`,
+        );
+        expect(still.statusCode).toBe(403);
       } finally {
         setMode('bindings');
       }
