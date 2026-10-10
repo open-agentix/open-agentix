@@ -13,7 +13,7 @@ import {
   type Principal,
   type ValidationResult,
 } from '@openagentix/core';
-import { and, desc, eq, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, or, type SQL } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
@@ -23,6 +23,7 @@ import { decodeTimeCursor, encodeTimeCursor, page } from '../pagination.js';
 import { statusFilter, textFilter, useCaseFilter, type AgentStatus } from './agent-filters.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
+import type { ResolvedScope } from './subtree-scope.js';
 
 /** Longest reason accepted when an agent is disabled or enabled. */
 export const MAX_DISABLE_REASON_LENGTH = 500;
@@ -226,16 +227,39 @@ export class AgentsService {
   }
 
   /**
+   * The row filter for the agents the principal may read: the acting tenant with team and
+   * agent-scoped bindings applied, or, for `scope=subtree`, the resolved predicate over the visible
+   * nodes. `undefined` when nothing is readable.
+   */
+  private visibility(principal: Principal, subtree: ResolvedScope | undefined): SQL | undefined {
+    if (subtree)
+      return subtree.isEmpty
+        ? undefined
+        : subtree.predicate({ tenantId: agents.tenantId, teamId: agents.teamId, agent: agents.id });
+    const teamsVisible = visibleTeams(principal, 'agents:read');
+    const agentsVisible = visibleAgents(principal, 'agents:read');
+    if (Array.isArray(teamsVisible) && teamsVisible.length === 0 && agentsVisible.length === 0)
+      return undefined;
+    return and(
+      eq(agents.tenantId, principal.tenantId),
+      teamsVisible === 'all'
+        ? undefined
+        : or(
+            teamsVisible.length ? inArray(agents.teamId, teamsVisible) : undefined,
+            agentsVisible.length ? inArray(agents.id, agentsVisible) : undefined,
+          ),
+    );
+  }
+
+  /**
    * Agents visible to the principal (own tenant only, team and agent-scoped bindings applied),
    * newest first, keyset-paged. Every filter is ANDed with the visibility scope: a filter value
    * can only narrow the result, never reach an agent the principal cannot read.
    */
-  async list(principal: Principal, query: AgentListQuery) {
+  async list(principal: Principal, query: AgentListQuery, subtree?: ResolvedScope) {
     const c = decodeTimeCursor(query.cursor);
-    const teamsVisible = visibleTeams(principal, 'agents:read');
-    const agentsVisible = visibleAgents(principal, 'agents:read');
-    if (Array.isArray(teamsVisible) && teamsVisible.length === 0 && agentsVisible.length === 0)
-      return { items: [], nextCursor: null };
+    const visibility = this.visibility(principal, subtree);
+    if (!visibility) return { items: [], nextCursor: null };
     const rows = await this.ctx.db
       .select({ agent: agents })
       .from(agents)
@@ -245,13 +269,7 @@ export class AgentsService {
       )
       .where(
         and(
-          eq(agents.tenantId, principal.tenantId),
-          teamsVisible === 'all'
-            ? undefined
-            : or(
-                teamsVisible.length ? inArray(agents.teamId, teamsVisible) : undefined,
-                agentsVisible.length ? inArray(agents.id, agentsVisible) : undefined,
-              ),
+          visibility,
           query.q ? textFilter(query.q) : undefined,
           query.teamId ? eq(agents.teamId, query.teamId) : undefined,
           query.useCase ? useCaseFilter(query.useCase) : undefined,

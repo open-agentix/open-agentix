@@ -42,6 +42,30 @@ export function decodeSeqCursor(cursor: string | undefined): number | null {
   return n;
 }
 
+/** Cursor over a text sort key (a name, a slug path) and an id that breaks ties. */
+export interface NameCursor {
+  key: string;
+  id: string;
+}
+
+export function encodeNameCursor(key: string, id = ''): string {
+  return Buffer.from(JSON.stringify([key, id])).toString('base64url');
+}
+
+export function decodeNameCursor(cursor: string | undefined): NameCursor | null {
+  if (!cursor) return null;
+  try {
+    const [key, id] = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as [
+      string,
+      string,
+    ];
+    if (typeof key !== 'string' || typeof id !== 'string') throw new Error('bad cursor');
+    return { key, id };
+  } catch {
+    throw new OaxError('invalid_cursor', 'cursor is invalid');
+  }
+}
+
 /** Takes `limit + 1` rows and returns the page plus the cursor of the last row (if more exist). */
 export function page<T>(
   rows: T[],

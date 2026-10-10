@@ -18,6 +18,7 @@ import {
   ManualRunBody,
   MembersBody,
   PageQuery,
+  SubtreeQuery,
   PublishResultSchema,
   RunSchema,
   TeamMemberSchema,
@@ -45,8 +46,8 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
         summary: 'List agents',
         security: sec,
         description:
-          'Agents the caller may read, newest first. Filters narrow that set and combine with AND. Each item carries tenant, use case, owner team, status, last run, month spend and budget.',
-        querystring: PageQuery.extend({
+          'Agents the caller may read, newest first. Filters narrow that set and combine with AND. Each item carries tenant, use case, owner team, status, last run, month spend and budget. With scope=subtree the list spans the acting tenant and its descendants, each node judged by the roles the caller holds there.',
+        querystring: PageQuery.extend(SubtreeQuery.shape).extend({
           q: z
             .string()
             .max(100)
@@ -66,8 +67,20 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req) => {
       const principal = principalOf(req);
-      const r = await agents.list(principal, req.query);
-      const items = await agentSummaries.summarize(principal, r.items);
+      const scopes = await services.subtree.resolveMany(
+        principal,
+        ['agents:read', 'runs:read', 'costs:read'],
+        req.query,
+      );
+      const [agentsScope, runsScope, costsScope] = scopes ?? [];
+      const r = await agents.list(principal, req.query, agentsScope);
+      const items = await agentSummaries.summarize(
+        principal,
+        r.items,
+        agentsScope && runsScope && costsScope
+          ? { agents: agentsScope, runs: runsScope, costs: costsScope }
+          : undefined,
+      );
       return { items: items.map(agentDto), nextCursor: r.nextCursor };
     },
   );

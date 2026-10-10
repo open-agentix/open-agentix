@@ -16,6 +16,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Subtree reads (ADR 0014 slice S3, #188)**: `?scope=node|subtree` (default `node`, unchanged) and `?tenantId=`
+  (narrowing only) on `GET /v1/agents`, `/v1/runs`, `/v1/approvals`, `/v1/events`, `/v1/event-sources`,
+  `/v1/connections`, `/v1/costs/summary`, `/v1/budgets` and `/v1/audit`. The server builds the node list from
+  the resolver (each node judged by the roles held there, team and agent scoped roles included); rows carry
+  `tenant { id, slug, slugPath, name }`; an unknown, invisible or out-of-subtree `tenantId` is the same 404;
+  sources, connections and budgets gain `limit`/`cursor` for subtree mode; a subtree above
+  `OAX_TENANT_MAX_NODES_PER_ROOT` readable nodes is `422 subtree_too_large`. No migration. OpenAPI and the UI
+  schema types are updated; see `docs/tenancy.md`.
 - **Executor spans with GenAI conventions (ADR 0015 slice S3, #208)**: the step executor now emits
   `oax.handover {step}`, `invoke_agent {step}`, `chat {model}` (CLIENT), `oax.policy.check
   {server}/{tool}`, `oax.approval.wait {server}/{tool}` and `execute_tool {tool}` under the

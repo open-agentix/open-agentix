@@ -1,6 +1,6 @@
 # ADR 0014: Role inheritance over the tenant tree
 
-- Status: Proposed. Slices S1, S1b and S2 are implemented (see "Implementation status" below); S3 to S10 are open.
+- Status: Proposed. Slices S1, S1b, S2 and S3 are implemented (see "Implementation status" below); S4 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
   resolver pattern); wave 13 of the [implementation plan](../IMPLEMENTATION-PLAN.md)
@@ -22,6 +22,7 @@
 | S1 | implemented (PR for #186) | Migration **`0018_tenant_role_bindings`**, not 0017: `0016_agent_disable` and `0017_approvals_tenant_status_idx` took the numbers after this ADR was written (follow-up of #198). Wherever this text says `0017_tenant_role_bindings`, read 0018; later slices continue from 0019. |
 | S1b | implemented (PR for #216, #217) | Prerequisites for S2, **without changing the read path**: reconcile of the `global_roles` mirror (start-up, periodic, mismatch-driven, CLI), the same-key rule, migration **`0019_trb_home_move`**, a serializable form for cached raw grants and a single-statement `loadRawGrants`. See below. |
 | S2 | implemented behind a flag (PR for #187, #227) | Acting node for every visible tenant, read-only inheritance, authz epoch and the resolver as read path **behind `OAX_ROLE_BINDINGS_READ=legacy|bindings`** (default `legacy`). Migration **`0021_authz_epoch`**. See "S2" below. |
+| S3 | implemented (PR for #188) | `?scope=node` or `subtree` and `?tenantId=` on the list routes, `tenant` on their rows. No migration. See "S3" below. |
 
 Differences between the plan below and what S1 shipped:
 
@@ -115,6 +116,41 @@ S2 (acting node, read-only inheritance, authz epoch; #187, #227):
   bound on an ancestor of the home node until the grant API gives mirror rows their own key.
 - Not in S2: implicit "admin everywhere" for platform operators, restrictions, use-case bindings,
   the reaper, the grant API.
+
+S3 (subtree reads; #188):
+
+- **One place decides.** `SubtreeScopes` (`apps/api/src/services/subtree-scope.ts`) builds, for the
+  acting node N and one permission, the nodes of `subtree(N)` inside the caller's reach where the
+  resolver (`appliedAt`, clamp on) gives that permission, and per node what is readable
+  (`all` or the team and agent ids). `ResolvedScope.predicate` turns that into the SQL of section
+  3.5: nodes with an unscoped binding in one `tenant_id = any(...)`, nodes with team or agent
+  scoped bindings one clause each (a team id never opens rows of another node). Platform
+  operators get the subtree of the acting node with the roles they act with (they keep the roles of
+  their home tenant, as in S2); on the `legacy` read path the scope is the acting node.
+- **Opt-in, additive.** `scope` defaults to `node`; nothing changes unless `scope=subtree` is sent.
+  `tenant { id, slug, slugPath, name }` appears on rows only in subtree mode (agents always had it).
+  `tenantId` (id, slug path or bare slug) needs `scope=subtree`, is intersected, and an unknown,
+  invisible, foreign or out-of-subtree node is the same 404 (`resolveVisible` plus a membership
+  check; no extra query that depends on existence). `allTenants` and `scope=subtree` exclude each
+  other.
+- **Routes**: `/v1/agents`, `/v1/runs`, `/v1/approvals`, `/v1/events`, `/v1/event-sources`,
+  `/v1/connections`, `/v1/costs/summary` (every `groupBy`; `groupBy=tenant` labels groups with the
+  slug path), `/v1/budgets` (`nodes[]`, paged by slug path) and `/v1/audit` (only nodes where the
+  caller holds `audit:read`; entries without a tenant partition never; a viewer gets 403 as before).
+  `GET /v1/tenants`, `/tree` and `/search` already returned the visible nodes since S2.
+- **Bounds.** Keyset cursors as before for agents, runs, approvals, events and audit; sources,
+  connections and budgets gain `limit` (default 200, at most 1000) and `cursor` that are honoured
+  with `scope=subtree` only (400 otherwise). A subtree with more readable nodes than
+  `OAX_TENANT_MAX_NODES_PER_ROOT` is `422 subtree_too_large` (narrow with `tenantId`), so the
+  predicate never exceeds that many nodes. Aggregate cache keys carry a digest of the scope.
+- **Node-wide resources** (events, sources, connections, audit, budgets) follow what the routes did
+  before: a node counts when any binding there carries the permission (a team scoped `operator`
+  therefore sees the events of that node, in subtree mode exactly as when acting there).
+- **Platform connections** owned by a node outside the scope are not listed in subtree mode, so a
+  row can never name a node the caller may not see.
+- Tests: `apps/api/test/subtree-scope.test.ts` (routes, 404 parity, cache isolation, and a
+  seeded property test against a naive parent-by-parent reference on random trees with random
+  bindings, expiries and team memberships).
 
 ## Context
 
