@@ -26,9 +26,30 @@ export const DEFAULT_LEDGER_EXTRAS: LedgerExtras = {
   via: 'in-process',
 };
 
+/**
+ * What the caller records after the transaction commits (cost and token counters, ADR 0015 S5).
+ * `provider` is the provider **instance** name as stored on the step: for a tenant connection that
+ * is tenant-chosen text. It is resolved to a family label by the consumers
+ * (`recordStepMetric`) and is never a label itself.
+ */
+export interface StepMetric {
+  /** Provider instance name of the step; `null` for a cost line without a model provider (tools). */
+  provider: string | null;
+  costMicros: number;
+  /** Tenant, team and agent of the run: the scope that resolves the provider instance. */
+  scope: { tenantId: string; teamId: string | null; agentId: string };
+  /** Present for steps that carry model tokens (`input` excludes cache tokens). */
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number } | null;
+  via: LedgerExtras['via'];
+  model: string | null;
+  /** Reported duration of the step, when there is one (seconds). */
+  seconds: number | null;
+  failed: boolean;
+}
+
 export interface StepWriteResult {
-  /** Label and amount for `oax_cost_micros_total`; the caller increments it after commit. */
-  metric: { provider: string; costMicros: number } | null;
+  /** Cost and tokens of the step; the caller records the metrics after commit. */
+  metric: StepMetric | null;
 }
 
 /**
@@ -106,5 +127,27 @@ export async function writeStepRows(
     { tenantId: run.tenantId, teamId: run.teamId, useCase: definition.labels.useCase ?? null },
     step.costMicros ?? 0,
   );
-  return { metric: { provider: step.provider ?? 'tool', costMicros: step.costMicros ?? 0 } };
+  const cacheRead = extras.cacheReadTokens;
+  const cacheWrite = extras.cacheWriteTokens;
+  const hasTokens =
+    step.provider !== undefined && ((step.tokensIn ?? 0) > 0 || (step.tokensOut ?? 0) > 0);
+  return {
+    metric: {
+      provider: step.provider ?? null,
+      costMicros: step.costMicros ?? 0,
+      scope: { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId },
+      tokens: hasTokens
+        ? {
+            input: Math.max(0, (step.tokensIn ?? 0) - cacheRead - cacheWrite),
+            output: step.tokensOut ?? 0,
+            cacheRead,
+            cacheWrite,
+          }
+        : null,
+      via: extras.via,
+      model: step.model ?? null,
+      seconds: step.durationMs !== undefined ? step.durationMs / 1000 : null,
+      failed: step.status !== 'ok',
+    },
+  };
 }

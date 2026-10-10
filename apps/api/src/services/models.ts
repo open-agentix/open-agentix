@@ -12,7 +12,7 @@ import {
   type ProviderConfig,
   type ProviderKind,
 } from '@openagentix/providers';
-import { CostModel, type PriceEntry, type TenantActor } from '@openagentix/core';
+import { CostModel, genAiProviderName, type PriceEntry, type TenantActor } from '@openagentix/core';
 import type { AppContext } from '../context.js';
 import { notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
@@ -200,6 +200,21 @@ export class ModelsService {
       }
     }
     return out;
+  }
+
+  /**
+   * The provider **family** label (closed set, `genAiProviderName`) of a provider instance as seen
+   * from a run's scope: the connection of the run's tenant that wins for the name, else the
+   * platform provider, else `other`. Metric labels use this and never the instance name, which for
+   * a tenant connection is tenant-chosen text (ADR 0015 S5).
+   */
+  async providerLabel(scope: RunScope, name: string): Promise<string> {
+    const family = (cfg: ProviderConfig) =>
+      genAiProviderName(ADAPTER_KIND[cfg.kind] ?? 'openai', cfg.kind);
+    const row = (await this.catalog.connectionsForRun('model', scope)).find((r) => r.name === name);
+    if (row) return family(connectionProviderConfig(row));
+    const platform = this.ctx.config.providers.find((p) => p.name === name);
+    return platform ? family(platform) : 'other';
   }
 
   async registryFor(scope: RunScope): Promise<ProviderRegistry> {

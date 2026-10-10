@@ -15,6 +15,7 @@ import type {
   BudgetVerdict,
 } from '@openagentix/core';
 import type { ToolGateway } from '@openagentix/mcp';
+import type { ExecutorObserver } from './executor-observer.js';
 import type { ExecutorTelemetry } from './executor-telemetry.js';
 import type { ProviderRegistry } from '@openagentix/providers';
 
@@ -155,6 +156,8 @@ export interface RunnerContext {
    * exactly as before.
    */
   telemetry?: ExecutorTelemetry;
+  /** Metric hooks (ADR 0015 slice S5). Absent: no metrics, the executor behaves exactly as before. */
+  observer?: ExecutorObserver;
   signal?: AbortSignal;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;

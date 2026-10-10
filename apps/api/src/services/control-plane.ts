@@ -34,6 +34,8 @@ import type { CatalogService } from './catalog.js';
 import type { GuidelinesService } from './guidelines.js';
 import type { ModelAccountingService } from './model-accounting.js';
 import type { RunNodesService } from './run-nodes.js';
+import { triggerLabel } from '../metric-labels.js';
+import { recordStepMetric } from './step-metrics.js';
 import { writeStepRows } from './step-writer.js';
 
 const ACTIVE = ['running', 'awaiting_approval'];
@@ -412,13 +414,18 @@ export class ControlPlaneService {
     // so it can neither forge nor trigger the audit entries derived from them (step.skipped,
     // condition.error, handover.invalid, ...).
     // Model calls are recorded by the model proxy from its own measurement (ADR 0009 section 5).
-    if (node && rawStep.kind === 'model_call')
+    if (node && rawStep.kind === 'model_call') {
+      this.ctx.metrics.nodeReport(rawStep.kind, 'refused');
       throw new HttpError(
         400,
         'step_kind_refused',
         'a run node cannot report model calls; the model proxy records them',
       );
-    if (node && !NODE_STEP_KINDS.has(rawStep.kind) && !isNodeGuardStep(rawStep)) return;
+    }
+    if (node && !NODE_STEP_KINDS.has(rawStep.kind) && !isNodeGuardStep(rawStep)) {
+      this.ctx.metrics.nodeReport(rawStep.kind, 'dropped');
+      return;
+    }
     if (!node && (await this.settleReserved(runId, rawStep))) return;
     // Values the broker handed out for this run never reach step rows or audit payloads.
     const step = await this.nodes.scrub(runId, node ? this.sanitizeNodeStep(rawStep) : rawStep);
@@ -431,11 +438,11 @@ export class ControlPlaneService {
         { reportedBy: node ? `node:${node.id}` : null },
       ),
     );
-    if (written.metric)
-      this.ctx.metrics.costMicros.inc(
-        { provider: written.metric.provider },
-        written.metric.costMicros,
-      );
+    if (written.metric) {
+      if (this.accounting) await this.accounting.recordStepMetric(written.metric);
+      else await recordStepMetric(this.ctx.metrics, undefined, written.metric);
+    }
+    this.observeStep(step, node !== undefined);
     // Redaction of secrets happens inside the audit entry creation.
     const special = node ? undefined : stepAuditEntry(step);
     await this.audit.append({
@@ -446,6 +453,46 @@ export class ControlPlaneService {
       runId,
       payload: node ? { reportedBy: `node:${node.id}`, ...step } : (special?.payload ?? step),
     });
+  }
+
+  /**
+   * Counters derived from the trusted fact path (ADR 0015 S5): every value is a status, a kind or
+   * a rule name from a closed set, a count or a duration; never a name, an argument or a message.
+   */
+  private observeStep(step: StepInput, fromNode: boolean): void {
+    const m = this.ctx.metrics;
+    if (fromNode) m.nodeReport(step.kind, 'accepted');
+    if (isNodeGuardStep(step)) {
+      const o = (step.output ?? {}) as { source?: unknown };
+      const report = auditShapeOfReport(step.output);
+      m.guard(
+        typeof o.source === 'string' ? o.source : undefined,
+        report.secrets.total,
+        report.invisible.total,
+      );
+      return;
+    }
+    if (step.kind === 'tool_call') {
+      // A node reports only calls its gate allowed (the decision was made on the control node);
+      // whether an approval was involved is not visible here. The durations of a node are its own
+      // claim and stay out of the duration series.
+      if (fromNode) m.toolCall('allow', step.status === 'ok' ? 'ok' : 'error');
+      else
+        m.toolExecuted(
+          step.durationMs !== undefined ? step.durationMs / 1000 : undefined,
+          step.status !== 'ok',
+        );
+    } else if (step.kind === 'control' && step.name === 'kill' && !fromNode) {
+      const reasons = (step.output as { reasons?: unknown } | undefined)?.reasons;
+      if (Array.isArray(reasons))
+        m.controlKill(
+          reasons.flatMap((r) =>
+            typeof (r as { rule?: unknown } | null)?.rule === 'string'
+              ? [(r as { rule: string }).rule]
+              : [],
+          ),
+        );
+    }
   }
 
   async requestApproval(
@@ -563,7 +610,7 @@ export class ControlPlaneService {
   }
 
   async completeRun(runId: string, result: RunResult): Promise<void> {
-    await this.ctx.db
+    const [done] = await this.ctx.db
       .update(runs)
       .set({
         status: result.status,
@@ -574,7 +621,12 @@ export class ControlPlaneService {
         lockedBy: null,
         leaseUntil: null,
       })
-      .where(eq(runs.id, runId));
+      .where(eq(runs.id, runId))
+      .returning({
+        createdAt: runs.createdAt,
+        startedAt: runs.startedAt,
+        triggeredBy: runs.triggeredBy,
+      });
     await this.ctx.db
       .update(approvals)
       .set({ status: 'rejected', decidedAt: this.ctx.now(), comment: 'run finished' })
@@ -582,6 +634,13 @@ export class ControlPlaneService {
     await this.nodes.revokeRun(runId, 'run_completed');
     await this.ctx.cache.delPrefix('costs:');
     this.ctx.metrics.runsFinished.inc({ status: result.status });
+    if (done)
+      this.ctx.metrics.runFinished(
+        result.status,
+        triggerLabel(done.triggeredBy),
+        (this.ctx.now().getTime() - (done.startedAt ?? done.createdAt).getTime()) / 1000,
+        result.error?.code ?? null,
+      );
     await this.audit.append({
       actor: 'worker',
       action: 'run.completed',

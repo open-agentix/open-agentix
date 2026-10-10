@@ -137,9 +137,16 @@ export async function createContext(
       'air-gapped mode: egress allowlist active',
     );
   }
-  const metrics = overrides.metrics ?? new Metrics();
-  await reportStdioViolations(database.db, config, logger, metrics);
   const modelCatalog = overrides.modelCatalog ?? loadModelCatalog();
+  const metrics =
+    overrides.metrics ??
+    new Metrics('oax_', {
+      genai: config.otel.genaiMetrics,
+      catalogModels: new Set(
+        Object.values(modelCatalog.providers).flatMap((p) => Object.keys(p.models)),
+      ),
+    });
+  await reportStdioViolations(database.db, config, logger, metrics);
   return {
     config,
     database,

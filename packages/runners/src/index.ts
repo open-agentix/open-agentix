@@ -22,3 +22,4 @@ export * from './kube-client.js';
 export * from './kubernetes-job.js';
 export * from './egress-rules.js';
 export * from './executor-telemetry.js';
+export * from './executor-observer.js';

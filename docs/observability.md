@@ -4,7 +4,8 @@ openagentix emits OpenTelemetry traces (OTLP) and Prometheus metrics. The design
 model and the slice plan are in [ADR 0015](adr/0015-opentelemetry-genai-tracing.md). This page
 documents what is implemented; it grows with each slice.
 
-> **Status.** The core is hardened (ADR 0015 slice S1): the attribute allowlist, error handling
+> **Status.** Slice S5 completes the Prometheus metrics and removes tenant-chosen text from every
+> label (section "Metrics"). The core is hardened (ADR 0015 slice S1): the attribute allowlist, error handling
 > without messages, the exporter configuration and its safety rules. Slice S2 adds the run's trace
 > identity, the audit links and the first spans: `oax.run.admit` at admission, one
 > `invoke_workflow {name}` per worker attempt and one HTTP server span per API request. The spans
@@ -261,14 +262,69 @@ See [`configuration.md`](configuration.md#observability) for the table of variab
 feature lands in a later slice (sampling, keep classes, node events, MCP propagation, GenAI
 metrics) are parsed and validated now and have no effect yet.
 
-## Metrics of the tracing pipeline
+## Metrics
 
-| Metric | Labels | Meaning |
-| --- | --- | --- |
-| `oax_otel_spans_dropped_total` | – | Spans dropped because the export queue was full. |
-| `oax_otel_export_failures_total` | `reason` | Failed exports (`timeout`, `network`, `http`, `other`). |
-| `oax_otel_attributes_dropped_total` | `key_class` | Attributes the allowlist refused. |
-| `oax_otel_redactions_total` | `kind` | Values the ContextGuard changed (secret kinds, `invisible`). |
-| `oax_otel_inbound_context_total` | `result` | Inbound `traceparent` headers on API requests: `ignored`, `linked`, `invalid`. |
+`GET /metrics` on the api and the worker (optional bearer `OAX_METRICS_TOKEN`) is the only metrics
+interface; there is no OTLP metric export. Prometheus metrics are an operations view for the whole
+platform: **no label ever holds a tenant id, a tenant, team, agent, connection or event source
+name, a use case, a model name chosen by a tenant, a tool name, a run id or an error message.**
+Every label value is a member of a closed set and passes `apps/api/src/metric-labels.ts` right
+before it is recorded, so a caller that passes a free text by mistake produces the fallback value
+(`other`) instead of a new series. Per-tenant numbers come from the cost and run APIs.
 
-All label values come from closed sets; none is derived from tenant input.
+| Metric | Type | Labels (closed sets) | Meaning |
+| --- | --- | --- | --- |
+| `oax_run_duration_seconds` | histogram | `status` (`succeeded`, `failed`, `cancelled`, `blocked_by_policy`), `trigger` (`manual`, `webhook`, `mail`, `kafka`, `cron`, `demo`, `other`) | From the first claim (creation if never claimed) to the end of the run, retries included. |
+| `oax_step_duration_seconds` | histogram | `runner` (runner kinds), `status` (`ok`, `error`) | One executed agent step. |
+| `oax_tool_calls_total` | counter | `decision` (`allow`, `deny`, `require_approval`), `result` (`ok`, `error`, `not_executed`) | In-process steps: every call the model asked for. Run nodes: calls they report (decision `allow`, an approval is not visible there); a denied call of a node is counted in `oax_policy_decisions_total` only. |
+| `oax_approvals_total`, `oax_approval_wait_seconds` | counter, histogram | `outcome` (`approved`, `rejected`, `timeout`, `cancelled`) | Approval waits of in-process steps; `cancelled` is a wait that the run's abort ended. |
+| `oax_tokens_total` | counter | `direction` (`input`, `output`, `cache_read`, `cache_write`), `provider` (family), `via` (`in-process`, `proxy`) | Tokens settled by the control node; `input` excludes cache tokens. `via="proxy"` counts the same tokens as `oax_model_proxy_tokens_total`, so one dashboard covers both paths. |
+| `oax_budget_exhausted_total` | counter | `scope` (`run`, `step`, `team`, `use_case`, `tenant`), `limit` (`tokens`, `usd`, `steps`, `tool_calls`, `timeout`) | A model call refused at reservation, or a run killed by the control agent, because of a budget or the run timeout. |
+| `oax_guard_replacements_total` | counter | `source` (`input`, `tool_result`, `tool_error`), `class` (`secret`, `invisible`) | Values the context guard removed or replaced (the number of values, never the values), also for run nodes. |
+| `oax_node_reports_total` | counter | `kind` (step kinds), `result` (`accepted`, `refused`, `dropped`) | Step reports from untrusted run nodes: `refused` was answered with an error (a `model_call`), `dropped` was ignored (a kind a node may not report). The node *event* counters of slice S4 (`oax_otel_node_events_dropped_total`, `oax_otel_node_context_mismatch_total`) come with that slice. |
+| `oax_cost_micro_usd_total` | counter | `provider` (family: `anthropic`, `aws.bedrock`, `azure.ai.openai`, `openai`, `openrouter`, `ollama`, `lmstudio`, `vllm`, `simulated`; `tool` for tool cost; `other`) | Model and tool cost. Resolved from the provider **instance** in the run's scope; the instance (connection) name is never a label. |
+| `oax_events_ingested_total` | counter | `kind` (`webhook`, `mail`, `kafka`, `cron`), `outcome` | Ingested and refused events. |
+| `oax_runs_created_total`, `oax_runs_refused_total` | counter | `trigger` (as above), `reason` | Admission. |
+| `oax_otel_spans_dropped_total` | counter | – | Spans dropped because the export queue was full. |
+| `oax_otel_export_failures_total` | counter | `reason` (`timeout`, `network`, `http`, `other`) | Failed exports. |
+| `oax_otel_attributes_dropped_total` | counter | `key_class` | Attributes the allowlist refused. |
+| `oax_otel_redactions_total` | counter | `kind` | Values the ContextGuard changed (secret kinds, `invisible`). |
+| `oax_otel_inbound_context_total` | counter | `result` (`ignored`, `linked`, `invalid`) | Inbound `traceparent` headers on API requests. |
+
+The older families (`oax_http_request_duration_seconds`, `oax_runs_by_status`, `oax_policy_decisions_total`,
+`oax_model_proxy_*`, `oax_worker_active_runs`, ...) are unchanged. The model proxy's `provider` label is the
+configured provider kind, never a connection name.
+
+**Breaking label changes (pre-1.0, slice S5).** `oax_cost_micro_usd_total{provider}` used the
+provider instance name, which for a tenant (BYOK) connection is the tenant's own text; it is now the
+family. `oax_events_ingested_total{source}` used the event source name; it is now `{kind}`.
+`oax_runs_created_total` and `oax_runs_refused_total` keep `trigger` but only the family of the
+trigger (the first part of `triggered_by`), reduced to the set above. Dashboards and alerts that
+select or group by `source`, or by a connection name, must be updated; the Grafana dashboard in
+`deploy/grafana/openagentix-overview.json` uses the new labels. The Helm chart's `prometheusRule`
+and dashboards live in `open-agentix-helm` and need the same change (tracked with the slice S9
+Helm mirror issue).
+
+### GenAI metrics (opt-in)
+
+`OAX_OTEL_GENAI_METRICS=true` (default `false`: the names are still experimental) adds, in
+Prometheus naming and without the `oax_` prefix: `gen_ai_client_inference_duration_seconds`,
+`gen_ai_client_inference_usage_input_tokens_total`, `..._output_tokens_total`,
+`..._cache_read_input_tokens_total`, `..._cache_write_input_tokens_total`,
+`gen_ai_execute_tool_duration_seconds`, `gen_ai_invoke_agent_duration_seconds` and
+`gen_ai_invoke_workflow_duration_seconds`. Labels: `gen_ai_operation_name`,
+`gen_ai_provider_name` (family), `gen_ai_request_model` (**only** a model id of the pinned catalog
+snapshot, every other value is `_OTHER`; a model that a tenant named in a BYOK connection and that
+is not in the catalog is therefore `_OTHER`) and `error_type` (a closed list: empty on success,
+`budget`, `timeout`, `cancelled`, `approval_timeout`, `handover_invalid`, `provider_error`,
+`policy_denied`, `tool_error`, `_OTHER`). Series grow with the catalog (a few thousand model ids
+at most), never with tenants. Durations of tool calls that a run node reports are its own claim and
+stay out of `gen_ai_execute_tool_duration_seconds`.
+
+### Cardinality test
+
+`apps/worker/test/metrics-cardinality.test.ts` runs the default tenant's flows and 16 tenants with
+random tenant, connection, agent and source names, then asserts that (1) the set of series does not
+grow with new tenants and names, (2) every label value of every `oax_` metric is in its closed set
+or shape, (3) a metric without a declared entry fails the test, so a new metric needs a reviewed
+allowlist, and (4) none of the chosen names and no UUID appears anywhere in `/metrics`.

@@ -15,7 +15,9 @@ import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
-import { writeStepRows, type LedgerExtras } from './step-writer.js';
+import { BUDGET_LIMITS, BUDGET_SCOPES, closed } from '../metric-labels.js';
+import { recordStepMetric, type ProviderLabelResolver } from './step-metrics.js';
+import { writeStepRows, type LedgerExtras, type StepMetric } from './step-writer.js';
 
 /**
  * Model call accounting (ADR 0009 section 4): a reservation of the worst-case cost before every
@@ -56,6 +58,11 @@ export interface ModelAccountingOptions {
     provider: string,
     model: string,
   ) => Promise<PriceEntry | undefined>;
+  /**
+   * Provider family label of a provider instance in a run's scope, for the cost and token
+   * metrics (ADR 0015 S5). Without it only instance names that are family names are kept.
+   */
+  providerLabel?: ProviderLabelResolver;
 }
 
 /** Defaults; the control node binds them from the `OAX_MODEL_PROXY_*` config block (services/index.ts). */
@@ -243,6 +250,9 @@ interface Limit {
   kind: 'cost' | 'tokens' | 'calls';
   /** What the limit applies to, for the refusal message. */
   label: string;
+  /** Closed label values of `oax_budget_exhausted_total` (ADR 0015 S5). */
+  scope: 'run' | 'step' | 'team' | 'use_case' | 'tenant';
+  metricLimit: 'tokens' | 'usd' | 'steps';
   /** Spent plus active reservations. */
   used: number;
   limit: number;
@@ -266,6 +276,11 @@ export class ModelAccountingService {
     private readonly scrub: <T>(runId: string, value: T) => Promise<T> = async (_r, v) => v,
     private readonly options: ModelAccountingOptions = DEFAULT_ACCOUNTING_OPTIONS,
   ) {}
+
+  /** Records the cost and token counters of a committed step (family label, never an instance name). */
+  recordStepMetric(m: StepMetric): Promise<void> {
+    return recordStepMetric(this.ctx.metrics, this.options.providerLabel, m);
+  }
 
   private lockTenant(tx: Db, tenantId: string) {
     return tx.execute(
@@ -406,6 +421,8 @@ export class ModelAccountingService {
         code: 'control_budget_cost',
         kind: 'cost',
         label: 'run cost budget',
+        scope: 'run',
+        metricLimit: 'usd',
         used: Number(run.costMicros) + reservedCost(ofRun),
         limit: costLimit(runBudget.maxCostUsd),
         blockAtLimit: false,
@@ -416,6 +433,8 @@ export class ModelAccountingService {
         code: 'control_budget_tokens',
         kind: 'tokens',
         label: 'run token budget',
+        scope: 'run',
+        metricLimit: 'tokens',
         used: run.tokensIn + run.tokensOut + reservedTokens(ofRun),
         limit: runBudget.maxTokens,
         blockAtLimit: false,
@@ -426,6 +445,8 @@ export class ModelAccountingService {
         code: 'control_budget_cost',
         kind: 'cost',
         label: 'step cost budget',
+        scope: 'step',
+        metricLimit: 'usd',
         used: Number(agentSpend?.cost ?? 0) + reservedCost(ofAgent),
         limit: costLimit(stepBudget.maxCostUsd),
         blockAtLimit: false,
@@ -436,6 +457,8 @@ export class ModelAccountingService {
         code: 'control_budget_tokens',
         kind: 'tokens',
         label: 'step token budget',
+        scope: 'step',
+        metricLimit: 'tokens',
         used: Number(agentSpend?.tokens ?? 0) + reservedTokens(ofAgent),
         limit: stepBudget.maxTokens,
         blockAtLimit: false,
@@ -446,6 +469,8 @@ export class ModelAccountingService {
         code: 'control_budget_steps',
         kind: 'calls',
         label: 'step model call budget',
+        scope: 'step',
+        metricLimit: 'steps',
         used: Number(agentSpend?.calls ?? 0) + ofAgent.length,
         limit: stepBudget.maxSteps,
         blockAtLimit: true,
@@ -472,6 +497,8 @@ export class ModelAccountingService {
               : 'control_budget_team',
         kind: 'cost',
         label: `${u.scope.replace('_', ' ')} "${u.key}" monthly budget`,
+        scope: u.scope,
+        metricLimit: 'usd',
         used: u.spentMicros + reservedCost(rows),
         limit: u.limitMicros,
         blockAtLimit: true,
@@ -510,6 +537,10 @@ export class ModelAccountingService {
     if (tightest && tightest.allowed < output) {
       const floor = req.minOutputTokens;
       if (floor === undefined || tightest.allowed < floor) {
+        this.ctx.metrics.budgetExhausted.inc({
+          scope: closed(BUDGET_SCOPES, tightest.limit.scope),
+          limit: closed(BUDGET_LIMITS, tightest.limit.metricLimit),
+        });
         throw new HttpError(
           403,
           tightest.limit.code,
@@ -635,8 +666,7 @@ export class ModelAccountingService {
       await this.lockTenant(tx, scope.tenantId);
       return this.closeLocked(tx, scope.tenantId, reservationId, clean, false, price);
     });
-    if (out.metric)
-      this.ctx.metrics.costMicros.inc({ provider: out.metric.provider }, out.metric.costMicros);
+    if (out.metric) await this.recordStepMetric(out.metric);
     return out.settlement;
   }
 
@@ -659,7 +689,7 @@ export class ModelAccountingService {
     req: SettleRequest,
     expire: boolean,
     resolvedPrice?: PriceEntry,
-  ): Promise<{ settlement: Settlement; metric: { provider: string; costMicros: number } | null }> {
+  ): Promise<{ settlement: Settlement; metric: StepMetric | null }> {
     const [r] = await tx
       .select()
       .from(modelReservations)
@@ -842,11 +872,7 @@ export class ModelAccountingService {
         });
         if (!out.settlement.alreadyClosed) {
           n++;
-          if (out.metric)
-            this.ctx.metrics.costMicros.inc(
-              { provider: out.metric.provider },
-              out.metric.costMicros,
-            );
+          if (out.metric) await this.recordStepMetric(out.metric);
         }
       } catch (err) {
         // One bad row must not stop the others; it is retried on the next round.
