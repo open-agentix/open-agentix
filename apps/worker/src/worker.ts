@@ -1,7 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { createServices, withSpan, type AppContext, type Services } from '@openagentix/api';
+import {
+  createServices,
+  getNetworkSettings,
+  withSpan,
+  type AppContext,
+  type Services,
+} from '@openagentix/api';
 import { ToolGateway, type InMemoryTransportFactory } from '@openagentix/mcp';
-import type { ProviderRegistry } from '@openagentix/providers';
+import {
+  createOutboundDispatcher,
+  type OutboundDispatcher,
+  type ProviderRegistry,
+} from '@openagentix/providers';
 import {
   InProcessRunner,
   type IsolatingRunner,
@@ -42,6 +52,8 @@ export interface WorkerOptions {
   /** In-process MCP servers (demo/test); real deployments use stdio or streamable-http connections. */
   inMemoryMcp?: InMemoryTransportFactory;
   runner?: Runner;
+  /** Outbound dispatcher of HTTP MCP servers (tests); default: built from the network settings. */
+  mcpOutbound?: OutboundDispatcher;
   /** Pull request delivery for steps with a `pull-request` output (DOG-4); off when unset. */
   delivery?: (services: Services, workerId: string) => PullRequestDelivery | undefined;
   /**
@@ -79,6 +91,7 @@ export class Worker {
   private loop: Promise<void> | null = null;
   private stopping = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private mcpOutboundImpl: OutboundDispatcher | undefined;
 
   constructor(
     readonly ctx: AppContext,
@@ -92,6 +105,19 @@ export class Worker {
     );
     this.providers = opts.providers ?? null;
     this.runner = opts.runner ?? new InProcessRunner();
+  }
+
+  /**
+   * The dispatcher every HTTP MCP request of this worker leaves through (ADR 0016 S1): the network
+   * configuration and the air-gapped allowlist of the process apply to it.
+   */
+  private mcpOutbound(): OutboundDispatcher {
+    if (this.opts.mcpOutbound) return this.opts.mcpOutbound;
+    const settings = getNetworkSettings();
+    return (this.mcpOutboundImpl ??= createOutboundDispatcher({
+      ...(settings ? { network: settings.net } : {}),
+      allowPlainHttpForPlatform: true,
+    }));
   }
 
   get running(): boolean {
@@ -124,6 +150,10 @@ export class Worker {
         // only operator-defined (platform) stdio servers may start. A tenant stdio server runs in
         // a run node or not at all.
         stdioGuard: workerStdioGuard(platformNames),
+        // HTTP servers: only platform connections are operator configuration, everything else gets
+        // the tenant destination rules and pinned DNS (ADR 0016 section 4).
+        outbound: this.mcpOutbound(),
+        originFor: (server) => (platformNames.has(server) ? 'platform' : 'tenant'),
         ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
       },
       contextGuardFromEnv(process.env),
@@ -293,5 +323,7 @@ export class Worker {
     await this.loop;
     this.loop = null;
     await this.drain();
+    await this.mcpOutboundImpl?.close().catch(() => undefined);
+    this.mcpOutboundImpl = undefined;
   }
 }

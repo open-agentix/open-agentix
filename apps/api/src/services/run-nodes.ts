@@ -301,11 +301,15 @@ export class RunNodesService {
     // ADR 0016 S0: a stored tenant stdio connection that breaks the command rules fails closed
     // here (audit entry, error visible with the run), before a node exists for the step.
     const stdioScope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
-    const { configs: stepMcp, tenantStdio } = await this.catalog.stepMcpConfigs(
-      stdioScope,
-      this.serversOf(agent),
-      { runId, actor: `worker:${orchestratorId}`, step: agent.id },
-    );
+    const {
+      configs: stepMcp,
+      tenantStdio,
+      tenantHttp,
+    } = await this.catalog.stepMcpConfigs(stdioScope, this.serversOf(agent), {
+      runId,
+      actor: `worker:${orchestratorId}`,
+      step: agent.id,
+    });
     const handover: StepHandover = {
       agentId: agent.id,
       agent: spec,
@@ -322,6 +326,7 @@ export class RunNodesService {
       ...(tenantStdio.length > 0
         ? { stdio: { tenantServers: tenantStdio, allowlist: cfg.mcp.stdioCommands } }
         : {}),
+      http: { tenantServers: tenantHttp },
     };
     await this.ctx.db.insert(runNodeSessions).values({
       id: sessionId,

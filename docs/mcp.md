@@ -90,6 +90,65 @@ holds even if a write grant reached the stored version some other way. Without a
   `read` really has no side effects. Review profiles like any other grant.
 - Argument constraints are not part of a profile; use concrete grants for narrowing.
 
+## HTTP MCP servers (streamable HTTP)
+
+A `streamable-http` connection is contacted at its `url`, nothing else. Every request of the MCP
+client (initialize, calls, the event stream, session close) leaves through the outbound dispatcher
+of [ADR 0011](adr/0011-outbound-network-proxies-and-private-endpoints.md) with the purpose `mcp`
+([ADR 0016](adr/0016-mcp-egress-and-authorization.md) sections 4.2 and 4.3). Who defined the
+connection decides how strict that is:
+
+| Connection scope | Destination rules |
+| --- | --- |
+| `platform` (operator) | the operator's network configuration: proxies, `deny` routes, air-gapped allowlist. Plain `http://` and private addresses stay possible (in-cluster servers). |
+| `tenant`, `team`, `agent` | **https only**; no `localhost`, no loopback, link-local, private, CGNAT, multicast or cloud-metadata address in any spelling (`169.254.169.254`, `2852039166`, `0xa9fea9fe`, `0251.0376.0251.0376`, `[::ffff:169.254.169.254]`, `[fd00:ec2::254]`, ...), no metadata host name. Only the platform can open a private range, with `privateAllow` in the network configuration (never loopback, link-local or metadata). |
+
+**When saving** (`POST`/`PUT /v1/connections`): the URL of a tenant connection is checked by the
+resolver without any DNS lookup (a refused connection answers `422 egress_denied` with the rule code
+only, so saving is never a name-resolution oracle). Independent of the scope, `400` is returned for
+credentials or a fragment in the URL (`mcp_url_invalid`, use `headerSecrets`) and for a header the
+platform owns (`mcp_header_forbidden`): `host`, `content-length`, `transfer-encoding`, `connection`,
+`upgrade`, `te`, `trailer`, `expect`, `cookie`, `via`, `forwarded`, `x-forwarded-*`, `x-real-ip`,
+`origin`, `accept`, `content-type`, `mcp-session-id`, `mcp-protocol-version`, `last-event-id`,
+the trace context (`traceparent`, `tracestate`, `baggage`) and `proxy-*`, `sec-*`, `x-oax-*`; also
+for the same header given twice (plain and secret-backed, or in two spellings) and for header
+values with control characters. Authentication headers of the MCP server (`authorization`,
+`x-api-key`, ...) stay yours. The optional `egress` list of an HTTP connection may repeat the host
+(and port) of the `url` and nothing else; it is checked against the air-gapped allowlist.
+
+**When connecting**: the dispatcher resolves the name once, refuses the connection if any answer is
+non-public, and connects to the address it checked (no second resolution, so DNS rebinding cannot
+swap the address after the check). Redirects are never followed (`redirect: error`), the request URL
+must have the origin of the connection URL (`mcp_egress_denied` otherwise), TLS verification is
+always on, and a response is limited to 64 MiB. Behind a proxy the proxy resolves the name; the
+resolver and one pre-request lookup refuse private answers, but the proxy's own answer can differ
+(residual risk of ADR 0011). A connection that was stored before these rules and breaks them fails
+closed when a run uses it.
+
+Run nodes: the control node tells the node which HTTP servers a tenant defined (`http.tenantServers`
+in the step handover); the node applies the tenant rules to them by name and literal address, and
+the egress proxy of the node resolves and enforces the destination. The control-node relay of
+ADR 0016 S4 will take HTTP servers out of nodes altogether.
+
+### Test a connection
+
+`POST /v1/connections/{id}/test` on an `mcp` connection (no body needed) runs `initialize` and
+`tools/list` through the same path as a run and answers with a **category only**:
+
+```json
+{ "ok": false, "category": "egress_denied", "latency": "<100ms" }
+```
+
+Categories: `ok`, `config_invalid`, `egress_denied`, `dns_failed`, `connect_failed`,
+`proxy_refused`, `tls_untrusted`, `tls_hostname_mismatch`, `auth_failed` (401/403), `http_error`
+(with `httpClass` `4xx` or `5xx`), `protocol_error`, `timeout`, `error`. On success `toolCount` is
+the number of listed tools. There is no response body, header, address, error text of the server,
+tool name or description and no exact timing in the answer or the audit entry (`connection.tested`
+with the category). It takes no URL (only a stored connection), is limited to 10 tests per minute
+per user and replica, needs `connections:write`, tests a platform connection only for platform
+operators, and refuses stdio connections (`400 mcp_test_unsupported`: a test would start a process).
+A test ends after 30 seconds in total (`timeout`) and reads at most 8 MiB per response.
+
 ## Stdio MCP servers
 
 A `stdio` connection starts a child process. Who defined the connection decides where it may run and

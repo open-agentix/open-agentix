@@ -8,6 +8,7 @@ import {
   modelPriceEntries,
   type FetchLike,
   type HostLookup,
+  type OutboundDispatcher,
   type ModelCatalog,
 } from '@openagentix/providers';
 import {
@@ -42,6 +43,8 @@ export interface AppContext {
   fetchImpl?: FetchLike;
   /** Name resolution for the SSRF checks of tenant-controlled endpoints (tests inject a fake). */
   hostLookup?: HostLookup;
+  /** Outbound dispatcher of HTTP MCP connection tests (tests inject one; default: per call). */
+  mcpOutbound?: OutboundDispatcher;
   now: () => Date;
   ldapFactory?: LdapClientFactory;
   oidcClient?: OidcClient;
@@ -157,6 +160,7 @@ export async function createContext(
     now: overrides.now ?? (() => new Date()),
     ...(overrides.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {}),
     ...(overrides.hostLookup ? { hostLookup: overrides.hostLookup } : {}),
+    ...(overrides.mcpOutbound ? { mcpOutbound: overrides.mcpOutbound } : {}),
     ...(overrides.ldapFactory ? { ldapFactory: overrides.ldapFactory } : {}),
     ...(overrides.oidcClient ? { oidcClient: overrides.oidcClient } : {}),
   };

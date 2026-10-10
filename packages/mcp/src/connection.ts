@@ -1,10 +1,15 @@
 import { OaxError, type SecretResolver } from '@openagentix/core';
-import { createProxyAwareFetch } from '@openagentix/providers';
+import {
+  sharedOutboundDispatcher,
+  type HostLookup,
+  type OutboundDispatcher,
+} from '@openagentix/providers';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServerConfig } from './config.js';
+import { assertHttpConfig } from './http-policy.js';
 
 export interface McpTool {
   name: string;
@@ -42,6 +47,59 @@ export interface ConnectDeps {
    * trusted process, run nodes to apply the command rules to the binaries of their image.
    */
   stdioGuard?: ((cfg: Extract<McpServerConfig, { transport: 'stdio' }>) => void) | undefined;
+  /**
+   * The outbound dispatcher every HTTP MCP request goes through (ADR 0011, purpose `mcp`). Default:
+   * the process-wide dispatcher for `env` (legacy proxy variables, no network configuration), so
+   * hosts with a network configuration or an air-gapped egress policy pass their own.
+   */
+  outbound?: OutboundDispatcher | undefined;
+  /**
+   * Who defined the server of that name. HTTP servers of a tenant, team or agent connection get the
+   * tenant destination rules (TLS only, no private, local or metadata addresses, pinned DNS);
+   * only `platform` connections are operator configuration. Unknown means tenant (fail closed).
+   */
+  originFor?: ((server: string) => 'platform' | 'tenant') | undefined;
+  /** See `OutboundContext.proxyChecksDestination`: run nodes behind the control node's proxy. */
+  proxyChecksDestination?: boolean | undefined;
+  /** Name resolution for the connect-time destination check (tests inject a fake resolver). */
+  lookup?: HostLookup | undefined;
+}
+
+type HttpConfig = Extract<McpServerConfig, { transport: 'streamable-http' }>;
+
+/**
+ * The `fetch` of one HTTP MCP connection. Every request of the SDK transport (POST, the SSE GET
+ * stream, session DELETE) passes here and leaves through the outbound dispatcher with purpose
+ * `mcp`: route and destination rules, pinned DNS for tenant servers, no redirects, size limit.
+ * The request URL must be the connection URL's origin; the SDK never needs another one for the
+ * streamable-HTTP transport, so anything else is a bug or an attack (`mcp_egress_denied`).
+ */
+export function createMcpFetch(
+  cfg: HttpConfig,
+  deps: Pick<ConnectDeps, 'outbound' | 'originFor' | 'env' | 'proxyChecksDestination' | 'lookup'>,
+): (input: string | URL, init?: RequestInit) => Promise<Response> {
+  const allowed = new URL(cfg.url).origin;
+  const origin = deps.originFor?.(cfg.name) ?? 'tenant';
+  const outbound = deps.outbound ?? sharedOutboundDispatcher(deps.env ?? process.env);
+  return async (input, init) => {
+    let target: URL;
+    try {
+      target = new URL(typeof input === 'string' || input instanceof URL ? input : String(input));
+    } catch {
+      throw new OaxError('mcp_egress_denied', `MCP server "${cfg.name}": invalid request URL`);
+    }
+    if (target.origin !== allowed || target.username || target.password)
+      throw new OaxError(
+        'mcp_egress_denied',
+        `MCP server "${cfg.name}": requests are limited to the origin of the connection url`,
+      );
+    return outbound.fetch(target, init, {
+      purpose: 'mcp',
+      scope: { origin },
+      ...(deps.proxyChecksDestination ? { proxyChecksDestination: true } : {}),
+      ...(deps.lookup ? { pin: { lookup: deps.lookup } } : {}),
+    });
+  };
 }
 
 export async function createTransport(cfg: McpServerConfig, deps: ConnectDeps): Promise<Transport> {
@@ -61,13 +119,22 @@ export async function createTransport(cfg: McpServerConfig, deps: ConnectDeps): 
       });
     }
     case 'streamable-http': {
+      // Stored connections that predate the rules fail closed here instead of being repaired.
+      assertHttpConfig(cfg.name, cfg);
       const headers: Record<string, string> = { ...cfg.headers };
-      for (const [h, ref] of Object.entries(cfg.headerSecrets))
-        headers[h] = await deps.secrets.resolve(ref);
-      // Outbound MCP over HTTP honours HTTPS_PROXY/NO_PROXY explicitly.
+      for (const [h, ref] of Object.entries(cfg.headerSecrets)) {
+        const value = await deps.secrets.resolve(ref);
+        // eslint-disable-next-line no-control-regex
+        if (/[\u0000-\u0008\u000a-\u001f\u007f]/.test(value))
+          throw new OaxError(
+            'mcp_header_forbidden',
+            `MCP connection "${cfg.name}": the secret of header "${h.toLowerCase()}" is not a valid header value`,
+          );
+        headers[h] = value;
+      }
       return new StreamableHTTPClientTransport(new URL(cfg.url), {
         requestInit: { headers },
-        fetch: createProxyAwareFetch({ ...(deps.env ? { env: deps.env } : {}) }),
+        fetch: createMcpFetch(cfg, deps),
       });
     }
     case 'in-memory': {
@@ -119,6 +186,8 @@ export function renderToolResult(
   };
 }
 
+const MAX_TOOL_PAGES = 50;
+
 /** One connected MCP server. */
 export class McpConnection {
   private tools: McpTool[] | null = null;
@@ -141,7 +210,11 @@ export class McpConnection {
     if (this.tools) return this.tools;
     const out: McpTool[] = [];
     let cursor: string | undefined;
+    let pages = 0;
     do {
+      // A server that never stops returning cursors must not pin the run (or a connection test).
+      if (++pages > MAX_TOOL_PAGES)
+        throw new OaxError('tool_failed', `MCP server "${this.config.name}" lists too many pages`);
       const page = await this.client.listTools(cursor ? { cursor } : {}, {
         timeout: this.config.timeoutMs,
       });

@@ -8,3 +8,5 @@ export * from './gate-http.js';
 export * from './stdio-policy.js';
 export * from './stdio-programs.js';
 export * from './stdio-env.js';
+export * from './http-policy.js';
+export * from './mcp-test.js';

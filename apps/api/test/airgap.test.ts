@@ -176,6 +176,26 @@ describe('air-gapped start-up self-check', () => {
     ).toEqual([]);
   });
 
+  it('checks the egress entries of MCP connections as well (ADR 0016 S1)', () => {
+    const p = buildPolicy(cfg({ OAX_AIRGAPPED: 'true', OAX_AIRGAPPED_ALLOW: 'mcp.internal' }));
+    expect(
+      checkStoredConnections(
+        [
+          {
+            name: 'e',
+            kind: 'mcp',
+            config: {
+              transport: 'streamable-http',
+              url: 'https://mcp.internal/x',
+              egress: ['mcp.internal', 'elsewhere.example:8443'],
+            },
+          },
+        ],
+        p,
+      ),
+    ).toEqual(['MCP connection "e" egress: elsewhere.example:8443 is not on OAX_AIRGAPPED_ALLOW']);
+  });
+
   it('knows the default endpoint of every provider kind', () => {
     const urls = (settings: object) => providerEndpoints(settings, 'p').map((e) => e.url);
     expect(urls({ kind: 'openai' })).toEqual(['https://api.openai.com/v1']);
@@ -239,6 +259,36 @@ describe('air-gapped control node', () => {
     expect(upd.statusCode).toBe(422);
     const after = await n.req({ method: 'GET', url: '/readyz', token: null });
     expect(after.json().airgapped.blockedAttempts).toBe(2);
+  }, 120_000);
+
+  it('refuses MCP egress entries outside the allowlist (ADR 0016 S1)', async () => {
+    n = await testNode({ OAX_AIRGAPPED: 'true', OAX_AIRGAPPED_ALLOW: 'mcp.internal' });
+    const create = (name: string, config: Record<string, unknown>) =>
+      n.req({
+        method: 'POST',
+        url: '/v1/connections',
+        payload: { name, config: { transport: 'streamable-http', ...config } },
+      });
+    const ok = await create('eg-ok', { url: 'https://mcp.internal/mcp', egress: ['mcp.internal'] });
+    expect(ok.statusCode).toBe(201);
+    // an entry the allowlist does not cover is refused even when the url is allowed
+    const bad = await create('eg-bad', {
+      url: 'https://mcp.internal/mcp',
+      egress: ['mcp.internal', 'elsewhere.example'],
+    });
+    expect([400, 422]).toContain(bad.statusCode);
+    expect(bad.json().error).toMatch(/egress_denied|mcp_egress_invalid|airgap_violation/);
+    // platform connections inside the allowlist stay creatable
+    const platform = await n.req({
+      method: 'POST',
+      url: '/v1/connections',
+      payload: {
+        name: 'eg-plat',
+        scope: 'platform',
+        config: { transport: 'streamable-http', url: 'https://mcp.internal/mcp' },
+      },
+    });
+    expect(platform.statusCode).toBe(201);
   }, 120_000);
 
   it('guards BYOK model connections, the connection test endpoint and keeps the catalog offline', async () => {

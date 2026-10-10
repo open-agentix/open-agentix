@@ -8,6 +8,7 @@ import {
   ConnectionSchema,
   ConnectionTestBody,
   ConnectionTestResultSchema,
+  McpConnectionTestResultSchema,
   ConnectionUpdateBody,
   StdioViolationsSchema,
   DecisionSchema,
@@ -20,6 +21,7 @@ import {
   PolicySchema,
   PolicyUpdateBody,
 } from '../schemas.js';
+import { HttpError } from '../../errors.js';
 import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
@@ -123,14 +125,26 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
       schema: {
         tags: ['connections'],
         summary:
-          'Send one tiny completion through a model connection (audited, costs a few tokens)',
+          'Test a connection (audited). Model connection: one tiny completion (costs a few tokens, needs `model`). MCP connection (streamable-http): `initialize` and `tools/list` through the outbound dispatcher, answered with a category only; rate limited to 10 per minute per user',
         security: sec,
         params: IdParams,
         body: ConnectionTestBody,
-        response: { 200: ConnectionTestResultSchema, 404: ErrorSchema },
+        response: {
+          200: z.union([ConnectionTestResultSchema, McpConnectionTestResultSchema]),
+          400: ErrorSchema,
+          404: ErrorSchema,
+          429: ErrorSchema,
+        },
       },
     },
-    async (req) => services.models.test(principalOf(req), req.params.id, req.body.model),
+    async (req) => {
+      const actor = principalOf(req);
+      const row = await catalog.getConnection(actor, req.params.id);
+      if (row.kind === 'mcp') return services.mcpTest.test(actor, req.params.id);
+      if (!req.body.model)
+        throw new HttpError(400, 'validation_failed', 'a model connection test needs "model"');
+      return services.models.test(actor, req.params.id, req.body.model);
+    },
   );
 
   app.get(
