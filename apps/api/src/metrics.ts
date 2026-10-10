@@ -20,6 +20,8 @@ export class Metrics {
   readonly modelProxyAborts: Counter<'reason'>;
   readonly modelProxyStreamsActive: Gauge<string>;
   readonly roleBindingsShadow: Counter<'outcome'>;
+  readonly roleBindingsReconcileFixes: Counter<'kind' | 'trigger'>;
+  readonly roleBindingsReconcileRuns: Counter<'trigger' | 'outcome'>;
 
   constructor(prefix = 'oax_') {
     collectDefaultMetrics({ register: this.registry, prefix });
@@ -42,6 +44,24 @@ export class Metrics {
         'Shadow comparison of the tenant role resolver with the legacy bindings (ADR 0014 S1): ' +
         'outcome match, mismatch or error; the legacy result stays authoritative',
       labelNames: ['outcome'],
+      registers: [this.registry],
+    });
+    this.roleBindingsReconcileFixes = new Counter({
+      name: `${prefix}role_bindings_reconcile_fixes_total`,
+      help:
+        'Rows the reconcile of tenant_role_bindings against users.global_roles changed (ADR 0014 ' +
+        'S1, #216): kind added or removed; blocked = a wanted role whose key is held by a ' +
+        'non-managed row (kept, needs a look). A non-zero rate outside a deploy means an old ' +
+        'application version or a manual change writes global_roles without the mirror',
+      labelNames: ['kind', 'trigger'],
+      registers: [this.registry],
+    });
+    this.roleBindingsReconcileRuns = new Counter({
+      name: `${prefix}role_bindings_reconcile_runs_total`,
+      help:
+        'Reconcile runs of the role binding mirror by trigger (startup, periodic, mismatch, cli) ' +
+        'and outcome (ok, error, skipped)',
+      labelNames: ['trigger', 'outcome'],
       registers: [this.registry],
     });
     this.runsCreated = new Counter({
