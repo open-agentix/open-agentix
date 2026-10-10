@@ -59,5 +59,106 @@
       },
       "errors": 0
     }
-  ]
+  ],
+  "otel": {
+    "meta": {
+      "date": "2026-10-10T11:33:51.960Z",
+      "node": "v22.23.3",
+      "database": "pglite",
+      "duration": 10,
+      "connections": 10,
+      "otel": true
+    },
+    "results": [
+      {
+        "name": "GET /v1/runs?limit=50",
+        "requests": 1065,
+        "rps": 107,
+        "p50": 93.46,
+        "p95": 125.1,
+        "p99": 166.68,
+        "non2xx": 0,
+        "statuses": {
+          "200": 1065
+        },
+        "errors": 0
+      },
+      {
+        "name": "GET /v1/runs/:id",
+        "requests": 4050,
+        "rps": 405,
+        "p50": 23.25,
+        "p95": 39.7,
+        "p99": 51.12,
+        "non2xx": 0,
+        "statuses": {
+          "200": 4050
+        },
+        "errors": 0
+      },
+      {
+        "name": "GET /v1/agents",
+        "requests": 755,
+        "rps": 76,
+        "p50": 135.97,
+        "p95": 194.1,
+        "p99": 269.26,
+        "non2xx": 0,
+        "statuses": {
+          "200": 755
+        },
+        "errors": 0
+      },
+      {
+        "name": "POST /v1/ingest/webhook/:id",
+        "requests": 865,
+        "rps": 87,
+        "p50": 110.02,
+        "p95": 171.56,
+        "p99": 189.02,
+        "non2xx": 0,
+        "statuses": {
+          "202": 865
+        },
+        "errors": 0
+      }
+    ],
+    "collector": {
+      "requests": 18,
+      "bytes": 1937401
+    },
+    "reference_without_exporter": {
+      "note": "Same session, same host, same command without --otel (not written by the script).",
+      "results": [
+        {
+          "name": "GET /v1/runs?limit=50",
+          "rps": 121,
+          "p50": 77.81,
+          "p95": 122.36,
+          "p99": 170.14
+        },
+        {
+          "name": "GET /v1/runs/:id",
+          "rps": 437,
+          "p50": 21.16,
+          "p95": 34.34,
+          "p99": 43.8
+        },
+        {
+          "name": "GET /v1/agents",
+          "rps": 84,
+          "p50": 118.42,
+          "p95": 170.98,
+          "p99": 197.29
+        },
+        {
+          "name": "POST /v1/ingest/webhook/:id",
+          "rps": 90,
+          "p50": 106.65,
+          "p95": 165.1,
+          "p99": 200.46
+        }
+      ]
+    }
+  }
 }

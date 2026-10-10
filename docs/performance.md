@@ -45,6 +45,21 @@ The script starts the control node in-process, seeds the `cve-triage` agent, a w
 p50/p95/p99 from every response. `--write` stores the result in
 [`performance-baseline.json`](performance-baseline.json).
 
+### Exporter overhead (`--otel`)
+
+`node scripts/bench.mjs --otel` starts a fake OTLP collector on loopback, sets
+`OTEL_EXPORTER_OTLP_ENDPOINT` to it and runs the same scenarios with tracing on; with `--write` the
+result is stored as the `otel` row of `performance-baseline.json` next to the plain baseline.
+ADR 0015 section 13 asks for the read and ingest p95 targets to stay unchanged with the exporter on.
+Measured 2026-10-10 (Node.js 22.23.3, embedded PGlite, shared homelab host that was busy, 10 s per
+scenario, 10 connections), plain versus `--otel` in the same session: p95 `GET /v1/runs?limit=50`
+122 ms versus 125 ms, `GET /v1/runs/:id` 34 ms versus 40 ms, `GET /v1/agents` 171 ms versus 194 ms,
+`POST /v1/ingest/webhook/:id` 165 ms versus 172 ms; the fake collector received 18 exports
+(1.9 MB). The bench does not start a worker, so these numbers cover the API path (request spans,
+admission spans) only, not executor spans, and the run-to-run noise on this host is of the same
+order as the differences. The sub-50 ms and sub-30 ms targets are for PostgreSQL and are not met by
+PGlite in either mode; the executor CPU comparison (at most 3 %) is not measured yet.
+
 ## Baseline (2026-10-03)
 
 Environment: Node.js 20.19.2, **embedded PGlite** (WASM, one connection, in memory), shared homelab
