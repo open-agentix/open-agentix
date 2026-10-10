@@ -67,6 +67,7 @@ import type {
 import type { ModelsService } from './models.js';
 import type { RunNodesService } from './run-nodes.js';
 import { noteInboundContext, spanIdentity, storedParent } from './node-telemetry.js';
+import { captureModelContent } from '../telemetry-content.js';
 import { startGuardedSpan, type OpenSpan } from '../telemetry.js';
 
 /** Output bound when neither the request, the agent nor the catalog names one. */
@@ -948,6 +949,33 @@ export class ModelProxyService {
     throw new ModelProxyError('model_proxy_unavailable', 'the call could not be settled');
   }
 
+  /**
+   * ADR 0015 5.4 (slice S10): parks the redacted text of a completed call for the exporters of the
+   * tenant that opted in. Off unless the operator allows it (`OAX_OTEL_CONTENT=redacted`); the
+   * messages of the `tool` role and every tool call are never read. Never changes the outcome.
+   */
+  private async captureContent(adm: Admitted, res: ChatResponse): Promise<void> {
+    const otel = this.ctx.config.otel;
+    if (otel.content !== 'redacted' || !adm.span) return;
+    try {
+      const sc = adm.span.span.spanContext();
+      await captureModelContent(
+        { db: this.ctx.db, config: otel },
+        {
+          tenantId: adm.auth.tenantId,
+          span: { traceId: sc.traceId, spanId: sc.spanId },
+          classification: adm.definition.classification,
+          system: adm.chat.system,
+          messages: adm.chat.messages,
+          outputText: res.text,
+          secrets: adm.secrets,
+        },
+      );
+    } catch {
+      // Telemetry never changes the outcome of a call.
+    }
+  }
+
   /** The proxy's own numbers on the `chat` span (never the provider's or the node's claims). */
   private measured(adm: Admitted, s: Settlement): void {
     try {
@@ -1282,6 +1310,7 @@ export class ModelProxyService {
       this.released(adm);
       this.tokens(s, cache, adm);
       this.ctx.metrics.modelProxyDuration.observe({ phase: 'total' }, ms / 1000);
+      await this.captureContent(adm, res);
       const out = this.response(adm, res, s, cache);
       this.log(adm, 'ok', s, ms);
       return out;
@@ -1744,6 +1773,7 @@ export class ModelProxyService {
       sink.error(err.code, err.message);
       return;
     }
+    await this.captureContent(adm, res);
     try {
       sink.done(this.response(adm, res, s, cache, !adm.pass));
       this.count('ok', adm);
