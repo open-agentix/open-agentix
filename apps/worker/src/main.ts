@@ -5,6 +5,8 @@ import {
   createTenantExporterSource,
   initTelemetry,
   loadConfig,
+  processSecrets,
+  scrubStdio,
 } from '@openagentix/api';
 import { demoServerFactories, inMemoryServers } from '@openagentix/mcp';
 import { ContainerRunner } from '@openagentix/runners';
@@ -17,6 +19,8 @@ import { createPullRequestDelivery } from './pr-wiring.js';
 import { Worker } from './worker.js';
 
 const config = loadConfig();
+// Console output and uncaught traces pass the redactor registry too (ADR 0016 section 7.5).
+scrubStdio(processSecrets);
 const logger = createLogger(config.logLevel, 'openagentix-worker');
 // The air-gapped check runs before the exporter (and its header secret) exists (#220); the
 // context activates the same configuration again once the exporter is up.

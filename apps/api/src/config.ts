@@ -20,7 +20,9 @@ import {
   validateImage,
   validateResourceCeiling,
 } from '@openagentix/runners';
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isIP } from 'node:net';
+import { join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { OTEL_ENV_SHAPE, buildOtelConfig, type OtelConfig } from './telemetry-config.js';
 import { parseStdioEgressGrants } from './stdio-egress.js';
@@ -290,6 +292,19 @@ export const EnvSchema = z.object({
   OAX_MCP_RELAY_IDLE_SECONDS: z.coerce.number().int().min(5).max(3600).default(300),
   /** Time a node has to deliver a request body; a slow trickle is cut off (slowloris). */
   OAX_MCP_RELAY_BODY_READ_SECONDS: z.coerce.number().int().min(1).max(120).default(15),
+  /**
+   * Platform key-encryption key for the secrets the platform stores (MCP OAuth tokens, ADR 0016
+   * section 7.5): 32 random bytes, base64 or base64url. `OAX_MCP_OAUTH_KEK_FILE` reads the same
+   * value from a mounted file instead (preferred; set only one of the two). Without a key the
+   * key service refuses every operation and no token can be stored.
+   */
+  OAX_MCP_OAUTH_KEK: z.string().optional(),
+  OAX_MCP_OAUTH_KEK_FILE: z.string().optional(),
+  /** Names the key-encryption key in the rows it wraps (`[A-Za-z0-9._-]`, up to 64). */
+  OAX_MCP_OAUTH_KEK_ID: z
+    .string()
+    .regex(/^[A-Za-z0-9._-]{1,64}$/)
+    .default('kek-1'),
   /** `trusted`: platform stdio connections may start in air-gapped mode (child sockets are not guarded). */
   OAX_AIRGAPPED_STDIO: z.enum(['trusted']).optional(),
 });
@@ -428,6 +443,14 @@ export interface Config {
     stdioCommands: string[];
     stdioEgress: Map<string, string[]>;
     requireToolPin: boolean;
+    /** Key-encryption key of the stored OAuth tokens; `key` is null when none is configured. */
+    oauth: {
+      kek: { key: Buffer | null; id: string };
+      /** Where the key came from; `env` is discouraged and warned about at start-up. */
+      source: 'env' | 'file' | 'none';
+      /** The key file is readable by group or others. */
+      fileLoose: boolean;
+    };
     relay: {
       concurrency: number;
       ratePerMinute: number;
@@ -493,6 +516,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       'invalid configuration: OAX_DEMO_LLM=claude-code requires OAX_DEMO_MODE=true (fixed scenarios only)',
     );
   }
+  const result = buildConfig(e, env, database);
+  // The key now lives in the closure of the config. Deleting it from process.env keeps it out of
+  // what child processes inherit (stdio MCP servers, harness CLIs) and out of `process.env` readers;
+  // the kernel's copy of the start-up environment (/proc/self/environ) is NOT changed, so the file
+  // variant (OAX_MCP_OAUTH_KEK_FILE) is the recommended one.
+  if (env === process.env) delete process.env.OAX_MCP_OAUTH_KEK;
+  return result;
+}
+
+function buildConfig(
+  e: z.infer<typeof EnvSchema>,
+  env: NodeJS.ProcessEnv,
+  database: DatabaseConfig,
+): Config {
   const oidcConfigured = e.OAX_OIDC_ISSUER && e.OAX_OIDC_CLIENT_ID && e.OAX_OIDC_REDIRECT_URI;
   return {
     env: e.NODE_ENV,
@@ -647,6 +684,7 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
     stdioCommands,
     stdioEgress: parseStdioEgressGrants(e.OAX_MCP_STDIO_EGRESS, stdioCommands),
     requireToolPin: e.OAX_MCP_REQUIRE_TOOL_PIN,
+    oauth: kekOf(e),
     relay: {
       concurrency: e.OAX_MCP_RELAY_CONCURRENCY,
       ratePerMinute: e.OAX_MCP_RELAY_RATE_PER_MINUTE,
@@ -656,6 +694,71 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
       bodyReadMs: e.OAX_MCP_RELAY_BODY_READ_SECONDS * 1000,
     },
   };
+}
+
+/**
+ * The 32-byte key-encryption key from the value or the file; errors never quote the value. The key
+ * is exposed through a non-enumerable getter, so serialising or logging the config cannot print it.
+ */
+function kekOf(e: z.infer<typeof EnvSchema>): Config['mcp']['oauth'] {
+  if (e.OAX_MCP_OAUTH_KEK && e.OAX_MCP_OAUTH_KEK_FILE)
+    throw new OaxError(
+      'config_invalid',
+      'set only one of OAX_MCP_OAUTH_KEK and OAX_MCP_OAUTH_KEK_FILE',
+    );
+  let raw = e.OAX_MCP_OAUTH_KEK;
+  let fileLoose = false;
+  if (e.OAX_MCP_OAUTH_KEK_FILE) {
+    // The default secret resolver serves every file below OAX_SECRETS_DIR as a secret reference; a
+    // KEK there could be handed to a run node by a tenant that is allowed that reference.
+    if (insideDirectory(e.OAX_MCP_OAUTH_KEK_FILE, e.OAX_SECRETS_DIR))
+      throw new OaxError(
+        'config_invalid',
+        'OAX_MCP_OAUTH_KEK_FILE must not be inside OAX_SECRETS_DIR (its files are served as secrets)',
+      );
+    try {
+      raw = readFileSync(e.OAX_MCP_OAUTH_KEK_FILE, 'utf8');
+      // Group- or world-readable: reported at start-up (Kubernetes Secret mounts are often 0444).
+      fileLoose = (statSync(e.OAX_MCP_OAUTH_KEK_FILE).mode & 0o077) !== 0;
+    } catch {
+      throw new OaxError('config_invalid', 'OAX_MCP_OAUTH_KEK_FILE cannot be read');
+    }
+  }
+  const source = e.OAX_MCP_OAUTH_KEK_FILE ? 'file' : e.OAX_MCP_OAUTH_KEK ? 'env' : 'none';
+  let key: Buffer | null = null;
+  if (raw !== undefined) {
+    key = Buffer.from(raw.trim(), 'base64');
+    // Buffer.from is lenient with bad characters, so also require the canonical 256-bit length.
+    if (key.length !== 32 || !/^[A-Za-z0-9+/_-]{42,44}={0,2}$/.test(raw.trim()))
+      throw new OaxError(
+        'config_invalid',
+        'the MCP OAuth key-encryption key must be 32 random bytes, base64 encoded',
+      );
+  }
+  const kek = { id: e.OAX_MCP_OAUTH_KEK_ID } as { id: string; key: Buffer | null };
+  Object.defineProperty(kek, 'key', { get: () => key, enumerable: false });
+  return { kek, source, fileLoose };
+}
+
+/** Whether `file` is `dir` or below it, compared by real path (symlinks followed) where it exists. */
+function insideDirectory(file: string, dir: string | undefined): boolean {
+  if (!dir) return false;
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p); // missing: the lexical path is all there is
+    }
+  };
+  const root = real(dir);
+  const target = real(file);
+  if (target === root || target.startsWith(root + sep)) return true;
+  // A link inside the directory that leads to the file serves it just the same.
+  try {
+    return readdirSync(dir).some((name) => real(join(dir, name)) === target);
+  } catch {
+    return false;
+  }
 }
 
 function stdioCommandsOf(raw: string): string[] {

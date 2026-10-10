@@ -322,6 +322,83 @@ Configuration: `OAX_MCP_REQUIRE_TOOL_PIN` (see [`configuration.md`](configuratio
 `0024_mcp_tool_snapshots` adds the two tables; the down script drops them (published versions keep
 their `toolPins`, which an older build ignores).
 
+## Stored OAuth tokens and the key service
+
+OAuth tokens of MCP connections (ADR 0016 section 7.5, slice S5) are the first credential values the
+platform stores. Nothing is stored in plaintext.
+
+- **Envelope encryption.** The operator provides a platform key-encryption key (KEK,
+  `OAX_MCP_OAUTH_KEK_FILE`; `OAX_MCP_OAUTH_KEK` is read once and removed from the environment). Each
+  tenant has one data key, created on first use, wrapped with the KEK and kept in `tenant_data_keys`.
+  Tokens are sealed with AES-256-GCM under the tenant's data key; the additional authenticated data is
+  the tenant, connection, issuer, resource and credential version, so a ciphertext copied to another
+  row, tenant, issuer, resource or version does not decrypt.
+- **Tables** (migration `0026_mcp_oauth_tokens`): `mcp_oauth_tokens` (tied to the tenant of its
+  connection by a composite foreign key), `mcp_oauth_clients`, `tenant_data_keys`, and
+  `connections.credential_version`. No API route selects the ciphertext columns.
+- **What a stored value may be.** The value is chosen by the authorization server, and the redactors
+  rewrite it wherever it occurs, so it must look like a credential and must not be able to blank
+  ordinary text: RFC 6750 `b64token` characters, 20 to 2048 of them, enough estimated entropy for its
+  alphabet (80 bits; a 20-character hex key passes), not compressible (periodic strings fail), not
+  word-like, not digits only, no dashed UUID anywhere in it, and not containing the tenant or
+  connection id. Public shapes are refused as well: paths (`runs/...`, `sha256/...`, `/api/v1/...`),
+  names with separators and no upper case (host names, model ids, versions, trace headers), values
+  with a date, and JWT fragments (a whole three-part JWT is fine). Anything else is refused with
+  `token_invalid`. Hex keys of 20 or more characters, base64, base64url and JWTs are accepted.
+- **Who can read a token.** Only `McpCredentials.accessToken(connection, scope, { guard })`, built by
+  the api (`createServices(ctx)`) and by the worker (`createServices(ctx, 'worker')`). The connection's
+  URL and credential version come from the database, not from the caller, and the call returns
+  `{ token, resource }`: send the token to that resource only (the URL may change between the call
+  and the request). The role check only documents the wiring; the boundary is that run nodes,
+  harnesses and models have neither the KEK nor a database connection, and a test follows the imports
+  from the run-node entry point (bare, subpath, `require` and dynamic imports) and fails if they
+  reach this module. Expired, revoked or re-authorization-pending tokens, a moved URL, missing scopes
+  and a destroyed tenant key fail closed (`mcp_auth_required`, `mcp_resource_mismatch`,
+  `mcp_insufficient_scope`). Refresh follows with the OAuth flows (S6).
+- **Credential version.** Changing the connection URL to another canonical URI bumps
+  `credential_version` and deletes the stored tokens in one transaction; writing a token locks the
+  connection row and re-checks the version, so a write racing the bump cannot leave an orphan.
+- **Redaction.** Before `accessToken` returns, the value is registered with the run's `ContextGuard`
+  and with a bounded per-process registry (Aho-Corasick; scanning cost follows the text, not the number
+  of tokens). Spellings indexed: the value, percent-encoded in either case, JSON-escaped and the three
+  base64 alignments; hex and base64url are not indexed (the run's `ContextGuard` still matches them).
+  Values belong to the tenant of the connection:
+  - audit payloads (string leaves, before hashing), JSON responses, run and model event streams are
+    scrubbed with the values of the tenant they are written or served for (run-token routes use the
+    run's tenant), so one tenant's token can never alter another tenant's evidence. Audit entries
+    without a tenant are not scrubbed (names and ids only). Responses that aggregate several tenants
+    (subtree views) use the caller's tenant only (follow-up issue);
+  - log lines, stdout/stderr, uncaught traces and span attributes cannot name a tenant. They use only
+    values that are also long (32 characters or more), high in estimated entropy (128 bits) and not the
+    shape of a UUID or a SHA digest (32, 40 or 64 hex characters, which are redacted per tenant only).
+    Residual risk, accepted: a long random-looking value can equal a public string of the same shape, so
+    such text in logs and spans could lose that string. This costs the integrity of log text, never
+    confidentiality, and never reaches audit entries or other tenants' API data.
+  Each re-registration of an unchanged token (every tool use) only refreshes its lifetime; a new or
+  rotated token rebuilds the affected automata once, bounded by the caps (150,000 indexed characters
+  in total, 40,000 per tenant, 256 values per tenant, 4096 in total; measured about 15 ms at the caps).
+  The registry is per process: a token read in the worker is not known to the api. Entries leave at
+  expiry (plus 5 minutes), on revocation or deletion of the connection and at the caps (the tenant over
+  its quota loses its own oldest value first, then the tenant with the most). A warning is logged when a
+  still-valid value is dropped, at most once a minute with the number dropped since. This in-memory set is
+  a recorded deviation from "not cached beyond one call" in ADR 0016.
+
+### Limits and operations
+
+- **Crypto-shredding is partial.** `KeyService.destroyTenantKeys` removes the wrapped data keys from
+  the live database (nothing calls it yet). While the KEK is unchanged, a database backup or WAL
+  segment taken earlier still holds the wrapped key and the KEK unwraps it. Complete shredding needs a
+  per-tenant key-encryption key or a KMS (ADR 0012 W12-2).
+- **Runbook: the KEK is lost or must be replaced.** There is no rotation yet. A data key wrapped with
+  another KEK id is refused (`key_unavailable`), and so is one wrapped with different key material
+  under the same id (the error says the KEK differs). If the KEK is lost, the stored tokens are
+  unrecoverable: stop the api and worker, delete the rows of `mcp_oauth_tokens`, `mcp_oauth_clients`
+  and `tenant_data_keys`, start with the new KEK (and a new `OAX_MCP_OAUTH_KEK_ID`), and authorize the
+  OAuth connections again. Back the KEK up with the database backups.
+- **Where the KEK lives.** Keep the key file outside `OAX_SECRETS_DIR` (start-up refuses it there, also through symlinks or a link inside the directory that leads to it: the default secret resolver serves every file below it as a secret reference). Give it to the api and the worker only; the worker process reads it into
+  memory, so keep key-holding workers on hosts or node pools that do not run untrusted run nodes (use
+  the container or Kubernetes runner for those).
+
 ## Control-node relay for run nodes
 
 ADR 0016 section 6 (slice S4); decides ADR 0012 open question 2. A run node never connects to an

@@ -59,8 +59,8 @@ export async function platformSecretRefs(ctx: AppContext): Promise<Set<string>> 
  * is stricter than the rule for other connections: the value is sent to a destination the tenant
  * chose, so the reference must (1) not be a platform secret, (2) be in the tenant's own namespace
  * (`<slug>.`) and (3) be opened by the tenant's `secret_refs` allowlist. These apply to every
- * tenant, the default (home) tenant included; its allowlist is `*` by default, the platform
- * denylist still holds.
+ * tenant, the default (home) tenant included; its allowlist is empty by default (migration 0009), so the
+ * operator opens its namespace; the platform denylist holds either way.
  */
 export async function telemetryHeaderSecretProblem(
   ctx: AppContext,

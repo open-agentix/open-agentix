@@ -42,6 +42,7 @@ import {
   McpRelayMessage,
   McpRelayParams,
 } from '../schemas.js';
+import { processSecrets, stringifyScrubbed } from '../../mcp-oauth/index.js';
 import type { ZApp } from '../zapp.js';
 
 /** The `traceparent` header of a request: compared with a node's stored context, never used. */
@@ -457,7 +458,7 @@ function registerMcpRelayRoute(app: ZApp, deps: Deps): void {
 }
 
 /** Writes Server-Sent Events to a hijacked reply; never throws, never writes after close. */
-function sseSink(reply: FastifyReply, callId: string): StreamSink {
+function sseSink(reply: FastifyReply, callId: string, tenantId: string): StreamSink {
   const raw = reply.raw;
   reply.hijack();
   raw.writeHead(200, {
@@ -471,7 +472,9 @@ function sseSink(reply: FastifyReply, callId: string): StreamSink {
   raw.once('close', () => (open = false));
   const write = (event: string, data: unknown): Promise<void> => {
     if (!open || raw.writableEnded) return Promise.resolve();
-    const ok = raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    const ok = raw.write(
+      `event: ${event}\ndata: ${stringifyScrubbed(processSecrets, data, tenantId)}\n\n`,
+    );
     if (ok) return Promise.resolve();
     return new Promise((resolve) => {
       const done = () => {
@@ -652,7 +655,7 @@ function registerModelRoutes(app: ZApp, deps: Deps): void {
         if (String(req.headers.accept ?? '').includes('text/event-stream')) {
           await modelProxy.stream(auth, req.body, {
             signal: gone.signal,
-            begin: (callId) => sseSink(reply, callId),
+            begin: (callId) => sseSink(reply, callId, auth.tenantId),
           });
           return reply;
         }

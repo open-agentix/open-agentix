@@ -143,6 +143,24 @@ All notable changes to this project are documented here. The format follows
   (tables `mcp_tool_snapshots`, `mcp_tool_snapshot_acceptances`; down script and snapshot included).
   The Console gets a Tools view per HTTP connection with a diff against the approved list (EN/DE).
   OpenAPI and the UI schema types are updated; see `docs/mcp.md`.
+- **Key service and encrypted token store for MCP OAuth (ADR 0016 slice S5, #235)**: platform
+  key-encryption key from `OAX_MCP_OAUTH_KEK_FILE` (or `OAX_MCP_OAUTH_KEK`, removed from `process.env`
+  after reading; `OAX_MCP_OAUTH_KEK_ID`; the key file must not be inside `OAX_SECRETS_DIR`), one data key
+  per tenant, AES-256-GCM with the tenant, connection, issuer, resource and credential version as
+  additional authenticated data. Migration `0026_mcp_oauth_tokens` (tables `mcp_oauth_tokens`,
+  `mcp_oauth_clients`, `tenant_data_keys`; `connections.credential_version`; down script and snapshot
+  included). `McpCredentials.accessToken()` reads the URL and credential version from the database,
+  returns the token with the resource it may be sent to, and registers the value with the
+  `ContextGuard` and a bounded, tenant-scoped per-process registry before returning it. The registry
+  scrubs audit payloads, responses and run and model streams with the tenant's values and logs, stdout
+  and span attributes with the values that pass a stricter tenant-less rule, in linear time; unchanged
+  tokens cost no rebuild and the rebuild at the caps takes about 15 ms. Stored token values must look like credentials (RFC 6750
+  charset, entropy for their alphabet, not repetitive, not word-like, no identifiers). Changing a
+  connection's URL bumps the credential version and deletes its tokens in one transaction.
+  Crypto-shredding is partial while one platform KEK exists (see `docs/mcp.md`). Token leak canary
+  tests cover logs, errors, audit, API responses, step records, model requests, the node and child
+  environment, container create options and spans. No new endpoint; nothing changes without a
+  configured key.
 - **Role-binding API (ADR 0014 slice S4, #189, #226)**: `GET/POST /v1/tenants/{id}/role-bindings`,
   `PATCH/DELETE .../{bindingId}` (`inherit` required on POST) and the platform-operator bulk opt-in
   `POST /v1/tenants/{rootId}/role-bindings/enable-inheritance { roles, dryRun }` with a dry run that lists the

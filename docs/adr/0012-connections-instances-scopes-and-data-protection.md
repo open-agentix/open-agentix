@@ -255,7 +255,7 @@ controller) and the technical and organisational measures the platform provides.
   digest.
 - **Erasure of a tenant**: retained content is encrypted with a per-tenant data key (envelope
   encryption; the key-encryption key from the operator's secret or KMS); deleting the tenant
-  destroys the data key (**crypto-shredding**), which also covers backups. The audit chain keeps
+  destroys the data key (**crypto-shredding**), which also covers backups **when the tenant has its own key-encryption key or a KMS that deletes it** (W12-2); with a single platform key-encryption key a backup taken earlier still unwraps the data key (ADR 0016 slice S5 ships exactly that minimal service). The audit chain keeps
   the tenant's entries as metadata (tombstoned payloads) because the chain is global until W7-1;
   with per-tenant chains (W7-1) the whole tenant chain can be archived or deleted after its legal
   retention period.
@@ -292,7 +292,7 @@ counts), `support_access.granted|used|expired`, `tenant.key_destroyed`.
 - `connection_grants` (section 2).
 - `cost_ledger`: `connection_id`, `connection_scope`; `model_reservations`: grant and instance
   scopes.
-- `tenants`: `retention`, `allowed_regions`, `operator_access`, `data_key_id`.
+- `tenants`: `retention`, `allowed_regions`, `operator_access`. Data keys live in their own table `tenant_data_keys` (created by ADR 0016 S5, migration 0026), not in a `tenants.data_key_id` column.
 - `audit_entries`: `payload_salt` (nullable, new entries), `payload_erased_at`.
 
 ### 9. Upgrade path
