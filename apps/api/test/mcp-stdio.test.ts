@@ -192,9 +192,8 @@ describe('platform connections stay operator configuration', () => {
     expect(after.json().config.command).toBe('/usr/local/bin/oax-workspace');
     // the platform operator still can
     expect(
-      (
-        await put(id, { transport: 'stdio', command: '/usr/local/bin/oax-workspace', args: ['-v'] })
-      ).statusCode,
+      (await put(id, { transport: 'stdio', command: '/usr/local/bin/oax-workspace', args: ['-v'] }))
+        .statusCode,
     ).toBe(200);
   });
 });
@@ -463,7 +462,7 @@ describe('stored connections that break the rules fail closed at run time', () =
       .items.find((a: { name: string }) => a.name === 'run-racy');
     const [row] = await n.ctx.db.select().from(connections).where(eq(connections.name, 'racy'));
     // warm the 30 s connection cache with the old (stdio) row
-    await n.services.catalog.mcpConfigs({ tenantId: row!.tenantId, teamId: null, agentId: null });
+    await n.services.catalog.mcpConfigs({ tenantId: row!.tenantId, teamId: null, agentId: ag.id });
     await n.ctx.db
       .update(connections)
       .set({
