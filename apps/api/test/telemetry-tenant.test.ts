@@ -328,6 +328,21 @@ describe('exporter rules', () => {
     expect(r.calls.dropped).toContain('no_capacity');
   });
 
+  it('one tenant cannot use up the exporters of the process', async () => {
+    r = rig({ config: { tenantExportersMax: 8 } });
+    r.specs.set(
+      TENANT_A,
+      Array.from({ length: 7 }, () => spec(TENANT_A)),
+    );
+    r.specs.set(TENANT_B, [spec(TENANT_B)]);
+    r.emit(TENANT_A);
+    r.emit(TENANT_B);
+    await r.flush();
+    expect(r.sent.filter((x) => x.ctx.scope?.tenantId === TENANT_A)).toHaveLength(4);
+    expect(r.sent.filter((x) => x.ctx.scope?.tenantId === TENANT_B)).toHaveLength(1);
+    expect(r.calls.dropped).toContain('no_capacity');
+  });
+
   it('refuses an exporter whose region the operator does not allow', async () => {
     r = rig({ config: { allowedRegions: ['eu'] } });
     r.specs.set(TENANT_A, [spec(TENANT_A, { region: 'us' }), spec(TENANT_A)]);

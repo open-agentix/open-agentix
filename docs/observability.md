@@ -565,7 +565,7 @@ curl -X POST "$OAX/v1/connections" -H "authorization: Bearer $ADMIN_TOKEN" \
   not help); a redirect is an error; connect, header, body and total times are bounded; the
   response is limited to 256 KiB and not read. In an air-gapped install the collector therefore
   needs a TLS endpoint, plain `http://` is not available to tenants.
-- **Operator limits:** `OAX_OTEL_TENANT_EXPORTERS_MAX` (default 32) exporters per process; each has
+- **Operator limits:** `OAX_OTEL_TENANT_EXPORTERS_MAX` (default 32) exporters per process and at most 4 per tenant (the others are not used and counted as `no_capacity`); each has
   its own bounded queue (at most 1024 spans) so a slow collector of one tenant can only lose that
   tenant's spans; `OAX_OTEL_EXPORT_TIMEOUT_MS` applies. With `OAX_OTEL_ALLOWED_REGIONS=eu,on-prem`
   a connection must declare a region from the list (422 `region_not_allowed` otherwise, and an

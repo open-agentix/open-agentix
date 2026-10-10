@@ -55,6 +55,8 @@ const FAILURE_CACHE_MS = 5_000;
 /** Spans waiting for the lookup of their tenant's exporters (a burst while the source is slow). */
 const MAX_PENDING = 4096;
 const QUEUE_MAX = 1024;
+/** Exporters one tenant can have in a process, so that one tenant cannot use up the process-wide cap. */
+export const MAX_EXPORTERS_PER_TENANT = 4;
 
 /** A tenant-owned exporter as the source resolved it (secrets already read, checks already made). */
 export interface TenantExporterSpec {
@@ -296,7 +298,8 @@ export class TenantExportRouter implements SpanProcessor {
     const kept: Handle[] = [];
     let refused = 0;
     const regions = this.config.allowedRegions;
-    for (const spec of specs) {
+    refused += Math.max(0, specs.length - MAX_EXPORTERS_PER_TENANT);
+    for (const spec of specs.slice(0, MAX_EXPORTERS_PER_TENANT)) {
       if (spec.tenantId !== tenantId) continue; // defence: never route a foreign spec
       if (regions.length > 0 && (!spec.region || !regions.includes(spec.region))) {
         refused++;
