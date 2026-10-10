@@ -69,12 +69,10 @@ scopes still intersect with the effective permissions. A platform operator actin
 keeps the roles of its home tenant (`homeTenantId` on the principal), as before.
 
 Inheritance is opt-in per binding (`inherit = true`, default `false`; ADR 0014); today's roles
-(`users.global_roles`, team and agent bindings) are non-inheriting bindings on the home node. No API
-creates an inheriting binding before S4, so with `bindings` the extra reach comes from rows written by
-an operator in SQL. Two consequences of the mirror (#226, S4): an inheriting or expiring binding of a
-legacy role **on the user's own home node** shares the mirror's key and is removed by the reconcile
-(and by the `0019` trigger when the role leaves `global_roles`), so bind inheriting grants on an
-ancestor of the home node (an organisation admin may live in a child and be bound on the root).
+(`users.global_roles`, team and agent bindings) are non-inheriting bindings on the home node. Since S4
+the role-binding API creates inheriting bindings (see "Role-binding API" below); the mirror rows of
+`global_roles` have their own key (`source = 'mirror'`), so an explicit grant (`source = 'grant'`) on the
+user's own home node in a legacy role is no longer removed by the reconcile or the `0019` trigger (#226).
 
 - `GET /v1/me` reports `actingTenant` (with the breadcrumb `path`, root first; ancestors by name and
   slug only), `homeTenant`, the bindings that apply at the acting node, each with the node it is bound
@@ -125,10 +123,10 @@ authoritative, so upgrading changes nobody's access.
   home tenant. Roles the application ignores (unknown ones, `pentest`) are not backfilled.
 - **Write-through**: user create (also the first admin of a new tenant and the bootstrap admin),
   `PATCH /v1/users/{id}` with `globalRoles`, and the LDAP/OIDC group mapping write `global_roles` and
-  the matching non-inheriting, non-expiring bindings on the home tenant in one transaction. Rows of
-  any other shape (inheriting, expiring, use case, other nodes) are left alone, except that
-  removing a role revokes a same-key row of any shape (see "same-key rule" below). The mirror
-  and the column go away together one release later.
+  the matching non-inheriting, non-expiring bindings (`source = 'mirror'`) on the home tenant in one
+  transaction. Explicit grants (`source = 'grant'`) and rows of any other shape (use case, other
+  nodes) are left alone (see "mirror rows and grants" below). The mirror and the column go away
+  together one release later.
 - **Pure resolver** `effectiveAt` in `packages/core/src/tenancy/roles.ts`: raw grants, the acting
   node and `now` in, `RoleBinding[]` (with `permissions`, `useCase`, `source`) out. No database,
   no clock, no recursion; unusable input yields fewer bindings, never more.
@@ -153,33 +151,42 @@ authoritative, so upgrading changes nobody's access.
   `PATCH` waits instead of racing. Operators can run it by hand, also against a live system:
   `pnpm --filter @openagentix/api db:reconcile-bindings [-- --dry-run]`
   (`node dist/reconcile-bindings-cli.js`, database variables only). Metrics:
-  `oax_role_bindings_reconcile_fixes_total{kind="added|removed|blocked",trigger="startup|periodic|mismatch|cli"}`
+  `oax_role_bindings_reconcile_fixes_total{kind="added|removed",trigger="startup|periodic|mismatch|cli"}`
   and `oax_role_bindings_reconcile_runs_total{trigger,outcome="ok|error|skipped"}`; a non-zero rate
   outside a deploy means something writes `global_roles` without the mirror.
-- **What the mirror manages, and the same-key rule**: a mirror row is non-inheriting, non-expiring,
-  without a use case, on the user's home node, for one of the six grantable roles. `trb_uq` makes
-  `(user, node, role, use case)` unique whatever the other columns say, so a legacy role has
-  exactly one possible slot. If a row of another shape sits in that slot (an inheriting or expiring
-  binding of the same role on the home node; no API creates one before S4):
-  - *adding* the role leaves that row as it is and reports it (`kind="blocked"`): nothing is
-    overwritten and nothing is hidden;
-  - *removing* the role from `global_roles` **revokes every binding of that key, whatever its
-    shape** (fail closed), so a legacy role that was taken away can never stay effective through a
-    row the mirror could not represent. Rows with a use case, on other nodes, and `pentest` are
-    never touched by the mirror or the reconcile.
-  Until S4 only mirror rows can be created through the application; a test asserts that every write
-  path leaves the plain shape. S4's grant API must keep this rule (or give mirrored roles a key of
-  their own) and test it (#226).
+- **Mirror rows and grants (the decision of #226, migration `0023_trb_source`)**: every row has a
+  `source`. `mirror` rows mirror `users.global_roles`: one slot per legacy role on the user's home node,
+  written by the application, the reconcile and the trigger. `grant` rows are everything the
+  role-binding API creates (and, in the migration, every pre-existing row that is not mirror-shaped:
+  inheriting, expiring, use case, `pentest` or not on the home node). `source` is part of `trb_uq`, so
+  the two never share a slot, and the same-key rule, the reconcile, the `global_roles` write-through and
+  the `0019` trigger work on `source = 'mirror'` only:
+  - *adding* a role to `global_roles` adds its mirror row next to any explicit grant of the same role;
+  - *removing* a role revokes the **mirror row** of that key (also when the bulk opt-in or `PATCH
+    { inherit: true }` made it inheriting: the flag adds inheritance, it does not change who owns the
+    row) and never an explicit grant: **an explicit grant survives an unrelated `global_roles` change,
+    the reconcile and the trigger**;
+  - a **home move** inside the organisation moves the mirror rows (old home node out, new home node in)
+    and leaves explicit grants where they are. A grant on the old home node still makes sense (it is a
+    decision about that node, not about the user's home, and the organisation is unchanged), so there is
+    no automatic revocation; the audit reason `moved_out` is reserved for node moves (S10), where a
+    grant can end up outside the user's organisation. Moving a user to another organisation stays
+    refused while any binding of the old one exists, grants included;
+  - rows with a use case, on other nodes and `pentest` are never touched by the mirror.
+  Consequence: revoking an inheriting or expiring grant needs the role-binding API; taking a role out
+  of `global_roles` does not. A test asserts that every write path of the application leaves mirror rows
+  plain.
 - **The database enforces revocation (#216)**: migration `0019_trb_home_move` adds the trigger
   `trb_users_home_move_trg` (`AFTER UPDATE OF tenant_id, global_roles` on `users`; it returns at
   once when neither value changed, so logins and other updates cost nothing). Whatever code path
   changed the row (the API, an older application version, an LDAP/SCIM sync, an emergency
   `update users set global_roles = ...` in `psql`), in the same statement:
-  - when `users.tenant_id` changes inside the organisation, every binding of the legacy key on the
-    old home node (no use case, one of the six roles, any shape) is deleted and the roles of
-    `global_roles` are bound on the new home node; use-case and `pentest` rows and other nodes are
-    kept;
-  - on the (new) home node the same-key rule is applied: a legacy-key binding whose role is not in
+  - when `users.tenant_id` changes inside the organisation, every **mirror** binding of the legacy key
+    on the old home node (no use case, one of the six roles, any shape) is deleted and the roles of
+    `global_roles` are bound on the new home node; explicit grants, use-case and `pentest` rows and
+    other nodes are kept (since `0023`; the trigger was restricted to `source = 'mirror'` in the same
+    migration as the key change);
+  - on the (new) home node the same-key rule is applied: a mirror binding whose role is not in
     `global_roles` is deleted, whatever its shape.
   Roles *added* through the column alone are not bound by the trigger (a missing row grants less,
   never more); the application, the shadow-driven and the periodic reconcile add them. The trigger
@@ -257,7 +264,10 @@ trigger, every writer is covered: the application, the `0019` home-move trigger,
 - Moving a node (W13-11) must bump the epoch of the roots it touches; the `0021` trigger already
   does so for `parent_id`, `root_id` and `path` changes.
 
-Rollback of the migration: `apps/api/drizzle/down/0021_authz_epoch.down.sql` (the triggers; an
+Rollback of the migrations: `apps/api/drizzle/down/0023_trb_source.down.sql` first (restores the old key
+and the `0019` trigger body; an explicit grant that shares its key with a mirror row is deleted, every
+other grant becomes a plain row the old reconcile may remove, so roll the application back first and
+export the grants you need), then `apps/api/drizzle/down/0021_authz_epoch.down.sql` (the triggers; an
 application version that compares the epoch then no longer sees revocations made outside it, so roll
 the application back first), then `0019_trb_home_move.down.sql` (the trigger only), then
 `apps/api/drizzle/down/0018_tenant_role_bindings.down.sql` drops both tables, the triggers
@@ -284,6 +294,64 @@ is the same `404` as one that does not exist. Rows carry `tenant { id, slug, slu
 A subtree with more readable nodes than `OAX_TENANT_MAX_NODES_PER_ROOT` is `422 subtree_too_large`
 (narrow with `tenantId`). `allTenants` cannot be combined with `scope=subtree`. On the `legacy` read
 path, and for callers limited to their home node, the subtree is the acting node.
+
+## Role-binding API (ADR 0014, slice S4)
+
+```text
+GET    /v1/tenants/{id}/role-bindings                    list the bindings bound on the node (users:read)
+POST   /v1/tenants/{id}/role-bindings                    { userId, role, inherit, expiresAt? }  (inherit is required)
+PATCH  /v1/tenants/{id}/role-bindings/{bindingId}        { role?, inherit?, expiresAt? }
+DELETE /v1/tenants/{id}/role-bindings/{bindingId}
+POST   /v1/tenants/{rootId}/role-bindings/enable-inheritance   { roles, dryRun }  (platform operators)
+```
+
+Everything is evaluated **on the node named in the path**, never on the acting node (`X-OAX-Tenant`
+is ignored): an unknown or invisible node is the same `404`, a visible node without the permission is
+`403`. The grantor's grants are re-read from the database inside the write transaction, which holds
+the organisation's tree lock in shared mode and a per-organisation exclusive binding lock, so a grant
+never races a node creation, two binding writes never interleave (the grantor's coverage and the
+last-admin check see every earlier write), and a PATCH or DELETE locks the binding row. The effective
+permissions come from the same resolver as the request path, **read-only clamp included**: an
+administrator who only holds an inheriting binding on an ancestor reads the subtree but cannot grant
+there until slice S5 lifts the clamp; the coverage check for `inherit` is already written to the
+final rule. Token scopes intersect (a token scoped to `users:write` alone cannot grant `operator`).
+Team and agent scoped bindings never give the right to grant.
+
+| Rule (ADR 0014 section 7) | Where / error |
+| --- | --- |
+| 1 `users:write` on the node | `403 forbidden` |
+| 2 nothing above one's own permissions; an inheriting grant needs an inheriting binding of at least the same role on the node or an ancestor | `403 grant_exceeds_own`, `403 inheritance_required` |
+| 3 use-case bindings | `422 use_case_bindings_unsupported` until S8 (the use-case admin rule arrives with it) |
+| 4 the grantee must be visible: home node in the grantor's `users:read` coverage, or already holding a (node, team or agent) binding inside it | `404 user`, the same body and the same queries as for an unknown id |
+| 5 the grantee's home organisation is the node's organisation | `404 user` for organisation members; platform operators get `422 cross_organisation_grant` (the `trb_same_org` trigger is the backstop) |
+| 6 no self-grant, also not by changing one's own binding | `403 self_grant` (platform operators excepted) |
+| 7 `pentest` | not accepted before S6 (`400 validation_failed`); its expiry rules arrive with it |
+| 8 the last inheriting `admin` of an organisation root | `409 last_admin` on DELETE or on a PATCH that narrows, re-roles or time-boxes it (platform operators excepted; disabled users and expiring bindings do not count) |
+| 9 who may grant may revoke; a user may always remove their own binding | PATCH checks the old and the new tuple; DELETE of a foreign binding needs rules 1 and 2, of an own binding only rule 8 |
+
+Other behaviour: `expiresAt` must be in the future (`422 validation_failed`); a user holds at most
+`OAX_MAX_BINDINGS_PER_USER` (default 200) bindings (`422 binding_limit_exceeded`); the same role twice
+from the same source on the same node is `409 conflict`. **Mirror rows** (`source: mirror`) accept
+`PATCH { inherit }` only and cannot be deleted here (`409 mirror_binding`): their role follows the
+user's `global_roles`. A grant is audited in the **binding node's partition**: `tenant.role_bound`,
+`tenant.role_binding_changed { bindingId, field: role|inherit|expiresAt, from, to }`,
+`tenant.role_unbound { bindingId, userId, role, reason: revoked|self }`, and `tenant.inheritance_enabled
+{ roles, bindings, users }` on the root. The authz epoch is bumped by the triggers of migration `0021`,
+so the next request of every cached principal of the organisation is rebuilt. A grant takes effect for
+**request authorisation** only with `OAX_ROLE_BINDINGS_READ=bindings`; on `legacy` the rest of the API
+still decides from `users.global_roles`, teams and agent bindings, and the shadow check reports the
+difference. The role-binding API itself always reads grants from `tenant_role_bindings`, in both modes:
+a grantor acts on the bindings it holds there (mirror rows and earlier grants) whatever the read path.
+A role cannot be bound to a disabled user (`422 grantee_disabled`, checked after grantee visibility).
+
+**Bulk opt-in.** `enable-inheritance` makes the plain (non-inheriting, unexpired, no use case) bindings
+of the listed roles in one organisation inheriting, mirror rows included. `dryRun` defaults to `true`
+and lists the bindings, the users and, per binding, the descendants that would gain access (at most
+50 nodes per binding and 500 bindings; the caller is a platform operator, who sees every node of the
+organisation, and nothing from other organisations appears). Bindings of disabled users are skipped.
+It runs in one transaction under the same locks and writes one `tenant.role_binding_changed` per binding
+plus `tenant.inheritance_enabled`. Everybody but a platform operator gets the same `403` for any tenant
+id; an operator's API token needs the scope `users:read` for a dry run and `users:write` to apply.
 
 ## Audit
 

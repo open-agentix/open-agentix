@@ -76,6 +76,8 @@ export const EnvSchema = z.object({
   OAX_TOKEN_MAX_TTL_DAYS: int(365),
   OAX_TENANT_MAX_DEPTH: z.coerce.number().int().min(1).max(32).default(32),
   OAX_TENANT_MAX_NODES_PER_ROOT: z.coerce.number().int().min(1).default(1000),
+  /** Role bindings one user may hold (ADR 0014 3.1); more is `422 binding_limit_exceeded`. */
+  OAX_MAX_BINDINGS_PER_USER: z.coerce.number().int().min(1).max(10_000).default(200),
   OAX_AUTH_CACHE_TTL_SECONDS: int(30),
   /**
    * Which source authorises (ADR 0014 S2): `legacy` = users.global_roles, team memberships and
@@ -285,7 +287,7 @@ export interface Config {
   rateLimit: { max: number; loginMax: number; planMax: number };
   bodyLimit: number;
   /** Tenant tree guards (ADR 0013): levels below a root (1 to 32) and nodes per organisation. */
-  tenancy: { maxDepth: number; maxNodesPerRoot: number };
+  tenancy: { maxDepth: number; maxNodesPerRoot: number; maxBindingsPerUser: number };
   auth: {
     bootstrapAdmin: { email: string; password: string } | null;
     sessionTtlSeconds: number;
@@ -481,6 +483,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tenancy: {
       maxDepth: e.OAX_TENANT_MAX_DEPTH,
       maxNodesPerRoot: e.OAX_TENANT_MAX_NODES_PER_ROOT,
+      maxBindingsPerUser: e.OAX_MAX_BINDINGS_PER_USER,
     },
     auth: {
       bootstrapAdmin:

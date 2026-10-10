@@ -139,7 +139,7 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
         u,
       );
       const r = await reconcileUserBindings(db(), u);
-      expect(r).toMatchObject({ added: 1, removed: 0, blocked: 0 });
+      expect(r).toMatchObject({ added: 1, removed: 0 });
       expect(await homeRoles(u)).toEqual(['admin', 'viewer']);
     });
 
@@ -250,14 +250,23 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
       await db()
         .insert(tenantRoleBindings)
         .values([
-          { id: randomUUID(), userId: u, tenantId: id.sub!, role: 'auditor', inherit: true },
-          { id: randomUUID(), userId: u, tenantId: id.sub!, role: 'operator' }, // permanent, non-home node
+          {
+            id: randomUUID(),
+            userId: u,
+            tenantId: id.sub!,
+            role: 'auditor',
+            inherit: true,
+            source: 'grant',
+          },
+          // permanent, non-home node
+          { id: randomUUID(), userId: u, tenantId: id.sub!, role: 'operator', source: 'grant' },
           {
             id: randomUUID(),
             userId: u,
             tenantId: DEFAULT_TENANT_ID,
             role: 'integrator',
             useCase: 'uc',
+            source: 'grant',
           },
           {
             id: randomUUID(),
@@ -265,12 +274,22 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
             tenantId: DEFAULT_TENANT_ID,
             role: 'pentest',
             expiresAt: new Date(Date.now() + 3_600_000),
+            source: 'grant',
+          },
+          // an explicit grant on the home node, in a legacy role (#226): its own key, never touched
+          {
+            id: randomUUID(),
+            userId: u,
+            tenantId: DEFAULT_TENANT_ID,
+            role: 'auditor',
+            inherit: true,
+            source: 'grant',
           },
         ]);
       const before = await shape(u);
       await withoutTrigger(() => setRoles(u, [])); // drift: viewer revoked by an old version
       const r = await reconcileUserBindings(db(), u);
-      expect(r).toMatchObject({ added: 0, removed: 1, blocked: 0 });
+      expect(r).toMatchObject({ added: 0, removed: 1 });
       expect(await shape(u)).toEqual(before.filter((s) => !s.startsWith('root|viewer')));
       // reconciling again, and a patch through the API, still leave them
       await reconcileUserBindings(db(), u);
@@ -281,33 +300,21 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
       await db().delete(tenantRoleBindings).where(eq(tenantRoleBindings.userId, u));
     });
 
-    it('a role removed from global_roles revokes a same-key row of any shape (fail closed)', async () => {
+    it('a role removed from global_roles revokes every mirror row of its key, whatever its shape; grants stay', async () => {
       const u = await createUser('revoke@example.org', ['admin', 'viewer']);
-      // A row of another shape in the key of a mirrored role. No write API creates one before S4;
-      // the test builds it by hand to pin the rule down.
+      // A mirror row that carries the inherit flag (PATCH { inherit } and the bulk opt-in of S4
+      // produce them): it keeps the slot of the mirror, so nothing is added next to it ...
       await db()
-        .delete(tenantRoleBindings)
+        .update(tenantRoleBindings)
+        .set({ inherit: true })
         .where(and(eq(tenantRoleBindings.userId, u), eq(tenantRoleBindings.role, 'admin')));
-      await db()
-        .insert(tenantRoleBindings)
-        .values([
-          {
-            id: randomUUID(),
-            userId: u,
-            tenantId: DEFAULT_TENANT_ID,
-            role: 'admin',
-            inherit: true,
-          },
-        ]);
-      // the mirror cannot add its own row; the existing one is kept and reported
       const kept = await rec().runUser(u, 'cli');
-      expect(kept).toMatchObject({ added: 0, removed: 0, blocked: 1 });
+      expect(kept).toMatchObject({ added: 0, removed: 0 });
       expect(await shape(u)).toEqual(['root|admin|inh', 'root|viewer|own']);
-      expect(await fixes('blocked')).toBeGreaterThan(0);
-      // removing admin through the API revokes the inheriting row too
+      // ... and removing admin through the API revokes it, inheritance included
       expect((await patchRoles(u, ['viewer'])).statusCode).toBe(200);
       expect(await shape(u)).toEqual(['root|viewer|own']);
-      // same for an expiring row and for the reconcile after an old-version removal
+      // same for an expiring mirror row, and for the reconcile after an old-version removal
       await db()
         .insert(tenantRoleBindings)
         .values({
@@ -321,6 +328,18 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
       const r = await reconcileUserBindings(db(), u);
       expect(r).toMatchObject({ removed: 1 });
       expect(await shape(u)).toEqual(['root|viewer|own']);
+      // an explicit grant in the same key survives the removal of the role from global_roles
+      await db().insert(tenantRoleBindings).values({
+        id: randomUUID(),
+        userId: u,
+        tenantId: DEFAULT_TENANT_ID,
+        role: 'admin',
+        inherit: true,
+        source: 'grant',
+      });
+      expect((await patchRoles(u, ['viewer', 'operator'])).statusCode).toBe(200);
+      await reconcileUserBindings(db(), u);
+      expect(await shape(u)).toEqual(['root|admin|inh', 'root|operator|own', 'root|viewer|own']);
     });
 
     it('only mirror rows can exist through the application: every write path leaves the plain shape', async () => {
@@ -786,7 +805,7 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
     expect(await homeRoles(u)).toEqual([...GRANTABLE_ROLES].sort());
     // mirrorGlobalRoles reports the change it made
     const c = await mirrorGlobalRoles(db(), { id: u, tenantId: DEFAULT_TENANT_ID }, ['viewer']);
-    expect(c).toEqual({ added: 0, removed: GRANTABLE_ROLES.length - 1, blocked: 0 });
+    expect(c).toEqual({ added: 0, removed: GRANTABLE_ROLES.length - 1 });
   });
 
   it('after all of the above the mirror of every user equals global_roles', async () => {

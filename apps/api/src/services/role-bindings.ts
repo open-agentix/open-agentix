@@ -24,50 +24,43 @@ import {
 import { HttpError } from '../errors.js';
 
 /**
- * Persistence of tenant role bindings (ADR 0014 section 4), slice S1.
+ * Persistence of tenant role bindings (ADR 0014 section 4), slices S1 and S4.
  *
- * Three jobs only: the write-through mirror and its reconcile (#216) of `users.global_roles`, and loading the raw grants the
+ * This module:  the write-through mirror and its reconcile (#216) of `users.global_roles`, and loading the raw grants the
  * pure resolver (`effectiveAt` in `@openagentix/core`) needs. Nothing here decides a permission.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * The key of a mirrored role: `(user, home node, role)` without a use case. `trb_uq` makes this
- * the only slot a legacy role can occupy, whatever the shape of the row in it.
- *
- * Mirror-managed rows are the ones that are non-inheriting, non-expiring, without a use case, on
- * the user's home node. Semantics when a row with the same key exists in another shape (inheriting
- * or expiring; only possible once a grant API exists, S4):
- *
- * - **Adding** a role never overwrites or hides it: `ON CONFLICT DO NOTHING` keeps the row that is
- *   there, the change is reported as `blocked` (the role is held by a non-managed row), and the
- *   shadow check compares what the resolver really sees.
- * - **Removing** a role through `global_roles` revokes *every* binding of that key, whatever its
- *   shape (fail closed): a legacy role that is not listed must not stay effective through a row
- *   the mirror could not represent. Rows with a use case, on other nodes, or of a role that
- *   `global_roles` cannot hold (`pentest`) are never touched.
+ * The key of a mirrored role: `(user, home node, role, source = mirror)` without a use case. Since
+ * migration 0023 (#226) `source` is part of `trb_uq`, so a mirror row and an explicit grant (source
+ * `grant`, created through the role-binding API) never share a slot and this module never sees,
+ * changes or deletes a grant. Mirror rows follow `users.global_roles` and the home node: a role that
+ * is not listed loses its mirror row (whatever its `inherit` flag: the bulk opt-in and `PATCH
+ * { inherit }` may turn a mirror row into an inheriting one, ADR 0014 4.2), and a home move
+ * re-creates them on the new home node. Rows with a use case, on other nodes, or of a role that
+ * `global_roles` cannot hold (`pentest`) are never touched.
  */
 const legacyKey = (user: { id: string; tenantId: string }) =>
   and(
     eq(tenantRoleBindings.userId, user.id),
     eq(tenantRoleBindings.tenantId, user.tenantId),
     sql`${tenantRoleBindings.useCase} is null`,
+    eq(tenantRoleBindings.source, 'mirror'),
     inArray(tenantRoleBindings.role, [...GRANTABLE_ROLES]),
   );
 
 export interface MirrorChange {
   added: number;
   removed: number;
-  blocked: number;
 }
 
 /**
  * Makes the bindings of `user` on its home tenant equal to `roles` (the mirror of
  * `users.global_roles`): missing mirror rows are added, rows of roles that are not wanted are
  * deleted (see {@link legacyKey} for the exact semantics). Call it in the same transaction that
- * writes `global_roles`. Returns what it changed (`blocked` = wanted, but the key is held by a row
- * of another shape that was left as it is).
+ * writes `global_roles`. Returns what it changed.
  *
  * `pentest` is refused: it needs an expiry, which `global_roles` cannot express.
  */
@@ -89,7 +82,7 @@ export async function mirrorGlobalRoles(
         : legacyKey(user),
     )
     .returning({ role: tenantRoleBindings.role });
-  if (wanted.length === 0) return { added: 0, removed: removed.length, blocked: 0 };
+  if (wanted.length === 0) return { added: 0, removed: removed.length };
   // `granted_by` is informational and a foreign key: only a real user id is recorded (system
   // actors such as the demo seed have none).
   const by =
@@ -105,23 +98,13 @@ export async function mirrorGlobalRoles(
         tenantId: user.tenantId,
         role,
         inherit: false,
+        source: 'mirror' as const,
         grantedBy: by,
       })),
     )
     .onConflictDoNothing()
     .returning({ role: tenantRoleBindings.role });
-  const present = await db
-    .select({
-      role: tenantRoleBindings.role,
-      inherit: tenantRoleBindings.inherit,
-      expiresAt: tenantRoleBindings.expiresAt,
-    })
-    .from(tenantRoleBindings)
-    .where(legacyKey(user));
-  const blocked = present.filter(
-    (b) => (b.inherit || b.expiresAt !== null) && wanted.includes(b.role as Role),
-  ).length;
-  return { added: inserted.length, removed: removed.length, blocked };
+  return { added: inserted.length, removed: removed.length };
 }
 
 /**
@@ -277,8 +260,6 @@ export interface ReconcileResult {
   userId: string;
   added: number;
   removed: number;
-  /** Wanted roles whose key is held by a row of another shape (kept as it is; see legacyKey). */
-  blocked: number;
 }
 
 /**
@@ -288,8 +269,8 @@ export interface ReconcileResult {
  * it instead of racing; the same triggers (`trb_same_org`) apply as for any other write. Returns
  * `undefined` for a user that no longer exists. Idempotent: a second call changes nothing.
  *
- * It repairs exactly what {@link mirrorGlobalRoles} manages (see {@link legacyKey}); inheriting,
- * expiring, use-case and other-node bindings, and `pentest`, are never touched.
+ * It repairs exactly what {@link mirrorGlobalRoles} manages (see {@link legacyKey}); explicit grants
+ * (source `grant`), use-case and other-node bindings, and `pentest`, are never touched.
  */
 export async function reconcileUserBindings(
   db: Db,
@@ -330,11 +311,12 @@ export async function findDriftedUsers(db: Db, afterId: string, limit: number): 
             and not exists (
               select 1 from ${tenantRoleBindings} b
               where b.user_id = u.id and b.tenant_id = u.tenant_id and b.role = g.role
-                and b.use_case is null)
+                and b.use_case is null and b.source = 'mirror')
         )
         or exists (
           select 1 from ${tenantRoleBindings} b
           where b.user_id = u.id and b.tenant_id = u.tenant_id and b.use_case is null
+            and b.source = 'mirror'
             and b.role in (${roles}) and not (b.role = any(u.global_roles))
         )
       )
@@ -347,7 +329,6 @@ export interface ReconcileSummary {
   users: number;
   added: number;
   removed: number;
-  blocked: number;
   /** User ids that were repaired (or, with `dryRun`, would be). */
   fixed: string[];
 }
@@ -364,7 +345,7 @@ export async function reconcileAllBindings(
   opts: { batchSize?: number; dryRun?: boolean; onResult?: (r: ReconcileResult) => void } = {},
 ): Promise<ReconcileSummary> {
   const batch = opts.batchSize ?? 200;
-  const out: ReconcileSummary = { users: 0, added: 0, removed: 0, blocked: 0, fixed: [] };
+  const out: ReconcileSummary = { users: 0, added: 0, removed: 0, fixed: [] };
   let after = NIL_UUID;
   for (;;) {
     const ids = await findDriftedUsers(db, after, batch);
@@ -381,7 +362,6 @@ export async function reconcileAllBindings(
       out.users++;
       out.added += r.added;
       out.removed += r.removed;
-      out.blocked += r.blocked;
       if (r.added || r.removed) out.fixed.push(id);
       opts.onResult?.(r);
     }

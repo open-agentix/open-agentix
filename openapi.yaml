@@ -9735,6 +9735,865 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/tenants/{id}/role-bindings:
+    get:
+      summary: List the role bindings bound on a tenant
+      tags:
+        - role-bindings
+      description: Needs `users:read` on the tenant (directly or through an inheriting binding above it). A tenant the caller cannot see is 404. `source` tells mirror rows (the global roles of the user) from grants made through this API (ADR 0014 section 4).
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: query
+          name: userId
+          required: false
+        - schema:
+            default: 50
+            type: integer
+            minimum: 1
+            maximum: 200
+          in: query
+          name: limit
+          required: false
+        - schema:
+            type: string
+            maxLength: 200
+          in: query
+          name: cursor
+          required: false
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        tenantId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          description: the node the role is bound on
+                        user:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            email:
+                              type: string
+                            displayName:
+                              type: string
+                          required:
+                            - id
+                            - email
+                            - displayName
+                          additionalProperties: false
+                        role:
+                          type: string
+                        useCase:
+                          description: always null until use-case bindings arrive (S8)
+                          type:
+                            - string
+                            - "null"
+                        inherit:
+                          type: boolean
+                          description: "true: the role also applies at every descendant of the node (ADR 0014 section 2)"
+                        expiresAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        source:
+                          type: string
+                          enum:
+                            - mirror
+                            - grant
+                          description: "`mirror` follows the global roles of the user (home node); `grant` was created through this API"
+                        grantedBy:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                      required:
+                        - id
+                        - tenantId
+                        - user
+                        - role
+                        - useCase
+                        - inherit
+                        - expiresAt
+                        - source
+                        - grantedBy
+                        - createdAt
+                      additionalProperties: false
+                  nextCursor:
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - items
+                  - nextCursor
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    post:
+      summary: Bind a role to a user on a tenant
+      tags:
+        - role-bindings
+      description: "The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. Audited as `tenant.role_bound` in the partition of the tenant."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                role:
+                  type: string
+                  enum:
+                    - admin
+                    - agent-engineer
+                    - integrator
+                    - operator
+                    - auditor
+                    - viewer
+                inherit:
+                  type: boolean
+                  description: "required: `false` = this tenant only, `true` = this tenant and all sub-tenants"
+                expiresAt:
+                  anyOf:
+                    - type: string
+                      format: date-time
+                      pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$
+                    - type: "null"
+                useCase:
+                  description: refused with 422 `use_case_bindings_unsupported` until ADR 0014 S8
+                  anyOf:
+                    - type: string
+                      minLength: 1
+                      maxLength: 200
+                    - type: "null"
+              required:
+                - userId
+                - role
+                - inherit
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "201":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    description: the node the role is bound on
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      email:
+                        type: string
+                      displayName:
+                        type: string
+                    required:
+                      - id
+                      - email
+                      - displayName
+                    additionalProperties: false
+                  role:
+                    type: string
+                  useCase:
+                    description: always null until use-case bindings arrive (S8)
+                    type:
+                      - string
+                      - "null"
+                  inherit:
+                    type: boolean
+                    description: "true: the role also applies at every descendant of the node (ADR 0014 section 2)"
+                  expiresAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  source:
+                    type: string
+                    enum:
+                      - mirror
+                      - grant
+                    description: "`mirror` follows the global roles of the user (home node); `grant` was created through this API"
+                  grantedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                required:
+                  - id
+                  - tenantId
+                  - user
+                  - role
+                  - useCase
+                  - inherit
+                  - expiresAt
+                  - source
+                  - grantedBy
+                  - createdAt
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/tenants/{id}/role-bindings/{bindingId}:
+    patch:
+      summary: Change the role, inheritance or expiry of a binding
+      tags:
+        - role-bindings
+      description: "Every change re-checks all grant rules for the old and the new state (who may grant may revoke). Mirror rows (`source: mirror`) accept `inherit` only; their role follows the user's global roles. Narrowing or removing the last inheriting administrator of an organisation is 409 `last_admin`. Audited as `tenant.role_binding_changed`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum:
+                    - admin
+                    - agent-engineer
+                    - integrator
+                    - operator
+                    - auditor
+                    - viewer
+                inherit:
+                  type: boolean
+                expiresAt:
+                  anyOf:
+                    - type: string
+                      format: date-time
+                      pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$
+                    - type: "null"
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: bindingId
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    description: the node the role is bound on
+                  user:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      email:
+                        type: string
+                      displayName:
+                        type: string
+                    required:
+                      - id
+                      - email
+                      - displayName
+                    additionalProperties: false
+                  role:
+                    type: string
+                  useCase:
+                    description: always null until use-case bindings arrive (S8)
+                    type:
+                      - string
+                      - "null"
+                  inherit:
+                    type: boolean
+                    description: "true: the role also applies at every descendant of the node (ADR 0014 section 2)"
+                  expiresAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  source:
+                    type: string
+                    enum:
+                      - mirror
+                      - grant
+                    description: "`mirror` follows the global roles of the user (home node); `grant` was created through this API"
+                  grantedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                required:
+                  - id
+                  - tenantId
+                  - user
+                  - role
+                  - useCase
+                  - inherit
+                  - expiresAt
+                  - source
+                  - grantedBy
+                  - createdAt
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    delete:
+      summary: Remove a role binding
+      tags:
+        - role-bindings
+      description: "Needs `users:write` and the same authority as granting it; a user may always remove their own binding (`reason: self`). The last inheriting administrator of an organisation cannot be removed (409 `last_admin`, platform operators excepted). Mirror rows are removed by changing the global roles of the user (409 `mirror_binding`). Audited as `tenant.role_unbound`."
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: bindingId
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "204":
+          description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/tenants/{id}/role-bindings/enable-inheritance:
+    post:
+      summary: "Bulk opt-in: make the plain bindings of some roles inherit (platform operators)"
+      tags:
+        - role-bindings
+      description: For an organisation root. Reports the bindings, users and nodes that gain access; with `dryRun` (the default) nothing changes. Bindings of disabled users and expired bindings are left alone. Audited as `tenant.inheritance_enabled` plus one `tenant.role_binding_changed` per binding.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                roles:
+                  minItems: 1
+                  maxItems: 6
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - admin
+                      - agent-engineer
+                      - integrator
+                      - operator
+                      - auditor
+                      - viewer
+                dryRun:
+                  default: true
+                  description: report who and which nodes would gain access without changing anything
+                  type: boolean
+              required:
+                - roles
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dryRun:
+                    type: boolean
+                  roles:
+                    type: array
+                    items:
+                      type: string
+                      enum:
+                        - admin
+                        - agent-engineer
+                        - integrator
+                        - operator
+                        - auditor
+                        - viewer
+                  bindings:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                    description: bindings that become (or would become) inheriting
+                  users:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  truncated:
+                    type: boolean
+                    description: "`items` lists the first 500 bindings only"
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        bindingId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        role:
+                          type: string
+                        source:
+                          type: string
+                          enum:
+                            - mirror
+                            - grant
+                        user:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            email:
+                              type: string
+                            displayName:
+                              type: string
+                          required:
+                            - id
+                            - email
+                            - displayName
+                          additionalProperties: false
+                        tenant:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slug:
+                              type: string
+                            slugPath:
+                              type: string
+                            name:
+                              type: string
+                          required:
+                            - id
+                            - slug
+                            - slugPath
+                            - name
+                          additionalProperties: false
+                          description: the node the binding is bound on
+                        nodeCount:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                          description: descendants that gain access
+                        nodes:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              slug:
+                                type: string
+                              slugPath:
+                                type: string
+                              name:
+                                type: string
+                            required:
+                              - id
+                              - slug
+                              - slugPath
+                              - name
+                            additionalProperties: false
+                          description: the first 50 of them
+                      required:
+                        - bindingId
+                        - role
+                        - source
+                        - user
+                        - tenant
+                        - nodeCount
+                        - nodes
+                      additionalProperties: false
+                required:
+                  - dryRun
+                  - roles
+                  - bindings
+                  - users
+                  - truncated
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/demo/scenarios:
     get:
       summary: "Demo mode: fixed scenarios, limits and the live-model budget"
