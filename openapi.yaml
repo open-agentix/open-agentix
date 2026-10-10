@@ -10848,7 +10848,7 @@ paths:
       summary: Bind a role to a user on a tenant
       tags:
         - role-bindings
-      description: "The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. Audited as `tenant.role_bound` in the partition of the tenant."
+      description: "The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. `pentest` (rule 7): only tenant admins of the tenant or above and platform operators (403 `pentest_grant_forbidden`); `expiresAt` is required (422 `expiry_required`) and at most `OAX_PENTEST_MAX_DAYS` ahead (422 `expiry_too_long`); the resolver read path only (409 `pentest_requires_bindings_read`). Audited as `tenant.role_bound` in the partition of the tenant."
       requestBody:
         required: true
         content:
@@ -10869,10 +10869,12 @@ paths:
                     - operator
                     - auditor
                     - viewer
+                    - pentest
                 inherit:
                   type: boolean
                   description: "required: `false` = this tenant only, `true` = this tenant and all sub-tenants"
                 expiresAt:
+                  description: required for `pentest` (at most `OAX_PENTEST_MAX_DAYS` ahead, default 30); optional otherwise
                   anyOf:
                     - type: string
                       format: date-time
@@ -11066,6 +11068,7 @@ paths:
                     - operator
                     - auditor
                     - viewer
+                    - pentest
                 inherit:
                   type: boolean
                 expiresAt:
@@ -11540,6 +11543,82 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/me/notices:
+    get:
+      summary: Own in-app notices (newest first)
+      tags:
+        - tenants
+      description: "The only notification channel there is: tenant administrators and the grantor get a notice when a `pentest` role is granted, 24 hours before it ends and when it has expired (ADR 0014 section 8). Kept 30 days; there is no mail or webhook delivery."
+      parameters:
+        - schema:
+            default: 50
+            type: integer
+            minimum: 1
+            maximum: 200
+          in: query
+          name: limit
+          required: false
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        kind:
+                          type: string
+                          enum:
+                            - pentest_granted
+                            - pentest_expiring
+                            - pentest_expired
+                        tenantId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          description: the tenant the notice is about (the node the binding is bound on)
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        payload:
+                          type: object
+                          propertyNames:
+                            type: string
+                          additionalProperties: {}
+                          description: ids, role, inherit and expiry of the binding; never secrets
+                      required:
+                        - id
+                        - kind
+                        - tenantId
+                        - createdAt
+                        - payload
+                      additionalProperties: false
+                required:
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/me/access:
     get:
       summary: Own effective permissions at a tenant, with the bindings that give them
