@@ -208,8 +208,8 @@ export async function loadRawGrants(
   };
   type TeamRow = { tenantId: string; teamId: string; role: string };
   type AgentRow = { tenantId: string; agentId: string; teamId: string | null; role: string };
-  // Unknown role strings are dropped here (fail closed); `pentest` is not grantable yet, so it is
-  // dropped from the legacy team and agent tables too.
+  // Unknown role strings are dropped here (fail closed). `pentest` is granted through node
+  // bindings only, so it is dropped from the legacy team and agent tables.
   const nodeBindings: NodeRoleGrant[] = [];
   for (const r of json(row.nodes) as NodeRow[]) {
     if (!isRole(r.role)) continue;
