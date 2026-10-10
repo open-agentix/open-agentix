@@ -16,6 +16,7 @@ type Http = Extract<McpServerConfig, { transport: 'streamable-http' }>;
 const oauth = {
   kind: 'oauth',
   grant: 'client_credentials',
+  issuer: 'https://auth.example.org',
   client: {
     clientIdSecret: 'id',
     clientAuth: 'client_secret_basic',
@@ -51,6 +52,7 @@ describe('auth in the connection config', () => {
     ['both secrets', { ...oauth, client: { ...oauth.client, keySecret: 'k' } }],
     ['public client', { ...oauth, client: { clientIdSecret: 'id', clientAuth: 'none' } }],
     ['unknown member', { ...oauth, extra: 1 }],
+    ['client_secret_basic without a pinned issuer', { ...oauth, issuer: undefined }],
     ['http issuer', { ...oauth, issuer: 'http://auth.example.org' }],
     ['issuer with a query', { ...oauth, issuer: 'https://auth.example.org?x=1' }],
     ['scope with a space', { ...oauth, scopes: ['a b'] }],

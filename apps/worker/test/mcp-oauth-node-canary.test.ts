@@ -116,6 +116,7 @@ beforeAll(async () => {
         auth: {
           kind: 'oauth',
           grant: 'client_credentials',
+          issuer: 'https://auth.example.org',
           client: {
             clientIdSecret: 'oa-client-id',
             clientAuth: 'client_secret_basic',

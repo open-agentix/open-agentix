@@ -34,6 +34,17 @@ let secrets: Secrets;
 let clock = new Date('2026-10-10T12:00:00Z');
 const rsa = rsaPem();
 
+/** Rotation of refresh tokens belongs to the authorization-code grant; a stored row is turned into one. */
+const asAuthorizationCode = async (id: string) =>
+  n.ctx.db
+    .update(mcpOauthTokens)
+    .set({ grantType: 'authorization_code' })
+    .where(eq(mcpOauthTokens.connectionId, id));
+
+/** The discovery results are trusted for an hour; the sessions of the test node do not live that long. */
+const expireDiscoveryCache = () =>
+  (n.services.mcpOauthFlows as unknown as { verified: Map<string, number> }).verified.clear();
+
 const advance = (ms: number) => {
   clock = new Date(clock.getTime() + ms);
 };
@@ -80,6 +91,8 @@ afterAll(async () => {
 const basicAuth = {
   kind: 'oauth',
   grant: 'client_credentials',
+  // client_secret_basic needs the issuer pinned: the secret goes to its token endpoint
+  issuer: 'https://auth.example.org',
   client: {
     clientIdSecret: 'oa-client-id',
     clientAuth: 'client_secret_basic',
@@ -400,7 +413,7 @@ describe('discovery refusals are audited', () => {
   });
 
   it('several authorization servers need an explicit choice', async () => {
-    const id = await create(basicAuth);
+    const id = await create(jwtAuth);
     const saved = mcp.prm.bind(mcp);
     mcp.prm = () => ({
       ...saved(),
@@ -439,6 +452,17 @@ describe('what a hostile authorization server can make the platform store or say
       'a path-shaped token',
       { access_token: 'runs/finished/by/some/worker/node', token_type: 'Bearer' },
     ],
+    ['a host-name-shaped token', { access_token: 'auth.example.org', token_type: 'Bearer' }],
+    ['a word-like token', { access_token: 'invalidgrantexpiredtokenerror', token_type: 'Bearer' }],
+    [
+      'a hostile refresh token',
+      {
+        access_token: newToken(),
+        token_type: 'Bearer',
+        refresh_token: 'runs/finished/by/some/worker/node',
+      },
+    ],
+    ['a scope with a quote', { access_token: newToken(), token_type: 'Bearer', scope: 'a"b' }],
     ['a DPoP token', { access_token: newToken(), token_type: 'DPoP' }],
     ['a token without a type', { access_token: newToken() }],
     ['a negative lifetime', { access_token: newToken(), token_type: 'Bearer', expires_in: -5 }],
@@ -449,8 +473,14 @@ describe('what a hostile authorization server can make the platform store or say
   ])('refuses %s and stores nothing', async (_n, body) => {
     const id = await create(basicAuth);
     as.nextToken = () => json(body);
+    const auditBefore = JSON.stringify(await audits(id));
     const res = await authorize(id);
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    // A refused value is never a redaction target: it must not blank text of the tenant.
+    for (const v of [body.access_token, (body as { refresh_token?: unknown }).refresh_token])
+      if (typeof v === 'string') expect(n.services.mcpOauth.registry.has(v)).toBe(false);
+    // the refusal is audited without the value (the discovery entry is the only new one)
+    expect((await audits(id)).filter((a) => !auditBefore.includes(a)).join()).not.toMatch(/token/);
     expect((await status(id)).status).toBe('not_authorized');
     const rows = await n.ctx.db
       .select()
@@ -473,9 +503,10 @@ describe('what a hostile authorization server can make the platform store or say
 describe('renewal', () => {
   it('renews once for twenty parallel uses (single flight) and sends the resource again', async () => {
     const id = await create(basicAuth);
-    as.expiresIn = 30; // inside the 60 s renewal window right away
+    as.expiresIn = 120;
     await authorize(id);
     as.expiresIn = 3600;
+    advance(70_000); // inside the renewal window, still valid
     const before = as.tokenRequests.length;
     as.latency = 30;
     const guards = Array.from({ length: 20 }, () => new ContextGuard());
@@ -488,9 +519,10 @@ describe('renewal', () => {
 
   it('two replicas renew once between them (advisory lock, re-read under the lock)', async () => {
     const id = await create(basicAuth);
-    as.expiresIn = 30;
+    as.expiresIn = 120;
     await authorize(id);
     as.expiresIn = 3600;
+    advance(70_000); // inside the renewal window, still valid
     const other = new McpOauthService(
       n.ctx,
       n.services.audit,
@@ -514,9 +546,11 @@ describe('renewal', () => {
   it('keeps the old pair when writing the rotated one fails, and persists the new pair otherwise', async () => {
     const id = await create(basicAuth);
     as.issueRefresh = true;
-    as.expiresIn = 30;
+    as.expiresIn = 120;
     await authorize(id);
     as.expiresIn = 3600;
+    advance(70_000); // inside the renewal window, still valid
+    await asAuthorizationCode(id);
     const r = await ref(id);
     const old = (await n.services.mcpOauth.tokens.open(r.tenantId, r.id, 1))!;
     expect(old.refreshToken).toBeTruthy();
@@ -549,9 +583,11 @@ describe('renewal', () => {
   it('stores a rotated refresh token together with the new access token', async () => {
     const id = await create(basicAuth);
     as.issueRefresh = true;
-    as.expiresIn = 30;
+    as.expiresIn = 120;
     await authorize(id);
     as.expiresIn = 3600;
+    advance(70_000); // inside the renewal window, still valid
+    await asAuthorizationCode(id);
     const r = await ref(id);
     const old = (await n.services.mcpOauth.tokens.open(r.tenantId, r.id, 1))!;
     advance(10_000);
@@ -567,9 +603,10 @@ describe('renewal', () => {
 
   it('invalid_grant: reauthorization_required, closed, audited, and no more requests', async () => {
     const id = await create(basicAuth);
-    as.expiresIn = 30;
+    as.expiresIn = 120;
     await authorize(id);
     as.expiresIn = 3600;
+    advance(70_000); // inside the renewal window, still valid
     as.nextToken = () => json({ error: 'invalid_grant', error_description: 'gone' }, 400);
     advance(10_000);
     await expect(token(id)).rejects.toMatchObject({ code: 'mcp_auth_required' });
@@ -591,9 +628,10 @@ describe('renewal', () => {
 
   it('a transient failure keeps using a token that has not expired, then retries after 30 s', async () => {
     const id = await create(basicAuth);
-    as.expiresIn = 45; // inside the renewal window, but still valid
+    as.expiresIn = 100;
     await authorize(id);
     as.expiresIn = 3600;
+    advance(50_000); // inside the renewal window (half of the lifetime), but still valid
     const r = await ref(id);
     const first = (await n.services.mcpOauth.tokens.open(r.tenantId, r.id, 1))!.accessToken;
     as.nextToken = () => new Response('busy', { status: 503 });
@@ -603,8 +641,8 @@ describe('renewal', () => {
     expect((await token(id)).token).toBe(first); // inside the retry pause: no new request
     expect(as.tokenRequests.length).toBe(calls);
     as.nextToken = undefined;
-    advance(31_000); // the old token has expired by now (45 s lifetime)
-    advance(20_000);
+    advance(31_000);
+    advance(30_000); // the old token has expired by now
     const renewed = (await token(id)).token;
     expect(renewed).not.toBe(first);
     expect((await status(id)).lastError).toBeNull();
@@ -629,13 +667,14 @@ describe('renewal', () => {
 describe('issuer and endpoint pinning', () => {
   it('a resource that later names another issuer needs a new authorization, without a request to it', async () => {
     const id = await create(basicAuth);
-    as.expiresIn = 30;
+    as.expiresIn = 120;
     await authorize(id);
     as.expiresIn = 3600;
+    advance(70_000); // inside the renewal window, still valid
     const evil = new FakeAs(world, { issuer: 'https://evil.example.org' });
     const saved = mcp.prm.bind(mcp);
     mcp.prm = () => ({ ...saved(), authorization_servers: [evil.issuer] });
-    advance(2 * 60 * 60_000);
+    expireDiscoveryCache();
     try {
       await expect(token(id)).rejects.toMatchObject({ code: 'mcp_auth_required' });
     } finally {
@@ -652,12 +691,13 @@ describe('issuer and endpoint pinning', () => {
 
   it('a moved token endpoint needs a new authorization and receives nothing', async () => {
     const id = await create(basicAuth);
-    as.expiresIn = 30;
+    as.expiresIn = 120;
     await authorize(id);
     as.expiresIn = 3600;
+    advance(70_000); // inside the renewal window, still valid
     const saved = as.metadata.token_endpoint;
     as.metadata.token_endpoint = 'https://auth.example.org/token-v2';
-    advance(2 * 60 * 60_000);
+    expireDiscoveryCache();
     const before = as.tokenRequests.length;
     try {
       await expect(token(id)).rejects.toMatchObject({ code: 'mcp_auth_required' });
@@ -719,7 +759,7 @@ describe('revocation', () => {
   });
 
   it('changing the client or the pinned issuer is a change of the relationship too', async () => {
-    const id = await create(basicAuth);
+    const id = await create(jwtAuth);
     await authorize(id);
     const t = (await token(id)).token;
     const cfg = (await n.req({ method: 'GET', url: `/v1/connections/${id}` })).json().config;
@@ -806,5 +846,124 @@ describe('tenancy', () => {
         guard: new ContextGuard(),
       }),
     ).rejects.toMatchObject({ code: 'mcp_auth_required' });
+  });
+});
+
+describe('issuer pinning protects the client secret', () => {
+  it('a resource that names only another token server never receives the client secret', async () => {
+    const evil = new FakeAs(world, { issuer: 'https://evil-as.example.net' });
+    const id = await create(basicAuth); // pinned to auth.example.org
+    const saved = mcp.prm.bind(mcp);
+    mcp.prm = () => ({ ...saved(), authorization_servers: [evil.issuer] });
+    try {
+      const res = await authorize(id);
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error).toBe('mcp_issuer_mismatch');
+      // naming the evil server in the body does not override the pin of the configuration either
+      expect((await authorize(id, { issuer: evil.issuer })).json().error).toBe(
+        'mcp_issuer_mismatch',
+      );
+    } finally {
+      mcp.prm = saved;
+    }
+    expect(world.to('evil-as.example.net')).toHaveLength(0);
+    expect(evil.tokenRequests).toHaveLength(0);
+  });
+
+  it('after a reauthorization is required, a new server needs the administrator to name it', async () => {
+    const id = await create(jwtAuth); // no issuer pin in the configuration
+    as.expiresIn = 120;
+    await authorize(id);
+    as.expiresIn = 3600;
+    advance(70_000);
+    const other = new FakeAs(world, { issuer: 'https://other-as.example.net' });
+    const saved = mcp.prm.bind(mcp);
+    mcp.prm = () => ({ ...saved(), authorization_servers: [other.issuer] });
+    expireDiscoveryCache();
+    try {
+      await expect(token(id)).rejects.toMatchObject({ code: 'mcp_auth_required' });
+      expect((await status(id)).status).toBe('reauthorization_required');
+      const silent = await authorize(id);
+      expect(silent.statusCode).toBe(409);
+      expect(silent.json().error).toBe('mcp_oauth_issuer_required');
+      expect(
+        world.to('other-as.example.net').filter((r) => r.url.pathname === '/token'),
+      ).toHaveLength(0);
+      const confirmed = await authorize(id, { issuer: other.issuer });
+      expect(confirmed.statusCode, confirmed.body).toBe(200);
+      expect((await status(id)).issuer).toBe(other.issuer);
+    } finally {
+      mcp.prm = saved;
+    }
+  });
+});
+
+describe('client credentials renewal', () => {
+  it('never uses a stored refresh token: a fresh grant is requested (RFC 6749 section 4.4.3)', async () => {
+    const id = await create(basicAuth);
+    as.issueRefresh = true;
+    as.expiresIn = 120;
+    await authorize(id);
+    as.expiresIn = 3600;
+    advance(70_000);
+    const r = await ref(id);
+    expect((await n.services.mcpOauth.tokens.open(r.tenantId, r.id, 1))!.refreshToken).toBeTruthy();
+    // a server that lost or rotated the refresh token cannot lock the connection out
+    as.validRefresh.clear();
+    const before = as.tokenRequests.length;
+    expect(as.tokens.has((await token(id)).token)).toBe(true);
+    expect(as.tokenRequests.length - before).toBe(1);
+    expect(as.tokenRequests.at(-1)!.form.get('grant_type')).toBe('client_credentials');
+    expect((await status(id)).status).toBe('active');
+  });
+
+  it('renews a short-lived token at half of its lifetime, not on every use', async () => {
+    const id = await create(basicAuth);
+    as.expiresIn = 30;
+    await authorize(id);
+    as.expiresIn = 3600;
+    const before = as.tokenRequests.length;
+    await token(id);
+    await token(id);
+    expect(as.tokenRequests.length).toBe(before);
+    advance(16_000); // 14 s left, less than half of 30 s
+    await token(id);
+    expect(as.tokenRequests.length - before).toBe(1);
+  });
+
+  it('only the endpoints the platform calls are compared with the pin', async () => {
+    const id = await create(basicAuth);
+    as.expiresIn = 120;
+    await authorize(id);
+    as.expiresIn = 3600;
+    advance(70_000);
+    const saved = { ...as.metadata };
+    as.metadata.jwks_uri = 'https://auth.example.org/jwks-new';
+    as.metadata.authorization_endpoint = 'https://auth.example.org/authorize-v2';
+    expireDiscoveryCache();
+    try {
+      expect(as.tokens.has((await token(id)).token)).toBe(true);
+      expect((await status(id)).status).toBe('active');
+    } finally {
+      as.metadata = saved;
+    }
+  });
+
+  it('a 401 for an old token does not expire the token another replica just renewed', async () => {
+    const id = await create(basicAuth);
+    await authorize(id);
+    const r = await ref(id);
+    const current = (await n.services.mcpOauth.tokens.open(r.tenantId, r.id, 1))!;
+    await n.services.mcpOauth.tokens.expireIfCurrent(
+      r.tenantId,
+      r.id,
+      1,
+      'an-older-token-value-0000000000',
+    );
+    const after = (await n.services.mcpOauth.tokens.open(r.tenantId, r.id, 1))!;
+    expect(after.meta.expiresAt).toEqual(current.meta.expiresAt);
+    await n.services.mcpOauth.tokens.expireIfCurrent(r.tenantId, r.id, 1, current.accessToken);
+    const expired = (await n.services.mcpOauth.tokens.open(r.tenantId, r.id, 1))!;
+    expect(expired.meta.expiresAt!.getTime()).toBeLessThanOrEqual(clock.getTime());
   });
 });
