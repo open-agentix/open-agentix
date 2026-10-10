@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
-  ROLE_PERMISSIONS,
+  bindingPermissions,
   hasPermission,
   isTerminal,
   visibleAgents,
@@ -485,7 +485,7 @@ export class RunsService {
       (b) =>
         a.approverRoles.includes(b.role) &&
         (b.agentId ? b.agentId === run.agentId : b.teamId === null || b.teamId === a.teamId) &&
-        ROLE_PERMISSIONS[b.role].includes('runs:approve'),
+        bindingPermissions(b).includes('runs:approve'),
     );
     if (!roleOk)
       throw forbidden(`approval requires one of the roles: ${a.approverRoles.join(', ')}`);

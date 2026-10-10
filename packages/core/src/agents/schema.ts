@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { CLASSIFICATIONS } from '../classification.js';
-import { ROLES } from '../rbac.js';
+import { GRANTABLE_ROLES } from '../rbac.js';
 
 export const API_VERSION = 'openagentix.io/v1alpha1';
 
@@ -270,7 +270,7 @@ export const RuntimeSchema = z.strictObject({
 export type Runtime = z.infer<typeof RuntimeSchema>;
 
 export const ApprovalSettingsSchema = z.strictObject({
-  approverRoles: z.array(z.enum(ROLES)).min(1).default(['operator', 'admin']),
+  approverRoles: z.array(z.enum(GRANTABLE_ROLES)).min(1).default(['operator', 'admin']),
   timeoutSeconds: z.number().int().positive().default(3600),
 });
 

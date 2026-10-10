@@ -1,6 +1,6 @@
 # ADR 0014: Role inheritance over the tenant tree
 
-- Status: Proposed
+- Status: Proposed. Slice S1 is implemented (see "Implementation status" below); S2 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
   resolver pattern); wave 13 of the [implementation plan](../IMPLEMENTATION-PLAN.md)
@@ -14,6 +14,40 @@
 - Unblocks (UX, [`docs/ux/multi-tenant-ux.md`](../ux/multi-tenant-ux.md) section 13): A2 #156,
   A3 #157, A4 #158 (`scope=subtree`), A6 #160, A9 #163 and through them U5, U6, U8, U9, U11;
   A5 #159 / U7 additionally need W13-2
+
+## Implementation status
+
+| Slice | State | Notes |
+| --- | --- | --- |
+| S1 | implemented (PR for #186) | Migration **`0018_tenant_role_bindings`**, not 0017: `0016_agent_disable` and `0017_approvals_tenant_status_idx` took the numbers after this ADR was written (follow-up of #198). Wherever this text says `0017_tenant_role_bindings`, read 0018; later slices continue from 0019. |
+
+Differences between the plan below and what S1 shipped:
+
+- **Shadow mode instead of switching the read path.** The resolver is wired behind the existing
+  permission code but the legacy bindings stay authoritative: `IdentityService.bindingsFor` still
+  builds the bindings from `users.global_roles`, team memberships and agent bindings, then resolves
+  the same user from `tenant_role_bindings` at the home node and compares both
+  (`oax_role_bindings_shadow_total{outcome=match|mismatch|error|skipped}`, at most two checks at
+  once, a rate-limited warning with the differing lines, switch `OAX_ROLE_BINDINGS_SHADOW`, default
+  on). Switching the read path is the first step of S2, once the mismatch counter has stayed at
+  zero and the mirror has been reconciled once (rows written by an older application version during
+  a rolling deploy or after an application-only rollback are not mirrored; #216, #217).
+- `RoleBinding` gained the optional `permissions`, `useCase` and `source`; the checks read the
+  narrowed `permissions` (never wider than the role, `bindingPermissions`).
+- The resolver takes the acting node's placement (`id`, `rootId`, `path`) instead of a tree
+  snapshot: the chain comes from the path. `visibleNodeIds` takes the snapshot for the visible set.
+  The inheritance clamp (`INHERITED_READ_ONLY`, default on) and role restrictions are already in the
+  pure resolver and its property tests; nothing feeds restrictions before S9.
+- `implicitPlatformAdmin` (default `true`, ADR 0013 7.1) is switched off by the shadow check
+  because today a platform operator acts with the roles of its home tenant.
+- Use-case bindings and `pentest` without an expiry never apply in the resolver (fail closed).
+- `GRANTABLE_ROLES` (the six legacy roles) is what the API, the console, group mappings and the
+  agent `approverRoles` accept; `pentest` is refused there until S6.
+- The migration also adds a guard trigger on `users` (a user cannot change organisation while
+  bindings of the old one exist) and a `FOR SHARE` lock on the user row in `trb_same_org`, so a
+  concurrent binding insert and home change cannot both succeed.
+- The backfill audit summary (`tenant.role_bound` with `source: migration`) is not written by S1: the
+  audit chain is appended by the application, not by SQL. It arrives with the audit events of S4.
 
 ## Context
 
@@ -229,7 +263,7 @@ There is **no recursive query** anywhere on the request path:
 
 ### 4. Bindings: schema and migration
 
-#### 4.1 Migration `0017_tenant_role_bindings.sql` (additive)
+#### 4.1 Migration `0018_tenant_role_bindings.sql` (additive; planned as 0017, see Implementation status)
 
 ```sql
 create table tenant_role_bindings (
@@ -270,7 +304,7 @@ create table tenant_role_restrictions (
   tenant; reads move to the new table. The column is dropped one release later (the usual
   expand/contract).
 - `pentest` is not accepted in `global_roles` (it needs an expiry); it exists only as a binding.
-- Down migration (`down/0017_tenant_role_bindings.down.sql`) drops both tables; the mirror keeps
+- Down migration (`down/0018_tenant_role_bindings.down.sql`) drops both tables; the mirror keeps
   `global_roles` correct, so rollback loses only inheritance flags, expiries and pentest bindings.
 
 #### 4.2 Backwards compatibility and the opt-in
@@ -457,7 +491,7 @@ checks before merge. Every slice adds its tests to the suites in section 13 and 
 
 | # | Slice | Content | Depends on | Unblocks (UX) | Security review |
 | --- | --- | --- | --- | --- | --- |
-| S1 | Bindings table and resolver | migration 0017 with backfill and down path, `trb_same_org` trigger, `global_roles` write-through, `pentest` added to `ROLES` (not grantable yet), pure resolver `packages/core/src/tenancy/roles.ts` with `permissions`/`source` on `RoleBinding`, `bindingsFor` loads the home organisation tagged by node, `hasPermission`/`visibleTeams`/`visibleAgents` read `permissions`; **no behaviour change** | W13-1 | - | migration equivalence test (effective permissions identical for every seeded user and node); trigger refuses cross-org rows |
+| S1 | Bindings table and resolver | migration 0018 (planned as 0017) with backfill and down path, `trb_same_org` trigger, `global_roles` write-through, `pentest` added to `ROLES` (not grantable yet), pure resolver `packages/core/src/tenancy/roles.ts` with `permissions`/`source` on `RoleBinding`, `bindingsFor` loads the home organisation tagged by node, `hasPermission`/`visibleTeams`/`visibleAgents` read `permissions`; **no behaviour change** | W13-1 | - | migration equivalence test (effective permissions identical for every seeded user and node); trigger refuses cross-org rows |
 | S2 | Acting node and read-only inheritance | `X-OAX-Tenant` (id or slug path) for the visible set, `X-OAX-Acting-Tenant` header, `INHERITED_READ_ONLY` clamp, authz epoch and tree snapshot (section 6), `GET /v1/me` with `actingTenant`, `homeTenant`, bindings with node/source/inherit/expiry, `visibleTenantCount` | S1 | A2 #156 -> U4 for all users | 404 parity (unknown vs invisible, timing class); clamp route-table test; epoch invalidation tests |
 | S3 | Subtree reads | `?scope=node|subtree` and `tenant` on rows for agents, runs, approvals, events, costs summary, budgets, audit (audit only with `audit:read`), server-built predicate (3.5), `?tenantId=` narrowing; `GET /v1/tenants/tree` with counts and `myRoles`/`inheritedRoles`; `GET /v1/tenants` = visible nodes | S2 | A4 #158 -> U6, U11; A3 #157 -> U5 | property test "no row outside the visible subtree"; ancestors only as names; viewer never gets audit rows |
 | S4 | Role-binding API | `GET/POST/PATCH/DELETE /v1/tenants/{id}/role-bindings`, bulk `enable-inheritance` (platform admin, dry run), grant rules 1 to 9, audit events of section 10, invalidation; use-case bindings refused (`422 use_case_bindings_unsupported`) | S2 | U5 role actions, "Users & roles" | each grant rule has a refusal test; no self-grant; last admin; grantee enumeration |

@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **API and core: tenant role bindings table, pure role resolver and shadow check (ADR 0014
+  slice S1, #186)**: migration `0018_tenant_role_bindings` (additive, down script and snapshot
+  included; ADR 0014 planned 0017, which `0017_approvals_tenant_status_idx` took) adds
+  `tenant_role_bindings` (user, node, role, `inherit` default `false`, expiry, grantor; the trigger
+  `trb_same_org` keeps a binding inside the user's home organisation and a guard on `users` keeps
+  the user there), `tenant_role_restrictions` and `tenants.authz_epoch` (both unused yet). Every
+  entry of `users.global_roles` is backfilled as a non-inheriting binding on the home tenant, and
+  every write of `global_roles` (user create and patch, first tenant admin, bootstrap admin,
+  LDAP/OIDC group mapping) now also writes the bindings in the same transaction. The pure resolver
+  `effectiveAt` in `@openagentix/core` (`packages/core/src/tenancy/roles.ts`) turns raw bindings, the
+  acting node and the time into `RoleBinding[]` with `permissions`, `useCase` and `source`; the
+  checks (`hasPermission`, `visibleTeams`, `visibleAgents`, `effectivePermissions`, approvals) read
+  the narrowed `permissions`. The role `pentest` exists (read-only) but cannot be granted before
+  slice S6 (`GRANTABLE_ROLES`). **No behaviour change**: the legacy bindings stay authoritative and
+  the API only compares them with the resolver in shadow mode
+  (`oax_role_bindings_shadow_total{outcome}`, `OAX_ROLE_BINDINGS_SHADOW`, default on). See
+  `docs/tenancy.md` and ADR 0014 "Implementation status".
 - **UI: tenants overview page (UX slice U5)**: a lazy `Tenants` page (`/tenants`, nav entry only in
   `multi` mode, with `visibleTenantCount > 1` or below other tenants) over `GET /v1/tenants/tree`:
   accessible treegrid (arrows, Home/End, `*`, `+`/`-`, Enter switches; roving tabindex), two levels

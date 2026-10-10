@@ -5,7 +5,7 @@ import {
   type HarnessKind,
   type RunnerKind,
   PriceTableSchema,
-  isRole,
+  isGrantableRole,
   type PriceEntry,
   type RoleBinding,
 } from '@openagentix/core';
@@ -73,6 +73,7 @@ export const EnvSchema = z.object({
   OAX_TENANT_MAX_DEPTH: z.coerce.number().int().min(1).max(32).default(32),
   OAX_TENANT_MAX_NODES_PER_ROOT: z.coerce.number().int().min(1).default(1000),
   OAX_AUTH_CACHE_TTL_SECONDS: int(30),
+  OAX_ROLE_BINDINGS_SHADOW: bool.default(true),
 
   OAX_OIDC_ISSUER: z.string().url().optional(),
   OAX_OIDC_CLIENT_ID: z.string().optional(),
@@ -260,6 +261,8 @@ export interface Config {
     sessionTtlSeconds: number;
     tokenMaxTtlDays: number;
     cacheTtlSeconds: number;
+    /** Compare the tenant role resolver with the legacy bindings (ADR 0014 S1); result unused. */
+    roleBindingsShadow: boolean;
     oidc: {
       issuer: string;
       clientId: string;
@@ -389,7 +392,7 @@ export function mapGroupsToBindings(
     if (!targets) continue;
     for (const t of Array.isArray(targets) ? targets : [targets]) {
       const [role, team] = t.split('@');
-      if (!role || !isRole(role)) continue;
+      if (!role || !isGrantableRole(role)) continue;
       out.set(`${role}@${team ?? ''}`, { role, teamSlug: team ?? null });
     }
   }
@@ -448,6 +451,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       sessionTtlSeconds: e.OAX_SESSION_TTL_SECONDS,
       tokenMaxTtlDays: e.OAX_TOKEN_MAX_TTL_DAYS,
       cacheTtlSeconds: e.OAX_AUTH_CACHE_TTL_SECONDS,
+      roleBindingsShadow: e.OAX_ROLE_BINDINGS_SHADOW,
       oidc: oidcConfigured
         ? {
             issuer: e.OAX_OIDC_ISSUER!,

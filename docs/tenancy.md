@@ -85,9 +85,47 @@ keeps the roles of its home tenant there (`homeTenantId` on the principal).
   materialised path in memory), no query per node. Migration `0017` adds
   `approvals(tenant_id, status)`.
 
-Not yet: roles are not bound per node (nobody but a platform operator reaches below the home node), `status` is
-always `active` (blocking comes with budget caps, W13-4), and the display colour and use case of a
-node need storage that arrives with W13-2 and W13-6.
+Not yet: roles are not authorised per node (nobody but a platform operator reaches below the home
+node), `status` is always `active` (blocking comes with budget caps, W13-4), and the display colour
+and use case of a node need storage that arrives with W13-2 and W13-8.
+
+## Role bindings (ADR 0014, slice S1)
+
+Migration `0018_tenant_role_bindings` adds the tables the next slices build on. **Nothing authorises
+from them yet**: the legacy sources (`users.global_roles`, team memberships, agent bindings) stay
+authoritative, so upgrading changes nobody's access.
+
+- `tenant_role_bindings (user, node, role, use_case, inherit, expires_at, granted_by)`:
+  `inherit` defaults to `false` (the role applies at the node only); `true` also applies it at every
+  descendant. The trigger `trb_same_org` keeps the node inside the user's home organisation
+  (`23514` otherwise) and a second trigger on `users` refuses moving a user to another organisation
+  while bindings of the old one exist. A binding can sit on any node of the organisation (an
+  organisation admin may live in a child and be bound on the root); that it can never apply upward,
+  sideways or across organisations is a property of the resolver, which has property tests for it.
+- `tenant_role_restrictions` and `tenants.authz_epoch` exist but are unused until later slices.
+- **Backfill**: every role in `users.global_roles` became a non-inheriting binding on the user's
+  home tenant. Roles the application ignores (unknown ones, `pentest`) are not backfilled.
+- **Write-through**: user create (also the first admin of a new tenant and the bootstrap admin),
+  `PATCH /v1/users/{id}` with `globalRoles`, and the LDAP/OIDC group mapping write `global_roles` and
+  the matching non-inheriting, non-expiring bindings on the home tenant in one transaction. Rows of
+  any other shape (inheriting, expiring, other nodes) are never touched by the mirror. The mirror
+  and the column go away together one release later.
+- **Pure resolver** `effectiveAt` in `packages/core/src/tenancy/roles.ts`: raw grants, the acting
+  node and `now` in, `RoleBinding[]` (with `permissions`, `useCase`, `source`) out. No database,
+  no clock, no recursion; unusable input yields fewer bindings, never more.
+- **Shadow mode**: after every principal build the API resolves the same user at the home node from
+  the bindings table and compares it with the legacy result. The outcome is counted in
+  `oax_role_bindings_shadow_total{outcome="match|mismatch|error|skipped"}`; a mismatch also logs a
+  warning with the differing lines (at most once per user and ten minutes). At most two checks run
+  at once; under load the rest are skipped (`skipped`), so the check adds a bounded number of
+  database reads to authentication. A non-zero `mismatch` means the
+  mirror drifted or a binding exists that the legacy path does not know. The legacy result is always
+  what authorises; the check never fails a request. Turn it off with `OAX_ROLE_BINDINGS_SHADOW=false`.
+- `pentest` exists in the role set (read-only, ADR 0014 section 8) but cannot be granted before S6:
+  the API, group mappings and the console reject it.
+
+Rollback: `apps/api/drizzle/down/0018_tenant_role_bindings.down.sql` drops both tables, the triggers
+and the epoch column; `global_roles` is intact, so nothing is lost but the new tables.
 
 ## Audit
 
