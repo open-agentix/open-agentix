@@ -785,7 +785,7 @@ describe('tenancy', () => {
       userId: randomUUID(),
       tenantId: randomUUID(),
       platformAdmin: false,
-    } as never;
+    };
     await expect(n.services.mcpOauthFlows.status(stranger as never, id)).rejects.toMatchObject({
       code: 'not_found',
     });

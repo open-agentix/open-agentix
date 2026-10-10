@@ -72,8 +72,12 @@ export interface OauthStatus {
 
 /** Revokes what a connection held once the change that made it necessary has been committed. */
 export interface PendingRevocation {
-  /** `keepRows`: the stored rows were already replaced (re-authorization), only tell the issuer. */
-  run(reason: string, actor?: string, keepRows?: boolean): Promise<void>;
+  /**
+   * `rows`: `delete` (default) removes the stored rows; `gone` means a transaction already
+   * removed them (change, deletion); `replaced` means new tokens were stored in their place
+   * (re-authorization): only the old values are forgotten by the redactors, not the owner's.
+   */
+  run(reason: string, actor?: string, rows?: 'delete' | 'gone' | 'replaced'): Promise<void>;
 }
 
 const splitScopes = (s: string | undefined) => (s ?? '').split(' ').filter(Boolean);
@@ -398,7 +402,7 @@ export class McpOauthService {
       },
     });
     // The previous tokens (if any) were overwritten; tell their issuer.
-    await previous?.run('reauthorized', `user:${by}`, true);
+    await previous?.run('reauthorized', `user:${by}`, 'replaced');
     return this.status(actor, id);
   }
 
@@ -696,7 +700,7 @@ export class McpOauthService {
     const config = row.config;
     const full = row as ConnectionRow;
     return {
-      run: async (reason, actor = SYSTEM_ACTOR, keepRows = false) => {
+      run: async (reason, actor = SYSTEM_ACTOR, rows = 'delete') => {
         let remote: 'ok' | 'failed' | 'skipped' = 'skipped';
         const cfg = (() => {
           const p = McpServerConfigSchema.safeParse(config);
@@ -726,10 +730,11 @@ export class McpOauthService {
             remote = 'failed';
           }
         }
-        if (!keepRows) {
+        if (rows === 'delete')
           await this.stores.tokens.delete(row.tenantId, row.id).catch(() => undefined);
-        }
-        for (const v of versions) this.stores.registry.forgetOwner(ownerKey(row.id, v));
+        // After a re-authorization the new tokens are registered under the same owner.
+        if (rows !== 'replaced')
+          for (const v of versions) this.stores.registry.forgetOwner(ownerKey(row.id, v));
         await this.audit.append({
           actor,
           tenantId: row.tenantId,

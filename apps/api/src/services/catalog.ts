@@ -116,7 +116,7 @@ export class CatalogService {
   oauth?: {
     prepareRevoke(
       row: Pick<ConnectionRow, 'id' | 'tenantId' | 'scope' | 'config' | 'kind'>,
-    ): Promise<{ run(reason: string, actor?: string, keepRows?: boolean): Promise<void> } | null>;
+    ): Promise<{ run(reason: string, actor?: string, rows?: 'delete' | 'gone' | 'replaced'): Promise<void> } | null>;
   };
 
   constructor(
@@ -824,7 +824,7 @@ export class CatalogService {
       throw conflict(`connection "${current.name}" was changed meanwhile; reload and try again`);
     }
     if (moved) processSecrets.forgetOwnerPrefix(`${id}:`);
-    await revocation?.run('config_changed', `user:${actor.userId}`, true);
+    await revocation?.run('config_changed', `user:${actor.userId}`, 'gone');
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,
@@ -844,7 +844,7 @@ export class CatalogService {
       .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)));
     // The token rows went with the connection (foreign key); forget the values in memory too.
     processSecrets.forgetOwnerPrefix(`${id}:`);
-    await revocation?.run('connection_deleted', `user:${actor.userId}`, true);
+    await revocation?.run('connection_deleted', `user:${actor.userId}`, 'gone');
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,

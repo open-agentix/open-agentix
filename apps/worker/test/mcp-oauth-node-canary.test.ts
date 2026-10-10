@@ -1,20 +1,26 @@
 import { randomBytes } from 'node:crypto';
-import { ContextGuard } from '@openagentix/core';
+import { StaticSecretResolver } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContainerRunner } from '@openagentix/runners';
-import { DEFAULT_TENANT_ID, runs } from '../../api/src/db/schema.js';
+import { runs } from '../../api/src/db/schema.js';
 import { processSecrets } from '../../api/src/mcp-oauth/index.js';
 import { testNode, type TestNode } from '../../api/test/helpers.js';
+import { FakeAs, FakeMcp, World } from '../../api/test/oauth-world.js';
 import { mergeCredentials } from '../src/run-node.js';
 
 /**
- * Token leak canary, run-node side (ADR 0016 section 10, slice S5): a run node gets its session,
- * its handover, its credentials and its step records from the control node, and its environment is
- * built from those. A stored OAuth token of a connection the step uses must be in none of them.
+ * Token leak canary, run-node side (ADR 0016 section 10, slices S5 and S6). The step uses an HTTP
+ * connection with OAuth: the control node's relay obtains a REAL token from a fake authorization
+ * server (discovery, client credentials, resource indicator), attaches it to the upstream request
+ * and answers the node. The token flows through the control node, so this test is not green by
+ * construction: it first proves that the token reached the MCP server and was echoed back, then
+ * that none of it (access token, client secret, client key) is in anything a run node is given or
+ * can ask for: session, handover, credentials, relay answers, steps, audit, run views, the merged
+ * child environment and the container create options.
  */
-const CANARY = 'CANARY-4c2e8aJ1f7d3bK9065wZs3Pm7QvLd';
 const IMAGE = `ghcr.io/open-agentix/open-agentix-worker@sha256:${'a'.repeat(64)}`;
+const CLIENT_SECRET = 'NODE-CANARY-CLIENT-SECRET-7Zp2Qx9Lm4Wv8Kc';
 const SOURCE = `---
 apiVersion: openagentix.io/v1alpha1
 kind: AgentPipeline
@@ -32,77 +38,114 @@ agents:
     instructions: Research.
     tools:
       - { server: jira, tool: get_issue }
+      - { server: jira, tool: echo_auth }
+      - { server: ops, tool: get_issue }
 ---
 `;
 
 let n: TestNode;
 let agentId: string;
+let world: World;
+let as: FakeAs;
+let mcp: FakeMcp;
 
 beforeAll(async () => {
-  n = await testNode({
-    OAX_MCP_OAUTH_KEK: randomBytes(32).toString('base64'),
-    OAX_RUNNERS_ENABLED: 'in-process,container',
-    OAX_CONTAINER_RUNNER_ENABLED: 'true',
-    OAX_CONTAINER_ENGINE_URL: 'http://socket-proxy:2375',
-    OAX_CONTAINER_IMAGE: IMAGE,
-    OAX_CONTAINER_NETWORK: 'oax-nodes',
-    OAX_NODE_CONTROL_URL: 'http://api:8080',
-    OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',
-    OAX_CONTAINER_EGRESS_GRANT_SECRET: 'g'.repeat(40),
-    OAX_CONTAINER_EGRESS_ALLOW: 'jira.example.org',
-    OAX_MCP_STDIO_COMMANDS: '/opt/mcp/bin/*',
+  world = new World();
+  as = new FakeAs(world);
+  mcp = new FakeMcp(world, as, 'jira.example.org', [
+    {
+      name: 'get_issue',
+      description: 'gets an issue',
+      inputSchema: { type: 'object' },
+      handler: () => 'issue',
+    },
+  ]);
+  await mcp.start();
+  const secrets = new StaticSecretResolver({
+    'mail-hook': 'mail-secret-1',
+    'oa-client-id': 'client-id-4711',
+    'oa-client-secret': CLIENT_SECRET,
   });
+  n = await testNode(
+    {
+      OAX_MCP_OAUTH_KEK: randomBytes(32).toString('base64'),
+      OAX_RUNNERS_ENABLED: 'in-process,container',
+      OAX_CONTAINER_RUNNER_ENABLED: 'true',
+      OAX_CONTAINER_ENGINE_URL: 'http://socket-proxy:2375',
+      OAX_CONTAINER_IMAGE: IMAGE,
+      OAX_CONTAINER_NETWORK: 'oax-nodes',
+      OAX_NODE_CONTROL_URL: 'http://api:8080',
+      OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',
+      OAX_CONTAINER_EGRESS_GRANT_SECRET: 'g'.repeat(40),
+      OAX_CONTAINER_EGRESS_ALLOW: 'jira.example.org',
+      OAX_MCP_STDIO_COMMANDS: '/opt/mcp/bin/*',
+    },
+    { secrets, mcpOutbound: world.dispatcher, mcpProbeLimit: 10_000 },
+  );
   await n.req({ method: 'POST', url: '/v1/teams', payload: { slug: 'team-ops', name: 'Ops' } });
-  const conn = await n.req({
+  const tenantId = (await n.req({ method: 'GET', url: '/v1/tenants' })).json().items[0].id;
+  await n.req({
+    method: 'PATCH',
+    url: `/v1/tenants/${tenantId}`,
+    payload: { secretRefs: ['mail-hook', 'oa-client-id', 'oa-client-secret'] },
+  });
+  // a stdio server keeps the environment merge of the node under test
+  const stdio = await n.req({
+    method: 'POST',
+    url: '/v1/connections',
+    payload: {
+      name: 'ops',
+      config: {
+        transport: 'stdio',
+        command: '/opt/mcp/bin/ops-mcp',
+        env: { OPS_URL: 'https://jira.example.org' },
+        envSecrets: { OPS_TOKEN: 'mail-hook' },
+        tools: { get_issue: { access: 'read' } },
+      },
+    },
+  });
+  expect(stdio.statusCode, stdio.body).toBe(201);
+  const http = await n.req({
     method: 'POST',
     url: '/v1/connections',
     payload: {
       name: 'jira',
       config: {
-        transport: 'stdio',
-        command: '/opt/mcp/bin/jira-mcp',
-        env: { JIRA_URL: 'https://jira.example.org' },
-        envSecrets: { JIRA_TOKEN: 'mail-hook' },
-        tools: { get_issue: { access: 'read' } },
+        transport: 'streamable-http',
+        url: 'https://jira.example.org/mcp',
+        auth: {
+          kind: 'oauth',
+          grant: 'client_credentials',
+          client: {
+            clientIdSecret: 'oa-client-id',
+            clientAuth: 'client_secret_basic',
+            clientSecretSecret: 'oa-client-secret',
+          },
+        },
+        tools: {
+          get_issue: { access: 'read', scopes: ['issues.read'] },
+          echo_auth: { access: 'read', scopes: ['issues.read'] },
+        },
+        profiles: { read: ['get_issue', 'echo_auth'] },
       },
     },
   });
-  expect(conn.statusCode, conn.body).toBe(201);
-  const tenantId = (await n.req({ method: 'GET', url: '/v1/tenants' })).json().items[0].id;
-  await n.req({
-    method: 'PATCH',
-    url: `/v1/tenants/${tenantId}`,
-    payload: { secretRefs: ['mail-hook'] },
-  });
-  // An HTTP connection of the same tenant holds the OAuth token; the stdio `jira` connection is
-  // what the step uses. Nothing the node is given may be derived from the token table.
-  const http = await n.req({
-    method: 'POST',
-    url: '/v1/connections',
-    payload: {
-      name: 'jira-oauth',
-      config: { transport: 'streamable-http', url: 'https://jira.example.org/mcp' },
-    },
-  });
   expect(http.statusCode, http.body).toBe(201);
-  await n.services.mcpOauth.tokens.put({
-    tenantId: DEFAULT_TENANT_ID,
-    connectionId: http.json().id,
-    credentialVersion: 1,
-    issuer: 'https://auth.example.org',
-    resource: 'https://jira.example.org/mcp',
-    clientRef: 'client',
-    scopes: ['read'],
-    accessToken: CANARY,
+  const id = http.json().id as string;
+  const auth = await n.req({
+    method: 'POST',
+    url: `/v1/connections/${id}/oauth/authorize`,
+    payload: {},
   });
-  await n.services.mcpOauth.credentials.accessToken(
-    { id: http.json().id, tenantId: DEFAULT_TENANT_ID },
-    ['read'],
-    { guard: new ContextGuard() },
-  );
-  // The redactor must not be what keeps the token out of the node: it is empty from here on, so a
-  // structural leak shows up in the bodies below instead of being scrubbed on the way out.
-  processSecrets.clear();
+  expect(auth.statusCode, auth.body).toBe(200);
+  const refresh = await n.req({ method: 'POST', url: `/v1/connections/${id}/tools/refresh` });
+  expect(refresh.statusCode, refresh.body).toBe(200);
+  const approve = await n.req({
+    method: 'POST',
+    url: `/v1/connections/${id}/tool-snapshots/${refresh.json().snapshot.digest}/approve`,
+    payload: { scope: 'new-versions' },
+  });
+  expect(approve.statusCode, approve.body).toBe(200);
   const created = await n.req({ method: 'POST', url: '/v1/agents', payload: { source: SOURCE } });
   expect(created.statusCode, created.body).toBe(201);
   agentId = created.json().id;
@@ -111,15 +154,12 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   processSecrets.clear();
+  await mcp.stop();
   await n.close();
 });
 
-// NOTE: until the OAuth flows (S6) attach stored tokens to run-node input, nothing in the control
-// node reads the token tables on the node's behalf, so these checks pass by construction. They pin
-// the contract for S6 and fail as soon as a token-bearing value reaches the node; the live
-// container variant is tracked in #305.
 describe('token leak canary: run node', () => {
-  it('session, handover, credentials, steps and audit carry no token', async () => {
+  it('the token reaches the server through the relay, and nothing a node can see carries it', async () => {
     const res = await n.req({
       method: 'POST',
       url: `/v1/agents/${agentId}/runs`,
@@ -155,29 +195,51 @@ describe('token leak canary: run node', () => {
     expect(
       (await call('GET', `/v1/worker/runs/${runId}/handover?agentId=research`)).statusCode,
     ).toBe(200);
-    await call('POST', `/v1/worker/runs/${runId}/mcp/jira`, {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/list',
-    });
-    // control-side views of the same run
+    const rpc = (id: number, method: string, params?: unknown) =>
+      call('POST', `/v1/worker/runs/${runId}/mcp/jira`, { jsonrpc: '2.0', id, method, params });
+    expect((await rpc(1, 'tools/list')).statusCode).toBe(200);
+    const echoed = await rpc(2, 'tools/call', { name: 'echo_auth', arguments: {} });
+    expect(echoed.statusCode, echoed.body).toBe(200);
+
+    // The token really flowed: the server saw a token the authorization server issued, and its
+    // echo came back to the control node. The relay's answer to the node is redacted.
+    const issued = [...as.tokens];
+    expect(issued.length).toBeGreaterThan(0);
+    expect(mcp.seenAuth.some((a) => a === `Bearer ${issued.at(-1)}`)).toBe(true);
+    expect(mcp.lastAuth).toBe(`Bearer ${issued.at(-1)}`);
+    expect(echoed.body).toContain('the header was');
+    expect(echoed.body).toContain('[redacted:known-secret]');
+
+    // The redactor must not be what keeps the token out of the node from here on: it is empty, so a
+    // structural leak shows up in the bodies below instead of being scrubbed on the way out.
+    processSecrets.clear();
     for (const url of [
       `/v1/runs/${runId}`,
       `/v1/runs/${runId}/steps`,
       `/v1/audit?runId=${runId}&limit=200`,
+      '/v1/audit?limit=500',
     ]) {
       const r = await n.req({ method: 'GET', url });
       seen.push(r.body);
     }
-    for (const body of seen) expect(body).not.toContain(CANARY);
-    expect(seen.join('')).not.toMatch(/accessTokenEnc|access_token_enc/);
+    const everything = seen.join('\n');
+    for (const secret of [...issued, CLIENT_SECRET, 'oa-client-secret'])
+      expect(everything, secret.slice(0, 6)).not.toContain(secret);
+    expect(everything).not.toMatch(/accessTokenEnc|access_token_enc/);
+    expect(everything).not.toContain('clientSecretSecret');
 
     // The node environment and the environment of its MCP children, built from exactly what the
     // control node handed over, and the container's create options.
     const creds = JSON.parse(seen[1] as string);
     const handover = JSON.parse(seen[2] as string);
+    const jira = (handover.mcp as { name: string; url: string; auth?: unknown }[]).find(
+      (c) => c.name === 'jira',
+    )!;
+    expect(jira.url).not.toContain('jira.example.org');
+    expect(jira.auth).toBeUndefined();
     const merged = mergeCredentials(handover.mcp ?? [], creds);
-    expect(JSON.stringify(merged)).not.toContain(CANARY);
+    const env = JSON.stringify(merged);
+    for (const secret of issued) expect(env).not.toContain(secret);
     const body = new ContainerRunner({
       engineUrl: 'http://socket-proxy:2375',
       image: IMAGE,
@@ -192,11 +254,13 @@ describe('token leak canary: run node', () => {
       limits: { cpus: 0.5, memoryMb: 256, timeoutSeconds: 30, pids: 64 },
       egress: [],
     });
-    expect(JSON.stringify(body)).not.toContain(CANARY);
-    expect(body.Env.some((e: string) => e.includes(CANARY))).toBe(false);
+    for (const secret of [...issued, CLIENT_SECRET])
+      expect(JSON.stringify(body)).not.toContain(secret);
+    expect(body.Env.some((e: string) => issued.some((t) => e.includes(t)))).toBe(false);
   });
 
-  it('the detector goes red for a variant that puts the token into the node environment', async () => {
+  it('the detector goes red for a variant that puts a token into the node environment', async () => {
+    const token = [...as.tokens].at(-1)!;
     // What a leaking implementation would produce: the check above must notice it.
     const leaked = mergeCredentials(
       [
@@ -212,11 +276,16 @@ describe('token leak canary: run node', () => {
       ],
       {
         agentId: 'a',
-        credentials: [{ secret: 's', env: 'LEAK', value: CANARY }],
+        credentials: [{ secret: 's', env: 'LEAK', value: token }],
         connections: [],
         expiresAt: '',
       } as never,
     );
-    expect(JSON.stringify(leaked)).toContain(CANARY);
+    expect(JSON.stringify(leaked)).toContain(token);
+  });
+
+  it('the broker never lists the OAuth client secrets of an HTTP connection', async () => {
+    const res = await n.req({ method: 'GET', url: '/v1/audit?limit=500' });
+    expect(res.body).not.toContain(CLIENT_SECRET);
   });
 });
