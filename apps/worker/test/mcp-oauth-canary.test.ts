@@ -79,7 +79,7 @@ async function storeAndFetchToken(guard: ContextGuard) {
     accessToken: CANARY,
   });
   const token = await oauth.credentials.accessToken(
-    { id, tenantId: schema.DEFAULT_TENANT_ID, credentialVersion: 1, resource: RESOURCE },
+    { id, tenantId: schema.DEFAULT_TENANT_ID },
     ['read'],
     { guard },
   );

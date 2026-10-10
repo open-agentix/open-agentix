@@ -43,13 +43,17 @@ beforeAll(async () => {
     accessToken: CANARY,
     refreshToken: REFRESH_CANARY,
   });
-  // The use of the token: registers it with the guard of the run and the process redactor.
-  await n.services.mcpOauth.credentials.accessToken(
-    { id: connectionId, tenantId: DEFAULT_TENANT_ID, credentialVersion: 1, resource: RESOURCE },
-    ['read'],
-    { guard: new ContextGuard() },
-  );
 });
+
+/** The use of the token: registers it with the guard of the run and the process redactor. */
+const arm = () =>
+  n.services.mcpOauth.credentials.accessToken(
+    { id: connectionId, tenantId: DEFAULT_TENANT_ID },
+    ['read'],
+    {
+      guard: new ContextGuard(),
+    },
+  );
 afterAll(async () => {
   processSecrets.clear();
   await n.close();
@@ -61,6 +65,11 @@ const lines = (): { sink: { write(l: string): void }; out: string[] } => {
 };
 
 describe('logs', () => {
+  beforeAll(async () => {
+    processSecrets.clear();
+    await arm(); // the redactor is the net under test here
+  });
+
   it('scrubs the token from messages, fields, errors and stack traces', () => {
     const { sink, out } = lines();
     const log = createLogger('info', 'canary', sink);
@@ -97,6 +106,11 @@ describe('logs', () => {
 });
 
 describe('errors', () => {
+  beforeAll(async () => {
+    processSecrets.clear();
+    await arm(); // the redactor is the net under test here
+  });
+
   it('scrubs the token from error bodies, including the unhandled 500 path and its log', async () => {
     const { sink, out } = lines();
     const app = Fastify({ logger: { level: 'info', stream: logDestination(sink) as never } });
@@ -118,6 +132,11 @@ describe('errors', () => {
 });
 
 describe('audit', () => {
+  beforeAll(async () => {
+    processSecrets.clear();
+    await arm(); // the redactor is the net under test here
+  });
+
   it('scrubs the token from a payload, in the stored row and in the audit API', async () => {
     const entry = await n.services.audit.append({
       actor: 'user:admin',
@@ -138,6 +157,10 @@ describe('audit', () => {
 });
 
 describe('API responses', () => {
+  // The redactor is EMPTY here: a structural leak (a handler that returns the value) must show up
+  // in the body instead of being hidden by the response hook.
+  beforeAll(() => processSecrets.clear());
+
   it('no connection endpoint exposes a token, a refresh token or the ciphertext', async () => {
     const urls = [
       '/v1/connections',
@@ -164,5 +187,24 @@ describe('API responses', () => {
       payload: { name: CANARY, config: { transport: 'streamable-http', url: RESOURCE } },
     });
     expect(res.body).not.toContain(CANARY);
+  });
+});
+
+describe('the detector itself', () => {
+  it('goes red for a deliberately leaking handler while the redactor is empty, and the net catches it when armed', async () => {
+    const app = Fastify({ logger: false });
+    scrubResponses(app, processSecrets);
+    app.get('/leak', async () => {
+      const stored = await n.services.mcpOauth.tokens.open(DEFAULT_TENANT_ID, connectionId, 1);
+      return { value: stored!.accessToken };
+    });
+    processSecrets.clear();
+    const bare = await app.inject({ method: 'GET', url: '/leak' });
+    expect(bare.body).toContain(CANARY); // what the structural checks above would report
+    await arm();
+    const armed = await app.inject({ method: 'GET', url: '/leak' });
+    expect(armed.body).not.toContain(CANARY);
+    expect(JSON.parse(armed.body)).toEqual({ value: '[REDACTED]' });
+    await app.close();
   });
 });

@@ -2,9 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { ContextGuard } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_TENANT_ID, runs } from '../src/db/schema.js';
-import { processSecrets } from '../src/mcp-oauth/index.js';
-import { testNode, type TestNode } from './helpers.js';
+import { ContainerRunner } from '@openagentix/runners';
+import { DEFAULT_TENANT_ID, runs } from '../../api/src/db/schema.js';
+import { processSecrets } from '../../api/src/mcp-oauth/index.js';
+import { testNode, type TestNode } from '../../api/test/helpers.js';
+import { mergeCredentials } from '../src/run-node.js';
 
 /**
  * Token leak canary, run-node side (ADR 0016 section 10, slice S5): a run node gets its session,
@@ -72,9 +74,20 @@ beforeAll(async () => {
     url: `/v1/tenants/${tenantId}`,
     payload: { secretRefs: ['mail-hook'] },
   });
+  // An HTTP connection of the same tenant holds the OAuth token; the stdio `jira` connection is
+  // what the step uses. Nothing the node is given may be derived from the token table.
+  const http = await n.req({
+    method: 'POST',
+    url: '/v1/connections',
+    payload: {
+      name: 'jira-oauth',
+      config: { transport: 'streamable-http', url: 'https://jira.example.org/mcp' },
+    },
+  });
+  expect(http.statusCode, http.body).toBe(201);
   await n.services.mcpOauth.tokens.put({
     tenantId: DEFAULT_TENANT_ID,
-    connectionId: conn.json().id,
+    connectionId: http.json().id,
     credentialVersion: 1,
     issuer: 'https://auth.example.org',
     resource: 'https://jira.example.org/mcp',
@@ -83,15 +96,13 @@ beforeAll(async () => {
     accessToken: CANARY,
   });
   await n.services.mcpOauth.credentials.accessToken(
-    {
-      id: conn.json().id,
-      tenantId: DEFAULT_TENANT_ID,
-      credentialVersion: 1,
-      resource: 'https://jira.example.org/mcp',
-    },
+    { id: http.json().id, tenantId: DEFAULT_TENANT_ID },
     ['read'],
     { guard: new ContextGuard() },
   );
+  // The redactor must not be what keeps the token out of the node: it is empty from here on, so a
+  // structural leak shows up in the bodies below instead of being scrubbed on the way out.
+  processSecrets.clear();
   const created = await n.req({ method: 'POST', url: '/v1/agents', payload: { source: SOURCE } });
   expect(created.statusCode, created.body).toBe(201);
   agentId = created.json().id;
@@ -156,5 +167,52 @@ describe('token leak canary: run node', () => {
     }
     for (const body of seen) expect(body).not.toContain(CANARY);
     expect(seen.join('')).not.toMatch(/accessTokenEnc|access_token_enc/);
+
+    // The node environment and the environment of its MCP children, built from exactly what the
+    // control node handed over, and the container's create options.
+    const creds = JSON.parse(seen[1] as string);
+    const handover = JSON.parse(seen[2] as string);
+    const merged = mergeCredentials(handover.mcp ?? [], creds);
+    expect(JSON.stringify(merged)).not.toContain(CANARY);
+    const body = new ContainerRunner({
+      engineUrl: 'http://socket-proxy:2375',
+      image: IMAGE,
+      network: 'oax-nodes',
+    }).buildCreateBody({
+      runId,
+      nodeId: session.nodeId,
+      steps: ['research'],
+      image: IMAGE,
+      controlUrl: 'http://api:8080',
+      runToken: session.token,
+      limits: { cpus: 0.5, memoryMb: 256, timeoutSeconds: 30, pids: 64 },
+      egress: [],
+    });
+    expect(JSON.stringify(body)).not.toContain(CANARY);
+    expect(body.Env.some((e: string) => e.includes(CANARY))).toBe(false);
+  });
+
+  it('the detector goes red for a variant that puts the token into the node environment', async () => {
+    // What a leaking implementation would produce: the check above must notice it.
+    const leaked = mergeCredentials(
+      [
+        {
+          name: 'x',
+          transport: 'stdio',
+          command: '/opt/mcp/bin/x',
+          args: [],
+          env: {},
+          envSecrets: {},
+          tools: {},
+        } as never,
+      ],
+      {
+        agentId: 'a',
+        credentials: [{ secret: 's', env: 'LEAK', value: CANARY }],
+        connections: [],
+        expiresAt: '',
+      } as never,
+    );
+    expect(JSON.stringify(leaked)).toContain(CANARY);
   });
 });

@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { ContextGuard } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/index.js';
+import { loadConfig, telemetryRuntime } from '../src/index.js';
 import {
   connections,
   DEFAULT_TENANT_ID,
@@ -28,6 +28,7 @@ const ISSUER = 'https://auth.example.org';
 const OTHER_TENANT = '00000000-0000-4000-8000-0000000000aa';
 const ACCESS = 'canary-access-token-0123456789';
 const REFRESH = 'canary-refresh-token-9876543210';
+const SECOND = 'second-access-token-q8Zr2Lm';
 
 let n: TestNode;
 let oauth: McpOauthStores;
@@ -62,8 +63,6 @@ const write = (connectionId: string, over: Record<string, unknown> = {}) =>
 const ref = (id: string, over: Record<string, unknown> = {}) => ({
   id,
   tenantId: DEFAULT_TENANT_ID,
-  credentialVersion: 1,
-  resource: RESOURCE,
   ...over,
 });
 const guardOf = () => new ContextGuard();
@@ -102,14 +101,22 @@ describe('encrypted token store', () => {
     await write(id);
     const guard = guardOf();
     const fresh = new SecretRegistry();
-    const creds = new McpCredentials(oauth.tokens, fresh, () => now, 'api');
+    const creds = new McpCredentials(
+      oauth.tokens,
+      fresh,
+      () => now,
+      'api',
+      () => [telemetryRuntime().guard],
+    );
     expect(fresh.size).toBe(0);
     const token = await creds.accessToken(ref(id), ['read'], { guard });
     expect(token).toBe(ACCESS);
     // registered with the run's guard and the log redactor
-    expect(fresh.list()).toContain(ACCESS);
+    expect(fresh.has(ACCESS)).toBe(true);
     expect(guard.text(`echo ${ACCESS}`).text).not.toContain(ACCESS);
     expect(fresh.scrub(`x ${ACCESS} y`)).toBe('x [REDACTED] y');
+    // ... and with the telemetry guard that sanitises span attributes
+    expect(telemetryRuntime().guard.text(`x ${ACCESS}`).text).not.toContain(ACCESS);
     // metadata never carries a value
     expect(JSON.stringify(await oauth.tokens.meta(DEFAULT_TENANT_ID, id, 1))).not.toContain(
       'canary',
@@ -198,9 +205,9 @@ describe('encrypted token store', () => {
   it('replaces the tokens of a connection on re-authorization and deletes them on disconnect', async () => {
     const id = await connection();
     await write(id);
-    await write(id, { accessToken: 'second-access-token-00000', refreshToken: undefined });
+    await write(id, { accessToken: SECOND, refreshToken: undefined });
     const stored = await oauth.tokens.open(DEFAULT_TENANT_ID, id, 1);
-    expect(stored).toMatchObject({ accessToken: 'second-access-token-00000', refreshToken: null });
+    expect(stored).toMatchObject({ accessToken: SECOND, refreshToken: null });
     expect(await oauth.tokens.delete(DEFAULT_TENANT_ID, id)).toBe(1);
     expect(await oauth.tokens.open(DEFAULT_TENANT_ID, id, 1)).toBeNull();
   });
@@ -211,7 +218,7 @@ describe('encrypted token store', () => {
     expect(await oauth.tokens.open(OTHER_TENANT, id, 1)).not.toBeNull();
     expect(await oauth.keys.destroyTenantKeys(OTHER_TENANT)).toBeGreaterThan(0);
     await expect(oauth.tokens.open(OTHER_TENANT, id, 1)).rejects.toMatchObject({
-      code: 'key_unavailable',
+      code: 'key_destroyed',
     });
     const keys = await n.ctx.db
       .select()
@@ -256,7 +263,7 @@ describe('McpCredentials.accessToken', () => {
     expect(() => new McpCredentials(oauth.tokens, registry, () => now, 'api')).not.toThrow();
   });
 
-  it('fails closed without tokens, for revoked or expired tokens, a changed resource and missing scopes', async () => {
+  it('fails closed without tokens, for revoked or expired tokens, a moved server and missing scopes', async () => {
     const guard = guardOf();
     const none = await connection();
     await expect(creds().accessToken(ref(none), [], { guard })).rejects.toMatchObject({
@@ -265,30 +272,51 @@ describe('McpCredentials.accessToken', () => {
 
     const id = await connection();
     await write(id);
-    await expect(
-      creds().accessToken(ref(id, { resource: 'https://moved.example.org/mcp' }), [], { guard }),
-    ).rejects.toMatchObject({
-      code: 'mcp_resource_mismatch',
-    });
     await expect(creds().accessToken(ref(id), ['admin'], { guard })).rejects.toMatchObject({
       code: 'mcp_insufficient_scope',
     });
-    await expect(
-      creds().accessToken(ref(id, { credentialVersion: 2 }), [], { guard }),
-    ).rejects.toMatchObject({
+    // The URL is read from the database: a connection that moved no longer matches its token.
+    await n.ctx.db
+      .update(connections)
+      .set({ config: { transport: 'streamable-http', url: 'https://moved.example.org/mcp' } })
+      .where(eq(connections.id, id));
+    await expect(creds().accessToken(ref(id), [], { guard })).rejects.toMatchObject({
+      code: 'mcp_resource_mismatch',
+    });
+    await n.ctx.db
+      .update(connections)
+      .set({ config: { transport: 'streamable-http', url: RESOURCE } })
+      .where(eq(connections.id, id));
+    // A bumped credential version has no token of its own yet.
+    await n.ctx.db.update(connections).set({ credentialVersion: 2 }).where(eq(connections.id, id));
+    await expect(creds().accessToken(ref(id), [], { guard })).rejects.toMatchObject({
       code: 'mcp_auth_required',
     });
+    await n.ctx.db.update(connections).set({ credentialVersion: 1 }).where(eq(connections.id, id));
     await oauth.tokens.setStatus(DEFAULT_TENANT_ID, id, 1, 'reauthorization_required');
     await expect(creds().accessToken(ref(id), [], { guard })).rejects.toMatchObject({
       code: 'mcp_auth_required',
     });
-    await oauth.tokens.setStatus(DEFAULT_TENANT_ID, id, 1, 'active');
+    await write(id);
     expect(await creds().accessToken(ref(id), ['read', 'write'], { guard })).toBe(ACCESS);
     now = new Date(now.getTime() + 2 * 3_600_000);
     await expect(creds().accessToken(ref(id), [], { guard })).rejects.toMatchObject({
       code: 'mcp_auth_required',
     });
     now = new Date('2026-10-10T12:00:00Z');
+  });
+
+  it('forgets a token in the redactor when its connection is disconnected or revoked', async () => {
+    const id = await connection();
+    await write(id, { accessToken: SECOND });
+    await creds().accessToken(ref(id), [], { guard: guardOf() });
+    expect(registry.has(SECOND)).toBe(true);
+    await oauth.tokens.setStatus(DEFAULT_TENANT_ID, id, 1, 'revoked');
+    expect(registry.has(SECOND)).toBe(false);
+    await write(id, { accessToken: SECOND });
+    await creds().accessToken(ref(id), [], { guard: guardOf() });
+    await oauth.tokens.delete(DEFAULT_TENANT_ID, id);
+    expect(registry.has(SECOND)).toBe(false);
   });
 
   it('does not hand out the token of another tenant', async () => {
@@ -379,5 +407,135 @@ describe('key service configuration', () => {
     );
     expect(loadConfig({ ...base, OAX_MCP_OAUTH_KEK: KEK }).mcp.oauth.kek.key).toHaveLength(32);
     expect(loadConfig(base).mcp.oauth.kek.key).toBeNull();
+  });
+
+  it('reports a replaced key-encryption key under the same id as unavailable, not as corruption', async () => {
+    const id = await connection();
+    await write(id);
+    const replaced = createMcpOauth(
+      {
+        db: n.ctx.db,
+        config: loadConfig({
+          NODE_ENV: 'test',
+          OAX_DATABASE_URL: 'memory://',
+          OAX_MCP_OAUTH_KEK: randomBytes(32).toString('base64'),
+        }),
+        now: () => now,
+      },
+      'api',
+      new SecretRegistry(),
+    );
+    await expect(replaced.tokens.open(DEFAULT_TENANT_ID, id, 1)).rejects.toMatchObject({
+      code: 'key_unavailable',
+    });
+  });
+
+  it('keeps the key out of the config object (non-enumerable) and removes it from the environment', () => {
+    const base = { NODE_ENV: 'test', OAX_DATABASE_URL: 'memory://' };
+    const config = loadConfig({ ...base, OAX_MCP_OAUTH_KEK: KEK });
+    expect(JSON.stringify(config)).not.toContain(KEK);
+    expect(JSON.stringify(config.mcp.oauth.kek)).toBe('{"id":"kek-1"}');
+    expect(config.mcp.oauth.source).toBe('env');
+  });
+
+  it('removes the key from process.env once it is loaded', () => {
+    const saved = { ...process.env };
+    try {
+      Object.assign(process.env, {
+        NODE_ENV: 'test',
+        OAX_DATABASE_URL: 'memory://',
+        OAX_MCP_OAUTH_KEK: KEK,
+      });
+      expect(loadConfig().mcp.oauth.kek.key).toHaveLength(32);
+      expect(process.env.OAX_MCP_OAUTH_KEK).toBeUndefined();
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
+      delete process.env.OAX_MCP_OAUTH_KEK;
+    }
+  });
+});
+
+describe('what put() accepts', () => {
+  it('refuses a resource that is not the canonical URI of the connection, an old credential version and non-https issuers', async () => {
+    const id = await connection();
+    await expect(write(id, { resource: 'https://other.example.org/mcp' })).rejects.toMatchObject({
+      code: 'mcp_resource_mismatch',
+    });
+    await expect(write(id, { credentialVersion: 7 })).rejects.toMatchObject({ code: 'conflict' });
+    await expect(write(id, { issuer: 'http://auth.example.org' })).rejects.toMatchObject({
+      code: 'token_invalid',
+    });
+    await expect(write(id, { issuer: 'https://user:pw@auth.example.org' })).rejects.toMatchObject({
+      code: 'token_invalid',
+    });
+  });
+
+  it('refuses token values that could damage the redactors or collide with identifiers', async () => {
+    const id = await connection();
+    const hostile = [
+      '1","b":"2-padding-padding-padding',
+      'a"b\\c-padding-padding-padding1',
+      randomUUID(),
+      randomUUID().replace(/-/g, ''),
+      `prefix-${DEFAULT_TENANT_ID}-suffix`,
+      `x${id}x-padding-more`,
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      '0123456789012345678901234567890',
+      'has space in the token value 1234',
+      'x'.repeat(5000),
+      'short-one',
+      'new\nline-token-value-12345678',
+    ];
+    for (const accessToken of hostile)
+      await expect(write(id, { accessToken }), accessToken.slice(0, 30)).rejects.toMatchObject({
+        code: 'token_invalid',
+      });
+    // a refresh token is held to the same standard
+    await expect(
+      write(id, { refreshToken: '{"a":1}-padding-padding-padding' }),
+    ).rejects.toMatchObject({
+      code: 'token_invalid',
+    });
+    // realistic shapes pass: opaque, base64, JWT
+    for (const accessToken of [
+      'ya29.a0AfH6SMBx9-Qk2Lr7pVwT3zYc8Nd5Fg1HjKm',
+      Buffer.from(randomBytes(32)).toString('base64'),
+      'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTQyIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmU',
+    ])
+      await write(id, { accessToken });
+  });
+});
+
+describe('connection changes', () => {
+  it('a new server URL bumps the credential version and deletes the stored tokens', async () => {
+    const res = await n.req({
+      method: 'POST',
+      url: '/v1/connections',
+      payload: { name: 'moving', config: { transport: 'streamable-http', url: RESOURCE } },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const id = res.json().id as string;
+    await write(id);
+    expect(await oauth.tokens.meta(DEFAULT_TENANT_ID, id, 1)).not.toBeNull();
+    // same canonical URI (case, default port): nothing changes
+    const same = await n.req({
+      method: 'PUT',
+      url: `/v1/connections/${id}`,
+      payload: {
+        config: { transport: 'streamable-http', url: 'HTTPS://MCP.example.org:443/mcp' },
+      },
+    });
+    expect(same.statusCode, same.body).toBe(200);
+    expect(await oauth.tokens.meta(DEFAULT_TENANT_ID, id, 1)).not.toBeNull();
+    const moved = await n.req({
+      method: 'PUT',
+      url: `/v1/connections/${id}`,
+      payload: { config: { transport: 'streamable-http', url: 'https://other.example.org/mcp' } },
+    });
+    expect(moved.statusCode, moved.body).toBe(200);
+    expect(await oauth.tokens.meta(DEFAULT_TENANT_ID, id, 1)).toBeNull();
+    const [row] = await n.ctx.db.select().from(connections).where(eq(connections.id, id));
+    expect(row!.credentialVersion).toBe(2);
   });
 });
