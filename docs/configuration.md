@@ -375,6 +375,13 @@ endpoint must be on `OAX_AIRGAPPED_ALLOW`, see [`airgapped.md`](airgapped.md#ope
 | `OAX_MCP_OAUTH_KEK_FILE` | – (none) | Path of a file (a mounted Secret) that holds the same base64 key. A start-up warning is logged if the file is readable by group or others. Only the api and the worker may have the key; keep key-holding workers on hosts or node pools that do not run untrusted run nodes. |
 | `OAX_MCP_OAUTH_KEK_ID` | `kek-1` | Name recorded with every data key the KEK wraps (`[A-Za-z0-9._-]`, up to 64). A data key wrapped with another id is refused until a KEK rotation exists. |
 
+MCP OAuth flows (client credentials, [`mcp.md`](mcp.md#oauth-for-http-mcp-connections)) add no setting of
+their own. They need the key-encryption key above (`key_service_unconfigured` otherwise), and their requests
+(resource metadata with purpose `mcp`; authorization server metadata, token and revocation with purpose
+`identity`) follow the network configuration: routes and proxies for those purposes, trust bundles and, in
+air-gapped mode, `OAX_AIRGAPPED_ALLOW` for every pinned authorization server host. `OAX_MCP_OAUTH_CIMD` and
+`OAX_MCP_OAUTH_DCR` of ADR 0016 belong to later slices and do not exist yet.
+
 ## Air-gapped mode
 
 `OAX_AIRGAPPED=true` enables a fail-closed egress policy: start-up is refused when an enabled
