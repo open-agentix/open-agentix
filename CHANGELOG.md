@@ -97,6 +97,15 @@ All notable changes to this project are documented here. The format follows
   (tables `mcp_tool_snapshots`, `mcp_tool_snapshot_acceptances`; down script and snapshot included).
   The Console gets a Tools view per HTTP connection with a diff against the approved list (EN/DE).
   OpenAPI and the UI schema types are updated; see `docs/mcp.md`.
+- **Key service and encrypted token store for MCP OAuth (ADR 0016 slice S5, #235)**: platform
+  key-encryption key from `OAX_MCP_OAUTH_KEK` / `OAX_MCP_OAUTH_KEK_FILE` (`OAX_MCP_OAUTH_KEK_ID`), one
+  data key per tenant, AES-256-GCM with the tenant, connection, issuer, resource and credential version
+  as additional authenticated data. Migration `0026_mcp_oauth_tokens` (tables `mcp_oauth_tokens`,
+  `mcp_oauth_clients`, `tenant_data_keys`; down script and snapshot included). `McpCredentials.accessToken()`
+  is limited to the api and the trusted worker and registers the value with the `ContextGuard` and the
+  log, audit and response redactor before returning it. Token leak canary tests cover logs, errors,
+  audit, API responses, step records, model requests, the node environment and spans. No new endpoint;
+  nothing changes without a configured key. See `docs/mcp.md`.
 - **Role-binding API (ADR 0014 slice S4, #189, #226)**: `GET/POST /v1/tenants/{id}/role-bindings`,
   `PATCH/DELETE .../{bindingId}` (`inherit` required on POST) and the platform-operator bulk opt-in
   `POST /v1/tenants/{rootId}/role-bindings/enable-inheritance { roles, dryRun }` with a dry run that lists the
