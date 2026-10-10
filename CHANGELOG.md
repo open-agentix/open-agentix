@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Docs: ADR 0017 (agent lifecycle governance) is accepted with the owner decisions of 2026-10-10 on all 18 open
+  questions: Agent Developer and Agent Maintainer roles with directory group mapping per tenant node,
+  protected-branch-like agent rules, review via Git with development and publish branches over plain Git,
+  tenant secrets inherited top-down with override and pinned resolution, no break-glass and no minimum
+  approver-binding age; new slices S10 to S13 (#290 to #293). Design only, nothing is implemented yet.
 - The role-binding reconcile no longer reports `blocked` (mirror rows and explicit grants cannot collide any
   more); `oax_role_bindings_reconcile_fixes_total` keeps `kind=added|removed`.
 - Docs: the ROADMAP now records `v0.2.0-alpha.1` as released (alpha, GitHub pre-release) with signed images; the
