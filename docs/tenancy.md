@@ -151,7 +151,7 @@ authoritative, so upgrading changes nobody's access.
     never touched by the mirror or the reconcile.
   Until S4 only mirror rows can be created through the application; a test asserts that every write
   path leaves the plain shape. S4's grant API must keep this rule (or give mirrored roles a key of
-  their own) and test it.
+  their own) and test it (#226).
 - **The database enforces revocation (#216)**: migration `0019_trb_home_move` adds the trigger
   `trb_users_home_move_trg` (`AFTER UPDATE OF tenant_id, global_roles` on `users`; it returns at
   once when neither value changed, so logins and other updates cost nothing). Whatever code path
@@ -182,7 +182,7 @@ authoritative, so upgrading changes nobody's access.
   user's grants. Neither the codec nor the cache shortens the revocation window: a cached entry
   lives at most `min(OAX_AUTH_CACHE_TTL_SECONDS, token lifetime)` unless it is deleted
   (`invalidateUserTokens`); revocations by the trigger or the reconcile do not delete it yet (S2
-  adds the authz epoch, ADR 0014 section 6.1).
+  adds the authz epoch, ADR 0014 section 6.1; #227).
 - **`loadRawGrants` uses one connection (#217)**: the node row and the three grant lists come from a
   single statement, so a principal build holds at most one pool connection and reads the home node
   and the grants from the same snapshot. Expiries are read as epoch milliseconds, rounded down: a

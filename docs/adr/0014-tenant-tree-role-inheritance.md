@@ -65,7 +65,8 @@ S1b (prerequisites for S2, #216, #217; the legacy path still decides):
   legacy role has exactly one slot. Adding a role never overwrites or hides a row of another shape
   there (reported as `blocked`); *removing* a role through `global_roles` revokes every binding of
   that `(user, home node, role, no use case)` key, whatever its shape. S4's grant API has to keep
-  the rule or key mirror rows separately.
+  the rule or key mirror rows separately (#226). Revocations by the trigger and the reconcile do
+  not yet invalidate cached principals; S2 adds that with the authz epoch (#227).
 - **Revocation in the database.** Migration `0019_trb_home_move` (trigger on `users`, `AFTER UPDATE
   OF tenant_id, global_roles`) applies the same-key rule in the same statement for every code path
   (older application versions, directory syncs, `psql`): a role removed from `global_roles` loses
