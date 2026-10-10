@@ -4,7 +4,7 @@ import { eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { auditLog, runs } from '../src/db/schema.js';
 import { rowToEntry } from '../src/services/audit.js';
-import { configureTelemetryRuntime, resetTelemetryRuntime } from '../src/telemetry.js';
+import { configureTelemetryRuntime, resetTelemetryRuntime, withSpan } from '../src/telemetry.js';
 import { agentSource } from './fixtures.js';
 import { testNode, type TestNode } from './helpers.js';
 import { attributesComply, countingStats, startTracing } from './trace-harness.js';
@@ -262,6 +262,42 @@ describe('audit links', () => {
     expect((await verify()).valid).toBe(true);
   });
 
+  it('strips a forged otel from a null-prototype payload too', async () => {
+    const id = (await trigger()).json().id as string;
+    const row = await runRow(id);
+    const payload = Object.assign(Object.create(null), { otel: FOREIGN, keep: 3 });
+    const e = await n.services.audit.append({
+      actor: 'test',
+      action: 'test.nullproto',
+      runId: id,
+      payload,
+    });
+    expect(e.payload).toEqual({
+      keep: 3,
+      otel: { traceId: row.traceId, spanId: row.traceRootSpanId },
+    });
+    const plain = await n.services.audit.append({
+      actor: 'test',
+      action: 'test.nullproto',
+      payload: Object.assign(Object.create(null), { otel: FOREIGN }),
+    });
+    expect(plain.payload).toEqual({});
+  });
+
+  it('does not cache a run identity read inside a caller transaction', async () => {
+    const id = (await trigger()).json().id as string;
+    await n.ctx.cache.del(`run-ident:${id}`);
+    await n.ctx.db.transaction(async (tx) => {
+      await n.services.audit.append(
+        { actor: 'test', action: 'test.tx', runId: id },
+        tx as unknown as Parameters<typeof n.services.audit.append>[1],
+      );
+    });
+    expect(await n.ctx.cache.get(`run-ident:${id}`)).toBeUndefined();
+    await n.services.audit.append({ actor: 'test', action: 'test.notx', runId: id });
+    expect(await n.ctx.cache.get(`run-ident:${id}`)).toBeDefined();
+  });
+
   it('an old run (no trace identity) keeps its entries unchanged and the chain verifies', async () => {
     const id = (await trigger()).json().id as string;
     // Make it look like a run created before the migration: ids are immutable, so insert a copy.
@@ -334,6 +370,32 @@ describe('audit links', () => {
       await rewrite(stored!.payload);
     }
     expect((await verify()).valid).toBe(true);
+  });
+});
+
+describe('invalid stored parent', () => {
+  it('starts its own trace instead of inheriting the active span', async () => {
+    const t = startTracing();
+    try {
+      await withSpan({ name: 'POST /v1/x', kind: 'http_server' }, {}, async () =>
+        withSpan(
+          {
+            name: 'invoke_workflow w',
+            kind: 'invoke_workflow',
+            parent: { traceId: 'bad', spanId: 'bad' },
+          },
+          {},
+          async () => 1,
+        ),
+      );
+      const spans = t.exporter.getFinishedSpans();
+      const outer = spans.find((s) => s.name === 'POST /v1/x')!;
+      const inner = spans.find((s) => s.name === 'invoke_workflow w')!;
+      expect(inner.spanContext().traceId).not.toBe(outer.spanContext().traceId);
+      expect(inner.parentSpanContext).toBeUndefined();
+    } finally {
+      await t.stop();
+    }
   });
 });
 

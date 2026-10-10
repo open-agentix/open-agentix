@@ -85,7 +85,8 @@ export interface SpanSpec {
   root?: StoredSpanIds;
   /**
    * Parent is a remote context rebuilt from stored ids (an attempt of an existing run). The span
-   * gets a fresh span id. Invalid ids are ignored, which starts an unrelated trace.
+   * gets a fresh span id. Invalid ids are ignored: the span then starts its own trace (it does not
+   * inherit the active span).
    */
   parent?: StoredSpanIds;
   /** Start a new trace instead of continuing the active one (HTTP server spans). */
@@ -240,8 +241,11 @@ function openSpan(spec: SpanSpec, attributes: Record<string, unknown>): OpenSpan
   };
   let parent: Context = context.active();
   if (spec.root || spec.newTrace) parent = ROOT_CONTEXT;
-  else if (spec.parent && isTraceId(spec.parent.traceId) && isSpanId(spec.parent.spanId))
-    parent = trace.setSpanContext(ROOT_CONTEXT, remoteContext(spec.parent));
+  else if (spec.parent)
+    parent =
+      isTraceId(spec.parent.traceId) && isSpanId(spec.parent.spanId)
+        ? trace.setSpanContext(ROOT_CONTEXT, remoteContext(spec.parent))
+        : ROOT_CONTEXT;
   const start = () => tracer().startSpan(name.name, options, parent);
   const raw =
     spec.root && isTraceId(spec.root.traceId) && isSpanId(spec.root.spanId)

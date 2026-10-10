@@ -10,8 +10,10 @@
 ALTER TABLE "run_node_sessions" ADD COLUMN "trace_context" text;--> statement-breakpoint
 ALTER TABLE "runs" ADD COLUMN "trace_id" text;--> statement-breakpoint
 ALTER TABLE "runs" ADD COLUMN "trace_root_span_id" text;--> statement-breakpoint
-ALTER TABLE "run_node_sessions" ADD CONSTRAINT "run_node_sessions_trace_context_shape" CHECK ("run_node_sessions"."trace_context" is null or "run_node_sessions"."trace_context" ~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$');--> statement-breakpoint
-ALTER TABLE "runs" ADD CONSTRAINT "runs_trace_ids_shape" CHECK (("runs"."trace_id" is null) = ("runs"."trace_root_span_id" is null) and ("runs"."trace_id" is null or ("runs"."trace_id" ~ '^[0-9a-f]{32}$' and "runs"."trace_id" <> repeat('0', 32) and "runs"."trace_root_span_id" ~ '^[0-9a-f]{16}$' and "runs"."trace_root_span_id" <> repeat('0', 16))))--> statement-breakpoint
+ALTER TABLE "run_node_sessions" ADD CONSTRAINT "run_node_sessions_trace_context_shape" CHECK ("run_node_sessions"."trace_context" is null or "run_node_sessions"."trace_context" ~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$') NOT VALID;--> statement-breakpoint
+ALTER TABLE "run_node_sessions" VALIDATE CONSTRAINT "run_node_sessions_trace_context_shape";--> statement-breakpoint
+ALTER TABLE "runs" ADD CONSTRAINT "runs_trace_ids_shape" CHECK (("runs"."trace_id" is null) = ("runs"."trace_root_span_id" is null) and ("runs"."trace_id" is null or ("runs"."trace_id" ~ '^[0-9a-f]{32}$' and "runs"."trace_id" <> repeat('0', 32) and "runs"."trace_root_span_id" ~ '^[0-9a-f]{16}$' and "runs"."trace_root_span_id" <> repeat('0', 16)))) NOT VALID;--> statement-breakpoint
+ALTER TABLE "runs" VALIDATE CONSTRAINT "runs_trace_ids_shape";--> statement-breakpoint
 CREATE OR REPLACE FUNCTION "runs_trace_identity_immutable"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 	IF NEW."trace_id" IS DISTINCT FROM OLD."trace_id"

@@ -63,11 +63,11 @@ interface RunIdentity {
   rootSpanId: string | null;
 }
 
-const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' &&
-  v !== null &&
-  !Array.isArray(v) &&
-  Object.getPrototypeOf(v) === Object.prototype;
+const isPlainObject = (v: unknown): v is Record<string, unknown> => {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+};
 
 /**
  * Sets the reserved `otel` key of a payload. A caller-supplied `otel` is always removed (the field
@@ -127,7 +127,8 @@ export class AuditService {
       traceId: trace?.traceId ?? null,
       rootSpanId: trace?.rootSpanId ?? null,
     };
-    await this.ctx.cache.set(key, identity, 3_600_000);
+    // Not cached inside a caller's transaction: the run row may still roll back.
+    if (db === this.ctx.db) await this.ctx.cache.set(key, identity, 3_600_000);
     return identity;
   }
 
