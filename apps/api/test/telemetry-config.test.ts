@@ -122,6 +122,37 @@ describe('standard OTLP credential and certificate variables are refused', () =>
   it('treats an empty value like an unset variable', () => {
     expect(() => otel({ OTEL_EXPORTER_OTLP_HEADERS: '  ' })).not.toThrow();
   });
+
+  it.each(['OTEL_TRACES_SAMPLER', 'OTEL_TRACES_SAMPLER_ARG'])(
+    '%s is refused: the SDK would build its own sampler from it (use OAX_OTEL_SAMPLE_RATIO)',
+    (name) => {
+      expect(() => otel({ [name]: 'always_off' })).toThrow(
+        new RegExp(`${name} \\(use OAX_OTEL_SAMPLE_RATIO`),
+      );
+    },
+  );
+});
+
+describe('variables that look like "export off" but are not read', () => {
+  const endpoint = { OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.org' };
+
+  it.each([
+    ['OTEL_SDK_DISABLED', 'true'],
+    ['OTEL_SDK_DISABLED', 'TRUE'],
+    ['OTEL_TRACES_EXPORTER', 'none'],
+    ['OTEL_TRACES_EXPORTER', 'console'],
+  ])('%s=%s together with an endpoint fails start-up', (name, value) => {
+    expect(() => otel({ ...endpoint, [name]: value })).toThrow(
+      /unset OTEL_EXPORTER_OTLP_ENDPOINT/,
+    );
+  });
+
+  it('is harmless without an endpoint or when it agrees with the export', () => {
+    expect(() => otel({ OTEL_SDK_DISABLED: 'true', OTEL_TRACES_EXPORTER: 'none' })).not.toThrow();
+    expect(() =>
+      otel({ ...endpoint, OTEL_SDK_DISABLED: 'false', OTEL_TRACES_EXPORTER: 'otlp' }),
+    ).not.toThrow();
+  });
 });
 
 describe('endpoint rules', () => {

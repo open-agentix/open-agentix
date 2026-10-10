@@ -353,9 +353,12 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
   with `http://` to a non-loopback host now needs `OAX_OTEL_INSECURE=true`, and an endpoint with
   credentials, a query or a fragment is refused. **Breaking** for installs that relied on the
   standard `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`, `_CLIENT_CERTIFICATE` or `_CLIENT_KEY`
-  variables (also the `_TRACES_` variants), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
-  `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`: start-up now fails with a message naming the replacement
-  (`OAX_OTEL_HEADERS_SECRET`, the network configuration, `OTEL_EXPORTER_OTLP_ENDPOINT`).
+  variables (also the `_TRACES_` variants), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+  `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_TRACES_SAMPLER` or `OTEL_TRACES_SAMPLER_ARG`: start-up
+  now fails with a message naming the replacement (`OAX_OTEL_HEADERS_SECRET`, the network
+  configuration, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OAX_OTEL_SAMPLE_RATIO`). `OTEL_SDK_DISABLED=true`
+  or an `OTEL_TRACES_EXPORTER` other than `otlp` next to an endpoint fails start-up as well (they
+  are not read; unset the endpoint to turn the export off).
 - **UI**: German glossary follows the multi-tenant UX design: "Use Case" (was "Anwendungsfall") and
   "Owner-Team" (was "Verantwortliches Team"). The browser tab title now reads
   `Page · Tenant · open-agentix`.

@@ -338,9 +338,11 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 | `OAX_OTEL_TRACE_URL_TEMPLATE` | – | Run-view link template; must contain `{traceId}`; parsed only (slice S2). |
 
 **Refused at start-up:** the standard `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`,
-`_CLIENT_CERTIFICATE`, `_CLIENT_KEY` (also with `_TRACES_`), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and
-`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`: use `OAX_OTEL_HEADERS_SECRET` and the network configuration
-instead. Details and the data that is never exported: [`observability.md`](observability.md).
+`_CLIENT_CERTIFICATE`, `_CLIENT_KEY` (also with `_TRACES_`), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`: use
+`OAX_OTEL_HEADERS_SECRET`, the network configuration and `OAX_OTEL_SAMPLE_RATIO` instead. With an
+endpoint set, `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER` other than `otlp` is refused too
+(they are not read; unset the endpoint to turn the export off). Details and the data that is never exported: [`observability.md`](observability.md).
 
 ## Air-gapped mode
 

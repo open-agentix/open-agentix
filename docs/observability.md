@@ -72,10 +72,13 @@ registered and no socket is opened.
   logged.
 - **Refused variables:** the standard `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_CERTIFICATE`,
   `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` and their `_TRACES_`
-  variants, as well as `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`,
-  make start-up fail with a message that names the replacement. The OpenTelemetry SDK would read
-  them implicitly (merging headers, loading certificate files), which would be a second,
-  unreviewed configuration path. Values are never echoed.
+  variants, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`,
+  `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` make start-up fail with a message that names
+  the replacement. The OpenTelemetry SDK would read them implicitly (merging headers, loading
+  certificate files, building its own sampler), which would be a second, unreviewed configuration
+  path. Values are never echoed. `OTEL_SDK_DISABLED=true` or an `OTEL_TRACES_EXPORTER` other than
+  `otlp` next to an endpoint also fails start-up: they are not read here, so they cannot turn the
+  export off; unset `OTEL_EXPORTER_OTLP_ENDPOINT` instead.
 - **No resource detectors.** The resource is static: `service.name` (`OTEL_SERVICE_NAME`) and the
   validated `OAX_OTEL_RESOURCE_ATTRIBUTES`. Nothing calls a cloud metadata endpoint or reads host
   details, and `OTEL_RESOURCE_ATTRIBUTES` is not read.

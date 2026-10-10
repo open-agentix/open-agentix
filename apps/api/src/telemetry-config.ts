@@ -79,6 +79,10 @@ for (const [suffix, instead] of [
 }
 REFUSED.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'OTEL_EXPORTER_OTLP_ENDPOINT';
 REFUSED.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = 'OTEL_EXPORTER_OTLP_PROTOCOL';
+// The SDK builds its sampler from these; sampling is configured with OAX_OTEL_SAMPLE_RATIO
+// (ADR 0015 section 9), and the code passes its own sampler.
+REFUSED.OTEL_TRACES_SAMPLER = 'OAX_OTEL_SAMPLE_RATIO';
+REFUSED.OTEL_TRACES_SAMPLER_ARG = 'OAX_OTEL_SAMPLE_RATIO';
 
 /** Fails start-up when a refused standard variable is set (values are never echoed). */
 export function refuseStandardOtlpVariables(env: NodeJS.ProcessEnv): void {
@@ -89,6 +93,22 @@ export function refuseStandardOtlpVariables(env: NodeJS.ProcessEnv): void {
     'config_invalid',
     `invalid configuration: the standard OpenTelemetry exporter variable(s) are not supported: ${details}`,
   );
+}
+
+/**
+ * `OTEL_SDK_DISABLED=true` and `OTEL_TRACES_EXPORTER=none` (or any exporter but `otlp`) are read
+ * by the SDK's auto-configuration only, which this platform does not use. Together with an endpoint
+ * they would look like "export off" while spans are exported, so that combination is refused.
+ */
+export function refuseDisablingVariables(env: NodeJS.ProcessEnv, endpoint: string | undefined): void {
+  if (!endpoint) return;
+  const disabled = (env.OTEL_SDK_DISABLED ?? '').trim().toLowerCase() === 'true';
+  const exporter = (env.OTEL_TRACES_EXPORTER ?? '').trim().toLowerCase();
+  if (disabled || (exporter !== '' && exporter !== 'otlp'))
+    throw new OaxError(
+      'config_invalid',
+      'invalid configuration: OTEL_SDK_DISABLED and OTEL_TRACES_EXPORTER are not read; to turn the export off, unset OTEL_EXPORTER_OTLP_ENDPOINT',
+    );
 }
 
 function bad(variable: string, why: string): never {
@@ -199,6 +219,7 @@ export function buildOtelConfig(
   const endpoint = e.OTEL_EXPORTER_OTLP_ENDPOINT?.trim()
     ? validateEndpoint(e.OTEL_EXPORTER_OTLP_ENDPOINT.trim(), e.OAX_OTEL_INSECURE)
     : undefined;
+  refuseDisablingVariables(env, endpoint);
   return {
     endpoint,
     protocol: e.OTEL_EXPORTER_OTLP_PROTOCOL,
