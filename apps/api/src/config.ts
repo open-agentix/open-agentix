@@ -325,6 +325,16 @@ export const EnvSchema = z.object({
     .string()
     .regex(/^[A-Za-z0-9._-]{1,64}$/)
     .default('kek-1'),
+  /**
+   * Publish the Client ID Metadata Document at `<OAX_PUBLIC_URL>/oauth/mcp-client.json` (ADR 0016
+   * section 7.2). Off by default; needs a public https `OAX_PUBLIC_URL`; refused in air-gapped mode.
+   */
+  OAX_MCP_OAUTH_CIMD: bool.default(false),
+  /**
+   * Allow dynamic client registration (RFC 7591) per tenant and authorization server. Off by
+   * default (deprecated by the MCP specification); refused in air-gapped mode.
+   */
+  OAX_MCP_OAUTH_DCR: bool.default(false),
   /** `trusted`: platform stdio connections may start in air-gapped mode (child sockets are not guarded). */
   OAX_AIRGAPPED_STDIO: z.enum(['trusted']).optional(),
 });
@@ -477,6 +487,10 @@ export interface Config {
       source: 'env' | 'file' | 'none';
       /** The key file is readable by group or others. */
       fileLoose: boolean;
+      /** Client ID Metadata Document published (`OAX_MCP_OAUTH_CIMD`). */
+      cimd: boolean;
+      /** Dynamic client registration allowed (`OAX_MCP_OAUTH_DCR`). */
+      dcr: boolean;
     };
     relay: {
       concurrency: number;
@@ -542,6 +556,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       'config_invalid',
       'invalid configuration: OAX_DEMO_LLM=claude-code requires OAX_DEMO_MODE=true (fixed scenarios only)',
     );
+  }
+  // Both features make the platform talk to servers the tenant chose (registration) or publish a
+  // document at a public URL: neither fits an air-gapped installation, and a CIMD client id must be
+  // an https URL the authorization server can fetch.
+  if ((e.OAX_MCP_OAUTH_CIMD || e.OAX_MCP_OAUTH_DCR) && e.OAX_AIRGAPPED)
+    throw new OaxError(
+      'config_invalid',
+      'OAX_MCP_OAUTH_CIMD and OAX_MCP_OAUTH_DCR are refused in air-gapped mode (OAX_AIRGAPPED=true); use a pre-registered client',
+    );
+  if (e.OAX_MCP_OAUTH_CIMD) {
+    const u = new URL(e.OAX_PUBLIC_URL);
+    if (u.protocol !== 'https:' || isLocalHost(u.hostname))
+      throw new OaxError(
+        'config_invalid',
+        'OAX_MCP_OAUTH_CIMD needs OAX_PUBLIC_URL to be a public https URL (the client id is a URL the authorization server fetches)',
+      );
   }
   const result = buildConfig(e, env, database);
   // The key now lives in the closure of the config. Deleting it from process.env keeps it out of
@@ -714,7 +744,7 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
     stdioCommands,
     stdioEgress: parseStdioEgressGrants(e.OAX_MCP_STDIO_EGRESS, stdioCommands),
     requireToolPin: e.OAX_MCP_REQUIRE_TOOL_PIN,
-    oauth: kekOf(e),
+    oauth: { ...kekOf(e), cimd: e.OAX_MCP_OAUTH_CIMD, dcr: e.OAX_MCP_OAUTH_DCR },
     relay: {
       concurrency: e.OAX_MCP_RELAY_CONCURRENCY,
       ratePerMinute: e.OAX_MCP_RELAY_RATE_PER_MINUTE,
@@ -730,7 +760,7 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
  * The 32-byte key-encryption key from the value or the file; errors never quote the value. The key
  * is exposed through a non-enumerable getter, so serialising or logging the config cannot print it.
  */
-function kekOf(e: z.infer<typeof EnvSchema>): Config['mcp']['oauth'] {
+function kekOf(e: z.infer<typeof EnvSchema>): Omit<Config['mcp']['oauth'], 'cimd' | 'dcr'> {
   if (e.OAX_MCP_OAUTH_KEK && e.OAX_MCP_OAUTH_KEK_FILE)
     throw new OaxError(
       'config_invalid',
@@ -768,6 +798,12 @@ function kekOf(e: z.infer<typeof EnvSchema>): Config['mcp']['oauth'] {
   const kek = { id: e.OAX_MCP_OAUTH_KEK_ID } as { id: string; key: Buffer | null };
   Object.defineProperty(kek, 'key', { get: () => key, enumerable: false });
   return { kek, source, fileLoose };
+}
+
+/** Loopback and `localhost` names: a redirect or metadata URL there is not reachable by a remote server. */
+export function isLocalHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127\./.test(h);
 }
 
 /** Whether `file` is `dir` or below it, compared by real path (symlinks followed) where it exists. */

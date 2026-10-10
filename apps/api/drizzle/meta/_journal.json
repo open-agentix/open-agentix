@@ -162,6 +162,13 @@
       "when": 1792600000000,
       "tag": "0028_pentest_role",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792600000001,
+      "tag": "0029_mcp_oauth_authorization_code",
+      "breakpoints": true
     }
   ]
 }
