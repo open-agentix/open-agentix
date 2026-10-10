@@ -20,6 +20,7 @@ import {
   validateImage,
   validateResourceCeiling,
 } from '@openagentix/runners';
+import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import { OTEL_ENV_SHAPE, buildOtelConfig, type OtelConfig } from './telemetry-config.js';
@@ -290,6 +291,19 @@ export const EnvSchema = z.object({
   OAX_MCP_RELAY_IDLE_SECONDS: z.coerce.number().int().min(5).max(3600).default(300),
   /** Time a node has to deliver a request body; a slow trickle is cut off (slowloris). */
   OAX_MCP_RELAY_BODY_READ_SECONDS: z.coerce.number().int().min(1).max(120).default(15),
+  /**
+   * Platform key-encryption key for the secrets the platform stores (MCP OAuth tokens, ADR 0016
+   * section 7.5): 32 random bytes, base64 or base64url. `OAX_MCP_OAUTH_KEK_FILE` reads the same
+   * value from a mounted file instead (preferred; set only one of the two). Without a key the
+   * key service refuses every operation and no token can be stored.
+   */
+  OAX_MCP_OAUTH_KEK: z.string().optional(),
+  OAX_MCP_OAUTH_KEK_FILE: z.string().optional(),
+  /** Names the key-encryption key in the rows it wraps (`[A-Za-z0-9._-]`, up to 64). */
+  OAX_MCP_OAUTH_KEK_ID: z
+    .string()
+    .regex(/^[A-Za-z0-9._-]{1,64}$/)
+    .default('kek-1'),
   /** `trusted`: platform stdio connections may start in air-gapped mode (child sockets are not guarded). */
   OAX_AIRGAPPED_STDIO: z.enum(['trusted']).optional(),
 });
@@ -428,6 +442,8 @@ export interface Config {
     stdioCommands: string[];
     stdioEgress: Map<string, string[]>;
     requireToolPin: boolean;
+    /** Key-encryption key of the stored OAuth tokens; `key` is null when none is configured. */
+    oauth: { kek: { key: Buffer | null; id: string } };
     relay: {
       concurrency: number;
       ratePerMinute: number;
@@ -647,6 +663,7 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
     stdioCommands,
     stdioEgress: parseStdioEgressGrants(e.OAX_MCP_STDIO_EGRESS, stdioCommands),
     requireToolPin: e.OAX_MCP_REQUIRE_TOOL_PIN,
+    oauth: { kek: { key: kekOf(e), id: e.OAX_MCP_OAUTH_KEK_ID } },
     relay: {
       concurrency: e.OAX_MCP_RELAY_CONCURRENCY,
       ratePerMinute: e.OAX_MCP_RELAY_RATE_PER_MINUTE,
@@ -656,6 +673,32 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
       bodyReadMs: e.OAX_MCP_RELAY_BODY_READ_SECONDS * 1000,
     },
   };
+}
+
+/** The 32-byte key-encryption key from the value or the file; errors never quote the value. */
+function kekOf(e: z.infer<typeof EnvSchema>): Buffer | null {
+  if (e.OAX_MCP_OAUTH_KEK && e.OAX_MCP_OAUTH_KEK_FILE)
+    throw new OaxError(
+      'config_invalid',
+      'set only one of OAX_MCP_OAUTH_KEK and OAX_MCP_OAUTH_KEK_FILE',
+    );
+  let raw = e.OAX_MCP_OAUTH_KEK;
+  if (e.OAX_MCP_OAUTH_KEK_FILE) {
+    try {
+      raw = readFileSync(e.OAX_MCP_OAUTH_KEK_FILE, 'utf8');
+    } catch {
+      throw new OaxError('config_invalid', 'OAX_MCP_OAUTH_KEK_FILE cannot be read');
+    }
+  }
+  if (raw === undefined) return null;
+  const key = Buffer.from(raw.trim(), 'base64');
+  // Buffer.from is lenient with bad characters, so also require the canonical 256-bit length.
+  if (key.length !== 32 || !/^[A-Za-z0-9+/_-]{42,44}={0,2}$/.test(raw.trim()))
+    throw new OaxError(
+      'config_invalid',
+      'the MCP OAuth key-encryption key must be 32 random bytes, base64 encoded',
+    );
+  return key;
 }
 
 function stdioCommandsOf(raw: string): string[] {
