@@ -54,6 +54,12 @@ describe('OAX_MCP_STDIO_COMMANDS parsing', () => {
     ['tmp dir', '/tmp/*'],
     ['workspace dir', '/workspace/*'],
     ['home', '/home/*'],
+    // nothing in or below a temporary, virtual or run-writable directory, not even one file
+    ['node workspace', '/tmp/workspace/*'],
+    ['file in tmp', '/tmp/workspace/bin/node'],
+    ['proc link', '/proc/self/exe'],
+    ['shared memory', '/dev/shm/x'],
+    ['run dir', '/run/mcp/server'],
   ])('refuses %s (fails start-up instead of opening a hole)', (_label, entry) => {
     expect(() => parseStdioAllowlist(entry)).toThrow(/OAX_MCP_STDIO_COMMANDS entry/);
   });
@@ -211,6 +217,29 @@ describe('programs that are refused even when allowlisted', () => {
     'ld-linux-x86-64.so.2',
     'ld.so',
     'ld-musl-x86_64.so.1',
+    'libc.musl-x86_64.so.1',
+    // init and privilege wrappers of container images, process runners
+    'tini',
+    'dumb-init',
+    'gosu',
+    'su-exec',
+    'capsh',
+    'prlimit',
+    'cross-env',
+    'concurrently',
+    'nodemon',
+    'pm2',
+    'just',
+    // database shells and calculators with a shell escape
+    'sqlite3',
+    'psql',
+    'mysql',
+    'mongosh',
+    'dc',
+    'R',
+    'erl',
+    // installs packages at run time by default
+    'bun',
   ];
 
   it.each(names)('refuses %s', (name) => {
@@ -232,26 +261,60 @@ describe('programs that are refused even when allowlisted', () => {
   });
 });
 
-describe('interpreters: allowed without code-injecting flags', () => {
+describe('interpreters: allowed without code-injecting flags, running an allowlisted file', () => {
   const interp = (name: string, args: string[]) =>
     check(cmd(`/opt/mcp/bin/${name}`, args)).map((i) => `${i.path}: ${i.message}`);
+  const P = '/opt/mcp/bin';
 
   it.each([
-    ['node', ['server.js']],
-    ['node', ['--max-old-space-size=256', 'server.js', '--port', '3000']],
-    ['node', ['--', 'server.js', '-e', 'x']],
-    ['nodejs', ['/opt/mcp/app/server.mjs']],
-    ['python3', ['-u', 'server.py']],
-    ['python3.11', ['-m', 'mcp_server_time']],
-    ['python', ['server.py', '--config', 'a.json']],
-    ['perl', ['server.pl']],
-    ['ruby', ['server.rb']],
-    ['php', ['server.php']],
-    ['java', ['-Xmx64m', '-jar', 'server.jar']],
-    ['deno', ['run', '--allow-net=api.example.org', 'server.ts']],
-    ['bun', ['run', 'server.ts']],
+    ['node', [`${P}/server.js`]],
+    ['node', ['--max-old-space-size=256', `${P}/server.js`, '--port', '3000']],
+    ['node', ['--enable-source-maps', '--no-warnings', `${P}/server.js`]],
+    ['node', ['--', `${P}/server.js`, '-e', 'x']],
+    ['nodejs', [`${P}/server.mjs`]],
+    ['python3', ['-u', `${P}/server.py`]],
+    ['python3', ['-uB', '-Wignore', '-Xutf8', `${P}/server.py`]],
+    ['python', [`${P}/server.py`, '--config', 'a.json']],
+    ['perl', ['-w', `${P}/server.pl`]],
+    ['ruby', [`${P}/server.rb`]],
+    ['php', [`${P}/server.php`]],
+    ['java', ['-Xmx64m', '-Dfile.encoding=UTF-8', '-jar', `${P}/server.jar`]],
+    ['deno', ['run', '--allow-net=api.example.org', `${P}/server.ts`]],
+    ['deno', ['run', '--allow-read', '--no-config', '--cached-only', `${P}/server.ts`]],
+    ['dotnet', [`${P}/server.dll`]],
+    ['tsx', [`${P}/server.ts`]],
   ])('accepts %s %j', (name, args) => {
     expect(interp(name, args)).toEqual([]);
+  });
+
+  it.each([
+    // the program file is not pinned
+    ['node', [], /must run a program file/],
+    ['node', ['server.js'], /normalized absolute path/],
+    ['node', ['./server.js'], /normalized absolute path/],
+    ['node', ['/tmp/workspace/evil.js'], /not in OAX_MCP_STDIO_COMMANDS/],
+    ['node', ['/opt/other/x.js'], /not in OAX_MCP_STDIO_COMMANDS/],
+    ['node', [`${P}/../../../tmp/workspace/x.js`], /normalized absolute path/],
+    ['python3', ['-m', 'mcp_server_time'], /may not stand before the program file/],
+    ['python3', [`-m${'mcp_server_time'}`], /may not stand before the program file/],
+    ['dotnet', ['mytool'], /normalized absolute path/],
+    ['java', ['Main'], /-jar <file>/],
+    ['java', ['-cp', '/tmp/workspace', 'Main'], /may not stand before the program file/],
+    ['java', ['-jar', '/tmp/workspace/x.jar'], /not in OAX_MCP_STDIO_COMMANDS/],
+    // an option that takes the next argument turns the allowlisted file into its value
+    ['node', ['--title', `${P}/server.js`, '/tmp/workspace/evil.js'], /may not stand before/],
+    ['python3', ['-W', `${P}/s.py`, '/tmp/workspace/evil.py'], /may not stand before/],
+    ['python3', ['-X', 'dev', `${P}/s.py`], /may not stand before/],
+    ['ruby', ['-C/tmp/workspace', `${P}/s.rb`], /runs or loads code|may not stand before/],
+    ['perl', ['-S', 'evil.pl'], /runs or loads code|may not stand before/],
+    [
+      'dotnet',
+      ['exec', '--additionalprobingpath', '/tmp', `${P}/x.dll`],
+      /installs or evaluates|normalized/,
+    ],
+    ['deno', ['run', '--cert', '/tmp/c.pem', `${P}/s.ts`], /may not stand before/],
+  ])('refuses %s %j', (name, args, re) => {
+    expect(interp(name, args).join('\n')).toMatch(re);
   });
 
   it.each([
@@ -313,7 +376,27 @@ describe('interpreters: allowed without code-injecting flags', () => {
     ['bun', ['add', 'pkg']],
     ['bun', ['run', 'https://example.org/x.ts']],
     ['bun', ['-e', '1']],
+    ['bun', ['run', '/opt/mcp/bin/server.ts']],
     ['dotnet', ['tool', 'run', 'x']],
+    ['node', ['--openssl-config=/tmp/o.cnf', '/opt/mcp/bin/s.js']],
+    ['node', ['--experimental-default-config-file', '/opt/mcp/bin/s.js']],
+    ['node', ['--experimental-config-file=/tmp/c.json', '/opt/mcp/bin/s.js']],
+    ['node', ['--snapshot-blob=/tmp/s.blob', '/opt/mcp/bin/s.js']],
+    ['node', ['-i']],
+    ['python3', ['-i', '/opt/mcp/bin/s.py']],
+    ['php', ['-c', '/tmp/php.ini', '/opt/mcp/bin/s.php']],
+    ['php', ['-z', '/tmp/x.so', '/opt/mcp/bin/s.php']],
+    ['php', ['--php-ini=/tmp/php.ini', '/opt/mcp/bin/s.php']],
+    ['java', ['--class-path=/tmp/w', '-jar', '/opt/mcp/bin/x.jar']],
+    ['java', ['-XX:SharedArchiveFile=/tmp/a.jsa', '-jar', '/opt/mcp/bin/x.jar']],
+    ['deno', ['run', 'npm:some-server']],
+    ['deno', ['run', 'jsr:@scope/server']],
+    ['deno', ['run', 'data:text/javascript,Deno.exit()']],
+    ['deno', ['run', '--preload=/tmp/x.ts', '/opt/mcp/bin/s.ts']],
+    ['deno', ['run', '--env-file=/tmp/.env', '/opt/mcp/bin/s.ts']],
+    ['tsx', ['-e', '1']],
+    ['ts-node', ['--eval', '1']],
+    ['zx', ['--eval', '1']],
   ])('refuses %s %j', (name, args) => {
     const issues = interp(name, args);
     expect(issues.length).toBeGreaterThan(0);
@@ -486,8 +569,13 @@ describe('symlinks and real paths', () => {
   symlinkSync(bin, join(root, 'bin-link'));
   afterAll(() => rmSync(root, { recursive: true, force: true }));
 
+  // The temporary directory is writable: `require` mode is exercised with a read-only view here and
+  // with the real probe in the dedicated test below.
   const run = (command: string, args: string[], realpath: StdioCheckOptions['realpath']) =>
-    checkStdioConfig({ command, args }, { allowlist: allow, realpath: realpath! });
+    checkStdioConfig(
+      { command, args },
+      { allowlist: allow, realpath: realpath!, writable: () => false },
+    );
 
   it('accepts a file and a symlink that stays inside the allowlist', () => {
     expect(run(join(bin, 'ok-server'), [], 'require')).toEqual([]);
@@ -535,6 +623,42 @@ describe('symlinks and real paths', () => {
 
   it('skip mode does not look at the file system (the control node cannot see node images)', () => {
     expect(run(join(bin, 'innocent-shell'), [], 'skip')).toEqual([]);
+  });
+
+  it('require mode refuses a binary that the node could replace (writable file or directory)', () => {
+    const issues = checkStdioConfig(
+      { command: join(bin, 'ok-server') },
+      { allowlist: allow, realpath: 'require' },
+    );
+    expect(issues.map((i) => i.message).join('\n')).toMatch(/writable by the run node/);
+    // a system file in a directory the user cannot write passes the probe (root can write it)
+    if (process.getuid?.() !== 0)
+      expect(
+        checkStdioConfig(
+          { command: '/bin/true' },
+          { allowlist: ['/bin/true', realpathSync('/bin/true')], realpath: 'require' },
+        )
+          .map((i) => i.message)
+          .join(),
+      ).not.toMatch(/writable/);
+  });
+
+  it('pins the program file of an interpreter through symlinks as well', () => {
+    const node = join(bin, 'innocent-node');
+    const pin = (program: string) =>
+      checkStdioConfig(
+        { command: node, args: [program] },
+        {
+          allowlist: [...allow, realpathSync(process.execPath)],
+          realpath: 'require',
+          writable: () => false,
+        },
+      ).map((i) => i.message);
+    expect(pin(join(bin, 'ok-server'))).toEqual([]);
+    expect(pin(join(bin, 'escape')).join('\n')).toMatch(
+      /real path .* of program file is not in OAX_MCP_STDIO_COMMANDS/,
+    );
+    expect(pin(join(bin, 'not-there')).join()).toMatch(/does not exist/);
   });
 
   it('uses the injected resolver (run node tests)', () => {

@@ -97,6 +97,74 @@ const WRAPPERS = [
   'cpio',
   'rsync',
   'busctl',
+  // init and privilege wrappers common in container images: they exec their arguments
+  'tini',
+  'dumb-init',
+  'catatonit',
+  'gosu',
+  'su-exec',
+  'setuidgid',
+  'chpst',
+  'envdir',
+  'envuidgid',
+  'softlimit',
+  'capsh',
+  'prlimit',
+  'unbuffer',
+  'firejail',
+  'bwrap',
+  'proot',
+  'fakeroot',
+  'fakechroot',
+  'faketime',
+  'perf',
+  'torsocks',
+  'proxychains',
+  'xvfb-run',
+  'ssh-agent',
+  'pkexec',
+  'sg',
+  'newgrp',
+  'start-stop-daemon',
+  'supervisord',
+  // process runners that start commands given as arguments or read from the working directory
+  'cross-env',
+  'dotenv',
+  'concurrently',
+  'npm-run-all',
+  'run-s',
+  'run-p',
+  'watchexec',
+  'entr',
+  'nodemon',
+  'pm2',
+  'forever',
+  'direnv',
+  'mise',
+  'asdf',
+  'volta',
+  'fnm',
+  'nvm',
+  'pyenv',
+  'rbenv',
+  'just',
+  'task',
+  'ninja',
+  'cmake',
+  'rake',
+  'gulp',
+  'grunt',
+  'ip',
+  // database shells and calculators with a shell escape or an evaluating flag
+  'sqlite3',
+  'duckdb',
+  'psql',
+  'mysql',
+  'mariadb',
+  'mongosh',
+  'mongo',
+  'redis-cli',
+  'dc',
   'gcc',
   'cc',
   'g++',
@@ -181,6 +249,8 @@ const INSTALLERS = [
   'luarocks',
   'nuget',
   'npm-cli',
+  // installs missing packages at run time by default (auto-install) and loads bunfig.toml
+  'bun',
 ];
 /** Container and cluster tools, version control. */
 const PLATFORM_TOOLS = [
@@ -227,6 +297,24 @@ const PROGRAM_IN_ARGV = [
   'scala',
   'kotlinc',
   'kotlin',
+  'r',
+  'octave',
+  'erl',
+  'escript',
+  'elixir',
+  'iex',
+  'ghci',
+  'sbcl',
+  'clisp',
+  'ocaml',
+  'utop',
+  'scheme',
+  'chez',
+  'nu',
+  'xonsh',
+  'elvish',
+  'osh',
+  'ysh',
 ];
 
 const FORBIDDEN = new Map<string, string>();
@@ -254,11 +342,40 @@ export interface InterpreterRule {
   urls?: boolean;
   /** Python `-m` modules that install packages or run an interactive/debug facility. */
   modules?: string[];
+  /**
+   * What may stand before the program file (ADR 0016 S0, strict default): the interpreter must run
+   * a file that is itself allowlisted, so only options that cannot consume the next argument are
+   * accepted in front of it. Long options in the `--name=value` form are always accepted there
+   * (the deny rules above still apply to them).
+   */
+  before?: {
+    /** Options accepted as the whole argument. */
+    flags?: string[];
+    /** Options accepted when the argument starts with one of these (`--allow-` of deno). */
+    flagPrefixes?: string[];
+    /** Options whose value must be attached (`-Xmx64m`, `-Dk=v`, `-Wignore`). */
+    attached?: string[];
+    /** A short-option cluster made only of these letters (`-uB` for python). */
+    cluster?: string;
+    /** Leading sub-commands (`deno run`). */
+    subcommands?: string[];
+    /** The option that names the program file (`java -jar <file>`); required when set. */
+    programFlag?: string;
+  };
 }
 
 const NODE_RULE: InterpreterRule = {
-  short: 'epr',
+  short: 'epri',
   long: [
+    'interactive',
+    'openssl-config',
+    'snapshot-blob',
+    'build-snapshot*',
+    'experimental-config-file',
+    'experimental-default-config-file',
+    'experimental-sea-config',
+    'redirect-warnings',
+    'tls-keylog',
     'eval',
     'print',
     'require',
@@ -276,41 +393,41 @@ const NODE_RULE: InterpreterRule = {
     'experimental-default-type',
     'experimental-network-imports',
   ],
+  before: {
+    flags: [
+      '--enable-source-maps',
+      '--no-warnings',
+      '--no-deprecation',
+      '--trace-warnings',
+      '--trace-deprecation',
+      '--trace-uncaught',
+      '--throw-deprecation',
+      '--pending-deprecation',
+      '--experimental-strip-types',
+      '--no-experimental-strip-types',
+      '--experimental-transform-types',
+      '--expose-gc',
+      '--frozen-intrinsics',
+      '--use-openssl-ca',
+      '--use-bundled-ca',
+      '--abort-on-uncaught-exception',
+      '--no-addons',
+      '--disallow-code-generation-from-strings',
+      '--permission',
+      '--experimental-permission',
+    ],
+  },
 };
+/** Python: only flag clusters without a value, and `-W`/`-X` with an attached value. */
+const PYTHON_BEFORE: InterpreterRule['before'] = { cluster: 'uBEIsSOPqbR', attached: ['-W', '-X'] };
 const INTERPRETERS = new Map<string, InterpreterRule>([
   ['node', NODE_RULE],
   ['nodejs', NODE_RULE],
   [
-    'bun',
-    {
-      ...NODE_RULE,
-      words: [
-        'x',
-        'add',
-        'install',
-        'i',
-        'create',
-        'pm',
-        'upgrade',
-        'repl',
-        'exec',
-        'init',
-        'link',
-        'update',
-        'remove',
-        'rm',
-        'outdated',
-        'publish',
-        'patch',
-      ],
-      urls: true,
-    },
-  ],
-  [
     'deno',
     {
       short: 'er',
-      long: ['eval', 'import-map', 'config', 'inspect*', 'unstable*'],
+      long: ['eval', 'import-map', 'config', 'inspect*', 'unstable*', 'preload', 'env-file', 'env'],
       words: [
         'eval',
         'repl',
@@ -329,14 +446,35 @@ const INTERPRETERS = new Map<string, InterpreterRule>([
         'outdated',
         'update',
         'cache',
+        'test',
+        'bench',
       ],
       urls: true,
+      before: {
+        subcommands: ['run'],
+        flags: [
+          '-A',
+          '-q',
+          '--quiet',
+          '--no-prompt',
+          '--no-config',
+          '--no-remote',
+          '--no-npm',
+          '--cached-only',
+          '--frozen',
+          '--no-lock',
+          '--check',
+          '--no-check',
+        ],
+        flagPrefixes: ['--allow-', '--deny-'],
+      },
     },
   ],
   [
     'python',
     {
       short: 'c',
+      before: PYTHON_BEFORE,
       modules: [
         'pip',
         'ensurepip',
@@ -370,13 +508,38 @@ const INTERPRETERS = new Map<string, InterpreterRule>([
   ],
   [
     'pypy',
-    { short: 'c', modules: ['pip', 'ensurepip', 'venv', 'virtualenv', 'code', 'pdb', 'runpy'] },
+    {
+      short: 'c',
+      modules: ['pip', 'ensurepip', 'venv', 'virtualenv', 'code', 'pdb', 'runpy'],
+      before: PYTHON_BEFORE,
+    },
   ],
-  ['perl', { short: 'eEMmxIdD' }],
-  ['ruby', { short: 'erIx' }],
-  ['php', { short: 'rRBEFaSdn' }],
-  ['lua', { short: 'el' }],
-  ['luajit', { short: 'el' }],
+  ['perl', { short: 'eEMmxIdDS', before: { cluster: 'wWXTt' } }],
+  [
+    'ruby',
+    { short: 'erIxSC', before: { cluster: 'wv', attached: ['-W'], flags: ['--jit', '--yjit'] } },
+  ],
+  [
+    'php',
+    {
+      short: 'rRBEFaSdncz',
+      long: [
+        'php-ini',
+        'define',
+        'zend-extension',
+        'run',
+        'process-begin',
+        'process-code',
+        'process-end',
+        'process-file',
+        'server',
+        'docroot',
+      ],
+      before: { flags: ['-q'] },
+    },
+  ],
+  ['lua', { short: 'eli', before: { cluster: 'WE' } }],
+  ['luajit', { short: 'eli', before: { cluster: 'WE' } }],
   [
     'java',
     {
@@ -392,8 +555,38 @@ const INTERPRETERS = new Map<string, InterpreterRule>([
         '-XX:OnOutOfMemoryError',
         '-XX:Flags',
         '-XX:VMOptionsFile',
+        '-XX:SharedArchiveFile',
+        '-XX:+AutoCreateSharedArchive',
+        '-XX:ArchiveClassesAtExit',
+        '-Djava.system.class.loader',
+        '-Djava.security.manager',
+        '-Djava.class.path',
+        '--class-path=',
+        '--module-path=',
+        '--upgrade-module-path=',
+        '--patch-module=',
+        '--add-modules=',
+        '--module=',
+        '--source=',
+        '-splash:',
         '@',
       ],
+      before: {
+        flags: [
+          '-ea',
+          '-da',
+          '-esa',
+          '-dsa',
+          '-server',
+          '-client',
+          '-enableassertions',
+          '-disableassertions',
+          '--enable-preview',
+          '-showversion',
+        ],
+        attached: ['-X', '-D', '-verbose:'],
+        programFlag: '-jar',
+      },
     },
   ],
   [
@@ -416,9 +609,15 @@ const INTERPRETERS = new Map<string, InterpreterRule>([
         'install',
         'pack',
         'test',
+        'exec',
       ],
+      before: {},
     },
   ],
+  // TypeScript and script runners on top of node: same flags, plus their own sub-commands.
+  ...(['tsx', 'ts-node', 'ts-node-esm', 'esno', 'esr', 'vite-node', 'jiti', 'zx'] as const).map(
+    (n): [string, InterpreterRule] => [n, { ...NODE_RULE, words: ['watch', 'repl', 'eval'] }],
+  ),
 ]);
 
 const WINDOWS_SUFFIX = /\.(?:exe|cmd|bat|com|ps1)$/u;
@@ -435,7 +634,12 @@ function programNames(file: string): string[] {
 export function forbiddenProgram(file: string): string | null {
   const base = path.basename(file).toLowerCase();
   // The dynamic loader (`ld-linux-x86-64.so.2 /bin/sh`) executes any program given as argument.
-  if (/^ld(?:[-.][a-z0-9_.+-]*)?\.so(?:\.\d+)*$/u.test(base) || /^ld[-.]linux/u.test(base))
+  // musl's libc (`libc.musl-x86_64.so.1`) is its loader too and runs a program given as argument.
+  if (
+    /^ld(?:[-.][a-z0-9_.+-]*)?\.so(?:\.\d+)*$/u.test(base) ||
+    /^ld[-.]linux/u.test(base) ||
+    /^libc\.musl/u.test(base)
+  )
     return 'the dynamic loader, which executes any program given in its arguments';
   for (const n of programNames(file)) {
     const why = FORBIDDEN.get(n);
@@ -469,8 +673,10 @@ export function interpreterArgIssues(rule: InterpreterRule, args: readonly strin
       out.push(`args.${i}: "-" reads the program from standard input`);
       continue;
     }
-    if (rule.urls && /^[a-z][a-z0-9+.-]*:\/\//iu.test(a))
-      out.push(`args.${i}: the interpreter would fetch its program from a URL`);
+    if (rule.urls && !a.startsWith('-') && /^[a-z][a-z0-9+.-]*:/iu.test(a))
+      out.push(
+        `args.${i}: the interpreter would fetch or evaluate its program from a URL or specifier (https:, npm:, jsr:, data:)`,
+      );
     if (rule.words?.includes(a))
       out.push(`args.${i}: sub-command "${a}" installs or evaluates code`);
     if (rule.prefixes?.some((p) => a.startsWith(p)))
@@ -494,4 +700,43 @@ export function interpreterArgIssues(rule: InterpreterRule, args: readonly strin
     }
   }
   return out;
+}
+
+/**
+ * Where the program file of an interpreter command stands in `args` (ADR 0016 S0, strict
+ * default). Returns the index of the program argument, or a message when something other than an
+ * option without a separate value stands in front of it: an option that consumes the next
+ * argument (`python -W x /allowed.py /tmp/evil.py`) could otherwise make the allowlisted file a
+ * mere option value while the interpreter runs another file.
+ */
+export function interpreterProgram(
+  rule: InterpreterRule,
+  args: readonly string[],
+): { index: number; message?: string } {
+  const b = rule.before ?? {};
+  let i = 0;
+  if (b.subcommands && args[0] !== undefined && b.subcommands.includes(args[0])) i = 1;
+  for (; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--') return { index: i + 1 };
+    if (b.programFlag && a === b.programFlag) return { index: i + 1 };
+    if (!a.startsWith('-') || a === '-') break;
+    if (a.startsWith('--') && a.includes('=')) continue;
+    if (b.flags?.includes(a)) continue;
+    if (b.flagPrefixes?.some((p) => a.startsWith(p))) continue;
+    if (b.attached?.some((p) => a.startsWith(p) && a.length > p.length)) continue;
+    if (
+      b.cluster &&
+      /^-[A-Za-z]+$/u.test(a) &&
+      [...a.slice(1)].every((c) => b.cluster!.includes(c))
+    )
+      continue;
+    return {
+      index: i,
+      message: `option "${a}" may not stand before the program file (only options that cannot take the next argument as their value, and "--name=value")`,
+    };
+  }
+  if (b.programFlag)
+    return { index: i, message: `the program file must be named with "${b.programFlag} <file>"` };
+  return { index: i };
 }

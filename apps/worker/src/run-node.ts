@@ -57,6 +57,8 @@ export interface RunNodeOptions {
   inMemoryMcp?: InMemoryTransportFactory;
   /** Injectable for tests: resolves the real path of a stdio command (`null` = missing). */
   resolveStdioPath?: (path: string) => string | null;
+  /** Injectable for tests: whether this process could change a stdio binary or its directory. */
+  stdioWritable?: (path: string) => boolean;
   /** Providers usable without the control node (unit tests only); default none: all calls are proxied. */
   localProviders?: ModelProvider[];
   /** Replaces the harness adapter (tests use fakes; the node binary never sets it). */
@@ -199,6 +201,7 @@ export function mergeCredentials(
 export function stdioGuardFor(
   handover: Pick<StepHandover, 'mcp' | 'stdio'>,
   resolve?: (p: string) => string | null,
+  writable?: (p: string) => boolean,
 ): (cfg: Extract<McpServerConfig, { transport: 'stdio' }>) => void {
   const tenant = new Set(handover.stdio?.tenantServers ?? []);
   const stored = new Map(handover.mcp.map((c) => [c.name, c]));
@@ -219,6 +222,7 @@ export function stdioGuardFor(
       allowlist: handover.stdio?.allowlist ?? [],
       realpath: 'require',
       ...(resolve ? { resolve } : {}),
+      ...(writable ? { writable } : {}),
     });
     if (issues.length > 0) throw stdioError(cfg.name, issues);
   };
@@ -472,7 +476,7 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
         ...Object.values(c.headers ?? {}),
       ]),
     ]);
-    const stdioGuard = stdioGuardFor(handover, opts.resolveStdioPath);
+    const stdioGuard = stdioGuardFor(handover, opts.resolveStdioPath, opts.stdioWritable);
     // Fail before any server starts, with the offending connection named.
     for (const cfg of handover.mcp) if (cfg.transport === 'stdio') stdioGuard(cfg);
     tools = new ToolGateway(

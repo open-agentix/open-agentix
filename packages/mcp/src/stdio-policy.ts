@@ -1,7 +1,13 @@
-import { realpathSync } from 'node:fs';
+import { accessSync, constants, realpathSync } from 'node:fs';
 import { posix as path } from 'node:path';
 import { OaxError } from '@openagentix/core';
-import { interpreterArgIssues, interpreterRule, forbiddenProgram } from './stdio-programs.js';
+import {
+  interpreterArgIssues,
+  interpreterProgram,
+  interpreterRule,
+  forbiddenProgram,
+  type InterpreterRule,
+} from './stdio-programs.js';
 import { isReservedStdioEnv } from './stdio-env.js';
 
 /**
@@ -86,6 +92,15 @@ const BROAD_PREFIXES = new Set([
   '/work',
 ]);
 
+/**
+ * Directories that are temporary, virtual or written by runs: no entry may lie in or below them
+ * (not even a single file), because a run node or a step can create or replace files there (the
+ * node's workspace is `/tmp/workspace`, filled from the tenant's repository).
+ */
+const WRITABLE_ROOTS = ['/tmp', '/var/tmp', '/dev', '/proc', '/sys', '/run', '/workspace', '/work'];
+const underWritableRoot = (p: string): boolean =>
+  WRITABLE_ROOTS.some((r) => p === r || p.startsWith(`${r}/`));
+
 /** Control characters (and optionally whitespace) have no place in a path or an allowlist entry. */
 function hasControlOrSpace(s: string, spaces = true): boolean {
   for (const ch of s) {
@@ -122,6 +137,10 @@ export function parseStdioAllowlist(raw: string | undefined): string[] {
         'the directory is too broad for a prefix entry; list the binaries or a dedicated directory',
       );
     if (!wildcard && target === '/') bad('is not a file');
+    if (underWritableRoot(target))
+      bad(
+        'lies in a temporary, virtual or run-writable directory (/tmp, /dev, /proc, /workspace, ...)',
+      );
     out.push(wildcard ? `${target}/*` : target);
   }
   return out;
@@ -149,6 +168,23 @@ export interface StdioCheckOptions {
   realpath?: 'skip' | 'if-exists' | 'require';
   /** Test seam; defaults to `fs.realpathSync`. Returns `null` when the file does not exist. */
   resolve?: (p: string) => string | null;
+  /**
+   * Test seam for `require` mode: `true` when this process could change the file or its directory
+   * (replace the binary between the check and the start). Defaults to an `access(W_OK)` probe.
+   */
+  writable?: (p: string) => boolean;
+}
+
+function defaultWritable(p: string): boolean {
+  const w = (x: string) => {
+    try {
+      accessSync(x, constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return w(p) || w(path.dirname(p));
 }
 
 function defaultResolve(p: string): string | null {
@@ -199,41 +235,102 @@ function commandIssues(cfg: StdioFields, opts: StdioCheckOptions): StdioIssue[] 
   });
 
   // What the literal path is, then what it resolves to.
-  const files: { file: string; label: string }[] = [{ file: command, label: 'command' }];
-  if (opts.realpath && opts.realpath !== 'skip') {
-    const real = (opts.resolve ?? defaultResolve)(command);
-    if (real === null) {
-      if (opts.realpath === 'require') cmd(`command "${command}" does not exist in this image`);
-    } else if (real !== command) {
-      files.push({ file: real, label: `real path "${real}" of command` });
-    }
-  }
+  const files = resolveFile(command, 'command', opts, cmd);
+  const rules = new Set<InterpreterRule>();
   for (const { file, label } of files) {
     const why = forbiddenProgram(file);
     if (why) cmd(`${label} "${file}" is ${why}; it is refused even if allowlisted`);
     const rule = interpreterRule(file);
-    if (rule)
+    if (rule) {
+      rules.add(rule);
       for (const m of interpreterArgIssues(rule, args))
         cmd(
           `${label} "${file}" is an interpreter: ${m.slice(m.indexOf(': ') + 2)}`,
           m.slice(0, m.indexOf(':')),
         );
+    }
   }
 
   // Allowlist: the literal path, and a resolved path must be listed too (symlink escape).
   if (opts.allowlist.length === 0) {
     cmd('no stdio commands are allowed on this platform (set OAX_MCP_STDIO_COMMANDS)');
-  } else {
-    for (const { file, label } of files)
+    return issues;
+  }
+  for (const { file, label } of files)
+    if (!matchesStdioAllowlist(file, opts.allowlist))
+      cmd(
+        label === 'command'
+          ? `command "${file}" is not in OAX_MCP_STDIO_COMMANDS`
+          : `${label} is not in OAX_MCP_STDIO_COMMANDS (a symlink may not lead out of the allowlist)`,
+      );
+
+  // An interpreter runs a program file, and that file is code as much as the interpreter is: it
+  // must be an absolute path in the allowlist too (strict default), so a tenant cannot point an
+  // allowlisted `node` or `python` at a file of the workspace or a module on a search path.
+  for (const rule of rules) {
+    const at = interpreterProgram(rule, args);
+    const p = `args.${at.index}`;
+    if (at.message) {
+      cmd(`command "${command}" is an interpreter: ${at.message}`, p);
+      continue;
+    }
+    const program = args[at.index];
+    if (program === undefined) {
+      cmd(
+        `command "${command}" is an interpreter and must run a program file listed in OAX_MCP_STDIO_COMMANDS`,
+        'args',
+      );
+      continue;
+    }
+    if (hasControlOrSpace(program, false) || !isNormalizedAbsolute(program)) {
+      cmd(
+        `the program file of interpreter "${command}" must be a normalized absolute path listed in OAX_MCP_STDIO_COMMANDS`,
+        p,
+      );
+      continue;
+    }
+    const programFiles = resolveFile(program, 'program file', opts, (m) => cmd(m, p));
+    for (const { file, label } of programFiles)
       if (!matchesStdioAllowlist(file, opts.allowlist))
         cmd(
-          label === 'command'
-            ? `command "${file}" is not in OAX_MCP_STDIO_COMMANDS`
+          label === 'program file'
+            ? `the program file "${file}" of interpreter "${command}" is not in OAX_MCP_STDIO_COMMANDS`
             : `${label} is not in OAX_MCP_STDIO_COMMANDS (a symlink may not lead out of the allowlist)`,
+          p,
         );
   }
 
   return issues;
+}
+
+/**
+ * The literal path and, unless `skip`, its real path (when it differs). In `require` mode the file
+ * must exist and neither it nor its directory may be writable by this process: a binary the run
+ * can replace between this check and the start is not the reviewed binary.
+ */
+function resolveFile(
+  file: string,
+  what: string,
+  opts: StdioCheckOptions,
+  report: (message: string) => void,
+): { file: string; label: string }[] {
+  const out = [{ file, label: what }];
+  if (!opts.realpath || opts.realpath === 'skip') return out;
+  const real = (opts.resolve ?? defaultResolve)(file);
+  if (real === null) {
+    if (opts.realpath === 'require') report(`${what} "${file}" does not exist in this image`);
+    return out;
+  }
+  if (real !== file) out.push({ file: real, label: `real path "${real}" of ${what}` });
+  if (opts.realpath === 'require') {
+    const writable = opts.writable ?? defaultWritable;
+    for (const f of new Set([file, real]))
+      if (writable(f))
+        report(
+          `${what} "${f}" or its directory is writable by the run node; only read-only, reviewed files may be started`,
+        );
+  }
+  return out;
 }
 
 function envIssues(cfg: StdioFields): StdioIssue[] {

@@ -1,5 +1,4 @@
 import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -11,7 +10,10 @@ import { Worker, workerStdioGuard } from '../src/index.js';
  * not even for a version that was published before the rule existed; platform stdio servers keep
  * working in-process.
  */
-const dir = realpathSync(mkdtempSync(join(tmpdir(), 'oax-stdio-worker-')));
+// Not below the temporary directory: OAX_MCP_STDIO_COMMANDS refuses entries in /tmp and friends.
+const dir = realpathSync(
+  mkdtempSync(join(fileURLToPath(new URL('.', import.meta.url)), '.oax-stdio-worker-')),
+);
 const marker = join(dir, 'started');
 const script = join(dir, 'tenant-server');
 const fixture = fileURLToPath(

@@ -474,9 +474,15 @@ describe('tenant stdio servers in a run node (ADR 0016 S0)', () => {
     return c;
   };
 
-  it('starts an allowlisted command (real path listed) and the step succeeds', async () => {
-    const { calls, fetchImpl } = withStdio(node, [node]);
-    expect(await runNode(base(fetchImpl))).toBe(0);
+  // The checkout is writable by the test user; the image of a real node is read-only.
+  const readOnly = (fetchImpl: Parameters<typeof base>[0]) => ({
+    ...base(fetchImpl),
+    stdioWritable: () => false,
+  });
+
+  it('starts an allowlisted command running an allowlisted program file, and the step succeeds', async () => {
+    const { calls, fetchImpl } = withStdio(node, [node, realpathSync(fixture)]);
+    expect(await runNode(readOnly(fetchImpl))).toBe(0);
     expect(results(calls)[0]).toMatchObject({ format: 'json', content: '{"ok":true}' });
     expect(results(calls)[0]!.failure).toBeUndefined();
     // the server really started and answered the tool call
@@ -487,17 +493,27 @@ describe('tenant stdio servers in a run node (ADR 0016 S0)', () => {
   it.each([
     ['a command that is not allowlisted', node, ['/opt/mcp/bin/*'], undefined],
     ['an interpreter with an inline program', node, [node], ['-e', 'process.exit(0)']],
+    ['an interpreter running a program file that is not allowlisted', node, [node], undefined],
   ])(
     'fails the step with mcp_command_forbidden for %s, and starts nothing',
     async (_l, command, allow, args) => {
       const { calls, fetchImpl } = withStdio(command, allow, args);
-      expect(await runNode(base(fetchImpl))).toBe(1);
+      expect(await runNode(readOnly(fetchImpl))).toBe(1);
       expect(results(calls)[0]).toMatchObject({
         failure: { status: 'failed', code: 'mcp_command_forbidden' },
       });
       expect(calls.some((c) => c.path.endsWith('/model'))).toBe(false);
     },
   );
+
+  it('refuses binaries the node could replace between the check and the start (writable)', async () => {
+    // default probe: the checkout (fixture and its directory) is writable by the test user
+    const { calls, fetchImpl } = withStdio(node, [node, realpathSync(fixture)]);
+    expect(await runNode(base(fetchImpl))).toBe(1);
+    expect(results(calls)[0]!.failure).toMatchObject({ code: 'mcp_command_forbidden' });
+    expect(JSON.stringify(results(calls)[0])).toContain('writable by the run node');
+    expect(calls.some((c) => c.path.endsWith('/model'))).toBe(false);
+  });
 
   it('refuses a command that does not exist in the image of the node', async () => {
     const { calls, fetchImpl } = withStdio('/opt/mcp/bin/missing', ['/opt/mcp/bin/*']);
@@ -512,7 +528,11 @@ describe('tenant stdio servers in a run node (ADR 0016 S0)', () => {
       stdio: { tenantServers: ['srv'], allowlist: ['/opt/mcp/bin/*'] },
     };
     const guard = (real: string) => () =>
-      stdioGuardFor(handover, () => real)(handover.mcp[0] as never);
+      stdioGuardFor(
+        handover,
+        () => real,
+        () => false,
+      )(handover.mcp[0] as never);
     expect(guard('/opt/mcp/bin/innocent')).not.toThrow();
     expect(guard('/bin/bash')).toThrow(/refused even if allowlisted/);
     expect(guard('/usr/local/bin/other')).toThrow(/symlink may not lead out/);
