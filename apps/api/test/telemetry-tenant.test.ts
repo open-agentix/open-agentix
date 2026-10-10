@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { trace } from '@opentelemetry/api';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import {
   ContextGuard,
@@ -10,7 +11,7 @@ import {
 import type { OutboundContext, OutboundDispatcher } from '@openagentix/providers';
 import { createOutboundDispatcher } from '@openagentix/providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { notifyTelemetryConnectionChanged } from '../src/telemetry-connection.js';
+import { notifyTelemetryConnectionChanged, optInFingerprint } from '../src/telemetry-connection.js';
 import {
   putCapturedContent,
   resetCapturedContent,
@@ -20,6 +21,7 @@ import { loadConfig } from '../src/config.js';
 import {
   RunIdGenerator,
   configureTelemetryRuntime,
+  telemetryRuntime,
   initTelemetry,
   resetTelemetryRuntime,
   startGuardedSpan,
@@ -28,6 +30,7 @@ import {
 import {
   TenantExportRouter,
   finalizeContent,
+  heldContentBytesForTest,
   type TenantExporterSpec,
 } from '../src/telemetry-tenant.js';
 import type { TelemetryStats } from '../src/telemetry-runtime.js';
@@ -37,6 +40,8 @@ import type { TelemetryStats } from '../src/telemetry-runtime.js';
  * Everything is real (processors, exporter, serialiser, sanitiser) except the network: a recording
  * dispatcher stands in for the outbound dispatcher and receives the OTLP/JSON body.
  */
+const RESOURCE_CANARY = 'CLUSTER-CANARY-OPERATOR-ONLY';
+const OPERATOR_SECRET = 'operator-proxy-secret-0123456789abcdef';
 const CANARY_TEXT = 'CANARY-CONTENT-5c1e';
 const HEADER_SECRET = 'Bearer-collector-secret-0123456789';
 const INPUT = JSON.stringify([{ role: 'user', parts: [{ type: 'text', content: CANARY_TEXT }] }]);
@@ -88,6 +93,26 @@ function recordingDispatcher(opts: { denyPlan?: boolean; failFetch?: boolean } =
   return { dispatcher, sent, planned };
 }
 
+/** The opt-in terms the proxy records for these exporters when it captures content. */
+const termsOf = (specs: TenantExporterSpec[]) =>
+  new Map(
+    specs.map((s) => [
+      s.connectionId,
+      optInFingerprint({
+        url: s.url,
+        protocol: s.protocol,
+        headersSecret: s.headersSecret,
+        region: s.region,
+        clearance: s.clearance,
+      }),
+    ]),
+  );
+const bigContent = (chars: number) => ({
+  'gen_ai.input.messages': JSON.stringify([
+    { role: 'user', parts: [{ type: 'text', content: 'x'.repeat(chars) }] },
+  ]),
+});
+
 let specSeq = 0;
 const spec = (tenantId: string, over: Partial<TenantExporterSpec> = {}): TenantExporterSpec => ({
   connectionId: randomUUID(),
@@ -132,7 +157,7 @@ interface Rig {
   /** Ends a span of the tenant (a `chat` span when `chat` is given), content parked before. */
   emit(
     tenantId: string | undefined,
-    o?: { chat?: { classification: Classification; optIns?: string[] } },
+    o?: { chat?: { classification: Classification; optIns?: string[]; size?: number } },
   ): string;
   flush(): Promise<void>;
   stop(): Promise<void>;
@@ -142,6 +167,7 @@ function rig(
   over: {
     config?: Partial<ConstructorParameters<typeof TenantExportRouter>[0]['config']>;
     dispatcher?: ReturnType<typeof recordingDispatcher>;
+    budget?: number;
     source?: (tenantId: string) => Promise<TenantExporterSpec[]>;
   } = {},
 ): Rig {
@@ -150,6 +176,7 @@ function rig(
   configureTelemetryRuntime({ stats });
   const router = new TenantExportRouter({
     dispatcher: rec.dispatcher,
+    ...(over.budget ? { contentHeldMaxBytes: over.budget } : {}),
     config: {
       content: 'redacted',
       tenantExportersMax: 8,
@@ -163,6 +190,10 @@ function rig(
   router.attach(over.source ?? (async (tenantId) => specs.get(tenantId) ?? []));
   const provider = new NodeTracerProvider({
     idGenerator: new RunIdGenerator(),
+    resource: resourceFromAttributes({
+      'service.name': 'openagentix-api',
+      'deployment.cluster': RESOURCE_CANARY,
+    }),
     spanProcessors: [router],
   });
   provider.register({ propagator: null });
@@ -192,7 +223,10 @@ function rig(
           classification: o.chat.classification,
           attributes: { 'gen_ai.input.messages': INPUT, 'gen_ai.output.messages': OUTPUT },
           truncated: false,
-          optIns: new Set(o.chat.optIns ?? specs.get(tenantId)?.map((s) => s.connectionId) ?? []),
+          optIns: o.chat.optIns
+            ? new Map(o.chat.optIns.map((id) => [id, 'x']))
+            : termsOf(specs.get(tenantId) ?? []),
+          ...(o.chat.size ? { attributes: bigContent(o.chat.size) } : {}),
           at: Date.now(),
         });
       open.end();
@@ -306,6 +340,28 @@ describe('tenant scope', () => {
     } as never);
     expect(pending(bare)).toBe(0);
     await bare.shutdown();
+  });
+});
+
+describe('what the operator keeps to itself', () => {
+  it('operator secrets, exception text and the operator resource never reach a tenant destination', async () => {
+    r = rig();
+    // The operator's guard knows its own secrets (proxy auth, certificate keys, exporter headers).
+    telemetryRuntime().guard.addSecret(OPERATOR_SECRET);
+    configureTelemetryRuntime({ exceptionDetail: 'guarded' });
+    r.specs.set(TENANT_A, [spec(TENANT_A, { headers: { Authorization: HEADER_SECRET } })]);
+    const open = startGuardedSpan(
+      { name: 'oax.run', kind: 'run', newTrace: true },
+      { 'oax.tenant.id': TENANT_A, 'oax.worker': `w-${OPERATOR_SECRET}` },
+    );
+    open.end(new Error(`connect ECONNREFUSED db.internal.example:5432 ${OPERATOR_SECRET}`));
+    await r.flush();
+    expect(r.sent).toHaveLength(1);
+    const text = r.sent[0]!.text;
+    for (const never of [OPERATOR_SECRET, 'db.internal.example', 'ECONNREFUSED', RESOURCE_CANARY])
+      expect(text, never).not.toContain(never);
+    expect(text).toContain('openagentix-api');
+    expect(text).not.toContain('exception.message');
   });
 });
 
@@ -473,6 +529,49 @@ describe('content gates', () => {
     expect(r.calls.content).toEqual(['dropped_opt_out']);
   });
 
+  it.each([
+    ['another endpoint', { url: 'https://moved.tenant.example/v1/traces' }],
+    ['another credential reference', { headersSecret: 'default.other' }],
+    ['a lower clearance', { clearance: 'public' as const }],
+    ['another region', { region: 'us' }],
+  ])('content captured under new terms is not sent by a stale exporter: %s', async (_n, change) => {
+    r = rig();
+    const e = spec(TENANT_A, { content: true, headersSecret: 'default.otlp', region: 'eu' });
+    r.specs.set(TENANT_A, [e]);
+    // This process built its exporter for the terms in `e` ...
+    r.emit(TENANT_A);
+    await r.flush();
+    r.sent.length = 0;
+    // ... the connection changed (another process wrote it, this one has not refreshed yet) and the
+    // model proxy captured content under the new terms.
+    r.specs.set(TENANT_A, [{ ...e, ...change }]);
+    r.emit(TENANT_A, { chat: { classification: 'public' } });
+    await r.flush();
+    expect(r.sent.length).toBeGreaterThan(0);
+    expect(r.sent.map((x) => x.text).join()).not.toContain(CANARY_TEXT);
+    expect(r.calls.content).toEqual(['dropped_opt_out']);
+  });
+
+  it('holds a bounded number of content bytes for queued spans and drops content first', async () => {
+    r = rig({ budget: 100_000 });
+    r.specs.set(TENANT_A, [spec(TENANT_A, { content: true })]);
+    // ~16 KiB counted per span, nothing is exported before the flush: about six fit the budget.
+    for (let i = 0; i < 20; i++)
+      r.emit(TENANT_A, { chat: { classification: 'public', size: 8000 } });
+    await vi.waitFor(() => expect(pending(r.router)).toBe(0));
+    expect(heldContentBytesForTest()).toBeLessThanOrEqual(100_000);
+    expect(heldContentBytesForTest()).toBeGreaterThan(0);
+    expect(r.calls.content.filter((c) => c === 'dropped_budget').length).toBeGreaterThan(10);
+    await r.router.forceFlush();
+    // Every span was exported (the budget drops content, never the span) and the holds are released.
+    expect(allSpans(r.sent)).toHaveLength(20);
+    const withContent = allSpans(r.sent).filter((sp) =>
+      sp.attributes.some((a) => a.key === 'gen_ai.input.messages'),
+    );
+    expect(withContent.length).toBeLessThan(10);
+    expect(heldContentBytesForTest()).toBe(0);
+  });
+
   it('without the operator allow no content is attached, whatever the tenant stored', async () => {
     r = rig({ config: { content: 'off' } });
     r.specs.set(TENANT_A, [spec(TENANT_A, { content: true })]);
@@ -494,7 +593,7 @@ describe('content gates', () => {
       classification: 'public',
       attributes: { 'gen_ai.input.messages': INPUT },
       truncated: false,
-      optIns: new Set(r.specs.get(TENANT_A)!.map((s) => s.connectionId)),
+      optIns: termsOf(r.specs.get(TENANT_A)!),
       at: Date.now(),
     });
     open.end();
@@ -517,6 +616,24 @@ describe('content gates', () => {
     r.emit(TENANT_A, { chat: { classification: 'internal' } });
     await r.flush();
     expect(r.sent).toHaveLength(0);
+  });
+});
+
+describe('lookup backlog', () => {
+  it('one tenant with a slow lookup cannot use up the backlog of the others', async () => {
+    let release!: () => void;
+    const slow = new Promise<TenantExporterSpec[]>((resolve) => (release = () => resolve([])));
+    r = rig({
+      source: async (tenantId) => (tenantId === TENANT_A ? slow : [spec(TENANT_B)]),
+    });
+    for (let i = 0; i < 700; i++) r.emit(TENANT_A);
+    r.emit(TENANT_B);
+    // The lookup of tenant A hangs: its backlog is capped on its own (synchronous, nothing to wait for).
+    expect(r.calls.dropped).toContain('pending_cap');
+    release();
+    await r.flush();
+    expect(r.sent.length).toBeGreaterThan(0);
+    expect(r.sent.every((x) => x.ctx.scope?.tenantId === TENANT_B)).toBe(true);
   });
 });
 
@@ -651,7 +768,7 @@ describe('initTelemetry with tenant exporters', () => {
       classification: 'public',
       attributes: { 'gen_ai.input.messages': INPUT },
       truncated: false,
-      optIns: new Set(),
+      optIns: new Map(),
       at: Date.now(),
     });
     open.end();

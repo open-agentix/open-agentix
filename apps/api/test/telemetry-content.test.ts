@@ -11,7 +11,7 @@ import {
 import type { OutboundDispatcher } from '@openagentix/providers';
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_TENANT_ID, auditLog, connections, runs } from '../src/db/schema.js';
+import { DEFAULT_TENANT_ID, auditLog, connections, runs, tenants } from '../src/db/schema.js';
 import { createTenantExporterSource } from '../src/services/telemetry-exporters.js';
 import { GuardedSpanExporter } from '../src/telemetry-export.js';
 import {
@@ -27,7 +27,13 @@ import {
   FakeUpstream,
   HARNESS_ENV,
   IMAGE,
+  DONE,
+  PLATFORM_ANTHROPIC_KEY,
   PLATFORM_OPENAI_KEY,
+  openaiChunk,
+  openaiUsage,
+  sse,
+  sseResponse,
   postModel,
   publicLookup,
 } from './model-proxy-helpers.js';
@@ -41,12 +47,16 @@ const TOOL_RESULT = 'CANARY-TOOL-RESULT-3a77';
 const TOOL_ARG = 'CANARY-TOOL-ARG-9be1';
 const PII_EMAIL = 'canary.person@example.org';
 const PII_CARD = '4111 1111 1111 1111';
+const THINKING = 'CANARY-THINKING-TEXT-61aa';
+const SIGNATURE = 'CANARY-THINKING-SIGNATURE-0f9e';
+const REDACTED_THINKING = 'CANARY-REDACTED-THINKING-7c3d';
 const PROMPT = 'CANARY-PROMPT-TEXT-d2f4';
 const HEADERS_VALUE = 'Authorization=Bearer-COLLECTOR-SECRET-0123456789';
 
 const secrets = new StaticSecretResolver({
-  otlp: HEADERS_VALUE,
+  'default.otlp': HEADERS_VALUE,
   'platform-openai': PLATFORM_OPENAI_KEY,
+  'platform-anthropic': PLATFORM_ANTHROPIC_KEY,
 });
 const ENV = {
   ...BASE_ENV,
@@ -66,6 +76,16 @@ agents:
     model: sim-1
     instructions: Research.
     runtime: { runner: container }
+  - id: s
+    provider: oai
+    model: gpt-x
+    instructions: Stream.
+    runtime: { runner: container }
+  - id: h
+    provider: claude
+    model: claude-x
+    instructions: Harness.
+    runtime: { runner: container, harness: claude-code }
 ---
 `;
 
@@ -95,6 +115,10 @@ const dispatcher = {
 
 beforeAll(async () => {
   n = await testNode(ENV, { secrets, fetchImpl: up.fetch, hostLookup: publicLookup });
+  await n.ctx.db
+    .update(tenants)
+    .set({ secretRefs: ['default.*'] })
+    .where(eq(tenants.id, DEFAULT_TENANT_ID));
   await n.req({ method: 'POST', url: '/v1/teams', payload: { slug: 'team-ops', name: 'Ops' } });
   const created = await n.req({ method: 'POST', url: '/v1/agents', payload: { source: SOURCE } });
   expect(created.statusCode, created.body).toBe(201);
@@ -137,11 +161,11 @@ const exporter = (config: Record<string, unknown> = {}) =>
     payload: {
       name: `tel-${randomUUID().slice(0, 8)}`,
       kind: 'telemetry',
-      config: { endpoint: 'https://otel.tenant.example', headersSecret: 'otlp', ...config },
+      config: { endpoint: 'https://otel.tenant.example', headersSecret: 'default.otlp', ...config },
     },
   });
 
-async function dispatch() {
+async function dispatch(step: 'a' | 's' | 'h' = 'a') {
   const res = await n.req({
     method: 'POST',
     url: `/v1/agents/${agentId}/runs`,
@@ -168,7 +192,7 @@ async function dispatch() {
     {},
     async () => {
       created = await n.services.runNodes.createSession(runId, 'w1', {
-        agentId: 'a',
+        agentId: step,
         input: { go: true },
         timeoutSeconds: 120,
         runner: 'container',
@@ -323,7 +347,7 @@ describe('content reaches the tenant exporter that opted in, and only it', () =>
       payload: {
         config: {
           endpoint: 'https://otel.tenant.example',
-          headersSecret: 'otlp',
+          headersSecret: 'default.otlp',
           protocol: 'http/json',
           content: 'off',
         },
@@ -350,7 +374,7 @@ describe('content reaches the tenant exporter that opted in, and only it', () =>
       payload: {
         config: {
           endpoint: 'https://otel.tenant.example',
-          headersSecret: 'otlp',
+          headersSecret: 'default.otlp',
           protocol: 'http/json',
           content: 'redacted',
           enabled: false,
@@ -409,6 +433,8 @@ describe('pass-through surface', () => {
           {
             role: 'assistant',
             content: [
+              { type: 'thinking', thinking: THINKING, signature: SIGNATURE },
+              { type: 'redacted_thinking', data: REDACTED_THINKING },
               { type: 'text', text: 'calling a tool' },
               { type: 'tool_use', id: 'toolu_1', name: 'jira_get', input: { q: TOOL_ARG } },
             ],
@@ -423,12 +449,142 @@ describe('pass-through surface', () => {
     expect(res.statusCode, res.body).toBe(200);
     const text = await sentAfterFlush();
     expect(text).toContain('chat sim-1');
-    for (const never of [TOOL_RESULT, TOOL_ARG, PII_EMAIL, 'toolu_1', 'jira_get'])
+    for (const never of [
+      TOOL_RESULT,
+      TOOL_ARG,
+      PII_EMAIL,
+      'toolu_1',
+      'jira_get',
+      THINKING,
+      SIGNATURE,
+      REDACTED_THINKING,
+    ])
       expect(text, never).not.toContain(never);
     const input = decoded(text)['gen_ai.input.messages']!;
     expect(input).toContain(PROMPT);
     expect(input).toContain('calling a tool');
     expect(input).toContain('[pii:email]');
+  });
+});
+
+describe('streaming paths', () => {
+  it('the native event stream captures the assembled answer', async () => {
+    await exporter({ content: 'redacted', protocol: 'http/json' });
+    up.handler = (_c, init) =>
+      sseResponse(
+        up,
+        async function* () {
+          yield openaiChunk({ role: 'assistant', content: '' });
+          yield openaiChunk({ content: 'STREAMED-NATIVE ' });
+          yield openaiChunk({ content: 'answer' }, 'stop');
+          yield openaiUsage(12, 5);
+          yield DONE;
+        },
+        init,
+      );
+    const { runId, created } = await dispatch('s');
+    const res = await n.req({
+      method: 'POST',
+      url: `/v1/worker/runs/${runId}/model`,
+      token: created.token,
+      headers: { accept: 'text/event-stream' },
+      payload: { agentId: 's', request: { model: 'gpt-x', ...request() } },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const text = await sentAfterFlush();
+    const attrs = decoded(text);
+    expect(attrs['gen_ai.output.messages']).toContain('STREAMED-NATIVE answer');
+    expect(attrs['gen_ai.input.messages']).toContain(PROMPT);
+    for (const never of [TOOL_RESULT, TOOL_ARG, PII_EMAIL])
+      expect(text, never).not.toContain(never);
+  });
+
+  it('the pass-through event stream captures it too, without reasoning blocks', async () => {
+    await exporter({ content: 'redacted', protocol: 'http/json' });
+    up.handler = (_c, init) =>
+      sseResponse(
+        up,
+        async function* () {
+          yield sse(
+            {
+              type: 'message_start',
+              message: {
+                id: 'm1',
+                model: 'claude-x',
+                role: 'assistant',
+                usage: { input_tokens: 25, output_tokens: 1 },
+              },
+            },
+            'message_start',
+          );
+          yield sse(
+            { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+            'content_block_start',
+          );
+          yield sse(
+            {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: 'STREAMED-PASS answer' },
+            },
+            'content_block_delta',
+          );
+          yield sse({ type: 'content_block_stop', index: 0 }, 'content_block_stop');
+          yield sse(
+            {
+              type: 'message_delta',
+              delta: { stop_reason: 'end_turn' },
+              usage: { output_tokens: 12 },
+            },
+            'message_delta',
+          );
+          yield sse({ type: 'message_stop' }, 'message_stop');
+        },
+        init,
+      );
+    const { runId, created } = await dispatch('h');
+    const { token, claims } = issueModelToken(
+      RUN_TOKEN_SECRET,
+      {
+        runId,
+        sid: created.sessionId,
+        nodeId: created.nodeId,
+        agentId: 'h',
+        surface: 'harness',
+        harness: 'claude-code',
+        ttlSeconds: 60,
+        notAfterMs: Date.now() + 60_000,
+      },
+      Date.now(),
+    );
+    expect(await n.services.runNodes.recordModelToken(created.sessionId, claims.jti)).toBe(true);
+    const res = await n.req({
+      method: 'POST',
+      url: '/v1/model-proxy/anthropic/v1/messages',
+      token,
+      payload: {
+        model: 'claude-x',
+        max_tokens: 100,
+        stream: true,
+        messages: [
+          { role: 'user', content: PROMPT },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'thinking', thinking: THINKING, signature: SIGNATURE },
+              { type: 'text', text: 'visible' },
+            ],
+          },
+          { role: 'user', content: 'go on' },
+        ],
+      },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const text = await sentAfterFlush();
+    const attrs = decoded(text);
+    expect(attrs['gen_ai.output.messages']).toContain('STREAMED-PASS answer');
+    expect(attrs['gen_ai.input.messages']).toContain('visible');
+    for (const never of [THINKING, SIGNATURE]) expect(text, never).not.toContain(never);
   });
 });
 

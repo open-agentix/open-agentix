@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { CLASSIFICATIONS, normalizeTarget } from '@openagentix/core';
 import { z } from 'zod';
 
@@ -68,4 +69,24 @@ export function notifyTelemetryConnectionChanged(tenantId: string): void {
       // A listener must not break the write that triggered it.
     }
   }
+}
+
+/**
+ * What a content opt-in covers: the destination, the credential reference, the protocol, the region
+ * and the clearance. The model proxy records it when the content is captured and the exporter must
+ * show the same value when it is sent, so a connection that was changed in between (for example in
+ * another process that has not refreshed yet) never receives content captured under the old terms.
+ */
+export function optInFingerprint(c: {
+  url: string;
+  protocol: string;
+  headersSecret?: string | undefined;
+  region?: string | undefined;
+  clearance: string;
+}): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([c.url, c.protocol, c.headersSecret ?? null, c.region ?? null, c.clearance]),
+    )
+    .digest('hex');
 }

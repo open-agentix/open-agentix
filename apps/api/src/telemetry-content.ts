@@ -8,7 +8,11 @@ import {
 import type { Db } from './db/client.js';
 import { connections } from './db/schema.js';
 import type { OtelConfig } from './telemetry-config.js';
-import { TelemetryConnectionConfigSchema } from './telemetry-connection.js';
+import {
+  TelemetryConnectionConfigSchema,
+  optInFingerprint,
+  telemetryTracesUrl,
+} from './telemetry-connection.js';
 import { telemetryRuntime } from './telemetry-runtime.js';
 
 /**
@@ -29,8 +33,11 @@ export interface CapturedContent {
   /** `gen_ai.input.messages` / `gen_ai.output.messages`, already guarded, redacted and capped. */
   attributes: Readonly<Record<string, string>>;
   truncated: boolean;
-  /** Connections whose tenant opt-in was seen when the content was captured. */
-  optIns: ReadonlySet<string>;
+  /**
+   * Connections whose tenant opt-in was seen when the content was captured, with the fingerprint of
+   * the terms they had then (destination, credential reference, region, clearance).
+   */
+  optIns: ReadonlyMap<string, string>;
   at: number;
 }
 
@@ -107,7 +114,7 @@ export async function contentOptIns(
   db: Db,
   tenantId: string,
   allowedRegions: readonly string[],
-): Promise<Set<string>> {
+): Promise<Map<string, string>> {
   const rows = await db
     .select({ id: connections.id, config: connections.config })
     .from(connections)
@@ -118,16 +125,36 @@ export async function contentOptIns(
         eq(connections.scope, 'tenant'),
       ),
     );
-  const out = new Set<string>();
+  const out = new Map<string, string>();
   for (const r of rows) {
     const parsed = TelemetryConnectionConfigSchema.safeParse(r.config);
     if (!parsed.success) continue;
     const c = parsed.data;
     if (!c.enabled || c.content !== 'redacted') continue;
     if (allowedRegions.length > 0 && (!c.region || !allowedRegions.includes(c.region))) continue;
-    out.add(r.id);
+    out.set(
+      r.id,
+      optInFingerprint({
+        url: telemetryTracesUrl(c.endpoint),
+        protocol: c.protocol,
+        headersSecret: c.headersSecret,
+        region: c.region,
+        clearance: c.clearance,
+      }),
+    );
   }
   return out;
+}
+
+const OPT_IN_TIMEOUT_MS = 250;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timeout')), ms);
+    timer.unref();
+  });
+  return Promise.race([p, limit]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -143,7 +170,11 @@ export async function captureModelContent(
   if (config.content !== 'redacted' || config.tenantExporters !== 'allow') return 'off';
   const rt = telemetryRuntime();
   try {
-    const optIns = await contentOptIns(deps.db, input.tenantId, config.allowedRegions);
+    // On the request path: a slow database must not hold up the call (fail closed, no capture).
+    const optIns = await withTimeout(
+      contentOptIns(deps.db, input.tenantId, config.allowedRegions),
+      OPT_IN_TIMEOUT_MS,
+    );
     if (optIns.size === 0) {
       rt.stats.contentResult?.('dropped_opt_out', 1);
       return 'no_opt_in';

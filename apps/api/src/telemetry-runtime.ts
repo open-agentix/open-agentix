@@ -40,7 +40,8 @@ export type ContentResult =
   | 'dropped_opt_out'
   | 'dropped_region'
   | 'dropped_operator'
-  | 'dropped_no_exporter';
+  | 'dropped_no_exporter'
+  | 'dropped_budget';
 
 export type InboundContextResult = 'ignored' | 'linked' | 'invalid';
 

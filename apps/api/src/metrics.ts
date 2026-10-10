@@ -394,7 +394,7 @@ export class Metrics {
     });
     const otelContent = new Counter({
       name: `${prefix}otel_content_total`,
-      help: 'Content gate outcomes for model call spans (attached, dropped_classification, dropped_opt_out, dropped_region, dropped_operator, dropped_no_exporter)',
+      help: 'Content gate outcomes for model call spans (attached, dropped_classification, dropped_opt_out, dropped_region, dropped_operator, dropped_no_exporter, dropped_budget)',
       labelNames: ['result'],
       registers: [this.registry],
     });

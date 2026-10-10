@@ -9,6 +9,7 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ContextGuard, mayFlow, redactPii, type Classification } from '@openagentix/core';
 import type { OutboundDispatcher } from '@openagentix/providers';
 import {
@@ -18,7 +19,7 @@ import {
 } from './telemetry-export.js';
 import { CONTENT_MAX_BYTES } from '@openagentix/core';
 import type { OtelConfig } from './telemetry-config.js';
-import { onTelemetryConnectionChanged } from './telemetry-connection.js';
+import { onTelemetryConnectionChanged, optInFingerprint } from './telemetry-connection.js';
 import { takeCapturedContent, type CapturedContent } from './telemetry-content.js';
 import {
   telemetryRuntime,
@@ -54,6 +55,10 @@ export const TENANT_CACHE_MS = 15_000;
 const FAILURE_CACHE_MS = 5_000;
 /** Spans waiting for the lookup of their tenant's exporters (a burst while the source is slow). */
 const MAX_PENDING = 4096;
+/** The share of that one tenant may use, so a slow lookup for one tenant cannot starve the others. */
+const MAX_PENDING_PER_TENANT = 512;
+/** Captured content held for queued spans in this process (bytes); beyond it the span goes without. */
+export const CONTENT_HELD_MAX_BYTES = 8 * 1024 * 1024;
 const QUEUE_MAX = 1024;
 /** Exporters one tenant can have in a process, so that one tenant cannot use up the process-wide cap. */
 export const MAX_EXPORTERS_PER_TENANT = 4;
@@ -65,6 +70,8 @@ export interface TenantExporterSpec {
   url: string;
   protocol: 'http/protobuf' | 'http/json';
   headers?: Record<string, string> | undefined;
+  /** Reference (never the value) of the header secret; part of the opt-in terms. */
+  headersSecret?: string | undefined;
   region?: string | undefined;
   clearance: Classification;
   /** The tenant's stored opt-in to content (the operator allow is checked separately). */
@@ -83,6 +90,20 @@ const fingerprintOf = (s: TenantExporterSpec): string =>
       ]),
     )
     .digest('hex');
+
+/**
+ * The resource of a tenant copy holds `service.name` only: the operator's static resource
+ * attributes (cluster, environment, region names) are the operator's, not the tenant's.
+ */
+function minimalResource(span: ReadableSpan): ReadableSpan {
+  const name = span.resource.attributes['service.name'];
+  return Object.create(span, {
+    resource: {
+      value: resourceFromAttributes(typeof name === 'string' ? { 'service.name': name } : {}),
+      enumerable: true,
+    },
+  }) as ReadableSpan;
+}
 
 /** The span with the content attributes added (the sanitised span keeps its identity and timing). */
 function withAttributes(span: ReadableSpan, extra: Record<string, string | boolean>): ReadableSpan {
@@ -143,9 +164,18 @@ class TenantSpanExporter implements SpanExporter {
     const rt = telemetryRuntime();
     let safe: ReadableSpan[];
     try {
-      const own = { ...rt, guard: this.handle.guard };
+      // Two passes: first with the process guard (the operator's secrets: exporter headers, proxy
+      // and certificate secrets), then with this exporter's own header values. Exception text is
+      // never forwarded to a tenant destination (internal host names, database errors), whatever
+      // the operator chose for the operator's own collector.
+      const first = { ...rt, exceptionDetail: 'off' as const };
+      const second = { ...first, guard: this.handle.guard };
       safe = spans.map((s) =>
-        this.router.withContent(this.handle, s, sanitizeReadableSpan(s, own)),
+        this.router.withContent(
+          this.handle,
+          s,
+          minimalResource(sanitizeReadableSpan(sanitizeReadableSpan(s, first), second)),
+        ),
       );
     } catch {
       rt.stats.tenantExportFailed?.('other');
@@ -182,7 +212,29 @@ export interface TenantExportRouterOptions {
     'content' | 'tenantExportersMax' | 'exportTimeoutMs' | 'maxQueue' | 'allowedRegions'
   >;
   now?: () => number;
+  /** Process-wide bytes of content held for queued spans (default {@link CONTENT_HELD_MAX_BYTES}). */
+  contentHeldMaxBytes?: number;
 }
+
+/** Accounting of the content bytes held for queued spans (process wide, see CONTENT_HELD_MAX_BYTES). */
+interface Hold {
+  bytes: number;
+  /** Exporters that still have to take (or drop) the content of this span. */
+  refs: number;
+  released: boolean;
+}
+let heldContentBytes = 0;
+const releaseHold = (h: Hold): void => {
+  if (h.released) return;
+  h.released = true;
+  heldContentBytes -= h.bytes;
+};
+// A span dropped from a full queue never reaches the exporter: its hold is released when it is
+// collected, so the budget cannot leak.
+const holdRegistry = new FinalizationRegistry<Hold>(releaseHold);
+
+/** Test helper. */
+export const heldContentBytesForTest = (): number => heldContentBytes;
 
 export class TenantExportRouter implements SpanProcessor {
   readonly config: TenantExportRouterOptions['config'];
@@ -191,7 +243,9 @@ export class TenantExportRouter implements SpanProcessor {
   private readonly loading = new Map<string, Promise<CacheEntry>>();
   /** Captured content per finished span until the exporters have taken what they may. */
   private readonly captured = new WeakMap<ReadableSpan, CapturedContent>();
+  private readonly holds = new WeakMap<ReadableSpan, Hold>();
   private pending = 0;
+  private readonly pendingByTenant = new Map<string, number>();
   private closed = false;
   private readonly unsubscribe: () => void;
 
@@ -236,23 +290,49 @@ export class TenantExportRouter implements SpanProcessor {
     const tenantId = span.attributes['oax.tenant.id'];
     if (typeof tenantId !== 'string' || !UUID.test(tenantId)) return;
     if ((sc.traceFlags & TraceFlags.SAMPLED) === 0) return;
-    if (parked && parked.tenantId === tenantId) this.captured.set(span, parked);
+    if (parked && parked.tenantId === tenantId) this.bind(span, parked);
     const hit = this.cache.get(tenantId);
     if (hit && this.now() - hit.at < hit.ttl) {
       this.deliver(hit, span, parked !== undefined);
       return;
     }
-    if (this.pending >= MAX_PENDING) {
+    const mine = this.pendingByTenant.get(tenantId) ?? 0;
+    if (this.pending >= MAX_PENDING || mine >= MAX_PENDING_PER_TENANT) {
       telemetryRuntime().stats.tenantSpansDropped?.('pending_cap', 1);
+      this.drop(span);
       return;
     }
     this.pending++;
+    this.pendingByTenant.set(tenantId, mine + 1);
     void this.resolve(tenantId)
       .then((entry) => this.deliver(entry, span, parked !== undefined))
-      .catch(() => undefined)
+      .catch(() => this.drop(span))
       .finally(() => {
         this.pending--;
+        const left = (this.pendingByTenant.get(tenantId) ?? 1) - 1;
+        if (left <= 0) this.pendingByTenant.delete(tenantId);
+        else this.pendingByTenant.set(tenantId, left);
       });
+  }
+
+  /** Holds the content of a span while it is queued, within the process-wide byte budget. */
+  private bind(span: ReadableSpan, parked: CapturedContent): void {
+    const bytes = Object.values(parked.attributes).reduce((n, v) => n + v.length * 2, 0);
+    if (heldContentBytes + bytes > (this.opts.contentHeldMaxBytes ?? CONTENT_HELD_MAX_BYTES)) {
+      // The span still goes out (metadata), the content is what is dropped first.
+      telemetryRuntime().stats.contentResult?.('dropped_budget', 1);
+      return;
+    }
+    const hold: Hold = { bytes, refs: 0, released: false };
+    heldContentBytes += bytes;
+    holdRegistry.register(span, hold);
+    this.captured.set(span, parked);
+    this.holds.set(span, hold);
+  }
+
+  private drop(span: ReadableSpan): void {
+    const hold = this.holds.get(span);
+    if (hold) releaseHold(hold);
   }
 
   private deliver(entry: CacheEntry, span: ReadableSpan, hadContent: boolean): void {
@@ -260,6 +340,11 @@ export class TenantExportRouter implements SpanProcessor {
     if (entry.refused > 0) rt.stats.tenantSpansDropped?.('no_capacity', entry.refused);
     if (entry.handles.length === 0 && hadContent)
       rt.stats.contentResult?.('dropped_no_exporter', 1);
+    const hold = this.holds.get(span);
+    if (hold) {
+      hold.refs = entry.handles.length;
+      if (hold.refs === 0) releaseHold(hold);
+    }
     for (const h of entry.handles) h.processor.onEnd(span);
   }
 
@@ -344,13 +429,28 @@ export class TenantExportRouter implements SpanProcessor {
     const stats = telemetryRuntime().stats;
     const c = this.captured.get(original);
     if (!c) return sanitized;
+    const hold = this.holds.get(original);
+    if (hold && --hold.refs <= 0) releaseHold(hold);
     const spec = handle.spec;
     const result = (r: ContentResult): ReadableSpan => {
       stats.contentResult?.(r, 1);
       return sanitized;
     };
     if (this.config.content !== 'redacted') return result('dropped_operator');
-    if (!spec.content || handle.contentRevoked || !c.optIns.has(spec.connectionId))
+    // The opt-in must still be the one the content was captured under: same destination,
+    // credential reference, protocol, region and clearance.
+    if (
+      !spec.content ||
+      handle.contentRevoked ||
+      c.optIns.get(spec.connectionId) !==
+        optInFingerprint({
+          url: spec.url,
+          protocol: spec.protocol,
+          headersSecret: spec.headersSecret,
+          region: spec.region,
+          clearance: spec.clearance,
+        })
+    )
       return result('dropped_opt_out');
     const regions = this.config.allowedRegions;
     if (regions.length > 0 && (!spec.region || !regions.includes(spec.region)))

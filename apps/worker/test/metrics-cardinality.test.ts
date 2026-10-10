@@ -155,6 +155,7 @@ const ALLOWED: Record<string, Record<string, Set<string> | RegExp>> = {
       'dropped_region',
       'dropped_operator',
       'dropped_no_exporter',
+      'dropped_budget',
     ),
   },
   role_bindings_shadow_total: { outcome: slug, authoritative: oneOf('legacy', 'bindings') },
