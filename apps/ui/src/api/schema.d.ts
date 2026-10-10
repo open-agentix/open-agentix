@@ -1976,6 +1976,8 @@ export interface paths {
                             /** @description pinned tool definitions per MCP connection (ADR 0016 section 5); absent for versions published before pinning */
                             toolPins?: {
                                 [key: string]: {
+                                    /** @description the connection the snapshot belongs to; acceptances of other connections do not count */
+                                    connectionId: string;
                                     /** @description digest of the approved snapshot the version was published against */
                                     snapshotDigest: string;
                                     /** @description SHA-256 over the granted tools of that snapshot (RFC 8785) */

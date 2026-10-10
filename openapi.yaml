@@ -2962,6 +2962,9 @@ paths:
                     additionalProperties:
                       type: object
                       properties:
+                        connectionId:
+                          type: string
+                          description: the connection the snapshot belongs to; acceptances of other connections do not count
                         snapshotDigest:
                           type: string
                           description: digest of the approved snapshot the version was published against
@@ -2974,6 +2977,7 @@ paths:
                             type: string
                           description: the version's grants on the connection (names and `prefix*`)
                       required:
+                        - connectionId
                         - snapshotDigest
                         - toolsDigest
                         - granted

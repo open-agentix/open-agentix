@@ -24,6 +24,11 @@ export interface PinnedTool {
 
 /** What a published version records per MCP connection (stored in the immutable definition). */
 export interface ToolPinRecord {
+  /**
+   * The connection the snapshot belongs to. Acceptances only count for this connection: a
+   * connection of the same name at a narrower scope resolved later must not decide for the version.
+   */
+  connectionId: string;
   /** Digest of the whole approved snapshot the version was published against. */
   snapshotDigest: string;
   /** Digest over the granted tools of that snapshot; compared with the live tools at run time. */
@@ -108,6 +113,10 @@ export function pinnedToolsOf(raw: readonly unknown[]): PinnedTool[] {
   if (raw.length > MAX_PINNED_TOOLS)
     throw new McpPinError('mcp_tools_too_large', `more than ${MAX_PINNED_TOOLS} tools`);
   const tools = raw.map(reduceTool);
+  // A list with two tools of one name has no canonical form; it is refused here, with the rest of
+  // the shape checks, so that no caller meets the error later while hashing.
+  if (new Set(tools.map((t) => t.name)).size !== tools.length)
+    throw new McpPinError('mcp_tool_invalid', 'the list contains a tool name twice');
   let total = 0;
   for (const t of tools) {
     let bytes: number;
@@ -180,9 +189,11 @@ export function changedToolNames(
 export function pinFor(
   snapshot: { digest: string; tools: readonly PinnedTool[] },
   patterns: readonly string[],
+  connectionId: string,
 ): ToolPinRecord {
   const granted = [...new Set(patterns)].sort();
   return {
+    connectionId,
     snapshotDigest: snapshot.digest,
     toolsDigest: toolsDigest(grantedTools(snapshot.tools, granted)),
     granted,

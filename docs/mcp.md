@@ -177,9 +177,17 @@ lone surrogates are refused instead of dropped) and checked against the test vec
 Snapshots are stored per connection (`mcp_tool_snapshots`, owned by the tenant of the connection) with
 the status `pending`, `approved` or `rejected`. They are bounded (at most 500 tools, 64 KiB per tool,
 1 MiB in total; more is refused with `422 mcp_tools_too_large`, malformed definitions with
-`422 mcp_tool_invalid`) and a list that contains something that looks like a credential (the patterns
-of the context guard, or a secret value resolved for the connection) is refused with
-`422 mcp_tools_contain_secret` and not stored.
+`422 mcp_tool_invalid`, which includes a list that names a tool twice) and a list that contains
+something that looks like a credential (the patterns of the context guard, or a secret value
+resolved for the connection) is refused with `422 mcp_tools_contain_secret` and not stored.
+
+Two limits to know about. **A server that lists more than 500 tools cannot be pinned**: refresh is
+refused with `mcp_tools_too_large`, so no approved snapshot exists and publish is refused with
+`mcp_tools_unreviewed`; put a narrower server (or a gateway that exposes only the tools an agent
+needs) in front of it. **The credential scan is a safeguard, not a guarantee**: it finds known
+patterns and the secret values resolved for the connection in clear text; a secret that the server
+encodes (base64, split, obfuscated) is not detected. Reviewers read the diff; the platform does not
+send secrets to `tools/list` in the first place.
 
 | Call | Needs | Purpose |
 | --- | --- | --- |
@@ -203,6 +211,12 @@ of profile grants, over all steps of the version) and the grants themselves. It 
 count) and with `400 mcp_tool_unknown` when a granted tool is not in it. A change to a tool that is
 not granted does not change `toolsDigest`.
 
+**Connection identity.** `toolPins` also records the id of the connection the snapshot belongs to.
+`existing-versions` acceptances are honoured only for that connection: a connection of the same
+name at a narrower scope (for example a tenant connection that shadows a platform one) that is
+resolved for a run decides nothing for a version that pinned the other connection; such a run
+accepts the pinned digest only.
+
 **Run.** The gateway of the worker (and of a run node) lists the tools of a pinned server once per
 session, computes the digest over the granted tools it actually received and compares it with the
 version's `toolsDigest` and with the digests the control node resolved as accepted (below). On a
@@ -214,9 +228,17 @@ as a `pending` snapshot with source `run` (at most 20 are kept per connection, a
 credential is not stored), and increments `oax_mcp_tools_changed_total` (no labels). There is no
 outbound notification channel in the platform yet: admins find the event in the audit log, the
 `Seen by a run` badge in the Tools view of the connection and the metric. `notifications/tools/list_changed`
-during a session is ignored; the next session sees the change.
+during a session is ignored; the next session sees the change. The definitions that were checked are
+the ones that are exposed: for a pinned server the gateway keeps the verified granted tools of the
+first list and never reads a second answer of the server, and a call to a tool that was not in the
+verified list is refused with `mcp_tools_changed`, so a server cannot answer the check with the
+approved definitions and the model with others.
 
-**Re-approval.** An admin reviews the diff and approves the new snapshot:
+**Re-approval.** An admin reviews the diff and approves the new snapshot. A list that a *run* reported
+(source `run`) cannot be approved directly (`409 mcp_snapshot_unconfirmed`): an untrusted node may
+have sent it. The admin first fetches the tools (`tools/refresh`); if the server returns exactly that
+list, the snapshot becomes a normal pending one (source `refresh`) and can be approved; if the server
+returns something else, the reported list stays unapproved. The Console disables Approve and says so.
 
 - `new-versions`: only versions published afterwards pin it. Published versions stay blocked.
 - `existing-versions`: every published version that pinned the previous approved snapshot (or one
@@ -227,6 +249,10 @@ during a session is ignored; the next session sees the change.
   connection-level record `mcp_tool_snapshot_acceptances (from_digest, to_digest)`. Acceptance is
   transitive along these records and is checked against every version it reaches. At run time the
   control node resolves, per version, the digests it accepts and hands them to the gateway.
+
+**Recommendation.** Set `OAX_MCP_REQUIRE_TOOL_PIN=true` on new installations: every run then uses
+pinned definitions. The default stays `false` so that upgrades keep running versions that were
+published before pinning existed.
 
 **Compatibility (decision).** Published versions are immutable and are never rewritten:
 

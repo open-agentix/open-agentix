@@ -182,6 +182,11 @@ export const ExpansionRecordSchema = z.object({
   connectionVersion: z.string(),
 });
 export const ToolPinSchema = z.object({
+  connectionId: z
+    .string()
+    .describe(
+      'the connection the snapshot belongs to; acceptances of other connections do not count',
+    ),
   snapshotDigest: z
     .string()
     .describe('digest of the approved snapshot the version was published against'),

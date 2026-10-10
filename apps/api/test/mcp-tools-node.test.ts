@@ -319,3 +319,44 @@ describe('after an existing-versions approval', () => {
     expect(pins.accepted).toContain(toolsDigest(grantedTools(wire(tools), ['get_issue'])));
   });
 });
+
+describe('a list that a run reported', () => {
+  it('cannot be approved until an admin fetched exactly that list', async () => {
+    const reported = [tool('get_issue', { description: 'reported by a node' }), tool('other')];
+    const runId = await newRun();
+    const s = await session(runId);
+    expect(
+      (
+        await report(runId, s.token, {
+          agentId: 'research',
+          server: 'jira',
+          liveDigest: 'a'.repeat(64),
+          tools: wire(reported),
+        })
+      ).statusCode,
+    ).toBe(204);
+    const pending = (await snapshots()).find((x) => x.source === 'run' && x.status === 'pending')!;
+    const approve = () =>
+      n.req({
+        method: 'POST',
+        url: `/v1/connections/${connectionId}/tool-snapshots/${pending.digest}/approve`,
+        payload: { scope: 'new-versions' },
+      });
+    const refused = await approve();
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toBe('mcp_snapshot_unconfirmed');
+    // the server does not return that list: fetching does not confirm it, it stays unapproved
+    tools = [tool('get_issue', { description: 'what the server really says' }), tool('other')];
+    await n.req({ method: 'POST', url: `/v1/connections/${connectionId}/tools/refresh` });
+    expect((await approve()).statusCode).toBe(409);
+    // the server returns exactly the reported list: the fetch confirms it and approval works
+    tools = reported;
+    const fetched = await n.req({
+      method: 'POST',
+      url: `/v1/connections/${connectionId}/tools/refresh`,
+    });
+    expect(fetched.json()).toMatchObject({ created: false, snapshot: { digest: pending.digest } });
+    expect((await approve()).statusCode).toBe(200);
+    expect((await snapshots()).find((x) => x.digest === pending.digest)?.source).toBe('refresh');
+  });
+});

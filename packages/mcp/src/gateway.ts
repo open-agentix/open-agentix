@@ -93,8 +93,13 @@ export class ToolGateway {
   private readonly connections = new Map<string, McpConnection>();
   private pins: Readonly<Record<string, ToolPinCheck>> = {};
   private onToolsChanged: ((e: ToolsChanged) => Promise<void> | void) | undefined;
-  /** One verdict per pinned server: the first `tools/list` decides for the whole session. */
-  private readonly verdicts = new Map<string, Promise<void>>();
+  /**
+   * One verdict per pinned server: the first `tools/list` decides for the whole session, and the
+   * granted tools of that very list (the ones whose digest matched) are the only definitions of the
+   * server that are ever exposed. A later `tools/list` is never read for a pinned server, so a server
+   * cannot answer the check with the approved definitions and the model with different ones.
+   */
+  private readonly verdicts = new Map<string, Promise<McpTool[]>>();
 
   constructor(
     private readonly configs: readonly McpServerConfig[],
@@ -149,9 +154,10 @@ export class ToolGateway {
     this.verdicts.clear();
   }
 
-  private verify(server: string): Promise<void> {
+  /** The verified granted tools of a pinned server, `null` for a server without a pin. */
+  private verify(server: string): Promise<McpTool[] | null> {
     const pin = this.pins[server];
-    if (!pin) return Promise.resolve();
+    if (!pin) return Promise.resolve(null);
     let verdict = this.verdicts.get(server);
     if (!verdict) {
       verdict = this.check(server, pin);
@@ -162,17 +168,32 @@ export class ToolGateway {
     return verdict;
   }
 
-  private async check(server: string, pin: ToolPinCheck): Promise<void> {
+  private async check(server: string, pin: ToolPinCheck): Promise<McpTool[]> {
     const tools = await (await this.connection(server)).listTools();
     let live: string;
+    let verified: PinnedTool[] = [];
     try {
       // Only the granted tools count: a change to any other tool of the server does not matter.
-      live = toolsDigest(pinnedToolsOf(grantedTools(tools as PinnedTool[], pin.granted)));
+      verified = pinnedToolsOf(grantedTools(tools as PinnedTool[], pin.granted));
+      live = toolsDigest(verified);
     } catch {
       // Unreadable or oversized definitions can never match a pin.
       live = 'invalid';
     }
-    if (digestMatchesAny(live, pin.accepted)) return;
+    if (digestMatchesAny(live, pin.accepted))
+      // Exactly the reduced definitions that were hashed (deep copies: nothing that held a
+      // reference to the server's answer can change them afterwards).
+      return verified.map((t) => {
+        const c = structuredClone(t);
+        return {
+          name: c.name,
+          ...(typeof c.title === 'string' ? { title: c.title } : {}),
+          ...(typeof c.description === 'string' ? { description: c.description } : {}),
+          inputSchema: c.inputSchema,
+          ...(c.outputSchema ? { outputSchema: c.outputSchema } : {}),
+          ...(c.annotations ? { annotations: c.annotations as McpTool['annotations'] } : {}),
+        };
+      });
     let all: PinnedTool[] | null;
     try {
       all = pinnedToolsOf(tools);
@@ -196,9 +217,10 @@ export class ToolGateway {
     const servers = [...new Set(agent.tools.map((t) => t.server))];
     const out: ExposedTool[] = [];
     for (const server of servers) {
-      // Fail closed before a single definition of this server can reach the model.
-      await this.verify(server);
-      const tools: McpTool[] = await (await this.connection(server)).listTools();
+      // Fail closed before a single definition of this server can reach the model; a pinned server
+      // exposes the verified list itself, never a second answer of the server.
+      const verified = await this.verify(server);
+      const tools: McpTool[] = verified ?? (await (await this.connection(server)).listTools());
       const declared = this.configs.find((c) => c.name === server)?.tools ?? {};
       for (const t of tools) {
         if (!findGrant(agent.tools, server, t.name)) continue;
@@ -234,8 +256,14 @@ export class ToolGateway {
     if (decision.effect === 'require_approval' && !opts.approved)
       return { status: 'approval_required', decision };
     let raw: ToolResult;
-    // A call never reaches a pinned server whose definitions changed, whatever the caller did before.
-    await this.verify(call.server);
+    // A call never reaches a pinned server whose definitions changed, whatever the caller did before,
+    // nor a tool of it that was not in the verified (pinned) list.
+    const verified = await this.verify(call.server);
+    if (verified && !verified.some((t) => t.name === call.tool))
+      throw new OaxError(
+        'mcp_tools_changed',
+        `tool "${call.server}/${call.tool}" is not part of the approved tool definitions of MCP server "${call.server}"`,
+      );
     try {
       const conn = await this.connection(call.server);
       raw = await conn.callTool(call.tool, call.args, opts.signal);

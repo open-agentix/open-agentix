@@ -138,6 +138,28 @@ describe('Tools of an MCP connection', () => {
     await expectNoA11yViolations(dialog);
   });
 
+  it('does not offer to approve a list that only a run reported, until it was fetched', async () => {
+    stubTools();
+    server.use(
+      http.get(api('/v1/connections/:id/tool-snapshots/:digest'), ({ params }) =>
+        HttpResponse.json({
+          ...summary(String(params.digest), 'pending', { source: 'run' }),
+          tools: [tool('get_issue')],
+          base: { digest: DIGEST_OLD, tools: [tool('get_issue')] },
+          changed: [],
+          pinnedBy: [],
+        }),
+      ),
+    );
+    const { user } = await renderApp('/connections');
+    await heading('Connections');
+    await user.click(await screen.findByRole('button', { name: 'Tools' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Tools of tickets' });
+    await within(dialog).findByText(/Changes compared with/);
+    expect(within(dialog).getByRole('note')).toHaveTextContent(/reported by a run/);
+    expect(within(dialog).getByRole('button', { name: 'Approve' })).toBeDisabled();
+  });
+
   it('approves for new versions by default and for existing versions on request', async () => {
     const bodies: unknown[] = [];
     stubTools(bodies);

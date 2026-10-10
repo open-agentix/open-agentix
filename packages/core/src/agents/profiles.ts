@@ -27,7 +27,12 @@ export interface ConnectionAccess {
    * latest approved snapshot, `null` when none was approved yet (publish is then refused with
    * `mcp_tools_unreviewed`). Absent for connections that cannot be pinned: they publish as before.
    */
-  pin?: { snapshot: { digest: string; tools: readonly PinnedTool[] } | null } | undefined;
+  pin?:
+    | {
+        connectionId: string;
+        snapshot: { digest: string; tools: readonly PinnedTool[] } | null;
+      }
+    | undefined;
 }
 
 /** `server name -> connection access`; servers that are not in the catalog are unknown. */
@@ -220,7 +225,7 @@ function pinTools(
         code: 'mcp_tool_unknown',
         message: `tool "${server}/${tool}" is not in the approved snapshot of connection "${server}"`,
       });
-    if (unknown.length === 0) out[server] = pinFor(pin.snapshot, granted);
+    if (unknown.length === 0) out[server] = pinFor(pin.snapshot, granted, pin.connectionId);
   }
   return out;
 }

@@ -134,6 +134,10 @@ describe('reduceTool and pinnedToolsOf', () => {
     );
   });
 
+  it('refuses a list that names a tool twice', () => {
+    expect(() => pinnedToolsOf([tool('a'), tool('a')])).toThrow(/twice/);
+  });
+
   it('sorts by name', () => {
     expect(pinnedToolsOf([tool('b'), tool('a')]).map((t) => t.name)).toEqual(['a', 'b']);
   });
@@ -198,7 +202,7 @@ const catalog = (
     tools: { get_issue: 'read' },
     profiles: { read: ['get_issue'] },
     version: 'v1',
-    ...(snapshot === undefined ? {} : { pin: { snapshot } }),
+    ...(snapshot === undefined ? {} : { pin: { connectionId: 'conn-1', snapshot } }),
   },
 });
 
@@ -212,12 +216,13 @@ describe('expansion records the tool pins', () => {
     expect(r.errors).toEqual([]);
     expect(r.definition.toolPins).toEqual({
       jira: {
+        connectionId: 'conn-1',
         snapshotDigest: snap.digest,
         toolsDigest: toolsDigest([tool('get_issue')]),
         granted: ['get_issue'],
       },
     });
-    expect(r.definition.toolPins!.jira).toEqual(pinFor(snap, ['get_issue']));
+    expect(r.definition.toolPins!.jira).toEqual(pinFor(snap, ['get_issue'], 'conn-1'));
   });
 
   it('pins the tools a profile grant expands to and wildcard matches', () => {

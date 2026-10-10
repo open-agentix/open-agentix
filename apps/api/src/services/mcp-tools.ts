@@ -160,7 +160,7 @@ export class McpToolsService {
       .where(
         and(
           eq(agents.tenantId, actor.tenantId),
-          sql`${agentVersions.definition} #> array['toolPins', ${row.name}] is not null`,
+          sql`${agentVersions.definition} #>> array['toolPins', ${row.name}, 'connectionId'] = ${row.id}`,
         ),
       )
       .limit(5000);
@@ -297,6 +297,16 @@ export class McpToolsService {
     let snap = inserted;
     if (!snap) {
       snap = await this.snapshot(row, digest);
+      // A list a run reported (an untrusted node may have made it up) becomes reviewable only
+      // after an admin's own fetch got exactly this list from the server.
+      if (snap.source === 'run' && snap.status === 'pending') {
+        const [confirmed] = await this.ctx.db
+          .update(mcpToolSnapshots)
+          .set({ source: 'refresh', fetchedBy: actor.userId, fetchedAt: this.ctx.now() })
+          .where(and(eq(mcpToolSnapshots.id, snap.id), eq(mcpToolSnapshots.source, 'run')))
+          .returning();
+        snap = confirmed ?? snap;
+      }
       // An explicit refresh that sees a rejected list again reopens it for review.
       if (snap.status === 'rejected') {
         const [reopened] = await this.ctx.db
@@ -348,6 +358,8 @@ export class McpToolsService {
         and(
           // A platform connection is pinned by versions of any tenant; others only by their own.
           row.scope === 'platform' ? undefined : eq(agents.tenantId, row.tenantId),
+          // Only versions that pinned THIS connection (a same-named one elsewhere is another pin).
+          sql`${agentVersions.definition} #>> array['toolPins', ${row.name}, 'connectionId'] = ${row.id}`,
           inArray(
             sql`${agentVersions.definition} #>> array['toolPins', ${row.name}, 'snapshotDigest']`,
             [...fromSet],
@@ -426,6 +438,12 @@ export class McpToolsService {
           kind: 'done' as const,
           summary: summary(snap, await this.currentDigest(row, tx), 0),
         };
+      if (snap.source === 'run')
+        throw new HttpError(
+          409,
+          'mcp_snapshot_unconfirmed',
+          'this tool list was reported by a run, not fetched by you: fetch the tools of the connection first; the list can only be approved if the server returns exactly it',
+        );
       if (snap.status !== 'pending')
         throw new HttpError(
           409,
@@ -599,7 +617,9 @@ export class McpToolsService {
       const pin = pins[server]!;
       const accepted = [pin.toolsDigest];
       const conn = conns.find((c) => c.name === server);
-      if (conn) {
+      // Acceptances belong to the connection the version pinned. A connection of the same name at
+      // a narrower scope that resolves instead must not decide for it: only the pinned digest counts.
+      if (conn && conn.id === pin.connectionId) {
         const edges = await this.ctx.db
           .select()
           .from(mcpToolSnapshotAcceptances)

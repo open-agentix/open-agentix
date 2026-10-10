@@ -244,7 +244,7 @@ export class CatalogService {
         profiles: cfg.profiles,
         version: c.updatedAt.toISOString(),
         ...(cfg.transport === 'streamable-http'
-          ? { pin: { snapshot: snapshots.get(c.id) ?? null } }
+          ? { pin: { connectionId: c.id, snapshot: snapshots.get(c.id) ?? null } }
           : {}),
       };
     }

@@ -666,6 +666,7 @@
       "review": "Prüfen",
       "current": "In Benutzung",
       "fromRun": "Von einem Run gesehen",
+      "needsConfirm": "Diese Liste wurde von einem Run gemeldet, nicht von dir abgerufen. Rufe zuerst die Tools ab: Freigeben geht nur, wenn der Server genau diese Liste liefert.",
       "statuses": {
         "pending": "Offen",
         "approved": "Freigegeben",

@@ -139,6 +139,11 @@ function SnapshotDetail({ connection, digest }: { connection: Connection; digest
           </ul>
         </div>
       ) : null}
+      {d.status === 'pending' && d.source === 'run' ? (
+        <p role="note" className="notice notice-warning">
+          {t('connections.tools.needsConfirm')}
+        </p>
+      ) : null}
       {d.status === 'pending' && can('connections:write') ? (
         <div className="stack">
           <SelectField
@@ -161,7 +166,12 @@ function SnapshotDetail({ connection, digest }: { connection: Connection; digest
             <Button variant="ghost" loading={reject.isPending} onClick={() => reject.mutate()}>
               {t('connections.tools.reject')}
             </Button>
-            <Button variant="primary" loading={approve.isPending} onClick={() => approve.mutate()}>
+            <Button
+              variant="primary"
+              loading={approve.isPending}
+              disabled={d.source === 'run'}
+              onClick={() => approve.mutate()}
+            >
               {t('connections.tools.approve')}
             </Button>
           </div>

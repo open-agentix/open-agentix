@@ -4,6 +4,7 @@ import { StaticSecretResolver, toolsDigest, type PinnedTool } from '@openagentix
 import { handleMockMcpHttp, type MockTool } from '@openagentix/mcp';
 import type { OutboundDispatcher } from '@openagentix/providers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULT_TENANT_ID } from '../src/db/schema.js';
 import { testNode, type TestNode } from './helpers.js';
 
 /**
@@ -248,6 +249,15 @@ describe('refresh and list', () => {
     expect((await list(id)).json().items).toEqual([]);
   });
 
+  it('answers 422 (not 500) for a list that names a tool twice and stores nothing', async () => {
+    const id = await connect('snap-dup');
+    tools = [tool('same'), tool('same', { description: 'again' })];
+    const res = await refresh(id);
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe('mcp_tool_invalid');
+    expect((await list(id)).json().items).toEqual([]);
+  });
+
   it('is audited with counts and digests, never with definitions', async () => {
     tools = [tool('get_issue', { description: 'AUDIT-CANARY-DESCRIPTION' })];
     const id = await connect('snap-audit');
@@ -385,6 +395,7 @@ describe('publish pins the tool definitions', () => {
         .filter((t) => names.includes(t.name))
         .map((t) => ({ name: t.name, description: t.description!, inputSchema: t.inputSchema! }));
     expect(v.toolPins['pub-ok']).toEqual({
+      connectionId: id,
       snapshotDigest: snapshot,
       toolsDigest: toolsDigest(wire(['get_issue'])),
       granted: ['get_issue'],
@@ -574,6 +585,55 @@ describe('tenant isolation', () => {
     expect(pub.json().error).toBe('mcp_tools_unreviewed');
     // alice's data is untouched
     expect((await list(own, alice)).json().items).toHaveLength(1);
+  });
+
+  it('honours acceptances of the pinned connection only, not of a same-named narrower one', async () => {
+    tools = [tool('get_issue')];
+    const platform = await connect('shadowed');
+    await pin(platform);
+    const agent = await agentFor('shadow-agent', 'shadowed', ['get_issue']);
+    expect((await publish(agent)).statusCode).toBe(201);
+    const version = (await api('GET', `/v1/agents/${agent}/versions/1.0.0`)).json();
+    expect(version.toolPins.shadowed.connectionId).toBe(platform);
+    const def = version.definition;
+
+    // another tenant has a connection of the same name (it wins for that tenant's runs) with the
+    // same first list and an existing-versions acceptance of its own
+    const t = await n.req({
+      method: 'POST',
+      url: '/v1/tenants',
+      payload: {
+        slug: 'iso-d',
+        name: 'iso-d',
+        admin: { email: 'admin@iso-d.example.org', displayName: 'd', password: PW },
+      },
+    });
+    expect(t.statusCode, t.body).toBe(201);
+    const dave = await n.login('admin@iso-d.example.org', PW);
+    const mine = await connect('shadowed', {}, dave, 'tenant');
+    const first = (await refresh(mine, dave)).json().snapshot.digest;
+    expect((await approve(mine, first, 'new-versions', dave)).statusCode).toBe(200);
+    // the platform connection and the tenant one both move on to a reworded list
+    tools = [tool('get_issue', { description: 'reworded' })];
+    const second = (await refresh(mine, dave)).json().snapshot.digest;
+    expect((await approve(mine, second, 'existing-versions', dave)).statusCode).toBe(200);
+    const platformSecond = (await refresh(platform)).json().snapshot.digest;
+    expect((await approve(platform, platformSecond, 'existing-versions')).statusCode).toBe(200);
+
+    const svc = n.services.mcpTools;
+    const home = await svc.pinsFor(def, {
+      tenantId: DEFAULT_TENANT_ID,
+      teamId: null,
+      agentId: agent,
+    });
+    expect(home.shadowed!.accepted).toHaveLength(2);
+    const shadowed = await svc.pinsFor(def, {
+      tenantId: t.json().id,
+      teamId: null,
+      agentId: agent,
+    });
+    // the tenant's own acceptance must not decide for a version that pinned the platform connection
+    expect(shadowed.shadowed!.accepted).toEqual([def.toolPins.shadowed.toolsDigest]);
   });
 
   it('lets a tenant read the snapshots of a platform connection but not change them', async () => {

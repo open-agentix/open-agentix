@@ -659,6 +659,7 @@
       "review": "Review",
       "current": "In use",
       "fromRun": "Seen by a run",
+      "needsConfirm": "This list was reported by a run, not fetched by you. Fetch the tools first: it can only be approved if the server returns exactly this list.",
       "statuses": {
         "pending": "Pending",
         "approved": "Approved",
