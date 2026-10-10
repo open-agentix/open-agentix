@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Telemetry core hardening (ADR 0015 slice S1)**: a closed attribute allowlist for spans
+  (`packages/core/src/telemetry`: key, type, length cap and value set per span kind; every string
+  passes the `ContextGuard`; unknown keys are dropped and counted), a single `withSpan` wrapper
+  that hands out a guarded span, an export-boundary exporter that re-applies the allowlist to every
+  span, the pinned convention version (`GENAI_SEMCONV_PIN`), `OTEL_EXPORTER_OTLP_PROTOCOL`
+  (`http/protobuf` default, `http/json`), `OAX_OTEL_HEADERS_SECRET` (exporter headers from a secret
+  reference), a bounded export queue and export timeout (`OAX_OTEL_MAX_QUEUE`,
+  `OAX_OTEL_EXPORT_TIMEOUT_MS`), the counters `oax_otel_spans_dropped_total`,
+  `oax_otel_export_failures_total{reason}`, `oax_otel_attributes_dropped_total{key_class}` and
+  `oax_otel_redactions_total{kind}`, `trace_id` and `span_id` in log lines written inside a span,
+  parsing and validation of all OpenTelemetry keys of ADR 0015 section 14 (the later-slice keys have
+  no effect yet), and `docs/observability.md`.
 - **API and core: tenant role bindings table, pure role resolver and shadow check (ADR 0014
   slice S1, #186)**: migration `0018_tenant_role_bindings` (additive, down script and snapshot
   included; ADR 0014 planned 0017, which `0017_approvals_tenant_status_idx` took) adds
@@ -272,6 +284,13 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Security
 
+- **Telemetry no longer exports error messages or stacks.** `withSpan` used to record the raw
+  exception (message and stack) and the message as the span status, so provider response bodies,
+  tool output and secrets inside an error could reach the collector. A failed span now carries the
+  error code (`error.type` and status description, or `_OTHER`) and one `exception` event with the
+  class name only; `OAX_OTEL_EXCEPTION_DETAIL=guarded` opts in to a guarded, 256-character message
+  (the stack is never recorded). The exporter uses no resource detectors (no metadata-endpoint
+  calls) and only static resource attributes.
 - **Demo: unlisted seed accounts no longer share the published password**: `demo-owner@example.org`
   (platform admin) and `admin@acme.example.org` (Acme Labs admin) only build the data set; they get
   a random password per seed, so the shared demo password opens only the accounts on the sign-in
@@ -345,6 +364,23 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Changed
 
+- **Telemetry**: the worker's `oax.run` span carries `oax.run.id` (was `oax.run_id`) and
+  `oax.tenant.id`. The default OTLP protocol is now `http/protobuf` (was JSON); set
+  `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` to keep the old wire format. **Breaking:**
+  `OTEL_EXPORTER_OTLP_ENDPOINT` with `http://` to a non-loopback host (for example an in-cluster
+  collector such as `http://otel-collector.observability.svc:4318`, as in the Helm EKS example) now
+  fails start-up unless `OAX_OTEL_INSECURE=true` is set (Helm: add it to `config.extraEnv`
+  until the chart has its own value), and an endpoint with credentials, a query or
+  a fragment is refused. **Breaking** as well for installs that relied on the
+  standard `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`, `_CLIENT_CERTIFICATE` or `_CLIENT_KEY`
+  variables (also the `_TRACES_` variants), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+  `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_TRACES_SAMPLER` or `OTEL_TRACES_SAMPLER_ARG`: start-up
+  now fails with a message naming the replacement (`OAX_OTEL_HEADERS_SECRET`, the network
+  configuration, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OAX_OTEL_SAMPLE_RATIO`). `OTEL_SDK_DISABLED=true`
+  or an `OTEL_TRACES_EXPORTER` other than `otlp` next to an endpoint fails start-up as well (they
+  are not read; unset the endpoint to turn the export off). A process in which another
+  OpenTelemetry SDK is already registered (auto-instrumentation through `NODE_OPTIONS` or an
+  operator injection) now fails start-up.
 - **UI**: German glossary follows the multi-tenant UX design: "Use Case" (was "Anwendungsfall") and
   "Owner-Team" (was "Verantwortliches Team"). The browser tab title now reads
   `Page · Tenant · open-agentix`.

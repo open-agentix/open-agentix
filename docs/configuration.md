@@ -319,8 +319,31 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `OAX_METRICS_TOKEN` | – (*secret*) | If set, `GET /metrics` (API and worker) requires `Authorization: Bearer <token>` (ServiceMonitor `bearerTokenSecret`). |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | – | Enables OpenTelemetry traces via OTLP/HTTP (`<endpoint>/v1/traces`). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | – | Collector base URL (`<endpoint>/v1/traces`); unset = no export. `https://`, or `http://` for loopback / with `OAX_OTEL_INSECURE`. No credentials, query or fragment in the URL. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` | `http/protobuf` or `http/json`. |
 | `OTEL_SERVICE_NAME` | `openagentix-api` / `openagentix-worker` | Service name in traces. |
+| `OAX_OTEL_RESOURCE_ATTRIBUTES` | – | Static `key=value,...` resource attributes (validated: lower-case dotted keys, no `service.name`, no `oax.tenant.*`, nothing secret-like; at most 32). |
+| `OAX_OTEL_HEADERS_SECRET` | – | Name of the secret that holds the exporter headers (`Name=value,Name2=value2`), resolved like any secret reference; never logged. |
+| `OAX_OTEL_INSECURE` | `false` | Allow `http://` to a non-loopback collector (in-cluster without TLS). |
+| `OAX_OTEL_MAX_QUEUE` | `2048` | Export queue size; spans beyond it are dropped and counted. |
+| `OAX_OTEL_EXPORT_TIMEOUT_MS` | `10000` | Export timeout. |
+| `OAX_OTEL_EXCEPTION_DETAIL` | `off` | `guarded`: record `exception.message` after the ContextGuard, capped at 256 characters (the stack is never recorded). |
+| `OAX_OTEL_SAMPLE_RATIO` | `1` | Parsed only (slice S6). |
+| `OAX_OTEL_KEEP` | `error,deny,approval,budget,guard` | Parsed only (slice S6). |
+| `OAX_OTEL_KEEP_BUFFER_SPANS` | `512` | Parsed only (slice S6). |
+| `OAX_OTEL_NODE_EVENTS_MAX` | `128` | Parsed only (slice S4). |
+| `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link`; parsed only (slice S2). |
+| `OAX_OTEL_MCP_PROPAGATION` | `deny` | `deny` or `allow`; parsed only (slice S8). |
+| `OAX_OTEL_CONTENT` | `off` | Only `off` is accepted (content capture is a gated later slice). |
+| `OAX_OTEL_GENAI_METRICS` | `false` | Parsed only (slice S5). |
+| `OAX_OTEL_TRACE_URL_TEMPLATE` | – | Run-view link template; must contain `{traceId}`; parsed only (slice S2). |
+
+**Refused at start-up:** the standard `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`,
+`_CLIENT_CERTIFICATE`, `_CLIENT_KEY` (also with `_TRACES_`), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`: use
+`OAX_OTEL_HEADERS_SECRET`, the network configuration and `OAX_OTEL_SAMPLE_RATIO` instead. With an
+endpoint set, `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER` other than `otlp` is refused too
+(they are not read; unset the endpoint to turn the export off). Details and the data that is never exported: [`observability.md`](observability.md).
 
 ## Air-gapped mode
 

@@ -1,3 +1,4 @@
+import { isSpanContextValid, trace } from '@opentelemetry/api';
 import { CostModel, DefaultSecretResolver, type SecretResolver } from '@openagentix/core';
 import pino, { type Logger } from 'pino';
 import {
@@ -54,8 +55,19 @@ export const LOG_REDACT_PATHS = [
   '*.apiKey',
 ];
 
+/** Adds the active span's ids to every log line, for log-to-trace correlation (ids only). */
+export function traceLogFields(): { trace_id?: string; span_id?: string } {
+  const ctx = trace.getActiveSpan()?.spanContext();
+  return ctx && isSpanContextValid(ctx) ? { trace_id: ctx.traceId, span_id: ctx.spanId } : {};
+}
+
 export function createLogger(level: string, name = 'openagentix'): Logger {
-  return pino({ name, level, redact: { paths: LOG_REDACT_PATHS, censor: '[REDACTED]' } });
+  return pino({
+    name,
+    level,
+    redact: { paths: LOG_REDACT_PATHS, censor: '[REDACTED]' },
+    mixin: traceLogFields,
+  });
 }
 
 export async function createContext(

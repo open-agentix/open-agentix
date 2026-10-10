@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryCache, ValkeyCache, cached, createCache, type ValkeyLike } from '../src/cache.js';
+import { loadConfig } from '../src/config.js';
 import { Metrics } from '../src/metrics.js';
 import {
   decodeSeqCursor,
@@ -94,21 +95,28 @@ describe('pagination', () => {
   });
 });
 
+const otel = (env: Record<string, string> = {}) =>
+  loadConfig({ OAX_DATABASE_URL: 'memory://', NODE_ENV: 'test', ...env }).otel;
+
 describe('telemetry and metrics', () => {
   it('is a no-op without endpoint and wraps spans', async () => {
-    const t = await initTelemetry(undefined, 'x');
+    const t = await initTelemetry(otel());
     expect(t.enabled).toBe(false);
     await t.shutdown();
-    expect(await withSpan('ok', { a: 1 }, async () => 5)).toBe(5);
+    expect(await withSpan({ name: 'ok', kind: 'run' }, { 'oax.worker': 'w' }, async () => 5)).toBe(
+      5,
+    );
     await expect(
-      withSpan('fail', {}, async () => {
+      withSpan({ name: 'fail', kind: 'run' }, {}, async () => {
         throw new Error('boom');
       }),
     ).rejects.toThrow('boom');
   });
 
   it('registers an OTLP exporter when configured (no spans exported)', async () => {
-    const t = await initTelemetry('http://127.0.0.1:4318', 'oax-test');
+    const t = await initTelemetry(otel({ OTEL_EXPORTER_OTLP_ENDPOINT: 'http://127.0.0.1:4318' }), {
+      serviceName: 'oax-test',
+    });
     expect(t.enabled).toBe(true);
     await t.shutdown();
   });

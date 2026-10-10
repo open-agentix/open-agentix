@@ -10,13 +10,13 @@ import { createPullRequestDelivery } from './pr-wiring.js';
 import { Worker } from './worker.js';
 
 const config = loadConfig();
-const telemetry = await initTelemetry(
-  config.otel.endpoint,
-  process.env.OTEL_SERVICE_NAME ?? 'openagentix-worker',
-);
-const ctx = await createContext(config, {
-  logger: createLogger(config.logLevel, 'openagentix-worker'),
+const logger = createLogger(config.logLevel, 'openagentix-worker');
+const telemetry = await initTelemetry(config.otel, {
+  serviceName: process.env.OTEL_SERVICE_NAME ?? 'openagentix-worker',
+  warn: (fields, message) => logger.warn(fields, message),
 });
+const ctx = await createContext(config, { logger });
+telemetry.attachStats(ctx.metrics.otel);
 // Opt-in container runner: one hardened container per isolated step (docs/runners.md).
 const container = config.runners.container;
 // The egress proxy is NOT part of this process: it is its own service (egress-proxy-cli.js), so that

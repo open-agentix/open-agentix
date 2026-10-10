@@ -20,6 +20,7 @@ import {
   validateResourceCeiling,
 } from '@openagentix/runners';
 import { z } from 'zod';
+import { OTEL_ENV_SHAPE, buildOtelConfig, type OtelConfig } from './telemetry-config.js';
 import { loadDatabaseConfig, type DatabaseConfig } from './db/settings.js';
 
 /**
@@ -230,8 +231,7 @@ export const EnvSchema = z.object({
   OAX_MODEL_PROXY_PRIVATE_ALLOW: z.string().default(''),
   /** `anthropic-beta` values a pass-through client may pass on (default: none). */
   OAX_MODEL_PROXY_ANTHROPIC_BETAS: z.string().default(''),
-  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
-  OTEL_SERVICE_NAME: z.string().optional(),
+  ...OTEL_ENV_SHAPE,
 
   // Air-gapped mode (docs/airgapped.md): fail-closed egress allowlist.
   OAX_AIRGAPPED: bool.default(false),
@@ -307,7 +307,7 @@ export interface Config {
   };
   ssePollMs: number;
   metricsToken: string | undefined;
-  otel: { endpoint: string | undefined; serviceName: string };
+  otel: OtelConfig;
   workerHttp: { host: string; port: number };
   secrets: { dir: string | undefined; envRefs: string[] };
   demoMcp: boolean;
@@ -508,10 +508,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     ssePollMs: Math.max(50, e.OAX_SSE_POLL_MS),
     metricsToken: e.OAX_METRICS_TOKEN,
-    otel: {
-      endpoint: e.OTEL_EXPORTER_OTLP_ENDPOINT,
-      serviceName: e.OTEL_SERVICE_NAME ?? 'openagentix-api',
-    },
+    otel: buildOtelConfig(e, 'openagentix-api', env),
     workerHttp: { host: e.OAX_WORKER_HTTP_HOST, port: e.OAX_WORKER_HTTP_PORT },
     secrets: { dir: e.OAX_SECRETS_DIR, envRefs: secretEnvRefs(env) },
     demoMcp: e.OAX_DEMO_MCP,
