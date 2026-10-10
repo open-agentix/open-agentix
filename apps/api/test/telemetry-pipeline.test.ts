@@ -560,7 +560,7 @@ describe('another OpenTelemetry SDK in the process (auto-instrumentation)', () =
   });
 
   it('starts normally once nothing else is registered', async () => {
-    const t = await initTelemetry(otel());
+    const t = await initTelemetry(otel({}));
     expect(t.enabled).toBe(false);
   });
 });
