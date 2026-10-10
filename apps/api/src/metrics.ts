@@ -188,7 +188,14 @@ export class Metrics {
       labelNames: ['kind'],
       registers: [this.registry],
     });
+    const otelInboundContext = new Counter({
+      name: `${prefix}otel_inbound_context_total`,
+      help: 'Inbound traceparent headers on API requests by outcome (ignored, linked, invalid); never used as a parent',
+      labelNames: ['result'],
+      registers: [this.registry],
+    });
     this.otel = {
+      inboundContext: (result, n) => otelInboundContext.inc({ result }, n),
       attributesDropped: (keyClass: DropClass, n) =>
         otelAttributesDropped.inc({ key_class: keyClass }, n),
       redactions: (kind, n) => otelRedactions.inc({ kind }, n),

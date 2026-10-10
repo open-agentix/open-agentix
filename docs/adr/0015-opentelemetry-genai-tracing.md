@@ -1,6 +1,7 @@
 # ADR 0015: Observability with OpenTelemetry GenAI semantic conventions
 
-- Status: Proposed
+- Status: Proposed. Slices S1 and S2 are implemented (see "Implementation notes S2" below and
+  [`observability.md`](../observability.md)); S3 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W3-5 (#37, "Observability completion: step, model and tool spans and the missing
   metrics"); RM-53 of the roadmap gap list; replaces the span list in the W3-5 acceptance
@@ -625,6 +626,28 @@ Negative:
 - **Only `oax.*` names, no GenAI conventions.** Rejected: loses the ecosystem (Langfuse, Phoenix,
   dashboards); the pin makes the experimental status manageable.
 - **Traces as the audit trail.** Rejected: sampling, loss and external mutability; ADR 0002 stays.
+
+## Implementation notes S2
+
+Decisions taken while implementing slice S2 (#207) where the text above left room:
+
+- Migration `0020_run_trace_identity` (planned without a number). Besides the three columns it adds
+  shape checks (both ids or neither, W3C shape, not all zero) and a trigger that makes
+  `runs.trace_id` / `runs.trace_root_span_id` immutable. There is no backfill: a run created before
+  the migration has no trace identity and its audit entries stay as they are.
+- `payload.otel.spanId` is the documenting span when there is one and otherwise the run's root span;
+  `traceId` is always the run's. The audit service writes the field from the run row, replaces any
+  caller-supplied `otel`, and omits it for an entry whose tenant is not the run's tenant (an
+  `access.denied` entry caused by another tenant's request for a foreign run id).
+- `oax.audit.seq` is set on the admission span and on the attempt span (for `run.completed`).
+  Further documenting spans get it in the slices that create them.
+- Every id the platform creates for a span comes from the operating system CSPRNG (the provider's
+  id generator replaces the SDK default, which uses `Math.random`).
+- `traceId` (and the link from `OAX_OTEL_TRACE_URL_TEMPLATE`, `traceUrl`) is returned by
+  `GET /v1/runs/{id}` only, not by lists or the other run endpoints.
+- `oax_otel_inbound_context_total{result=ignored|linked|invalid}` counts inbound `traceparent`
+  headers; with `ignore`, and in `link` mode without an exporter, nothing is linked.
+- `run_node_sessions.trace_context` is created here but written only by slice S4.
 
 ## Open questions (owner decisions needed)
 

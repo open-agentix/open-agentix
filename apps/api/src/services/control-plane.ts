@@ -588,6 +588,8 @@ export class ControlPlaneService {
       target: runId,
       runId,
       payload: { status: result.status, usage: result.usage, error: result.error ?? null },
+      // The attempt span `invoke_workflow` documents this entry (payload.otel, oax.audit.seq).
+      linkSpan: true,
     });
   }
 }

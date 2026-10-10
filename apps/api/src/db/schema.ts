@@ -373,6 +373,13 @@ export const runs = pgTable(
     errorCode: text('error_code'),
     errorMessage: text('error_message'),
     outputs: jsonb('outputs'),
+    /**
+     * Trace identity (ADR 0015 section 2): 16 random bytes (hex) and the id of the root span
+     * `oax.run.admit`, written once at run creation from a CSPRNG, never derived from the run id
+     * and never taken from an input. NULL for runs created before migration 0020 (no trace).
+     */
+    traceId: text('trace_id'),
+    traceRootSpanId: text('trace_root_span_id'),
   },
   (t) => [
     index('runs_agent_created_idx').on(t.agentId, t.createdAt.desc(), t.id.desc()),
@@ -386,6 +393,11 @@ export const runs = pgTable(
     index('runs_lease_idx')
       .on(t.leaseUntil)
       .where(sql`status in ('running', 'awaiting_approval')`),
+    // Both ids or neither, in W3C shape and not all zero (ADR 0015 section 2).
+    check(
+      'runs_trace_ids_shape',
+      sql`(${t.traceId} is null) = (${t.traceRootSpanId} is null) and (${t.traceId} is null or (${t.traceId} ~ '^[0-9a-f]{32}$' and ${t.traceId} <> repeat('0', 32) and ${t.traceRootSpanId} ~ '^[0-9a-f]{16}$' and ${t.traceRootSpanId} <> repeat('0', 16)))`,
+    ),
   ],
 );
 
@@ -485,11 +497,20 @@ export const runNodeSessions = pgTable(
     /** SHA-256 (hex) of the archive; kept after the bytes are dropped. */
     workspaceSeedSha256: text('workspace_seed_sha256'),
     workspaceSeedFetchedAt: ts('workspace_seed_fetched_at'),
+    /**
+     * W3C `traceparent` of the dispatching span (ADR 0015 section 6.1). Reserved: written by a later
+     * slice (S4); the platform, never the node, sets it.
+     */
+    traceContext: text('trace_context'),
     createdAt: created(),
   },
   (t) => [
     uniqueIndex('run_node_sessions_node_uq').on(t.nodeId),
     index('run_node_sessions_run_idx').on(t.runId),
+    check(
+      'run_node_sessions_trace_context_shape',
+      sql`${t.traceContext} is null or ${t.traceContext} ~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$'`,
+    ),
   ],
 );
 

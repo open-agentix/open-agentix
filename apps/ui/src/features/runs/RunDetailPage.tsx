@@ -58,7 +58,10 @@ export function RunDetailPage() {
   const cancel = useMutation({
     mutationFn: () => call(api.POST('/v1/runs/{id}/cancel', { params: { path: { id: runId } } })),
     onSuccess: (r) => {
-      queryClient.setQueryData(runQuery(runId).queryKey, r);
+      // The cancel response has no trace identity: keep what the detail already holds.
+      queryClient.setQueryData(runQuery(runId).queryKey, (prev) =>
+        prev ? { ...prev, ...r } : prev,
+      );
       toast.success(t('runs.cancelled'));
     },
   });

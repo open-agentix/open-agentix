@@ -1,21 +1,33 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   ProxyTracerProvider,
+  ROOT_CONTEXT,
+  SpanKind as OtelSpanKind,
   SpanStatusCode,
+  TraceFlags,
+  context,
+  isSpanContextValid,
   trace,
+  type Context,
+  type Link,
   type Span,
   type SpanContext,
   type MeterProvider,
   type Tracer,
   type TracerProvider,
 } from '@opentelemetry/api';
-import type { BufferConfig } from '@opentelemetry/sdk-trace-base';
+import type { BufferConfig, IdGenerator } from '@opentelemetry/sdk-trace-base';
 import {
   type ContextGuard,
   OaxError,
   DefaultSecretResolver,
   type SecretResolver,
   describeError,
+  isSpanId,
+  isTraceId,
   MAX_INPUT_CHARS,
+  newSpanId,
+  newTraceId,
   type SpanKind,
 } from '@openagentix/core';
 import type { OtelConfig } from './telemetry-config.js';
@@ -55,17 +67,43 @@ export interface GuardedSpan {
   spanContext(): SpanContext;
 }
 
+/** A trace position taken from stored columns, never from a request. */
+export interface StoredSpanIds {
+  traceId: string;
+  spanId: string;
+}
+
 export interface SpanSpec {
   name: string;
   kind: SpanKind;
   /** Per-run guard that also knows the run's resolved secret values (default: the runtime guard). */
   guard?: ContextGuard;
+  /**
+   * The span is the root of a trace and gets exactly these ids (the admission span of a run uses
+   * the ids stored on the run row). It has no parent: the active span is not inherited.
+   */
+  root?: StoredSpanIds;
+  /**
+   * Parent is a remote context rebuilt from stored ids (an attempt of an existing run). The span
+   * gets a fresh span id. Invalid ids are ignored: the span then starts its own trace (it does not
+   * inherit the active span).
+   */
+  parent?: StoredSpanIds;
+  /** Start a new trace instead of continuing the active one (HTTP server spans). */
+  newTrace?: boolean;
+  /** Links by id; flags only, no trace state, no attributes. */
+  links?: readonly StoredSpanIds[];
+  /** Link the span that is active now (admission links the request span, ADR 0015 section 2). */
+  linkActive?: boolean;
 }
 
 const EVENT_NAME = /^[a-z][a-z0-9_.]{0,63}$/;
 
+/** Raw span to the guarded view the code received, for `activeGuardedSpan`. */
+const guardedBySpan = new WeakMap<Span, GuardedSpan>();
+
 function guardedSpan(span: Span, kind: SpanKind, guard: ContextGuard | undefined): GuardedSpan {
-  return {
+  const g: GuardedSpan = {
     setAttributes(attributes) {
       span.setAttributes(sanitizeForSpan(kind, attributes, guard));
     },
@@ -75,6 +113,90 @@ function guardedSpan(span: Span, kind: SpanKind, guard: ContextGuard | undefined
     },
     spanContext: () => span.spanContext(),
   };
+  guardedBySpan.set(span, g);
+  return g;
+}
+
+/**
+ * The active span as the guarded view, when it was created by `withSpan`/`startGuardedSpan` and
+ * belongs to the given trace. Anything else (a foreign span, another trace, no span) is undefined.
+ */
+export function activeGuardedSpan(traceId: string): GuardedSpan | undefined {
+  const span = trace.getActiveSpan();
+  if (!span) return undefined;
+  const ctx = span.spanContext();
+  if (!isSpanContextValid(ctx) || ctx.traceId !== traceId) return undefined;
+  return guardedBySpan.get(span);
+}
+
+/** The span id of the active span when it is valid and part of `traceId`. */
+export function activeSpanIdIn(traceId: string): string | undefined {
+  const ctx = trace.getActiveSpan()?.spanContext();
+  return ctx && isSpanContextValid(ctx) && ctx.traceId === traceId ? ctx.spanId : undefined;
+}
+
+/**
+ * Id generator of the provider. Every id comes from the operating system CSPRNG (the SDK's default
+ * generator uses `Math.random`). `withIds` makes the next span that is started synchronously inside
+ * the callback take the given ids, which is how the admission span gets the ids stored on the run.
+ */
+export class RunIdGenerator implements IdGenerator {
+  private static readonly slot = new AsyncLocalStorage<{
+    traceId?: string;
+    spanId?: string;
+  }>();
+
+  static withIds<T>(ids: StoredSpanIds, fn: () => T): T {
+    return RunIdGenerator.slot.run({ traceId: ids.traceId, spanId: ids.spanId }, fn);
+  }
+
+  generateTraceId = (): string => {
+    const store = RunIdGenerator.slot.getStore();
+    const forced = store?.traceId;
+    if (store && forced) {
+      delete store.traceId;
+      return forced;
+    }
+    return newTraceId();
+  };
+
+  generateSpanId = (): string => {
+    const store = RunIdGenerator.slot.getStore();
+    const forced = store?.spanId;
+    if (store && forced) {
+      delete store.spanId;
+      return forced;
+    }
+    return newSpanId();
+  };
+}
+
+/** The remote span context of a stored position: sampled, no trace state. */
+function remoteContext(ids: StoredSpanIds): SpanContext {
+  return {
+    traceId: ids.traceId,
+    spanId: ids.spanId,
+    traceFlags: TraceFlags.SAMPLED,
+    isRemote: true,
+  };
+}
+
+function linksOf(spec: SpanSpec): Link[] {
+  const links: Link[] = [];
+  for (const l of spec.links ?? [])
+    if (isTraceId(l.traceId) && isSpanId(l.spanId)) links.push({ context: remoteContext(l) });
+  if (spec.linkActive) {
+    const active = trace.getActiveSpan()?.spanContext();
+    if (active && isSpanContextValid(active))
+      links.push({
+        context: {
+          traceId: active.traceId,
+          spanId: active.spanId,
+          traceFlags: active.traceFlags,
+        },
+      });
+  }
+  return links;
 }
 
 /** Marks the span failed: status description and `error.type` are the code, the event the class. */
@@ -97,33 +219,88 @@ function recordFailure(
   span.addEvent('exception', sanitizeForSpan(kind, event, guard));
 }
 
-/** Runs `fn` in a span, recording errors without their messages. */
-export async function withSpan<T>(
-  spec: SpanSpec,
-  attributes: Record<string, unknown>,
-  fn: (span: GuardedSpan) => Promise<T>,
-): Promise<T> {
+/** A started span for callers that cannot wrap the work in a callback (a Fastify hook). */
+export interface OpenSpan {
+  span: GuardedSpan;
+  /** Runs `fn` with this span as the active one. */
+  run<T>(fn: () => T): T;
+  /** Ends the span; a failure is recorded as a code and a class name only. */
+  end(failure?: unknown): void;
+}
+
+function openSpan(spec: SpanSpec, attributes: Record<string, unknown>): OpenSpan {
   const name = sanitizeSpanName(spec.name, spec.guard);
   const options = {
     attributes: {
       ...sanitizeForSpan(spec.kind, attributes, spec.guard),
       ...(name.redacted ? { 'oax.redacted': true } : {}),
     },
+    // Only the request span is a SERVER span; model calls (CLIENT) arrive with the executor slice.
+    kind: spec.kind === 'http_server' ? OtelSpanKind.SERVER : OtelSpanKind.INTERNAL,
+    links: linksOf(spec),
   };
-  return tracer().startActiveSpan(name.name, options, async (span) => {
-    try {
-      return await fn(guardedSpan(span, spec.kind, spec.guard));
-    } catch (e) {
-      try {
-        recordFailure(span, spec.kind, spec.guard, e);
-      } catch {
-        // Telemetry must never replace or hide the caller's error (e.g. a throwing message getter).
+  let parent: Context = context.active();
+  if (spec.root || spec.newTrace) parent = ROOT_CONTEXT;
+  else if (spec.parent)
+    parent =
+      isTraceId(spec.parent.traceId) && isSpanId(spec.parent.spanId)
+        ? trace.setSpanContext(ROOT_CONTEXT, remoteContext(spec.parent))
+        : ROOT_CONTEXT;
+  const start = () => tracer().startSpan(name.name, options, parent);
+  const raw =
+    spec.root && isTraceId(spec.root.traceId) && isSpanId(spec.root.spanId)
+      ? RunIdGenerator.withIds(spec.root, start)
+      : start();
+  if (spec.root && raw.isRecording() && raw.spanContext().spanId !== spec.root.spanId)
+    // The provider ignores the id generator: audit links would point at a span that does not exist.
+    telemetryRuntime().warn(
+      { reason: 'span_id_not_applied' },
+      'telemetry root span id not applied',
+    );
+  const spanContext = trace.setSpan(parent, raw);
+  let ended = false;
+  return {
+    span: guardedSpan(raw, spec.kind, spec.guard),
+    run: (fn) => context.with(spanContext, fn),
+    end(failure) {
+      if (ended) return;
+      ended = true;
+      if (failure !== undefined) {
+        try {
+          recordFailure(raw, spec.kind, spec.guard, failure);
+        } catch {
+          // Telemetry must never replace or hide the caller's error (e.g. a throwing message getter).
+        }
       }
-      throw e;
-    } finally {
-      span.end();
-    }
-  });
+      raw.end();
+    },
+  };
+}
+
+export function startGuardedSpan(spec: SpanSpec, attributes: Record<string, unknown>): OpenSpan {
+  return openSpan(spec, attributes);
+}
+
+/** Runs `fn` in a span, recording errors without their messages. */
+export async function withSpan<T>(
+  spec: SpanSpec,
+  attributes: Record<string, unknown>,
+  fn: (span: GuardedSpan) => Promise<T>,
+): Promise<T> {
+  const open = openSpan(spec, attributes);
+  try {
+    return await open.run(() => fn(open.span));
+  } catch (e) {
+    open.end(e ?? new Error('thrown value'));
+    throw e;
+  } finally {
+    open.end();
+  }
+}
+
+/** True while an SDK provider is registered, i.e. while spans are recorded at all. */
+export function tracingEnabled(): boolean {
+  return registeredProvider() !== undefined;
 }
 
 export interface Telemetry {
@@ -267,6 +444,7 @@ export async function initTelemetry(
       'service.name': init.serviceName ?? config.serviceName,
     }),
     sampler: new ParentBasedSampler({ root: new AlwaysOnSampler() }),
+    idGenerator: new RunIdGenerator(),
     spanLimits: SPAN_LIMITS,
     generalLimits: {
       attributeValueLengthLimit: SPAN_LIMITS.attributeValueLengthLimit,

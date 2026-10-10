@@ -3060,6 +3060,10 @@ export interface paths {
                             errorCode: string | null;
                             errorMessage: string | null;
                             outputs: unknown;
+                            /** @description W3C trace id of the run (random, server-generated); null for runs created before the trace identity existed */
+                            traceId: string | null;
+                            /** @description Link to the trace in the operator's trace backend (OAX_OTEL_TRACE_URL_TEMPLATE); null when no template is configured or the run has no trace */
+                            traceUrl: string | null;
                         };
                     };
                 };

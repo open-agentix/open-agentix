@@ -5,9 +5,11 @@ model and the slice plan are in [ADR 0015](adr/0015-opentelemetry-genai-tracing.
 documents what is implemented; it grows with each slice.
 
 > **Status.** The core is hardened (ADR 0015 slice S1): the attribute allowlist, error handling
-> without messages, the exporter configuration and its safety rules. The span tree (one span per
-> step, model call and tool call) follows in later slices. Today the worker emits one span per
-> run (`oax.run`).
+> without messages, the exporter configuration and its safety rules. Slice S2 adds the run's trace
+> identity, the audit links and the first spans: `oax.run.admit` at admission, one
+> `invoke_workflow {name}` per worker attempt and one HTTP server span per API request. The spans
+> below the workflow (handover, agent, model call, tool call, policy, approval) follow in later
+> slices.
 
 ## Convention version
 
@@ -105,6 +107,89 @@ registered and no socket is opened.
 - **Air-gapped mode** is unchanged: the endpoint must be on `OAX_AIRGAPPED_ALLOW`. Routing the
   exporter through the outbound dispatcher (proxies, trust bundles, client certificates) is slice S7.
 
+## One trace per run
+
+Every run gets its trace identity when its row is created (`RunsService.enqueue`, on the control
+plane): `runs.trace_id` (16 random bytes, hex) and `runs.trace_root_span_id` (8 random bytes), both
+from the operating system CSPRNG, written once, and never changed (a database trigger refuses an
+update; shape checks refuse half-set, malformed or all-zero values). They are
+
+- **not derived** from the run id, the tenant, the time or anything else, so a trace id says nothing
+  about a run and two tenants' runs cannot be correlated through their trace ids;
+- **never taken from an input**: a `traceparent` header, a webhook body, an event payload or a node
+  report cannot choose, predict or join a run's trace;
+- present **with or without an exporter** (they cost nothing and the audit chain stores them).
+
+Runs created before migration `0020` have `NULL` ids: they have no trace, their audit entries are
+unchanged, and their worker attempts start an unrelated trace each.
+
+```text
+oax.run.admit                       root span, the ids stored on the run (api or worker, at creation)
+invoke_workflow {definition.name}   one per attempt (lease); child of the stored root span
+```
+
+- **`oax.run.admit`** (INTERNAL) is created with exactly the stored `trace_id` / `trace_root_span_id`
+  and has no parent. The API or webhook request span that is active at admission is a **link**,
+  never the parent. Attributes: `oax.run.id`, `oax.tenant.id`, `oax.trigger.kind`,
+  `oax.admission.result` (`queued` or `blocked`), `oax.audit.seq`.
+- **`invoke_workflow {name}`** (INTERNAL, worker) replaces the former `oax.run` span. Each attempt is
+  a child of a remote context rebuilt from the two stored columns, so a run that a crashed worker
+  lost and another worker retries is **one trace with several attempt spans**; the lost attempt's
+  unexported spans are simply missing. Attributes: `gen_ai.operation.name`, `gen_ai.workflow.name`,
+  `oax.agent.version`, `oax.run.attempt`, `oax.run.id`, `oax.tenant.id`, `oax.tenant.root_id`, and at
+  the end `oax.run.status`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`,
+  `oax.cost.micro_usd`, `oax.audit.seq`.
+- **HTTP server span** `{METHOD} {route pattern}` (SERVER, api): created by a Fastify hook, not by
+  `instrumentation-http`. Only the method, the route **pattern**, the status code and the access
+  class (`oax.access`) are recorded; never a concrete path, a query string, a header or a body.
+  Requests that match no route and `/healthz`, `/readyz`, `/metrics` get no span. Every request
+  starts its own trace.
+
+Spans only exist while an exporter is configured; ids and audit links do not depend on it.
+
+### Inbound `traceparent`
+
+An inbound `traceparent` on an API request (webhook or authenticated) is never trusted: it is not
+the parent of any span and not the trace of any run. `OAX_OTEL_INBOUND_CONTEXT` decides what else
+happens, and the outcome is counted in `oax_otel_inbound_context_total{result}`:
+
+| Value | Effect |
+| --- | --- |
+| `ignore` (default) | The header is dropped (`result=ignored`). |
+| `link` | A well-formed header becomes a span **link** of the request span: trace id, span id and flags only, never `tracestate` or baggage (`result=linked`). Without an exporter nothing is linked and it counts as `ignored`. |
+
+A header that is not exactly `00-<32 hex>-<16 hex>-<2 hex>` (lower-case, not all zero) counts as
+`invalid` in both modes. The request is never rejected because of it.
+
+### Audit links
+
+The audit chain ([ADR 0002](adr/0002-audit-hash-chain.md)) stays the source of truth; traces may be
+sampled, dropped or deleted. Both directions are linked:
+
+- **Audit entry to trace.** Every audit entry of a run that has a trace identity gets
+  `payload.otel = { "traceId": "<runs.trace_id>", "spanId": "<hex>" }`. The ids are written by the
+  audit service from the run row; a caller-supplied `payload.otel` is always removed or replaced, so
+  neither a node report nor a service can forge a link. `spanId` is the span that documents the
+  entry when there is one (`run.queued` / `run.blocked`: `oax.run.admit`; `run.completed`: the
+  attempt span that was active) and otherwise the root span of the run's trace. The field is part
+  of the hashed payload, ids only, and is added only when the entry belongs to the run's own tenant
+  (the `access.denied` entry that another tenant's request for a foreign run id causes carries no
+  trace id).
+- **Trace to audit entry.** A span that documents an entry carries `oax.audit.seq`, set after the
+  entry is committed.
+
+**Chain compatibility.** Verification recomputes the payload digest and the entry hash from the
+stored payload; nothing about the algorithm changed. Entries written before the slice have no
+`otel` and verify exactly as before (a golden test pins the digest and hash of such an entry), and
+changing `otel` in a stored entry breaks the chain like any other payload change.
+
+### Run API
+
+`GET /v1/runs/{id}` returns `traceId` (null for runs without a trace) and, when
+`OAX_OTEL_TRACE_URL_TEMPLATE` is set, `traceUrl` with the filled template. Both are returned only to
+principals that may read the run (same tenant and permission as the rest of the run); the run
+list, the trigger response and the other run endpoints do not contain them.
+
 ## Log correlation
 
 Every log line written inside a span carries `trace_id` and `span_id` (hex, ids only).
@@ -112,8 +197,8 @@ Every log line written inside a span carries `trace_id` and `span_id` (hex, ids 
 ## Configuration
 
 See [`configuration.md`](configuration.md#observability) for the table of variables. Keys whose
-feature lands in a later slice (sampling, keep classes, node events, inbound context, MCP
-propagation, GenAI metrics, trace URL template) are parsed and validated now and have no effect yet.
+feature lands in a later slice (sampling, keep classes, node events, MCP propagation, GenAI
+metrics) are parsed and validated now and have no effect yet.
 
 ## Metrics of the tracing pipeline
 
@@ -123,5 +208,6 @@ propagation, GenAI metrics, trace URL template) are parsed and validated now and
 | `oax_otel_export_failures_total` | `reason` | Failed exports (`timeout`, `network`, `http`, `other`). |
 | `oax_otel_attributes_dropped_total` | `key_class` | Attributes the allowlist refused. |
 | `oax_otel_redactions_total` | `kind` | Values the ContextGuard changed (secret kinds, `invisible`). |
+| `oax_otel_inbound_context_total` | `result` | Inbound `traceparent` headers on API requests: `ignored`, `linked`, `invalid`. |
 
 All label values come from closed sets; none is derived from tenant input.
