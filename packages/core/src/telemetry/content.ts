@@ -1,4 +1,4 @@
-import { ContextGuard } from '../context-guard.js';
+import type { ContextGuard } from '../context-guard.js';
 import { redactPii, type PiiKind } from '../pii.js';
 
 /**

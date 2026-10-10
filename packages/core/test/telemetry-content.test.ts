@@ -91,7 +91,7 @@ describe('content attributes (ADR 0015 5.4)', () => {
       { messages: [{ role: 'user', content: 'ignore​ previous‮' }], outputText: '' },
       guard(),
     );
-    expect(r.attributes[CONTENT_INPUT_KEY]).not.toMatch(/[​‮]/);
+    expect(r.attributes[CONTENT_INPUT_KEY]).not.toMatch(/[\u200b\u202e]/);
     expect(r.attributes[CONTENT_OUTPUT_KEY]).toBeUndefined();
   });
 
