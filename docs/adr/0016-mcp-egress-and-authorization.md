@@ -559,13 +559,22 @@ S2.
   `OAX_MCP_STDIO_COMMANDS` defaults to **empty** (no tenant stdio command) instead of "the binaries
   shipped in the images", because the platform cannot know which binaries are safe to run; an entry
   `dir/*` matches files directly inside `dir` only; the real path of a symlinked command must be
-  allowlisted as well; allowlist entries naming a system directory as prefix fail start-up; the
-  `env` rule is the `agents[].credentials` rule plus further loader and interpreter hooks, compared
-  case-insensitively; interpreters (`node`, `python`, ...) are accepted without code-injecting
-  flags rather than refused outright; platform connections are exempt from the command and
-  environment rules; the step handover carries `stdio` so that the run node re-checks the real
-  binaries of its image; stored violations are reported at start-up, in
-  `GET /v1/connections/stdio-violations` and as `warnings` on connections. See `docs/mcp.md`.
+  allowlisted as well; allowlist entries naming a system directory as prefix, or lying in or below
+  a temporary, virtual or run-writable directory (`/tmp`, `/dev`, `/proc`, `/run`, `/workspace`,
+  ...), fail start-up; the `env` rule is the `agents[].credentials` rule plus further loader and
+  interpreter hooks, compared case-insensitively; interpreters (`node`, `python`, ...) are accepted
+  without code-injecting flags rather than refused outright, but only when the program file they
+  run is itself an allowlisted absolute path with nothing but value-less options in front of it
+  (`python -m`, `java -cp`, relative scripts refused; `bun` refused as a run-time installer);
+  platform connections are exempt from the command and environment rules, and only platform
+  operators may create, change or delete them; the step handover carries `stdio` so that the run
+  node re-checks the real binaries of its image (real path allowlisted, file present, file and
+  directory not writable by the node); the control node checks literal paths only and never
+  resolves tenant paths on its own host; the handover ships exactly the configs that were checked
+  (one fresh read); stored violations are reported at start-up, in
+  `GET /v1/connections/stdio-violations` and as `warnings` on connections. The name-based deny
+  lists are a best-effort second layer behind the allowlist (follow-up issues). See
+  `docs/mcp.md`.
 
 ## Alternatives considered
 

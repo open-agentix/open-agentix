@@ -114,34 +114,55 @@ node when a run node is prepared, and by the run node against its own image):
 1. `command` is an absolute, normalized path (no `.`, `..`, `//`, trailing `/`; no `PATH` lookup).
 2. The path is listed in the operator allowlist `OAX_MCP_STDIO_COMMANDS`: comma-separated absolute
    files or `dir/*` (files directly inside `dir`, not below). The default is empty: no tenant stdio
-   command. Entries that are relative, contain other glob characters, or name a system directory as
-   prefix (`/*`, `/usr/bin/*`, `/bin/*`, `/tmp/*`, `/workspace/*`, ...) fail start-up. Use dedicated
-   directories of reviewed binaries.
-3. Symlinks: the run node resolves `command` with `realpath`; the **real path must also be
-   allowlisted**, so a link cannot lead out of the list (list the target too when you install via
-   links), and the real file's name is checked against rules 4 and 5. The control node resolves the
-   path only when the file exists on its own host. A command missing in the node image fails the
-   step.
+   command. Entries that are relative, contain other glob characters, name a system directory as
+   prefix (`/*`, `/usr/bin/*`, `/bin/*`, `/opt/*`, ...), or lie in or below a temporary, virtual or
+   run-writable directory (`/tmp`, `/var/tmp`, `/dev`, `/proc`, `/sys`, `/run`, `/workspace`,
+   `/work`; even a single file there) fail start-up. Use dedicated directories of reviewed
+   binaries.
+3. Symlinks and writability are checked by the **run node**, which holds the binaries: it resolves
+   `command` (and the program file of an interpreter, rule 5) with `realpath`; the **real path must
+   also be allowlisted**, so a link cannot lead out of the list (list the target too when you
+   install via links), and the real file's name is checked against rules 4 and 5. A file that is
+   missing in the node image, or that the node process could change (the file or its directory is
+   writable, so it could be replaced between the check and the start), fails the step. The run
+   node's root file system is read-only (container runner), so files of the image pass. The
+   control node checks the literal path only: it never resolves tenant-chosen paths on its own
+   host, so connection errors do not reveal which files exist there.
 4. Refused whatever the allowlist says (`mcp_command_forbidden`), by the lower-cased name of the file
    and of its real path, with a trailing version and `.exe/.cmd/.bat/.com/.ps1` removed (`pip3.11`,
    `python3.12`):
    - shells and multi-call binaries: `sh bash zsh dash ash ksh csh tcsh fish busybox toybox coreutils
      cmd powershell pwsh`, and programs that execute their arguments: `env sudo su doas xargs nohup
-     timeout nice setsid chroot nsenter strace gdb find awk sed make tar rsync vim less man ...`;
-   - run-time installers and package managers: `npx npm pnpm pnpx yarn bunx uvx uv pip pipx poetry
-     conda gem cargo go composer apt apk dpkg brew corepack mvn gradle ...`;
+     timeout nice setsid chroot nsenter strace gdb find awk sed make tar rsync vim less man ...`,
+     init and privilege wrappers of container images (`tini dumb-init catatonit gosu su-exec capsh
+     prlimit ...`), process runners (`cross-env concurrently nodemon pm2 just task ...`) and
+     database shells or calculators with a shell escape (`sqlite3 psql mysql mongosh dc R ...`);
+   - run-time installers and package managers: `npx npm pnpm pnpx yarn bunx bun uvx uv pip pipx
+     poetry conda gem cargo go composer apt apk dpkg brew corepack mvn gradle ...` (`bun` installs
+     missing packages at run time by default);
    - container, network and VCS tools: `docker podman nerdctl kubectl helm curl wget nc socat ssh
-     scp telnet openssl git svn`; the dynamic loader (`ld-linux*.so`, `ld.so`);
-   - interpreters that take their program on the command line (`tclsh jshell Rscript irb ...`).
+     scp telnet openssl git svn`; the dynamic loader (`ld-linux*.so`, `ld.so`, musl's `libc.musl*`);
+   - interpreters that take their program on the command line (`tclsh jshell Rscript irb erl ...`).
 5. Interpreters that are useful for real servers (`node`, `python`, `perl`, `ruby`, `php`, `lua`,
-   `java`, `deno`, `bun`, `dotnet`) are accepted, but arguments are refused when they inject or load
-   code: `node -e/-p/-r/--eval/--print/--require/--import/--loader/--env-file/--inspect*/--run`,
-   `python -c` and `-m pip|ensurepip|venv|http|code|...`, `perl -e/-E/-M/-I/-x`, `ruby -e/-r/-I`,
-   `php -r/-d/-S`, `java -javaagent/-agentlib/@argfile`, `deno|bun` sub-commands that evaluate or
-   install and URL arguments, a bare `-` (program from stdin). Short options are matched inside
-   clusters (`-Sc`) and with attached values (`-ecode`), long options with `_` read as `-`. Arguments
-   are scanned up to a `--`; an option of the script itself such as `node server.js -e x` is
-   refused too (deliberate: the scan does not know where the script ends).
+   `java`, `deno`, `dotnet`, and `tsx`/`ts-node`/`zx` on top of node) are accepted only when they
+   run a **program file that is itself allowlisted** (strict default): listing `node` allows
+   nothing by itself, `node /opt/mcp/jira/server.js` needs `/opt/mcp/jira/server.js` (or
+   `/opt/mcp/jira/*`) in the list as well. The program file is the first argument after the
+   interpreter options; only options that cannot take the next argument as their value may stand
+   before it (long options as `--name=value`, and per interpreter a short list such as
+   `--enable-source-maps`, python `-u -B -I -Wx -Xy`, java `-Xmx.. -Dk=v` followed by
+   `-jar <file>`, `deno run --allow-...`). Therefore `python -m module`, `java -cp ... Main`,
+   `dotnet <tool>` and relative program paths are refused. Arguments that inject or load code are
+   refused anywhere before a `--`: `node -e/-p/-r/-i/--eval/--print/--require/--import/--loader/
+   --env-file/--openssl-config/--experimental-config-file/--snapshot-blob/--inspect*/--run`,
+   `python -c/-i`, `perl -e/-E/-M/-I/-x/-S`, `ruby -e/-r/-I/-x/-S/-C`,
+   `php -r/-d/-c/-z/-S/--php-ini`, `java -javaagent/-agentlib/@argfile/--class-path=...`,
+   `deno` sub-commands that evaluate or install, `--preload`/`--env-file`/`--import-map`, and URL or
+   specifier arguments (`https:`, `npm:`, `jsr:`, `data:`), a bare `-` (program from stdin). Short
+   options are matched inside clusters (`-Sc`) and with attached values (`-ecode`), long options
+   with `_` read as `-`. Arguments are scanned up to a `--`; an option of the program itself such
+   as `node server.js -e x` is refused too (deliberate: the scan does not know where the program's
+   own arguments start).
 6. At most 64 arguments of 4096 characters, no NUL bytes. There is no field for a working
    directory, shell or uid (the schema rejects unknown keys); the child starts in the process
    directory with `env` plus `PATH` only.
@@ -149,11 +170,21 @@ node when a run node is prepared, and by the run node against its own image):
    `agents[].credentials` (`PATH HOME USER SHELL PWD TMPDIR LANG NODE_OPTIONS NODE_PATH`, proxy
    variables, `OAX_*`, `LD_*`, `DYLD_*`) plus other loader and interpreter hooks (`BASH_ENV ENV
    IFS PYTHON* PERL5* RUBYOPT JAVA_TOOL_OPTIONS CLASSPATH GIT_* NODE_* NPM_* PIP_* UV_* XDG_*
-   SSL_CERT_* GLIBC_* MALLOC_* ...`), compared case-insensitively (`https_proxy`).
+   SSL_CERT_* GLIBC_* MALLOC_* OPENSSL_* DOTNET_* CORECLR_* COMPLUS_* QT_* GTK_* GIO_* GST_*
+   SSH_* KRB5* ...`), compared case-insensitively (`https_proxy`).
 
 Allowlist the binary, not a launcher: `/opt/mcp/bin/jira-mcp` is a fine entry, `/usr/bin/env` and
 `/bin/sh` are never accepted, and a wrapper script is as trusted as everything it calls. The
-allowlist is only as safe as the directories it names: do not list a directory a run can write to.
+allowlist is the wall; the name rules of 4, 5 and 7 are a second, best-effort layer and cannot be
+complete: a shell copied or hard-linked under another name (`/opt/mcp/bin/helper` that is `bash`),
+a script whose shebang or body runs its arguments (`exec "$@"`), or a server that reads a
+configuration file named in its arguments is only as safe as the operator's review of that file.
+The allowlist is only as safe as the directories it names: do not list a directory a run can write
+to.
+
+**Who manages platform connections.** Creating, changing and deleting a `platform` connection needs
+platform operator access, also for an administrator of the tenant that stores it (the operator's
+home tenant): platform stdio servers are exempt from the rules above and start in the worker.
 
 **Existing connections.** Nothing is deleted or rewritten. A stored tenant stdio connection that
 breaks the rules is reported at start-up (warning and gauge `oax_mcp_stdio_violations`), listed by
@@ -166,7 +197,18 @@ operator listed the binary, or delete it.
 invisible to it. Start-up (and creating a connection) therefore refuses platform stdio connections
 unless `OAX_AIRGAPPED_STDIO=trusted` acknowledges that those servers share the worker's network, and
 refuses tenant stdio connections unless an isolating runner (`container`, `kubernetes-job`) is
-enabled, because those run only in nodes on the closed runner network.
+enabled, because those run only in nodes. What a node's network is, precisely: with the container
+runner the node sits on an `internal` Docker network without a gateway, so TCP and UDP to other
+destinations fail and HTTPS leaves only through the egress proxy with the **step's** grant (every
+stdio server of the step shares it, and in air-gapped mode the proxy ceiling must lie within
+`OAX_AIRGAPPED_ALLOW`); name resolution is not locked down yet (Docker's embedded resolver may
+forward queries, a possible DNS exfiltration channel, ADR 0016 section 4.5, slice S2). With the
+Kubernetes runner the per-node NetworkPolicy applies, and `dnsEgress: true` opens kube-dns.
+
+**Upgrading.** The step handover carries a new field `stdio` when a tenant stdio server is
+involved. Run-node images older than this change reject the unknown field (strict schema) and fail
+such steps closed; update the worker and run-node images together. Steps without tenant stdio
+servers are unaffected.
 
 **Not covered yet** (ADR 0016 slices S2 and later): per-server egress rules (every stdio server of a
 step shares the step's egress grant), the shared UID of a node's children, and signed toolbox

@@ -308,7 +308,11 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
   network, database credentials and run-token secret (the air-gapped guard patches the Node
   process only). Tenant, team and agent `stdio` connections now run only in run nodes; in the
   worker the gateway starts platform (operator-defined) stdio servers only. See `docs/mcp.md`
-  ("Stdio MCP servers") and the Breaking entry below.
+  ("Stdio MCP servers") and the Breaking entry below. Hardened in review: platform connections
+  could be changed or deleted by any administrator of the operator's home tenant (and then run any
+  command in the worker for every tenant), an allowlisted interpreter could run a file of the
+  workspace, the api resolved tenant paths on its own host (file existence oracle), and a cached
+  stdio config could reach a node unchecked.
 
 - **Telemetry no longer exports error messages or stacks.** `withSpan` used to record the raw
   exception (message and stack) and the message as the span status, so provider response bodies,
@@ -440,6 +444,14 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
   unless `OAX_AIRGAPPED_STDIO=trusted`, and tenant stdio connections unless an isolating runner is
   enabled. Platform connections are not subject to the command and environment rules. Run nodes
   receive `stdio` in the step handover and reject it when older than this change (fail closed).
+  (5) Interpreters (`node`, `python`, `java`, `deno`, ...) must run a program file that is itself
+  an allowlisted absolute path, with only value-less options before it: `python -m`, `java -cp`,
+  relative scripts and `dotnet <tool>` are refused, and `bun` is refused as a run-time installer.
+  Allowlist entries in or below `/tmp`, `/var/tmp`, `/dev`, `/proc`, `/sys`, `/run`, `/workspace`
+  or `/work` fail start-up, and the run node refuses a command or program file that it could
+  change (file or directory writable). (6) `PUT` and `DELETE /v1/connections/{id}` on a `platform`
+  connection need platform operator access (`403` for other administrators of the operator's home
+  tenant).
 
 - **Network start-up checks (W10-1-1)**: the api now aborts start-up (`tls_insecure`) when
   `NODE_TLS_REJECT_UNAUTHORIZED=0` is set, air-gapped or not; add the CA to a trust bundle or
