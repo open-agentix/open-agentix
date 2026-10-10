@@ -228,6 +228,8 @@ they were built for, so a switch needs no flush.
 **Authz epoch.** Migration `0020_authz_epoch` makes the database bump `tenants.authz_epoch` of the
 organisation root, in the same transaction, on every change that can alter what a cached principal
 may do: insert, update or delete of `tenant_role_bindings`, `team_members` and `agent_role_bindings`;
+delete of a team or an agent (whose cascade removes memberships and agent bindings) and a change of
+its node (or, for an agent, its team);
 update of `users.tenant_id`, `global_roles`, `platform_admin` or `disabled` and delete of a user;
 creation or deletion of a child node and a change of a node's slug or placement. Because it is a
 trigger, every writer is covered: the application, the `0019` home-move trigger, the reconcile
