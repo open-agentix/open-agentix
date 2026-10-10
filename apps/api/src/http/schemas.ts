@@ -318,6 +318,9 @@ export const ApprovalSchema = z.object({
   agentId: z.string(),
   tool: z.string(),
   args: Json,
+  argsRedacted: z
+    .boolean()
+    .describe('secrets in the arguments were replaced by [REDACTED]: the call has more than shown'),
   reasons: Json,
   approverRoles: z.array(z.string()),
   status: z.enum(['pending', 'approved', 'rejected', 'timeout']),

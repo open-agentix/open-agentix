@@ -6,12 +6,13 @@ import {
   WorkerModelResponseSchema,
   type ModelErrorCode,
 } from '@openagentix/providers';
+import { verifyRunToken } from '@openagentix/core';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { bearerOf } from '../app.js';
-import { HttpError } from '../../errors.js';
+import { HttpError, mcpRelayRefusal } from '../../errors.js';
 import { parseStrictJson } from '../../services/model-proxy-json.js';
 import { ModelProxyError, type StreamSink } from '../../services/model-proxy.js';
 import { modelErrorHandler, modelRateKey } from './model-errors.js';
@@ -370,6 +371,17 @@ function registerMcpRelayRoute(app: ZApp, deps: Deps): void {
   void app.register(async (scope) => {
     // A node has `bodyReadMs` to deliver its body: the server has no request timeout of its own, and
     // a trickle of bytes would otherwise hold a connection (and its parse buffer) forever.
+    // Signature and expiry, before the body is read; the rest is checked by the service. A bad
+    // token is refused like an unknown server. This runs in `preParsing`, after the route's rate
+    // limit (an `onRequest` hook added per route), so these refusals carry the same headers as
+    // every other one; the global auth hook leaves this route to us.
+    scope.addHook('preParsing', async (req) => {
+      try {
+        verifyRunToken(ctx.config.runToken.secret, bearerOf(req) ?? '', ctx.now().getTime());
+      } catch {
+        throw mcpRelayRefusal();
+      }
+    });
     scope.addHook('onRequest', async (req) => {
       const timer = setTimeout(() => {
         if (!req.raw.complete) req.raw.destroy();
@@ -377,6 +389,11 @@ function registerMcpRelayRoute(app: ZApp, deps: Deps): void {
       timer.unref();
       req.raw.once('end', () => clearTimeout(timer));
       req.raw.once('close', () => clearTimeout(timer));
+    });
+    // Every answer of the relay scope, the refusals of the global auth hook included, is uncacheable.
+    scope.addHook('onSend', async (_req, reply, payload) => {
+      void reply.header('cache-control', 'no-store');
+      return payload;
     });
     scope.removeAllContentTypeParsers();
     scope.addContentTypeParser(

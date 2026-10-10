@@ -5355,6 +5355,9 @@ paths:
                         tool:
                           type: string
                         args: {}
+                        argsRedacted:
+                          type: boolean
+                          description: "secrets in the arguments were replaced by [REDACTED]: the call has more than shown"
                         reasons: {}
                         approverRoles:
                           type: array
@@ -5417,6 +5420,7 @@ paths:
                         - agentId
                         - tool
                         - args
+                        - argsRedacted
                         - reasons
                         - approverRoles
                         - status
@@ -5510,6 +5514,9 @@ paths:
                   tool:
                     type: string
                   args: {}
+                  argsRedacted:
+                    type: boolean
+                    description: "secrets in the arguments were replaced by [REDACTED]: the call has more than shown"
                   reasons: {}
                   approverRoles:
                     type: array
@@ -5572,6 +5579,7 @@ paths:
                   - agentId
                   - tool
                   - args
+                  - argsRedacted
                   - reasons
                   - approverRoles
                   - status

@@ -363,8 +363,18 @@ node MCP client -- POST /v1/worker/runs/{id}/mcp/{server} (step-scoped run token
   well as from the node's step reports, so a node that does not report its calls cannot exceed it (calls
   in flight at the same moment can overshoot it by up to the session's concurrency).
 
-Migration `0025_approvals_consumed_at` adds the nullable column behind the single-use approval; the
-down script drops it. Configuration: [`configuration.md`](configuration.md).
+Every request of a node session is also throttled before any database or secret read
+(twice `OAX_MCP_RELAY_RATE_PER_MINUTE` per minute, `429 rate_limited`), and every answer of the relay
+route, refusals of the token check included, carries `cache-control: no-store` and the same
+rate-limit headers.
+
+Approval requests whose arguments the scrubber changed (`[REDACTED]`) are flagged
+(`argsRedacted` on `GET /v1/approvals`, in the `approval.requested` audit entry and as a note on the
+approval card), so approvers know the call has more than they see.
+
+Migration `0025_approvals_consumed_at` adds the single-use column (approvals decided before the
+upgrade are marked used, so the relay cannot spend them) and the `args_redacted` flag; the
+down script drops both. Configuration: [`configuration.md`](configuration.md).
 
 **What this does not do.** The relay trusts the connection's server like an in-process call does:
 a malicious server can still return text that is only filtered by the context guard. Stdio servers

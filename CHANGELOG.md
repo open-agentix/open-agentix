@@ -41,7 +41,8 @@ All notable changes to this project are documented here. The format follows
   secrets. Sampling, elicitation and roots are not relayed
   (`mcp_capability_unsupported`, also in process). New metrics `oax_mcp_relay_requests_total{method,outcome}`
   and `oax_mcp_relay_sessions`; audit `mcp.relay.call`, `mcp.relay.denied`, `mcp.relay.refused`. Migration
-  `0025_approvals_consumed_at` (down script included). Decides ADR 0012 open question 2.
+  `0025_approvals_consumed_at` (down script included; approvals decided before the upgrade count as used).
+  Approvals whose arguments were redacted are flagged (`argsRedacted`) in the API, the audit entry and the approval card. Decides ADR 0012 open question 2.
 
 - **Publishing against an HTTP MCP connection needs an approved tool snapshot** (ADR 0016 S3): refresh
   and approve the connection's tools once, then publish. Existing published versions are not

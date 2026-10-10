@@ -83,6 +83,8 @@ const OAX_CODE = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_REFUSAL_AUDITS = 20;
 /** Entries of the audit budget map before it is reset (bounded memory). */
 const MAX_AUDIT_BUDGETS = 2000;
+/** Node sessions tracked by the request throttle before it starts over (bounded memory). */
+const MAX_THROTTLED_NODES = 5000;
 const CALL_PARAM_KEYS: ReadonlySet<string> = new Set(['name', 'arguments', '_meta']);
 
 const deadline = async <T>(work: Promise<T>, ms: number): Promise<T> => {
@@ -139,6 +141,7 @@ export class McpRelayService {
   private readonly sessions: RelaySessions;
   private outbound: OutboundDispatcher | undefined;
   private readonly refusalAudits = new Map<string, number>();
+  private readonly nodeHits = new Map<string, number[]>();
 
   constructor(
     private readonly ctx: AppContext,
@@ -201,6 +204,12 @@ export class McpRelayService {
     try {
       claims = verifyRunToken(this.ctx.config.runToken.secret, req.token, this.ctx.now().getTime());
       if (claims.runId !== req.runId || !claims.sid || claims.steps?.length !== 1) throw refused();
+    } catch {
+      throw refused();
+    }
+    // Before the first database read: a node hammering the relay costs a map lookup, not queries.
+    this.throttle(claims.sid!);
+    try {
       node = await this.runNodes.checkSession(claims, req.runId, req.traceparent);
     } catch {
       throw refused();
@@ -233,6 +242,21 @@ export class McpRelayService {
     const parsed = McpServerConfigSchema.safeParse(row.config);
     if (!parsed.success || parsed.data.transport !== 'streamable-http') return 'not_http';
     return { row, cfg: parsed.data, platform: row.scope === 'platform' };
+  }
+
+  /**
+   * Requests per minute of one node session, of any kind (notifications and `ping` included), taken
+   * before any database read, secret read or upstream call. Twice the call rate of a session: the
+   * session's own limit still applies to `tools/*`.
+   */
+  private throttle(sid: string): void {
+    const now = this.ctx.now().getTime();
+    if (this.nodeHits.size > MAX_THROTTLED_NODES) this.nodeHits.clear();
+    const recent = (this.nodeHits.get(sid) ?? []).filter((t) => now - t < 60_000);
+    if (recent.length >= this.ctx.config.mcp.relay.ratePerMinute * 2)
+      throw new HttpError(429, 'rate_limited', 'too many MCP relay requests from this node');
+    recent.push(now);
+    this.nodeHits.set(sid, recent);
   }
 
   private parse(body: unknown): RelayMessage {

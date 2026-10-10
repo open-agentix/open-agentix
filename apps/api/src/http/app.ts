@@ -24,7 +24,7 @@ import {
 } from 'fastify-type-provider-zod';
 import type { AppContext } from '../context.js';
 import { LOG_REDACT_PATHS } from '../context.js';
-import { HttpError, forbidden, mcpRelayRefusal, registerErrorHandler } from '../errors.js';
+import { HttpError, forbidden, registerErrorHandler } from '../errors.js';
 import type { Services } from '../services/index.js';
 import { VERSION } from '../version.js';
 import { verifyStreamToken } from '../auth/stream-token.js';
@@ -244,12 +244,14 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
         throw forbidden(`missing permission ${access}`);
       return;
     }
+    // The MCP relay verifies the token in a hook of its own scope (routes/worker.ts), so that its
+    // refusals leave through the same response pipeline, with the same headers, as every other one.
+    if (access === 'run-token' && req.routeOptions.config?.relay) return;
     if (access === 'run-token') {
       // Signature and expiry are checked before the body is parsed; the run binding in the handler.
       try {
         verifyRunToken(ctx.config.runToken.secret, token ?? '', ctx.now().getTime());
       } catch (e) {
-        if (req.routeOptions.config?.relay) throw mcpRelayRefusal();
         throw new HttpError(401, (e as OaxError).code, 'valid run token required');
       }
       return;

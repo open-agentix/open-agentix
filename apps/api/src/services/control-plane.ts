@@ -606,6 +606,8 @@ export class ControlPlaneService {
     const { definition, teamId, tenantId } = await this.definitionForRun(runId);
     const id = randomUUID();
     const now = this.ctx.now();
+    const scrubbed = await this.nodes.scrub(runId, call.args);
+    const argsRedacted = JSON.stringify(scrubbed) !== JSON.stringify(call.args);
     await this.ctx.db.insert(approvals).values({
       id,
       tenantId,
@@ -613,7 +615,8 @@ export class ControlPlaneService {
       teamId,
       agentId,
       tool: `${call.server}/${call.tool}`,
-      args: await this.nodes.scrub(runId, call.args),
+      args: scrubbed,
+      argsRedacted,
       reasons: (reasons ?? []) as object,
       approverRoles: definition.approvals.approverRoles,
       status: 'pending',
@@ -628,7 +631,8 @@ export class ControlPlaneService {
       runId,
       payload: {
         tool: `${call.server}/${call.tool}`,
-        args: await this.nodes.scrub(runId, call.args),
+        args: scrubbed,
+        ...(argsRedacted ? { argsRedacted } : {}),
       },
     });
     return id;

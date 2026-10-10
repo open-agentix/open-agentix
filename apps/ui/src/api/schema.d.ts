@@ -3616,6 +3616,8 @@ export interface paths {
                                 agentId: string;
                                 tool: string;
                                 args: unknown;
+                                /** @description secrets in the arguments were replaced by [REDACTED]: the call has more than shown */
+                                argsRedacted: boolean;
                                 reasons: unknown;
                                 approverRoles: string[];
                                 /** @enum {string} */
@@ -3715,6 +3717,8 @@ export interface paths {
                             agentId: string;
                             tool: string;
                             args: unknown;
+                            /** @description secrets in the arguments were replaced by [REDACTED]: the call has more than shown */
+                            argsRedacted: boolean;
                             reasons: unknown;
                             approverRoles: string[];
                             /** @enum {string} */

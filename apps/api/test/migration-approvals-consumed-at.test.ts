@@ -9,7 +9,7 @@ import { sqlTargets, type Sql } from './db-targets.js';
 
 /**
  * Migration 0025 (ADR 0016 slice S4): one nullable column that makes an approval single use for the
- * MCP relay. Existing approvals stay unused, the single-use statement is atomic, the down script
+ * MCP relay. Approvals decided before the upgrade count as used, the single-use statement is atomic, the down script
  * reverts it. PGlite and, with OAX_TEST_DATABASE_URL, a real PostgreSQL.
  */
 const TAG = '0025_approvals_consumed_at';
@@ -30,7 +30,9 @@ describe('migration 0025 files', () => {
       JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, `meta/${n}_snapshot.json`), 'utf8'));
     const [s24, s25] = [read('0024'), read('0025')];
     expect(s25.prevId).toBe(s24.id);
-    expect(Object.keys(s25.tables['public.approvals'].columns)).toContain('consumed_at');
+    expect(Object.keys(s25.tables['public.approvals'].columns)).toEqual(
+      expect.arrayContaining(['consumed_at', 'args_redacted']),
+    );
     expect(Object.keys(s24.tables['public.approvals'].columns)).not.toContain('consumed_at');
     expect(existsSync(join(MIGRATIONS_FOLDER, `down/${TAG}.down.sql`))).toBe(true);
   });
@@ -47,6 +49,7 @@ describe.each(sqlTargets)('migration 0025 on existing data (%s)', (_kind, enable
   const version = randomUUID();
   const run = randomUUID();
   const oldApproval = randomUUID();
+  const pending = randomUUID();
   const cols = async () =>
     (
       await c.query<{ column_name: string }>(
@@ -85,6 +88,11 @@ describe.each(sqlTargets)('migration 0025 on existing data (%s)', (_kind, enable
       [run, DEFAULT_TENANT_ID, agent, version],
     );
     await approval(oldApproval);
+    await c.query(
+      `insert into approvals (id, tenant_id, run_id, agent_id, tool, args, reasons, approver_roles, status, expires_at)
+       values ($1, $2, $3, 'a', 'jira/risky', '{}', '[]', '{admin}', 'pending', now() + interval '1 hour')`,
+      [pending, DEFAULT_TENANT_ID, run],
+    );
     await c.migrate(MIGRATIONS_FOLDER);
   });
   afterAll(async () => {
@@ -92,13 +100,20 @@ describe.each(sqlTargets)('migration 0025 on existing data (%s)', (_kind, enable
     await c.close();
   });
 
-  it('adds the column and leaves an existing approval unused', async () => {
-    expect(await cols()).toContain('consumed_at');
-    const { rows } = await c.query<{ consumed_at: unknown }>(
-      `select consumed_at from approvals where id = $1`,
+  it('adds the columns and marks every approval decided before the upgrade as used', async () => {
+    expect(await cols()).toEqual(expect.arrayContaining(['consumed_at', 'args_redacted']));
+    const { rows } = await c.query<{ consumed_at: unknown; args_redacted: boolean }>(
+      `select consumed_at, args_redacted from approvals where id = $1`,
       [oldApproval],
     );
-    expect(rows[0]!.consumed_at).toBeNull();
+    expect(rows[0]!.consumed_at).not.toBeNull();
+    expect(rows[0]!.args_redacted).toBe(false);
+    // a pending approval is not used: it can still be decided and then used once
+    const pendingRow = await c.query<{ consumed_at: unknown }>(
+      `select consumed_at from approvals where id = $1`,
+      [pending],
+    );
+    expect(pendingRow.rows[0]!.consumed_at).toBeNull();
   });
 
   it('the single-use statement of the relay consumes an approval exactly once', async () => {
@@ -119,6 +134,7 @@ describe.each(sqlTargets)('migration 0025 on existing data (%s)', (_kind, enable
   it('the down script reverts it and can run twice', async () => {
     await c.script(DOWN);
     expect(await cols()).not.toContain('consumed_at');
+    expect(await cols()).not.toContain('args_redacted');
     await c.script(DOWN);
     const { rows } = await c.query(`select id from approvals where id = $1`, [oldApproval]);
     expect(rows).toHaveLength(1);

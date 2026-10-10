@@ -4,7 +4,7 @@ import { issueRunToken, type SecretResolver } from '@openagentix/core';
 import { handleMockMcpHttp, type MockTool } from '@openagentix/mcp';
 import type { OutboundDispatcher } from '@openagentix/providers';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { approvals, connections, runs } from '../src/db/schema.js';
 import { RUN_TOKEN_SECRET, testNode, type TestNode } from './helpers.js';
 
@@ -572,6 +572,58 @@ describe('refusals look alike', () => {
     same(await b.relay(run, s.token, 'crm', msg), 'foreign tenant connection');
   });
 
+  it('every kind of refusal carries the same headers, the global auth hook included', async () => {
+    const runId = await b.newRun();
+    const s = await b.session(runId);
+    const other = await b.session(await b.newRun());
+    const expired = issueRunToken(
+      RUN_TOKEN_SECRET,
+      { runId, workerId: s.nodeId, ttlSeconds: 1, sid: s.sessionId, steps: ['research'] },
+      Date.now() - 60_000,
+    );
+    const dead = await b.session(runId);
+    await b.n.services.runNodes.revoke(dead.sessionId, 'step_end');
+    const kinds: Record<string, Awaited<ReturnType<Booted['relay']>>> = {
+      unknownServer: await b.relay(runId, s.token, 'no-such', msg),
+      foreignRun: await b.relay(runId, other.token, 'jira', msg),
+      revoked: await b.relay(runId, dead.token, 'jira', msg),
+      forged: await b.relay(runId, 'oaxrt.forged.token', 'jira', msg),
+      expired: await b.relay(runId, expired, 'jira', msg),
+      noToken: await b.n.req({
+        method: 'POST',
+        url: `/v1/worker/runs/${runId}/mcp/jira`,
+        token: null,
+        payload: msg,
+      }),
+    };
+    const volatile = new Set([
+      'date',
+      'x-request-id',
+      'content-length',
+      'etag',
+      'x-ratelimit-remaining',
+      'x-ratelimit-reset',
+      'ratelimit-remaining',
+      'ratelimit-reset',
+      'retry-after',
+    ]);
+    const shape = (h: Record<string, unknown>) =>
+      Object.fromEntries(
+        Object.entries(h)
+          .filter(([k]) => !volatile.has(k))
+          .sort(([a], [c]) => (a < c ? -1 : 1)),
+      );
+    const reference = shape(kinds.unknownServer!.headers);
+    expect(reference['cache-control']).toBe('no-store');
+    for (const [kind, res] of Object.entries(kinds)) {
+      expect(res.statusCode, kind).toBe(404);
+      expect(
+        shape(res.headers),
+        `${kind}: ${JSON.stringify(shape(res.headers))} vs ${JSON.stringify(reference)}`,
+      ).toEqual(reference);
+    }
+  });
+
   it('records why in the audit log, bounded, and never in the answer', async () => {
     const runId = await b.newRun();
     const s = await b.session(runId);
@@ -755,6 +807,47 @@ describe('approval and tool pin', () => {
   });
 });
 
+describe('approval requests', () => {
+  it('flag arguments the scrubber changed, so approvers know something is hidden', async () => {
+    const runId = await b.newRun();
+    await b.session(runId);
+    const clean = await b.n.services.control.requestApproval(
+      runId,
+      'research',
+      { server: 'jira', tool: 'risky', args: { amount: 1 } },
+      [],
+    );
+    // the scrubber only rewrites when the run has secrets it knows; stand in for it
+    const scrub = vi
+      .spyOn(b.n.services.runNodes, 'scrub')
+      .mockImplementation(async (_run, v) =>
+        JSON.parse(JSON.stringify(v).replace('hunter2', '[REDACTED]')),
+      );
+    const hidden = await b.n.services.control.requestApproval(
+      runId,
+      'research',
+      { server: 'jira', tool: 'risky', args: { note: 'password is hunter2' } },
+      [],
+    );
+    scrub.mockRestore();
+    const list = (
+      await b.n.req({ method: 'GET', url: `/v1/approvals?runId=${runId}&limit=50` })
+    ).json().items as { id: string; argsRedacted: boolean; args: unknown }[];
+    expect(list.find((a) => a.id === clean)!.argsRedacted).toBe(false);
+    const h = list.find((a) => a.id === hidden)!;
+    expect(h.argsRedacted).toBe(true);
+    expect(JSON.stringify(h.args)).toContain('[REDACTED]');
+    const entries = (
+      await b.n.req({
+        method: 'GET',
+        url: `/v1/audit?action=approval.requested&runId=${runId}&limit=20`,
+      })
+    ).json().items as { target: string; payload: { argsRedacted?: boolean } }[];
+    expect(entries.find((e) => e.target === hidden)!.payload.argsRedacted).toBe(true);
+    expect(entries.find((e) => e.target === clean)!.payload.argsRedacted).toBeUndefined();
+  });
+});
+
 describe('what the server says', () => {
   it('an error page that quotes the credential never reaches the node', async () => {
     const runId = await b.newRun();
@@ -919,6 +1012,16 @@ describe('per-session concurrency and rate', () => {
     expect(took).toBeLessThan(5000);
     // the relay still serves a well-behaved node
     expect((await small.rpc(runId, s.token, 'ping')).status).toBe(200);
+  });
+
+  it('throttles every request of a node session before any database read', async () => {
+    const runId = await small.newRun();
+    const s = await small.session(runId);
+    const codes: number[] = [];
+    for (let i = 0; i < 16; i++) codes.push((await small.rpc(runId, s.token, 'ping')).status);
+    // twice the call rate (6/min here)
+    expect(codes.slice(0, 12).every((c) => c === 200)).toBe(true);
+    expect(codes.slice(12).every((c) => c === 429)).toBe(true);
   });
 
   it('refuses an oversized body before it is read', async () => {

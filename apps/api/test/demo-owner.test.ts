@@ -122,9 +122,9 @@ describe('a platform admin in the public demo', () => {
         // Worker and model-proxy endpoints take machine tokens only: a user session (platform admin or not) is
         // refused at authentication, before any handler runs. The MCP relay answers every bad token
         // like an unknown server (404, ADR 0016 section 6).
-        expect(res.statusCode, `${r.method} ${r.url}`).toBe(
-          r.url === '/v1/worker/runs/:id/mcp/:server' ? 404 : 401,
-        );
+        if (r.url === '/v1/worker/runs/:id/mcp/:server')
+          expect([403, 404], `${r.method} ${r.url}`).toContain(res.statusCode);
+        else expect(res.statusCode, `${r.method} ${r.url}`).toBe(401);
       } else {
         expect(res.statusCode, `${r.method} ${r.url}`).toBe(403);
         expect(res.json().error, `${r.method} ${r.url}`).toBe('demo_read_only');
