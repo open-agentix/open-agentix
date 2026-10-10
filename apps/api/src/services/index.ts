@@ -1,5 +1,5 @@
 import type { AppContext } from '../context.js';
-import { createMcpOauth, type McpOauthStores } from '../mcp-oauth/index.js';
+import { createMcpOauth, type McpOauthStores, type TrustedRole } from '../mcp-oauth/index.js';
 import { AgentCheckService } from './agent-check.js';
 import { AgentSummaryService } from './agent-summaries.js';
 import { AgentsService } from './agents.js';
@@ -50,7 +50,8 @@ export interface Services {
   subtree: SubtreeScopes;
 }
 
-export function createServices(ctx: AppContext): Services {
+/** `role` says which trusted process the services are built for (it gates `McpCredentials`). */
+export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Services {
   const audit = new AuditService(ctx);
   const identity = new IdentityService(ctx, audit);
   const catalog = new CatalogService(ctx, audit);
@@ -119,7 +120,7 @@ export function createServices(ctx: AppContext): Services {
     mcpTools,
     mcpRelay,
     agentCheck,
-    mcpOauth: createMcpOauth(ctx, 'api'),
+    mcpOauth: createMcpOauth(ctx, role),
     subtree: new SubtreeScopes(ctx),
   };
 }

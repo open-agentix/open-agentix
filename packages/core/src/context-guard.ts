@@ -80,7 +80,8 @@ function base64Cores(bytes: Buffer): string[] {
   return out;
 }
 
-function forms(secret: string): string[] {
+/** Every spelling of a secret the guards look for: plain, URL-encoded, base64 cores, base64url, hex. */
+export function secretForms(secret: string): string[] {
   const bytes = Buffer.from(secret);
   const b64 = base64Cores(bytes);
   const hex = bytes.toString('hex');
@@ -109,7 +110,7 @@ export class ContextGuard {
   /** Registers a secret value that is in use (resolved reference, brokered credential, token). */
   addSecret(value: string): void {
     if (value.length < MIN_KNOWN_SECRET_LENGTH) return;
-    for (const f of forms(value)) {
+    for (const f of secretForms(value)) {
       if (this.known.includes(f)) continue;
       this.known.push(f);
     }

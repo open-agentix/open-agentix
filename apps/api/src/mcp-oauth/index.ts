@@ -1,3 +1,4 @@
+import { telemetryRuntime } from '../telemetry-runtime.js';
 import type { Db } from '../db/client.js';
 import type { Config } from '../config.js';
 import { McpCredentials, type TrustedRole } from './credentials.js';
@@ -20,12 +21,15 @@ export function createMcpOauth(
 ): McpOauthStores {
   const { kek } = ctx.config.mcp.oauth;
   const keys = new KeyService(ctx.db, kek, ctx.now);
-  const tokens = new McpOauthTokenStore(ctx.db, keys, ctx.now);
+  const tokens = new McpOauthTokenStore(ctx.db, keys, registry, ctx.now);
   return {
     keys,
     tokens,
     clients: new McpOauthClientStore(ctx.db, keys),
-    credentials: new McpCredentials(tokens, registry, ctx.now, role),
+    // Span attributes are sanitised with the telemetry runtime's guard, not with the registry.
+    credentials: new McpCredentials(tokens, registry, ctx.now, role, () => [
+      telemetryRuntime().guard,
+    ]),
   };
 }
 
@@ -34,3 +38,12 @@ export type { TrustedRole };
 export { SecretRegistry, processSecrets } from './secret-registry.js';
 export { scrubbingDestination, type LineSink } from './scrubbing-stream.js';
 export { scrubResponses } from './http.js';
+export {
+  scrubJsonText,
+  scrubLeaves,
+  scrubPayloadWith,
+  scrubStdio,
+  stringifyScrubbed,
+} from './scrub.js';
+export { canonicalResource } from './resource.js';
+export { assertTokenShape } from './token-shape.js';

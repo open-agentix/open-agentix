@@ -20,7 +20,7 @@ import {
   validateImage,
   validateResourceCeiling,
 } from '@openagentix/runners';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import { OTEL_ENV_SHAPE, buildOtelConfig, type OtelConfig } from './telemetry-config.js';
@@ -443,7 +443,13 @@ export interface Config {
     stdioEgress: Map<string, string[]>;
     requireToolPin: boolean;
     /** Key-encryption key of the stored OAuth tokens; `key` is null when none is configured. */
-    oauth: { kek: { key: Buffer | null; id: string } };
+    oauth: {
+      kek: { key: Buffer | null; id: string };
+      /** Where the key came from; `env` is discouraged and warned about at start-up. */
+      source: 'env' | 'file' | 'none';
+      /** The key file is readable by group or others. */
+      fileLoose: boolean;
+    };
     relay: {
       concurrency: number;
       ratePerMinute: number;
@@ -509,6 +515,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       'invalid configuration: OAX_DEMO_LLM=claude-code requires OAX_DEMO_MODE=true (fixed scenarios only)',
     );
   }
+  const result = buildConfig(e, env, database);
+  // The key now lives only in the closure of the config; do not leave it in the environment where
+  // child processes (stdio MCP servers, harness CLIs) and /proc/<pid>/environ readers would see it.
+  if (env === process.env) delete process.env.OAX_MCP_OAUTH_KEK;
+  return result;
+}
+
+function buildConfig(
+  e: z.infer<typeof EnvSchema>,
+  env: NodeJS.ProcessEnv,
+  database: DatabaseConfig,
+): Config {
   const oidcConfigured = e.OAX_OIDC_ISSUER && e.OAX_OIDC_CLIENT_ID && e.OAX_OIDC_REDIRECT_URI;
   return {
     env: e.NODE_ENV,
@@ -663,7 +681,7 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
     stdioCommands,
     stdioEgress: parseStdioEgressGrants(e.OAX_MCP_STDIO_EGRESS, stdioCommands),
     requireToolPin: e.OAX_MCP_REQUIRE_TOOL_PIN,
-    oauth: { kek: { key: kekOf(e), id: e.OAX_MCP_OAUTH_KEK_ID } },
+    oauth: kekOf(e),
     relay: {
       concurrency: e.OAX_MCP_RELAY_CONCURRENCY,
       ratePerMinute: e.OAX_MCP_RELAY_RATE_PER_MINUTE,
@@ -675,30 +693,41 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
   };
 }
 
-/** The 32-byte key-encryption key from the value or the file; errors never quote the value. */
-function kekOf(e: z.infer<typeof EnvSchema>): Buffer | null {
+/**
+ * The 32-byte key-encryption key from the value or the file; errors never quote the value. The key
+ * is exposed through a non-enumerable getter, so serialising or logging the config cannot print it.
+ */
+function kekOf(e: z.infer<typeof EnvSchema>): Config['mcp']['oauth'] {
   if (e.OAX_MCP_OAUTH_KEK && e.OAX_MCP_OAUTH_KEK_FILE)
     throw new OaxError(
       'config_invalid',
       'set only one of OAX_MCP_OAUTH_KEK and OAX_MCP_OAUTH_KEK_FILE',
     );
   let raw = e.OAX_MCP_OAUTH_KEK;
+  let fileLoose = false;
   if (e.OAX_MCP_OAUTH_KEK_FILE) {
     try {
       raw = readFileSync(e.OAX_MCP_OAUTH_KEK_FILE, 'utf8');
+      // Group- or world-readable: reported at start-up (Kubernetes Secret mounts are often 0444).
+      fileLoose = (statSync(e.OAX_MCP_OAUTH_KEK_FILE).mode & 0o077) !== 0;
     } catch {
       throw new OaxError('config_invalid', 'OAX_MCP_OAUTH_KEK_FILE cannot be read');
     }
   }
-  if (raw === undefined) return null;
-  const key = Buffer.from(raw.trim(), 'base64');
-  // Buffer.from is lenient with bad characters, so also require the canonical 256-bit length.
-  if (key.length !== 32 || !/^[A-Za-z0-9+/_-]{42,44}={0,2}$/.test(raw.trim()))
-    throw new OaxError(
-      'config_invalid',
-      'the MCP OAuth key-encryption key must be 32 random bytes, base64 encoded',
-    );
-  return key;
+  const source = e.OAX_MCP_OAUTH_KEK_FILE ? 'file' : e.OAX_MCP_OAUTH_KEK ? 'env' : 'none';
+  let key: Buffer | null = null;
+  if (raw !== undefined) {
+    key = Buffer.from(raw.trim(), 'base64');
+    // Buffer.from is lenient with bad characters, so also require the canonical 256-bit length.
+    if (key.length !== 32 || !/^[A-Za-z0-9+/_-]{42,44}={0,2}$/.test(raw.trim()))
+      throw new OaxError(
+        'config_invalid',
+        'the MCP OAuth key-encryption key must be 32 random bytes, base64 encoded',
+      );
+  }
+  const kek = { id: e.OAX_MCP_OAUTH_KEK_ID } as { id: string; key: Buffer | null };
+  Object.defineProperty(kek, 'key', { get: () => key, enumerable: false });
+  return { kek, source, fileLoose };
 }
 
 function stdioCommandsOf(raw: string): string[] {

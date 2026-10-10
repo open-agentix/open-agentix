@@ -116,11 +116,25 @@ export async function reportStdioViolations(
   }
 }
 
+/** Operator-facing hints about how the MCP OAuth key-encryption key was provided. */
+export function warnAboutKek(config: Config, logger: Logger): void {
+  const { source, fileLoose } = config.mcp.oauth;
+  if (source === 'env')
+    logger.warn(
+      'OAX_MCP_OAUTH_KEK was read from the environment (removed from it now); prefer OAX_MCP_OAUTH_KEK_FILE with a mounted Secret',
+    );
+  if (fileLoose)
+    logger.warn(
+      'the OAX_MCP_OAUTH_KEK_FILE file is readable by group or others; restrict it to the service user (mode 0400) where the platform allows',
+    );
+}
+
 export async function createContext(
   config: Config,
   overrides: Partial<AppContext> = {},
 ): Promise<AppContext> {
   const logger = overrides.logger ?? createLogger(config.logLevel);
+  warnAboutKek(config, logger);
   // Air-gapped mode is fail-closed: invalid endpoints abort start-up before anything connects.
   const egress = activateAirgap(config);
   // Network configuration warnings (plain http proxies, unreachable routes, scheme-less proxy

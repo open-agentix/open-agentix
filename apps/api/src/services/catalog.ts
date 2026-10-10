@@ -42,13 +42,17 @@ import {
   type ModelEntry,
 } from '@openagentix/providers';
 import { legacyNetwork } from '@openagentix/providers';
-import { and, asc, desc, eq, gt, inArray, or } from 'drizzle-orm';
+import { canonicalResource } from '../mcp-oauth/resource.js';
+import { processSecrets } from '../mcp-oauth/secret-registry.js';
+import { ownerKey } from '../mcp-oauth/token-store.js';
+import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import {
   DEFAULT_TENANT_ID,
   agents,
   connections,
+  mcpOauthTokens,
   mcpToolSnapshots,
   policies,
   teams,
@@ -698,11 +702,26 @@ export class CatalogService {
       current.scope as ConnectionScope,
       config,
     );
+    // A new server URL is a new OAuth resource (ADR 0016 section 7.4): bump the credential
+    // version and delete the stored tokens, which were issued for the old one.
+    const moved = resourceOf(current.config) !== resourceOf(parsed);
     const [row] = await this.ctx.db
       .update(connections)
-      .set({ config: parsed, updatedAt: this.ctx.now() })
+      .set({
+        config: parsed,
+        updatedAt: this.ctx.now(),
+        ...(moved ? { credentialVersion: sql`${connections.credentialVersion} + 1` } : {}),
+      })
       .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)))
       .returning();
+    if (moved) {
+      await this.ctx.db
+        .delete(mcpOauthTokens)
+        .where(
+          and(eq(mcpOauthTokens.connectionId, id), eq(mcpOauthTokens.tenantId, actor.tenantId)),
+        );
+      processSecrets.forgetOwner(ownerKey(id, current.credentialVersion));
+    }
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,
@@ -867,5 +886,16 @@ export class CatalogService {
       toolAccess: definition.toolAccess,
       bundles: [...(await this.enabledBundles(tenantId)), ...extraBundles],
     });
+  }
+}
+
+/** Canonical resource of an HTTP MCP connection config, or null (stdio, in-memory, malformed). */
+function resourceOf(config: unknown): string | null {
+  const url = (config as { url?: unknown } | null)?.url;
+  if (typeof url !== 'string') return null;
+  try {
+    return canonicalResource(url);
+  } catch {
+    return null;
   }
 }

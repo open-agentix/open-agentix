@@ -5,9 +5,9 @@ import type { Db } from '../db/client.js';
 import { connections, mcpOauthClients, mcpOauthTokens } from '../db/schema.js';
 import type { BindingContext } from './envelope.js';
 import type { KeyService } from './key-service.js';
-
-/** Shorter values cannot be recognised by the redactors, so they are not accepted as tokens. */
-export const MIN_TOKEN_LENGTH = 16;
+import { assertHttpsUrl, canonicalResource } from './resource.js';
+import type { SecretRegistry } from './secret-registry.js';
+import { assertTokenShape } from './token-shape.js';
 
 export type TokenStatus = 'active' | 'refresh_failed' | 'reauthorization_required' | 'revoked';
 
@@ -44,30 +44,70 @@ export interface StoredTokens {
   refreshToken: string | null;
 }
 
+/** The part of a connection the credentials service reads from the database, never from a caller. */
+export interface McpConnectionInfo {
+  credentialVersion: number;
+  /** Canonical URI derived from the stored URL. */
+  resource: string;
+}
+
+export const ownerKey = (connectionId: string, credentialVersion: number) =>
+  `${connectionId}:${credentialVersion}`;
+
 const bindingOf = (b: TokenBinding): BindingContext => ({ ...b });
 const splitScopes = (s: string) => s.split(' ').filter(Boolean);
 
 /**
  * Persistence of OAuth tokens of MCP connections (table `mcp_oauth_tokens`). Values are sealed by
  * the {@link KeyService} on the way in and opened on the way out; nothing else in the code base
- * selects the ciphertext columns. Only `McpCredentials` calls {@link open}.
+ * selects the ciphertext columns. Only `McpCredentials` calls {@link open}. Leaving the `active`
+ * state (and deleting) forgets the value in the redactor registry.
  */
 export class McpOauthTokenStore {
   constructor(
     private readonly db: Db,
     private readonly keys: KeyService,
+    private readonly registry: SecretRegistry,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  /** The connection as stored: owner check included. Null for anything but an HTTP MCP connection. */
+  async connection(tenantId: string, connectionId: string): Promise<McpConnectionInfo | null> {
+    const [c] = await this.db
+      .select({
+        config: connections.config,
+        kind: connections.kind,
+        v: connections.credentialVersion,
+      })
+      .from(connections)
+      .where(and(eq(connections.id, connectionId), eq(connections.tenantId, tenantId)));
+    const url = (c?.config as { url?: unknown } | undefined)?.url;
+    if (!c || c.kind !== 'mcp' || typeof url !== 'string') return null;
+    try {
+      return { credentialVersion: c.v, resource: canonicalResource(url) };
+    } catch {
+      return null;
+    }
+  }
+
   async put(w: TokenWrite): Promise<void> {
-    for (const v of [w.accessToken, w.refreshToken])
-      if (v !== undefined && v.length < MIN_TOKEN_LENGTH)
-        throw new OaxError('token_invalid', 'the token is too short to be a credential');
-    await this.assertConnectionOf(w.tenantId, w.connectionId);
-    const binding = bindingOf(w);
+    assertTokenShape(w.accessToken, [w.tenantId, w.connectionId]);
+    if (w.refreshToken !== undefined)
+      assertTokenShape(w.refreshToken, [w.tenantId, w.connectionId]);
+    assertHttpsUrl(w.issuer, 'the issuer');
+    assertHttpsUrl(w.resource, 'the resource');
+    const conn = await this.connection(w.tenantId, w.connectionId);
+    if (!conn) throw new OaxError('not_found', 'connection not found for this tenant');
+    if (w.resource !== conn.resource)
+      throw new OaxError(
+        'mcp_resource_mismatch',
+        'the resource is not the canonical URI of the connection',
+      );
+    if (w.credentialVersion !== conn.credentialVersion)
+      throw new OaxError('conflict', 'the credential version of the connection has changed');
     const sealed = await this.keys.sealAll(
       w.refreshToken ? [w.accessToken, w.refreshToken] : [w.accessToken],
-      binding,
+      bindingOf(w),
     );
     const at = this.now();
     const values = {
@@ -85,7 +125,7 @@ export class McpOauthTokenStore {
       authorizedAt: at,
       updatedAt: at,
     };
-    await this.db
+    const written = await this.db
       .insert(mcpOauthTokens)
       .values({
         id: randomUUID(),
@@ -98,7 +138,10 @@ export class McpOauthTokenStore {
         target: [mcpOauthTokens.connectionId, mcpOauthTokens.credentialVersion],
         set: values,
         setWhere: eq(mcpOauthTokens.tenantId, w.tenantId),
-      });
+      })
+      .returning({ id: mcpOauthTokens.id });
+    if (written.length === 0)
+      throw new OaxError('conflict', 'the stored tokens belong to another tenant');
   }
 
   /** Metadata only; never touches the ciphertext columns. */
@@ -143,6 +186,7 @@ export class McpOauthTokenStore {
       .update(mcpOauthTokens)
       .set({ status, updatedAt: this.now() })
       .where(this.where(tenantId, connectionId, credentialVersion));
+    if (status !== 'active') this.registry.forgetOwner(ownerKey(connectionId, credentialVersion));
   }
 
   /** Deletes the tokens of a connection (disconnect, revocation, URL or issuer change). */
@@ -152,7 +196,8 @@ export class McpOauthTokenStore {
       .where(
         and(eq(mcpOauthTokens.tenantId, tenantId), eq(mcpOauthTokens.connectionId, connectionId)),
       )
-      .returning({ id: mcpOauthTokens.id });
+      .returning({ v: mcpOauthTokens.credentialVersion });
+    for (const r of rows) this.registry.forgetOwner(ownerKey(connectionId, r.v));
     return rows.length;
   }
 
@@ -170,15 +215,6 @@ export class McpOauthTokenStore {
       .from(mcpOauthTokens)
       .where(this.where(tenantId, connectionId, credentialVersion));
     return row ?? null;
-  }
-
-  private async assertConnectionOf(tenantId: string, connectionId: string): Promise<void> {
-    const [c] = await this.db
-      .select({ t: connections.tenantId })
-      .from(connections)
-      .where(eq(connections.id, connectionId));
-    if (!c || c.t !== tenantId)
-      throw new OaxError('not_found', 'connection not found for this tenant');
   }
 }
 
@@ -215,6 +251,8 @@ export class McpOauthClientStore {
     clientSecret?: string | undefined;
     createdBy?: string | undefined;
   }): Promise<string> {
+    assertHttpsUrl(w.issuer, 'the issuer');
+    if (w.clientSecret !== undefined) assertTokenShape(w.clientSecret, [w.tenantId]);
     const id = randomUUID();
     const sealed = w.clientSecret
       ? await this.keys.seal(w.clientSecret, this.binding(w.tenantId, id, w.issuer))

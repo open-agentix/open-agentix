@@ -11,6 +11,10 @@ import { KEY_BYTES, open, seal, type BindingContext, bindingAad } from './envelo
  * `tenant_data_keys`. ADR 0012 W12-2 (versioned tenant keys, customer-managed KMS) extends this
  * class; callers only see `seal` and `open`.
  *
+ * Crypto-shredding limit: while the KEK is unchanged, a database backup (or WAL) taken before
+ * `destroyTenantKeys` still holds the wrapped key, and the KEK unwraps it. Shredding is complete
+ * only with a per-tenant key-encryption key or a KMS that deletes it (ADR 0012 W12-2).
+ *
  * Data keys exist in memory only for the duration of one call. Without a configured KEK every
  * operation fails closed with `key_service_unconfigured`.
  */
@@ -129,7 +133,7 @@ export class KeyService {
       .from(tenantDataKeys)
       .where(and(eq(tenantDataKeys.tenantId, tenantId), eq(tenantDataKeys.version, version)));
     if (!row || row.status === 'destroyed' || !row.wrappedKey)
-      throw new OaxError('key_unavailable', 'the data key of this credential no longer exists');
+      throw new OaxError('key_destroyed', 'the data key of this credential no longer exists');
     return this.unwrap(kek, row);
   }
 
@@ -139,6 +143,14 @@ export class KeyService {
         'key_unavailable',
         'the data key was wrapped with a different key-encryption key',
       );
-    return open(kek, row.wrappedKey, this.wrapAad(row.tenantId, row.version, row.kekId));
+    try {
+      return open(kek, row.wrappedKey, this.wrapAad(row.tenantId, row.version, row.kekId));
+    } catch {
+      // Same key id, different key material: the operator replaced the KEK without a rotation.
+      throw new OaxError(
+        'key_unavailable',
+        'the data key cannot be unwrapped: the key-encryption key differs from the one that wrapped it',
+      );
+    }
   }
 }
