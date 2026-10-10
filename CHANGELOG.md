@@ -15,6 +15,14 @@ network configuration, bring-your-own-key model connections with a pinned models
 isolation in every query, hierarchical tenants with role bindings, OpenTelemetry tracing and the runnable
 demo.
 
+**Known limitations (alpha).** Not production-ready. Verified with real runs so far: Claude Code on the
+in-process path only. Implemented but not verified with real runs: the isolated run-node path through the
+model proxy, the OpenCode adapter, the Kubernetes Job runner on a real cluster and the model providers with
+real accounts. Tenant administrators can still create stdio MCP connections whose command the worker starts
+for in-process steps (containment with an operator allowlist is in review and planned for the next
+pre-release, see ADR 0016); until then, treat tenant administrators as trusted. Test code inside run nodes
+shares the node's user id (issue #140).
+
 **Status: alpha, not production-ready.** Interfaces, settings and the database schema can still change
 between pre-releases. What has been verified with real runs: Claude Code running in-process
 (real `claude` CLI runs behind the policy gate). What has not: the isolated run-node path with a real
