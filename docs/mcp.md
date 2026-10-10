@@ -402,11 +402,12 @@ platform stores. Nothing is stored in plaintext.
 
 ## OAuth for HTTP MCP connections
 
-ADR 0016 section 7, slice S6. A `streamable-http` connection has an `auth` block: `none` (no
+ADR 0016 section 7, slices S6 and S7. A `streamable-http` connection has an `auth` block: `none` (no
 credential), `static` (the `headerSecrets` of earlier versions; also the meaning of an absent `auth`) or
-`oauth`. This slice implements the **client credentials** grant with a **pre-registered** client. The
-authorization-code flow with PKCE, client ID metadata documents and dynamic client registration are
-later slices; the schema refuses them today.
+`oauth`. `oauth` has two grants: **client credentials** with a pre-registered client (service
+connections, nobody present; described first) and **authorization code with PKCE** with a
+pre-registered client, a client ID metadata document or dynamic registration (the remote system needs a
+person's consent; see [Authorization code with PKCE](#authorization-code-with-pkce)).
 
 ```jsonc
 {
@@ -446,9 +447,11 @@ exactly the secret that its `clientAuth` uses, and `client_secret_basic` also an
 
 | Route | Permission | Meaning |
 | --- | --- | --- |
-| `POST /v1/connections/{id}/oauth/authorize` | `connections:write` | Discovers the authorization server, pins it, requests a token. Body `{ "issuer"?: "https://..." }` (needed when the resource names several servers: `409 mcp_oauth_issuer_required` lists them). Rate limited like the connection test. |
-| `GET /v1/connections/{id}/oauth` | `connections:read` | Status, pinned issuer, scopes, expiry, last renewal error code, the authorization server hosts, `scopesWider`. Never a token. |
-| `POST /v1/connections/{id}/oauth/disconnect` | `connections:write` | Deletes the stored tokens and revokes them at the issuer. |
+| `POST /v1/connections/{id}/oauth/authorize` | `connections:write` | Discovers the authorization server, pins it, and for `client_credentials` requests a token; for `authorization_code` it returns the `authorizationUrl` of the consent. Body `{ "issuer"?: "https://..." }` (needed when the resource names several servers: `409 mcp_oauth_issuer_required` lists them). Rate limited like the connection test. |
+| `GET /v1/connections/{id}/oauth` | `connections:read` | Status, pinned issuer, scopes, expiry, last renewal error code, the authorization server hosts, `scopesWider`; for `authorization_code` also `registration`, `redirectUri`, `scopesMissing`, `requiredScopes`, `reauthorizationNeeded` and `pendingExpiresAt`. Never a token. |
+| `POST /v1/connections/{id}/oauth/disconnect` | `connections:write` | Deletes the stored tokens and revokes them at the issuer; an open consent request ends too. |
+| `GET /v1/oauth/mcp/callback` | none (browser redirect) | The redirect target of the authorization server; see below. |
+| `GET /oauth/mcp-client.json` | none | The client ID metadata document, only with `OAX_MCP_OAUTH_CIMD=true` (otherwise `404`). |
 
 Consent is explicit: runs never authorize a connection by themselves. A pin outlives a failed
 renewal: when a connection needs a new authorization and the resource now names a different server than
@@ -487,12 +490,15 @@ Checks on what the documents say:
 - every endpoint in the metadata (token, revocation, authorization, registration, JWKS) must be `https` and
   pass the tenant destination rules and the air-gapped allowlist (`egress_denied`), also those the
   platform does not call today;
-- the server must support `client_credentials` and the configured client authentication method when it
-  publishes the lists (`mcp_oauth_unsupported`); RFC 9207's `iss` check is available as
-  `verifyIssuerParameter` for the authorization-code callback.
+- the server must support the configured grant and client authentication method when it
+  publishes the lists (`mcp_oauth_unsupported`); a public client (`none`) is not checked against the list;
+- for `authorization_code` the server must publish an `authorization_endpoint` and list `S256` in
+  `code_challenge_methods_supported` (`mcp_pkce_unsupported`, audited as `pkce_unsupported`).
 
 Refusals are audited as `mcp.oauth.denied` with a closed `code` (`issuer_mismatch`, `resource_mismatch`,
-`resource_metadata_origin`, `endpoints_changed`, `egress_denied`).
+`resource_metadata_origin`, `endpoints_changed`, `egress_denied`, `pkce_unsupported`,
+`registration_disabled`, and from the callback `state_invalid`, `iss_mismatch`, `iss_missing`,
+`authorization_refused`, `forbidden`).
 
 ### Pinning
 
@@ -571,21 +577,121 @@ remote result is. A central grant revocation (ADR 0012) has no caller on `main` 
 
 ### Audit and what is never recorded
 
-`mcp.oauth.discovered` (connection, issuer, resource, endpoint hosts), `mcp.oauth.authorized` (connection,
-issuer, grant, scopes, user), `mcp.oauth.refreshed`, `mcp.oauth.refresh_failed`, `mcp.oauth.revoked`,
+`mcp.oauth.discovered` (connection, issuer, resource, endpoint hosts), `mcp.oauth.authorization_requested`
+(connection, issuer, grant, scopes, user), `mcp.oauth.authorized` (connection,
+issuer, grant, scopes, user), `mcp.oauth.client_registered` (tenant, issuer, method), `mcp.oauth.step_up_required`
+(connection, scopes), `mcp.oauth.refreshed`, `mcp.oauth.refresh_failed`, `mcp.oauth.revoked`,
 `mcp.oauth.denied`. Names, ids, hosts and closed codes only: never a token, a client secret, a key, an
 assertion, a URL path or a server text. Client secrets and minted assertions are registered with the
 redactors when they are read, fresh tokens when they are issued (before they are stored or used).
+
+### Authorization code with PKCE
+
+ADR 0016 section 7.2, slice S7. For remote systems that need a person's consent (SaaS MCP servers
+without machine clients). An administrator with `connections:write` consents **once per connection
+instance**; the tokens belong to the instance, not to the person: every run that uses the connection uses
+them, and the console shows "authorized by, at, scopes".
+
+```jsonc
+"auth": {
+  "kind": "oauth",
+  "grant": "authorization_code",
+  "client": {
+    // pre-registered, public client (PKCE is the proof) ...
+    "clientIdSecret": "acme.jira-client-id", "clientAuth": "none"
+    // ... or confidential: "clientAuth": "private_key_jwt" + "keySecret", or
+    //     "client_secret_basic" + "clientSecretSecret" (then auth.issuer is required)
+    // ... or the platform's metadata document:  "registration": "cimd"   (no secrets)
+    // ... or dynamic registration:              "registration": "dcr"    (no secrets)
+  },
+  "scopes": "from-profiles"
+}
+```
+
+**Flow.** `POST /v1/connections/{id}/oauth/authorize` runs the same discovery as the client-credentials
+flow, then refuses an authorization server that does not advertise `S256` in
+`code_challenge_methods_supported`. It stores a pending request (table `mcp_oauth_pending`, migration
+`0029_mcp_oauth_authorization_code`) and answers with the `authorizationUrl`: `response_type=code`,
+`client_id`, `redirect_uri`, `state`, `code_challenge` with `code_challenge_method=S256`, `resource`
+(RFC 8707) and `scope`. The console opens that URL. After the consent the authorization server redirects the
+browser to `GET /v1/oauth/mcp/callback`, which redeems the code (with the verifier, the exact redirect URI
+and `resource`) at the **endpoints pinned when the request started**, stores the tokens for the connection
+instance and revokes tokens a re-authorization replaced.
+
+| Property | How |
+| --- | --- |
+| PKCE | `S256` always, 256-bit verifier from the CSPRNG; never `plain`; the verifier is stored sealed with the tenant data key (AAD: tenant, connection, issuer, resource, credential version, domain-separated from tokens) and never leaves the control node. |
+| `state` | 256 bits, stored only as SHA-256, **single use** (the callback deletes the row in the statement that reads it, whatever the outcome), valid for 10 minutes, bound to the person, connection, tenant and credential version. A new request of the same person for the same connection replaces the old one; at most 200 open requests per tenant. |
+| RFC 9207 | The callback checks `iss` before it looks at `code` or `error`: `iss` present must equal the issuer the request was started for (exact string, also for error responses); `iss` absent is accepted only when the metadata does not advertise `authorization_response_iss_parameter_supported`. Failures are `iss_mismatch` / `iss_missing`, nothing is redeemed. |
+| Redirect URI | Exactly `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback`, computed on the server; no request parameter can change it. `OAX_PUBLIC_URL` must be an `https` origin without path (`http` only for `localhost`/loopback); the console shows the URI so it can be registered at the authorization server. |
+| Who | The route needs `connections:write` on the acting tenant. At the callback the person who started the request must still exist, be enabled and hold `connections:write` on that tenant and connection (`forbidden` otherwise, no token request). Platform (central) connections: `authorization_code` is refused at save and at authorize with `central_user_delegation` (a person's consent cannot be shared with the tenants that use a central instance). |
+| Callback answer | A redirect to `<OAX_UI_URL>/connections?mcp_oauth=<result>&connection=<id>` (the id comes from the stored request; `result` is one of `ok`, `denied`, `state_invalid`, `state_expired`, `iss_mismatch`, `iss_missing`, `code_invalid`, `token_refused`, `forbidden`, `conflict`, `error`), or without a console URL a page of fixed text. Nothing from the query (error, description, state, code) is echoed; there is no `redirect`-style parameter. The page carries `default-src 'none'`, `frame-ancestors 'none'`, `no-store` and `no-referrer`. |
+| Logs | The request log prints the callback path without its query. Neither the state, the code, the verifier nor a token is logged or audited; the audit has names, ids, hosts, scopes and closed codes. |
+| Token shape | A token the server issues must have the shape of a credential before anything stores or registers it (as for client credentials). |
+
+**Scopes and step-up.** The requested scopes are the profile scopes (or the explicit list), else the
+challenge scope, else `scopes_supported`; `offline_access` is added only when the server advertises it. The
+grant can be narrower than the request (the person may untick scopes): `scopesMissing` lists what the
+profiles need and the grant lacks, and runs that need them fail closed with `mcp_insufficient_scope`.
+When an MCP server answers `403 insufficient_scope`, the connection records the challenge's scopes
+(`requiredScopes`), becomes `reauthorization_required` and **fails closed** (`mcp_auth_required`)
+until an administrator authorizes again; the new consent asks for the **union** of the granted, the
+required and the configured scopes, so no scope is lost, and the replaced tokens are revoked. This is
+audited as `mcp.oauth.step_up_required`. A grant without a refresh token cannot be renewed: when the
+access token expires the connection becomes `reauthorization_required` (it never falls back to another
+grant).
+
+#### Refresh token rotation
+
+A refresh token may be single use. The renewal reads the stored pair under the advisory lock, asks the
+server, and writes the new pair over exactly that row in the same transaction; the previous pair stays
+in the row until then. If the write or the commit fails after the server answered, the commit is retried
+in new transactions (three attempts, 250 ms, 1 s and 3 s), and a pair that still cannot be stored is kept
+in memory (it is already registered with the redactors) and written, without a new request, by the next
+renewal. If the row changed or the connection was deleted meanwhile, the new tokens are revoked at the
+server. A crash between the server's answer and the first commit loses the pair; the server's reuse
+detection then ends in `invalid_grant` and `reauthorization_required`, never in a token held by nobody.
+
+#### Client ID metadata document (`OAX_MCP_OAUTH_CIMD=true`)
+
+The platform publishes one document per installation at `<OAX_PUBLIC_URL>/oauth/mcp-client.json`
+(`client_id` equals that URL, `redirect_uris` is the callback, `token_endpoint_auth_method: none`). It is
+used only for `authorization_code`, only when the server advertises `client_id_metadata_document_supported`
+(`mcp_oauth_unsupported` otherwise), and needs a public `https` `OAX_PUBLIC_URL` (start-up refuses it
+otherwise). It contains no secret and nothing tenant-specific. Off by default; refused at start-up and at
+save when off or air-gapped.
+
+#### Dynamic client registration (`OAX_MCP_OAUTH_DCR=true`)
+
+Off by default (the MCP specification deprecates it). When on, the first consent registers a client
+(RFC 7591: `application_type: web`, the single callback URI, a public client when the server lists `none`,
+else `client_secret_basic`) **per tenant and authorization server**; the next connection of the tenant at
+that issuer reuses it, other tenants never share it, a changed `OAX_PUBLIC_URL` registers again. The
+registration endpoint goes through the same destination checks as the other pinned endpoints (it is
+pinned, `egress_denied` for internal hosts). The response is untrusted: the redirect URIs it states must be
+exactly the callback, the client id must be printable ASCII, a secret must have the shape of a credential
+and is stored sealed. Audited as `mcp.oauth.client_registered`.
+
+#### Metrics
+
+`oax_mcp_oauth_authorize_total{outcome}` with a closed set (`started`, `ok`, `state_invalid`,
+`state_expired`, `iss_mismatch`, `iss_missing`, `denied`, `token_refused`, `forbidden`, `conflict`, `error`);
+no tenant or connection label.
 
 ### Known limits
 
 - The redactor registry is per process (#304); a platform connection used by a tenant's run keeps its
   token under the platform tenant, so tenant-scoped scrubbing of that tenant's audit/response text does not
   know it (the run's guard and the tenant-less log rule still do).
-- For the authorization-code grant (later slice), a commit failure after the authorization server rotated
-  a refresh token loses that token; the connection then needs a new authorization. Client-credentials
-  connections are not affected (they never use a refresh token).
-- Authorization code with PKCE, CIMD, DCR and `authorization_code` on central instances are later slices.
+- A process that dies between the authorization server's answer to a refresh and the commit loses the
+  rotated refresh token (see [Rotation](#refresh-token-rotation)); the connection then needs a new consent.
+  Client-credentials connections are not affected (they never use a refresh token).
+- The callback has no session (a browser redirect carries no bearer token). It trusts the single-use
+  `state` alone, which is bound to the person, connection and tenant that started the request, so a
+  victim who is tricked into opening someone else's authorization URL consents on that person's
+  connection, never on their own (consent phishing is inherent to OAuth; the connection shows who
+  authorized it and every consent is audited).
+- Authorization code on a central (platform) instance is refused by design (`central_user_delegation`).
 
 ## Control-node relay for run nodes
 

@@ -440,6 +440,19 @@ the platform refuses to use the stored client and marks the connection `reauthor
   old token until it expires (`mcp_auth_refresh_failed` afterwards); the audit code `endpoints_changed`
   and `resource_metadata_origin` extend the list of `mcp.oauth.denied`. Grant revocation (ADR 0012) has no
   caller on `main`; the revoke hook exists. See [docs/mcp.md](../mcp.md#oauth-for-http-mcp-connections).
+- **Implementation notes (S7, #237).** The authorization-code flow, CIMD and DCR are in. Pending requests
+  live in `mcp_oauth_pending` (migration 0029): the state as SHA-256, the PKCE verifier sealed with the tenant
+  data key (AAD domain-separated from tokens), the pinned endpoints and whether the server advertises
+  RFC 9207. The callback is public (a browser redirect has no bearer token): the single-use state is the
+  authenticator, the starting person's permission is checked again with the principal of that user, and the
+  endpoints pinned at the start are the only ones the code is redeemed at. Deviations: the audit codes
+  `iss_missing`, `authorization_refused`, `forbidden`, `registration_disabled` extend the list of
+  `mcp.oauth.denied`; `mcp.oauth.authorization_requested` and `mcp.oauth.step_up_required` are new actions;
+  the callback answers a redirect to the console (`OAX_UI_URL`) with a closed result, else a page of fixed
+  text. A public pre-registered client (`clientAuth: none`) is allowed for `authorization_code` only.
+  A grant without a refresh token is not renewed with another grant: it needs a new consent at expiry.
+  Rotation: the previous pair stays until the new one is committed, the commit is retried (3 attempts) and
+  a pair that could not be stored is kept in memory for the next renewal; a crash in that window loses it.
 - **Revocation**: deleting or disabling a connection, revoking a grant (ADR 0012), rotating the
   client secret, changing the URL or issuer, and an admin's "disconnect" delete the stored tokens
   and call the authorization server's revocation endpoint (RFC 7009) when advertised (best effort,

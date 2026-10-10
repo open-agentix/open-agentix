@@ -34,7 +34,7 @@ exponential backoff before it starts.
 | `NODE_ENV` | `production` | both | `production` requires `OAX_RUN_TOKEN_SECRET`. |
 | `OAX_HOST` | `0.0.0.0` | api | Listen address. |
 | `OAX_PORT` | `8080` | api | Listen port. |
-| `OAX_PUBLIC_URL` | `http://localhost:8080` | api | External base URL (OIDC redirects, ingest URLs, OpenAPI servers). |
+| `OAX_PUBLIC_URL` | `http://localhost:8080` | api | External base URL (OIDC redirects, ingest URLs, OpenAPI servers, and the redirect URI `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback` of the MCP OAuth authorization-code flow: an `https` origin without path, `http` only for localhost; the authorization servers must be able to send the browser there). |
 | `OAX_UI_URL` | – | api | UI base URL; OIDC callback redirects to `<ui>/auth/callback#token=…`. |
 | `OAX_CORS_ORIGINS` | – | api | Comma-separated allowed origins (the UI). Empty = no CORS. |
 | `OAX_TRUST_PROXY` | `false` | api | Trust `X-Forwarded-*` (behind an ingress/ALB). |
@@ -380,14 +380,17 @@ endpoint must be on `OAX_AIRGAPPED_ALLOW`, see [`airgapped.md`](airgapped.md#ope
 | `OAX_MCP_STDIO_COMMANDS` | – (none) | Comma list of absolute paths (or `dir/*`, direct children only) that tenant, team and agent `stdio` MCP connections may start, in run nodes only. Empty means no tenant stdio command. Shells, installers and inline-code interpreters are refused even when listed; unsafe entries fail start-up. See [`mcp.md`](mcp.md#stdio-mcp-servers). |
 | `OAX_MCP_OAUTH_KEK` | – (none) | Platform key-encryption key for the secrets the platform stores (MCP OAuth tokens): 32 random bytes, base64 (`openssl rand -base64 32`). Prefer `OAX_MCP_OAUTH_KEK_FILE`; set only one of the two. The variable is removed from the process environment once read, and a warning is logged at start-up if it was used. Without a key, no token can be stored or read (`key_service_unconfigured`). See [`mcp.md`](mcp.md#stored-oauth-tokens-and-the-key-service). |
 | `OAX_MCP_OAUTH_KEK_FILE` | – (none) | Path of a file (a mounted Secret) that holds the same base64 key. A start-up warning is logged if the file is readable by group or others. Only the api and the worker may have the key; keep key-holding workers on hosts or node pools that do not run untrusted run nodes. |
+| `OAX_MCP_OAUTH_CIMD` | `false` | Publish the Client ID Metadata Document at `<OAX_PUBLIC_URL>/oauth/mcp-client.json` for `authorization_code` connections with `registration: cimd`. Needs a public `https` `OAX_PUBLIC_URL`; refused at start-up in air-gapped mode. |
+| `OAX_MCP_OAUTH_DCR` | `false` | Allow dynamic client registration (RFC 7591) per tenant and authorization server for `registration: dcr`. Deprecated by the MCP specification; refused at start-up in air-gapped mode. |
 | `OAX_MCP_OAUTH_KEK_ID` | `kek-1` | Name recorded with every data key the KEK wraps (`[A-Za-z0-9._-]`, up to 64). A data key wrapped with another id is refused until a KEK rotation exists. |
 
-MCP OAuth flows (client credentials, [`mcp.md`](mcp.md#oauth-for-http-mcp-connections)) add no setting of
-their own. They need the key-encryption key above (`key_service_unconfigured` otherwise), and their requests
+MCP OAuth flows (client credentials and authorization code, [`mcp.md`](mcp.md#oauth-for-http-mcp-connections))
+add only the two switches above. The authorization-code flow needs a reachable `OAX_PUBLIC_URL` (its callback is a
+browser redirect) and, for the console to be shown after the consent, `OAX_UI_URL`. They need the key-encryption key above (`key_service_unconfigured` otherwise), and their requests
 (resource metadata with purpose `mcp`; authorization server metadata, token and revocation with purpose
 `identity`) follow the network configuration: routes and proxies for those purposes, trust bundles and, in
 air-gapped mode, `OAX_AIRGAPPED_ALLOW` for every pinned authorization server host. `OAX_MCP_OAUTH_CIMD` and
-`OAX_MCP_OAUTH_DCR` of ADR 0016 belong to later slices and do not exist yet.
+`OAX_MCP_OAUTH_DCR` are refused at start-up with `OAX_AIRGAPPED=true`.
 
 ## Air-gapped mode
 

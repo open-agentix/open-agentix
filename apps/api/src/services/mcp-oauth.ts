@@ -751,7 +751,7 @@ export class McpOauthService {
     const state = newSecretToken();
     const verifier = newSecretToken();
     const resource = canonicalResource(cfg.url);
-    const expiresAt = await this.stores.pending.create({
+    await this.stores.pending.create({
       state,
       verifier,
       tenantId: row.tenantId,
