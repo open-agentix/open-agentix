@@ -540,6 +540,31 @@ describe('the SDK takes nothing from OTEL_* fallbacks and propagates nothing', (
   });
 });
 
+describe('another OpenTelemetry SDK in the process (auto-instrumentation)', () => {
+  const foreign = () => {
+    const memory = new InMemorySpanExporter();
+    new NodeTracerProvider({ spanProcessors: [new SimpleSpanProcessor(memory)] }).register();
+    return memory;
+  };
+
+  it.each([
+    ['without an endpoint', {}],
+    ['with an endpoint', { OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.org' }],
+  ])('fails start-up %s: its exporter would bypass the guard', async (_label, env) => {
+    const memory = foreign();
+    await expect(initTelemetry(otel(env))).rejects.toMatchObject({
+      code: 'config_invalid',
+      message: expect.stringContaining('another OpenTelemetry SDK'),
+    });
+    expect(memory.getFinishedSpans()).toEqual([]);
+  });
+
+  it('starts normally once nothing else is registered', async () => {
+    const t = await initTelemetry(otel());
+    expect(t.enabled).toBe(false);
+  });
+});
+
 describe('an unavailable exporter never blocks a run', () => {
   const run = async (n: number) => {
     const started = Date.now();

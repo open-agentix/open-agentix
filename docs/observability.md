@@ -85,6 +85,11 @@ registered and no socket is opened.
   (`OTEL_PROPAGATORS` is not read): nothing injects `traceparent` or `baggage` into outbound
   requests. `OTEL_EXPORTER_OTLP_COMPRESSION` is still applied by the exporter (it changes only
   the encoding of the payload).
+- **No auto-instrumentation.** When another OpenTelemetry SDK is registered in the process (for
+  example `@opentelemetry/auto-instrumentations-node` loaded with `NODE_OPTIONS=--require ...`,
+  or injected by the OpenTelemetry Operator), start-up fails: its exporter would bypass the
+  allowlist and the export guard, and its HTTP instrumentation would record full URLs and inject
+  `traceparent` into every outbound request (ADR 0015 section 6.3).
 - **No resource detectors.** The resource is static: `service.name` (`OTEL_SERVICE_NAME`) and the
   validated `OAX_OTEL_RESOURCE_ATTRIBUTES`. Nothing calls a cloud metadata endpoint or reads host
   details, and `OTEL_RESOURCE_ATTRIBUTES` is not read.

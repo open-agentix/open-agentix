@@ -358,7 +358,9 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
   now fails with a message naming the replacement (`OAX_OTEL_HEADERS_SECRET`, the network
   configuration, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OAX_OTEL_SAMPLE_RATIO`). `OTEL_SDK_DISABLED=true`
   or an `OTEL_TRACES_EXPORTER` other than `otlp` next to an endpoint fails start-up as well (they
-  are not read; unset the endpoint to turn the export off).
+  are not read; unset the endpoint to turn the export off). A process in which another
+  OpenTelemetry SDK is already registered (auto-instrumentation through `NODE_OPTIONS` or an
+  operator injection) now fails start-up.
 - **UI**: German glossary follows the multi-tenant UX design: "Use Case" (was "Anwendungsfall") and
   "Owner-Team" (was "Verantwortliches Team"). The browser tab title now reads
   `Page · Tenant · open-agentix`.

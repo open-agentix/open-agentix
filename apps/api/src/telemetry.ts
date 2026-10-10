@@ -1,9 +1,11 @@
 import {
+  ProxyTracerProvider,
   SpanStatusCode,
   trace,
   type Span,
   type SpanContext,
   type Tracer,
+  type TracerProvider,
 } from '@opentelemetry/api';
 import {
   type ContextGuard,
@@ -173,10 +175,39 @@ async function resolveHeaders(
   return headers;
 }
 
+/** What the API's proxy delegates to while no SDK is registered. */
+const NO_PROVIDER = new ProxyTracerProvider().getDelegate();
+
+/** The provider spans currently go to, or undefined when none is registered. */
+function registeredProvider(): TracerProvider | undefined {
+  const global = trace.getTracerProvider() as TracerProvider & {
+    getDelegate?: () => TracerProvider;
+  };
+  const delegate = typeof global.getDelegate === 'function' ? global.getDelegate() : global;
+  return delegate === NO_PROVIDER ? undefined : delegate;
+}
+
+/**
+ * Fails start-up when another OpenTelemetry SDK owns the global provider, typically
+ * auto-instrumentation loaded with `NODE_OPTIONS=--require/--import` (or injected by an operator).
+ * Its exporter would bypass the allowlist and the export guard, and its HTTP instrumentation would
+ * record full URLs and inject `traceparent` everywhere (ADR 0015 section 6.3). Our own
+ * registration would silently lose against it, so the only safe answer is to refuse.
+ */
+function refuseForeignProvider(own?: TracerProvider): void {
+  const current = registeredProvider();
+  if (current === undefined || current === own) return;
+  throw new OaxError(
+    'config_invalid',
+    'invalid configuration: another OpenTelemetry SDK is registered in this process (auto-instrumentation via NODE_OPTIONS?); it is not supported, remove it and use OTEL_EXPORTER_OTLP_ENDPOINT',
+  );
+}
+
 export async function initTelemetry(
   config: OtelConfig,
   init: TelemetryInit = {},
 ): Promise<Telemetry> {
+  refuseForeignProvider();
   configureTelemetryRuntime({
     exceptionDetail: config.exceptionDetail,
     ...(init.warn ? { warn: init.warn } : {}),
@@ -237,6 +268,7 @@ export async function initTelemetry(
   // No global propagator: nothing injects or extracts `traceparent`/`baggage` until a slice names
   // the place deliberately (ADR 0015 sections 2, 6.1 and 6.4).
   provider.register({ propagator: null });
+  refuseForeignProvider(provider);
   return {
     enabled: true,
     attachStats,
