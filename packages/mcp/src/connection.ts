@@ -10,6 +10,11 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServerConfig } from './config.js';
 import { assertHttpConfig } from './http-policy.js';
+import {
+  MCP_PROTOCOL_VERSIONS,
+  type McpPropagationPolicy,
+  type McpTraceMeta,
+} from './trace-context.js';
 
 export interface McpTool {
   name: string;
@@ -67,6 +72,11 @@ export interface ConnectDeps {
   originFor?: ((server: string) => 'platform' | 'tenant') | undefined;
   /** See `OutboundContext.proxyChecksDestination`: run nodes behind the control node's proxy. */
   proxyChecksDestination?: boolean | undefined;
+  /**
+   * Platform switch for MCP trace context propagation (`OAX_OTEL_MCP_PROPAGATION`, ADR 0015 S8).
+   * Anything but `allow` (including absent) sends nothing, whatever a connection says.
+   */
+  tracePropagation?: McpPropagationPolicy | undefined;
   /** Name resolution for the connect-time destination check (tests inject a fake resolver). */
   lookup?: HostLookup | undefined;
 }
@@ -243,12 +253,23 @@ export class McpConnection {
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    meta?: McpTraceMeta,
   ): Promise<ToolResult> {
     try {
-      const raw = await this.client.callTool({ name, arguments: args }, undefined, {
-        timeout: this.config.timeoutMs,
-        ...(signal ? { signal } : {}),
-      });
+      // `_meta` is rebuilt from the one validated field, so nothing else a caller put on `meta`
+      // (a `tracestate`, `baggage`, any other key) can reach the wire.
+      const raw = await this.client.callTool(
+        {
+          name,
+          arguments: args,
+          ...(meta ? { _meta: { traceparent: meta.traceparent } } : {}),
+        },
+        undefined,
+        {
+          timeout: this.config.timeoutMs,
+          ...(signal ? { signal } : {}),
+        },
+      );
       return renderToolResult(
         raw as { content?: unknown; isError?: unknown; structuredContent?: unknown },
         this.config.maxResultBytes,
@@ -263,6 +284,17 @@ export class McpConnection {
       }
       throw new OaxError('tool_failed', `tool ${this.config.name}/${name} failed: ${msg}`);
     }
+  }
+
+  /**
+   * The negotiated protocol version when it is one of the known ones (closed set for the span
+   * attribute `mcp.protocol.version`); `undefined` otherwise. Stdio transports do not report it.
+   */
+  get protocolVersion(): string | undefined {
+    const v = (this.client.transport as { protocolVersion?: unknown } | undefined)?.protocolVersion;
+    return typeof v === 'string' && (MCP_PROTOCOL_VERSIONS as readonly string[]).includes(v)
+      ? v
+      : undefined;
   }
 
   async close(): Promise<void> {

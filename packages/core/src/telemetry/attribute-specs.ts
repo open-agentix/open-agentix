@@ -115,6 +115,16 @@ export const ATTRIBUTE_SPECS = {
   'oax.reservation.result': slug,
   'oax.provider.instance': text(63),
   'oax.mcp.server': text(64),
+  // MCP conventions on `execute_tool`, only while context propagation is on (ADR 0015 section 6.4).
+  'mcp.method.name': choice('tools/call'),
+  'mcp.protocol.version': choice(
+    '2024-10-07',
+    '2024-11-05',
+    '2025-03-26',
+    '2025-06-18',
+    '2025-11-25',
+  ),
+  'oax.mcp.propagated': bool,
   'oax.policy.effect': choice('allow', 'deny', 'require_approval'),
   'oax.policy.reason_codes': {
     t: 'string[]',
@@ -290,6 +300,9 @@ const PER_KIND: Record<Exclude<SpanKind, 'unknown'>, readonly AttributeKey[]> = 
     'gen_ai.tool.type',
     'gen_ai.tool.call.id',
     'oax.mcp.server',
+    'mcp.method.name',
+    'mcp.protocol.version',
+    'oax.mcp.propagated',
     'oax.tool.result_bytes',
     'oax.tool.truncated',
     'oax.tool.is_error',

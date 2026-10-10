@@ -154,6 +154,9 @@ export class Worker {
         // the tenant destination rules and pinned DNS (ADR 0016 section 4).
         outbound: this.mcpOutbound(),
         originFor: (server) => (platformNames.has(server) ? 'platform' : 'tenant'),
+        // Platform switch for trace context propagation (ADR 0015 S8); a connection still has to
+        // opt in. Default deny.
+        tracePropagation: this.ctx.config.otel.mcpPropagation,
         ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
       },
       contextGuardFromEnv(process.env),

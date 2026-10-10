@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
   getEgressPolicy,
+  hasPermission,
   hasTenantPrefix,
   pinnedToolsOf,
   resolveRoute,
@@ -644,6 +645,7 @@ export class CatalogService {
     const scopeId = input.scopeId ?? null;
     await this.assertScope(actor, scope, scopeId);
     const config = await this.prepareConfig(actor, input.kind, input.name, scope, input.config);
+    this.assertPropagationAllowed(actor, input.kind, scope, config, undefined);
     const [exists] = await this.ctx.db
       .select({ id: connections.id })
       .from(connections)
@@ -689,6 +691,28 @@ export class CatalogService {
     return row;
   }
 
+  /**
+   * ADR 0015 S8: turning `telemetry.propagate` on sends the run's trace id to a server the platform
+   * does not control, so it is not part of the integrator's `connections:write`. A platform
+   * connection is operator-only already (`assertScope`, `getOwnConnection`); every other scope needs
+   * a tenant-wide admin binding (`settings:write`). Switching it off, or saving a connection that
+   * already had it on, needs nothing extra.
+   */
+  private assertPropagationAllowed(
+    actor: Principal,
+    kind: ConnectionKind,
+    scope: ConnectionScope,
+    next: Record<string, unknown>,
+    previous: unknown,
+  ): void {
+    if (kind !== 'mcp' || scope === 'platform') return;
+    const on = (c: unknown) =>
+      (c as { telemetry?: { propagate?: unknown } } | null)?.telemetry?.propagate === true;
+    if (!on(next) || on(previous)) return;
+    if (!hasPermission(actor, 'settings:write', null))
+      throw forbidden('enabling telemetry.propagate needs a tenant admin');
+  }
+
   private async invalidateConnections(): Promise<void> {
     await this.ctx.cache.delPrefix('connections:');
   }
@@ -701,6 +725,13 @@ export class CatalogService {
       current.name,
       current.scope as ConnectionScope,
       config,
+    );
+    this.assertPropagationAllowed(
+      actor,
+      current.kind as ConnectionKind,
+      current.scope as ConnectionScope,
+      parsed,
+      current.config,
     );
     const [row] = await this.ctx.db
       .update(connections)

@@ -1,4 +1,5 @@
 import { tracingEnabled, withSpan } from '@openagentix/api';
+import { formatTraceparent } from '@openagentix/mcp';
 import type { ExecutorTelemetry } from '@openagentix/runners';
 
 /** The run a span belongs to; ids only (ADR 0015 section 7.1). */
@@ -23,6 +24,16 @@ export function executorTelemetry(identity: RunSpanIdentity): ExecutorTelemetry 
   };
   return {
     span: (spec, attributes, fn) =>
-      withSpan({ name: spec.name, kind: spec.kind }, { ...attributes, ...base }, fn),
+      withSpan({ name: spec.name, kind: spec.kind }, { ...attributes, ...base }, (span) =>
+        fn({
+          setAttributes: (a) => span.setAttributes(a),
+          addEvent: (n, a) => span.addEvent(n, a),
+          // Built from the span's own context (ids this process generated), never from an input.
+          traceparent: () => {
+            const c = span.spanContext();
+            return formatTraceparent(c.traceId, c.spanId, (c.traceFlags & 1) === 1);
+          },
+        }),
+      ),
   };
 }

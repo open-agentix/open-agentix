@@ -1,7 +1,7 @@
 # ADR 0015: Observability with OpenTelemetry GenAI semantic conventions
 
 - Status: Proposed. Slices S1 to S5 are implemented (see "Implementation notes S2/S3/S4/S5"
-  below and [`observability.md`](../observability.md)); S6 and S7 are implemented (notes below); S8 to S10 are open.
+  below and [`observability.md`](../observability.md)); S6 to S8 are implemented (notes below); S9 and S10 are open.
 - Date: 2026-10-10
 - Plan items: W3-5 (#37, "Observability completion: step, model and tool spans and the missing
   metrics"); RM-53 of the roadmap gap list; replaces the span list in the W3-5 acceptance
@@ -505,7 +505,7 @@ OTLP metric export is not added: metrics stay pull-based (`/metrics`, ServiceMon
 | `OAX_OTEL_EXPORT_TIMEOUT_MS` | `10000` | Export timeout. |
 | `OAX_OTEL_NODE_EVENTS_MAX` | `128` | Node-reported events per session. |
 | `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link` for inbound `traceparent`. |
-| `OAX_OTEL_MCP_PROPAGATION` | `deny` | `allow` lets MCP instances opt in. |
+| `OAX_OTEL_MCP_PROPAGATION` | `deny` | `allow` lets MCP instances opt in. In use since S8. |
 | `OAX_OTEL_EXCEPTION_DETAIL` | `off` | `guarded`: guarded, capped exception messages. |
 | `OAX_OTEL_CONTENT` | `off` | Only `off` until slice S10. |
 | `OAX_OTEL_GENAI_METRICS` | `false` | Expose GenAI metrics on `/metrics`. |
@@ -801,6 +801,38 @@ Decisions taken while implementing slice S7 (#212, with #220) where the text abo
 - **Errors** leaving the sender are fixed shapes (name and code); the original error, which can name
   the destination, is dropped. `gRPC` was not added (owner question 3 is open).
 - No migration.
+
+## Implementation notes S8
+
+Decisions taken while implementing slice S8 (#213) where the text above left room:
+
+- **One propagation point.** `traceMetaFor` (`packages/mcp/src/trace-context.ts`) decides, and
+  `ToolGateway.call` is the only caller: platform `allow` AND `telemetry.propagate: true` AND a
+  well-formed caller-supplied traceparent, else nothing is added. `McpConnection.callTool` rebuilds
+  `_meta` as `{ traceparent }` from that one validated field, so nothing else (tracestate, baggage,
+  other keys) can reach the wire. Because the control-node relay (ADR 0016 S4) calls the same
+  gateway method, it inherits the rule; it only has to pass `trace` (see below).
+- **Where the value comes from.** The executor asks its `execute_tool` span for `traceparent()`
+  (ids this process generated; flags are `00` or `01`, never anything else) and offers it in
+  `call(..., { trace })`. It is never read from an input, a node or a server response. A server's
+  `_meta` in `tools/list` and `tools/call` results is not read at all.
+- **Scope of the wire change.** `params._meta` of `tools/call` only (not `initialize`, `tools/list`,
+  connection tests or tool refresh), on every transport that carries `_meta` (streamable HTTP and
+  stdio). No HTTP header is added: the S1 forbidden header list (`traceparent`, `tracestate`,
+  `baggage`) stays. No environment variable (`TRACEPARENT`) is set for stdio servers.
+- **Who may switch it on.** `telemetry.propagate` is part of the connection config (strict object, no
+  other keys, no migration). Turning it on needs a tenant-wide `settings:write` binding (tenant
+  admin) for tenant, team and agent connections and platform operator access for platform
+  connections (403 otherwise); turning it off, or saving a connection that already has it on, needs
+  only `connections:write`.
+- **Attributes.** `mcp.method.name` (`tools/call`), `mcp.protocol.version` (closed list, only when the
+  transport reports a known version) and `oax.mcp.propagated` (`true`) are added to the `execute_tool`
+  span only for calls that carried a traceparent. `mcp.session.id` is not exported.
+- **Not covered yet.** Run nodes and harness steps create no `execute_tool` span, so they offer no
+  traceparent and send nothing. The relay (ADR 0016 S4, PR #299) must open an `execute_tool` span
+  for the relayed call and pass `trace: { traceparent }` to `ToolGateway.call`, with
+  `tracePropagation` set from `OAX_OTEL_MCP_PROPAGATION` on its gateway.
+- No new metric, no migration.
 
 ## Open questions (owner decisions needed)
 

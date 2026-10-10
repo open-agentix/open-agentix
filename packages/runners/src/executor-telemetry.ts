@@ -16,6 +16,12 @@ export type ExecutorSpanKind =
 export interface ExecutorSpan {
   setAttributes(attributes: Record<string, unknown>): void;
   addEvent(name: string, attributes?: Record<string, unknown>): void;
+  /**
+   * The W3C `traceparent` of this very span (the run's own trace identity), or `undefined` when the
+   * span is not recorded. Only the `execute_tool` span is asked for it, to hand it to the MCP
+   * gateway, which sends it only when both opt-ins are on (ADR 0015 section 6.4).
+   */
+  traceparent?(): string | undefined;
 }
 
 export interface ExecutorTelemetry {

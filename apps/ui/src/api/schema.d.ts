@@ -11246,6 +11246,11 @@ export interface components {
             profiles?: {
                 [key: string]: string[];
             };
+            /** @description Opt-in trace context propagation (ADR 0015 section 6.4). With `propagate: true` (and `OAX_OTEL_MCP_PROPAGATION=allow` on the platform) the run's `traceparent` is sent in `params._meta` of `tools/call`; never `tracestate` or `baggage`. Enabling it needs a tenant admin (platform operator for platform connections). */
+            telemetry?: {
+                /** @default false */
+                propagate: boolean;
+            };
         };
         Error: {
             /** @description stable error code */

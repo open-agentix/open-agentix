@@ -50,6 +50,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Opt-in MCP trace context propagation** (ADR 0015 S8, #213): with `OAX_OTEL_MCP_PROPAGATION=allow` on
+  the platform and `telemetry.propagate: true` on an MCP connection (tenant admin, or platform operator
+  for platform connections), each `tools/call` carries `params._meta.traceparent` of the run's
+  `execute_tool` span. Default off; never `tracestate`, `baggage`, other `_meta` keys or HTTP headers;
+  the platform `deny` wins; nothing a server returns becomes a parent. The `execute_tool` span gets
+  `mcp.method.name`, `mcp.protocol.version` and `oax.mcp.propagated`. No migration. The relay of
+  ADR 0016 S4 must pass the traceparent to the gateway once it lands.
+
 - **Sampling with always-keep classes (ADR 0015 slice S6, #211)**: `OAX_OTEL_SAMPLE_RATIO`
   (default `1`, validated 0 to 1) samples by the run's trace id, so the api and the worker decide
   alike. Below 1, `OAX_OTEL_KEEP` (default `error,deny,approval,budget,guard`) still exports the

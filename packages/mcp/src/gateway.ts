@@ -21,6 +21,7 @@ import {
 import type { ConnectDeps, McpTool, ToolResult } from './connection.js';
 import { McpConnection } from './connection.js';
 import type { McpServerConfig } from './config.js';
+import { traceMetaFor } from './trace-context.js';
 
 /** Model-facing name for an MCP tool (`server__tool`, OpenAI/Anthropic compatible charset). */
 export function modelToolName(server: string, tool: string): string {
@@ -69,6 +70,17 @@ export interface ToolsChanged {
   server: string;
   liveDigest: string;
   tools: PinnedTool[] | null;
+}
+
+/**
+ * Trace context for one call (ADR 0015 S8). `traceparent` is the position of the run's own
+ * `execute_tool` span; the gateway sends it only when the platform and the connection both allow it,
+ * and drops a malformed value. `onPropagated` runs right before the request leaves, with closed
+ * values only, so the caller can label its span.
+ */
+export interface CallTrace {
+  traceparent?: string | undefined;
+  onPropagated?: ((info: { method: 'tools/call'; protocolVersion?: string }) => void) | undefined;
 }
 
 /** A failed tool call: the message is guarded, `guard` says what was removed (counts only). */
@@ -249,7 +261,7 @@ export class ToolGateway {
   async call(
     call: ToolCallRequest,
     gate: PolicyGate,
-    opts: { approved?: boolean; signal?: AbortSignal } = {},
+    opts: { approved?: boolean; signal?: AbortSignal; trace?: CallTrace } = {},
   ): Promise<GatewayCallResult> {
     const decision = await gate.decide(call);
     if (decision.effect === 'deny') return { status: 'denied', decision };
@@ -266,7 +278,19 @@ export class ToolGateway {
       );
     try {
       const conn = await this.connection(call.server);
-      raw = await conn.callTool(call.tool, call.args, opts.signal);
+      // The single propagation point (ADR 0015 S8): both switches, a validated traceparent, nothing else.
+      const meta = traceMetaFor(conn.config, this.deps.tracePropagation, opts.trace?.traceparent);
+      if (meta) {
+        try {
+          opts.trace?.onPropagated?.({
+            method: 'tools/call',
+            ...(conn.protocolVersion ? { protocolVersion: conn.protocolVersion } : {}),
+          });
+        } catch {
+          /* labelling a span must never fail a tool call */
+        }
+      }
+      raw = await conn.callTool(call.tool, call.args, opts.signal, meta);
     } catch (e) {
       // The message of a failed call carries server text (a JSON-RPC error, a crash message) and
       // reaches the model like a result: the executor shows it, the harness gate returns it.
