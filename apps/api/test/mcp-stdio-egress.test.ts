@@ -326,12 +326,31 @@ Work.
   it('compares canonical spellings (case, default port)', () => {
     const w = egressUnusedWarnings(
       {
-        runtime: { egress: ['API.Jira.Example:443'] },
+        runtime: { runner: 'container', egress: ['API.Jira.Example:443'] },
         agents: [{ id: 'a', tools: [{ server: 's' }] }],
       },
       [{ name: 's', transport: 'stdio', command: JIRA, egress: ['api.jira.example'] } as never],
     );
     expect(w).toHaveLength(1);
+  });
+  it('checks only container steps: Kubernetes needs the entry in runtime.egress', () => {
+    const configs = [
+      { name: 's', transport: 'stdio', command: JIRA, egress: ['api.jira.example'] } as never,
+    ];
+    const def = (runner: string, step?: string) => ({
+      runtime: { runner, egress: ['api.jira.example'] },
+      agents: [
+        {
+          id: 'a',
+          tools: [{ server: 's' }],
+          ...(step ? { runtime: { runner: step } } : {}),
+        },
+      ],
+    });
+    expect(egressUnusedWarnings(def('kubernetes-job'), configs)).toEqual([]);
+    expect(egressUnusedWarnings(def('in-process'), configs)).toEqual([]);
+    expect(egressUnusedWarnings(def('container', 'kubernetes-job'), configs)).toEqual([]);
+    expect(egressUnusedWarnings(def('kubernetes-job', 'container'), configs)).toHaveLength(1);
   });
 });
 

@@ -159,14 +159,16 @@ const canonicalEntry = (e: string): string => e.trim().toLowerCase().replace(/:4
  * only serves a stdio MCP server, which now has its own grant from the `egress` of its connection.
  * The step's account no longer reaches the server, so the entry opens the node's own network for
  * nothing. HTTP servers are not reported: until the relay of S4 the node still reaches them with
- * the step's account, so their host is still used. Advisory only.
+ * the step's account, so their host is still used. Only steps on the container runner are checked:
+ * the Kubernetes runner requires a server's entries to stay in the step's `runtime.egress` (one
+ * NetworkPolicy per Pod), and in-process steps have no per-server grants at all. Advisory only.
  */
 export function egressUnusedWarnings(
   def: {
-    runtime: { egress: readonly string[] };
+    runtime: { runner?: string | undefined; egress: readonly string[] };
     agents: readonly {
       id: string;
-      runtime?: { egress?: readonly string[] | undefined } | undefined;
+      runtime?: { runner?: string | undefined; egress?: readonly string[] | undefined } | undefined;
       tools: readonly { server: string }[];
       profileGrants?: readonly { server: string }[] | undefined;
     }[];
@@ -176,6 +178,7 @@ export function egressUnusedWarnings(
   const out: { path: string; message: string }[] = [];
   const byName = new Map(configs.map((c) => [c.name, c]));
   def.agents.forEach((a, i) => {
+    if ((a.runtime?.runner ?? def.runtime.runner ?? 'in-process') !== 'container') return;
     const entries = a.runtime?.egress ?? def.runtime.egress;
     if (entries.length === 0) return;
     const servers = new Set([

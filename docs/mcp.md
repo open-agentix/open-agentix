@@ -322,9 +322,10 @@ depend on that engine behaviour or on how the network was created (the runner al
 network that is not `internal`).
 
 **Lint.** `POST /v1/agents/validate` reports the warning `egress_unused` for a host in a step's
-`runtime.egress` that only serves a stdio server with its own `egress`: the step's account no
-longer reaches it. Hosts of HTTP MCP servers are not reported, because until the control-node relay
-(slice S4) the node still reaches them with the step's account.
+`runtime.egress` of a step on the container runner that only serves a stdio server with its own
+`egress`: the step's account no longer reaches it. Kubernetes steps are not reported (there the
+entry must stay in `runtime.egress`). Hosts of HTTP MCP servers are not reported, because until the
+control-node relay (slice S4) the node still reaches them with the step's account.
 
 **What this does not do.**
 
