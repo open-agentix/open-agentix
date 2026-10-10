@@ -8,8 +8,9 @@ documents what is implemented; it grows with each slice.
 > without messages, the exporter configuration and its safety rules. Slice S2 adds the run's trace
 > identity, the audit links and the first spans: `oax.run.admit` at admission, one
 > `invoke_workflow {name}` per worker attempt and one HTTP server span per API request. The spans
-> below the workflow (handover, agent, model call, tool call, policy, approval) follow in later
-> slices.
+> below the workflow follow in later slices: slice S3 adds the executor spans of in-process steps
+> (handover, agent, model call, policy check, approval wait, tool call); the spans of isolated
+> steps (run nodes, model proxy) come with S4.
 
 ## Convention version
 
@@ -146,6 +147,66 @@ invoke_workflow {definition.name}   one per attempt (lease); child of the stored
   starts its own trace.
 
 Spans only exist while an exporter is configured; ids and audit links do not depend on it.
+
+## Executor spans (steps that run in the worker)
+
+The step executor (`packages/runners/src/executor.ts`) knows nothing about OpenTelemetry. It calls
+span **hooks** (`RunnerContext.telemetry`, `ExecutorTelemetry`) that the worker implements with
+`withSpan`, so the allowlist, the guard and the export boundary apply unchanged. Without a
+registered SDK the worker passes no hooks and the executor behaves exactly as before.
+
+```text
+invoke_workflow {name}
+ ├─ oax.handover {step}                    condition + input validation (one per step, also when skipped)
+ └─ invoke_agent {step}                    one per executed step
+     ├─ chat {model}                       CLIENT; reservation + provider call
+     ├─ oax.policy.check {server}/{tool}   gate decision
+     ├─ oax.approval.wait {server}/{tool}  only when the decision is require_approval
+     └─ execute_tool {tool}                the gateway call
+```
+
+Steps that a run node executes (isolated runners, harnesses) are not instrumented below
+`invoke_agent` yet (slice S4).
+
+| Span | Attributes (all from the allowlist) |
+| --- | --- |
+| `oax.handover` | `oax.step.id`, `oax.handover.explicit`, `oax.handover.result` (`ok`, `skipped`, `invalid`), `oax.schema.digest` (input schema, when there is one) |
+| `invoke_agent` | `gen_ai.operation.name`, `gen_ai.agent.name` (step id), `gen_ai.agent.id` (`{definition}/{step}`), `gen_ai.agent.version`, `gen_ai.request.model`, `gen_ai.provider.name`, `oax.runner.kind`, and the step's token and cost totals (also when the step failed) |
+| `chat` | `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature`, `gen_ai.response.finish_reasons`, `gen_ai.usage.*` tokens (including cache read/write when reported), `oax.cost.micro_usd`, `oax.cost.priced`, `oax.usage.source`, `oax.model.via`, `oax.reservation.result` (`reserved`, `none`), `oax.provider.instance` |
+| `oax.policy.check` | `gen_ai.tool.name`, `oax.mcp.server`, `oax.policy.effect`, `oax.policy.reason_codes` (codes, never messages) |
+| `oax.approval.wait` | `oax.approval.outcome` (`approved`, `rejected`, `timeout`) |
+| `execute_tool` | `gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.tool.type=extension`, `gen_ai.tool.call.id` (only in the safe shape), `oax.mcp.server`, `oax.tool.result_bytes`, `oax.tool.truncated`, `oax.tool.is_error`, `oax.cost.micro_usd`; `error.type` for a refused or failed call |
+
+Every span also carries `oax.run.id`, `oax.tenant.id` and `oax.tenant.root_id`.
+
+**Span events** on the enclosing `invoke_agent` (or `oax.handover`) span carry counts, rule names and
+codes only:
+
+| Event | Attributes |
+| --- | --- |
+| `oax.control.decision` | `oax.control.action` (`pause`, `kill`), `oax.control.rules` (rule names such as `budget_cost`) |
+| `oax.budget.breach` | `oax.budget.scopes` (`tenant`, `use_case`, `team`) |
+| `oax.guard.report` | `oax.guard.source` (`input`, `tool_result`, `tool_error`), `oax.guard.invisible`, `oax.guard.secrets`, `oax.guard.secret_kinds` |
+| `oax.handover.invalid` | `oax.validation.direction`, `oax.validation.attempt`, `oax.validation.violations`, `oax.schema.digest` |
+| `oax.handover.retry` | `oax.validation.direction`, `oax.validation.attempt`, `oax.schema.digest` |
+| `oax.output.valid` | `oax.validation.direction`, `oax.validation.attempt` |
+
+A step that fails ends its span as `ERROR` with the failure code (`approval_timeout`,
+`control_budget_use_case`, `handover_invalid`, a provider error code) as `error.type`.
+
+**Never exported from the executor:** the prompt or the event payload, model output, tool
+arguments, tool results and tool error text, provider error bodies, MCP tool descriptions, policy
+or budget messages, approval comments, the `useCase` label. A tool name that the model made up
+(and that the step does not expose) is **not** used as a span name or attribute: the span is named
+`oax.policy.check _unknown`.
+
+**Provider name.** `gen_ai.provider.name` comes from a closed table over the adapter family
+(`anthropic`, `aws.bedrock`, `azure.ai.openai`, `openai`, `openrouter`, `ollama`, `lmstudio`,
+`vllm`, `simulated`; an unknown family falls back to the adapter kind, then `other`). The
+connection (instance) name is exported only as `oax.provider.instance` on `chat` spans, truncated
+to 63 characters and guarded; it is never a span name, an event attribute or a metric label. For a
+tenant-defined (BYOK) connection that name is chosen by the tenant: a shared collector shows it to
+whoever can read the tenant's traces.
 
 ### Inbound `traceparent`
 

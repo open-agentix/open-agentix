@@ -16,6 +16,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Executor spans with GenAI conventions (ADR 0015 slice S3, #208)**: the step executor now emits
+  `oax.handover {step}`, `invoke_agent {step}`, `chat {model}` (CLIENT), `oax.policy.check
+  {server}/{tool}`, `oax.approval.wait {server}/{tool}` and `execute_tool {tool}` under the
+  attempt's `invoke_workflow` span, through span hooks (`RunnerContext.telemetry`) that the worker
+  implements with the guarded `withSpan`; no hooks and no behaviour change without an SDK. Control
+  decisions, guard reports, budget breaches and output validation are span events (counts, rule
+  names and codes only). `gen_ai.provider.name` comes from the adapter family via a closed table,
+  the connection name only as `oax.provider.instance`. Prompts, outputs, tool arguments and
+  results, error text and a model-invented tool name are never exported. New allowlist keys:
+  `oax.control.*`, `oax.budget.scopes`, `oax.guard.*`, `oax.validation.*`. Golden span-shape tests
+  and a redaction canary suite cover the whole export. See `docs/observability.md`.
 - **Run trace identity and audit links (ADR 0015 slice S2, #207)**: migration
   `0020_run_trace_identity` (additive, down script and snapshot included) adds `runs.trace_id`,
   `runs.trace_root_span_id` and `run_node_sessions.trace_context` (all nullable; shape checks and a

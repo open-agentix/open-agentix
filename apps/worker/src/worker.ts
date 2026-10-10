@@ -16,6 +16,7 @@ import {
   type RunnerKind,
 } from '@openagentix/core';
 import type { PullRequestDelivery } from './git/delivery.js';
+import { executorTelemetry } from './executor-spans.js';
 import { NodeDispatcher } from './node-dispatcher.js';
 import { RunQueue } from './queue.js';
 
@@ -175,12 +176,19 @@ export class Worker {
           throw new OaxError('mcp_stdio_requires_isolation', stdio[0]!.message, stdio);
         }
         const scope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
+        const telemetry = executorTelemetry({
+          runId,
+          tenantId: run.tenantId,
+          tenantRootId: rootId,
+        });
         const result = await this.runner.execute(prepared, {
           // Providers resolve per run: platform providers plus the run tenant's BYOK connections.
           providers: this.providers ?? (await this.services.models.registryFor(scope)),
           tools,
           control,
           costModel: await this.services.models.costModelFor(scope),
+          // Executor spans (ADR 0015 S3); none without a registered SDK.
+          ...(telemetry ? { telemetry } : {}),
           signal: abort.signal,
           // Without isolation configured, a step that asks for an isolating runner has nowhere
           // to run: the dispatcher still exists and fails it closed instead of running it inline.

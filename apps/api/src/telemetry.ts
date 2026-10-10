@@ -235,8 +235,13 @@ function openSpan(spec: SpanSpec, attributes: Record<string, unknown>): OpenSpan
       ...sanitizeForSpan(spec.kind, attributes, spec.guard),
       ...(name.redacted ? { 'oax.redacted': true } : {}),
     },
-    // Only the request span is a SERVER span; model calls (CLIENT) arrive with the executor slice.
-    kind: spec.kind === 'http_server' ? OtelSpanKind.SERVER : OtelSpanKind.INTERNAL,
+    // The request span is a SERVER span and a model call a CLIENT span; everything else is internal.
+    kind:
+      spec.kind === 'http_server'
+        ? OtelSpanKind.SERVER
+        : spec.kind === 'chat'
+          ? OtelSpanKind.CLIENT
+          : OtelSpanKind.INTERNAL,
     links: linksOf(spec),
   };
   let parent: Context = context.active();
