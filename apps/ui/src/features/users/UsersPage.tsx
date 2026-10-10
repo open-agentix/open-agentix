@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { useState } from 'react';
-import { PERMISSIONS, ROLE_PERMISSIONS, ROLES } from '../../../../../packages/core/src/rbac';
+import {
+  GRANTABLE_ROLES,
+  PERMISSIONS,
+  ROLE_PERMISSIONS,
+} from '../../../../../packages/core/src/rbac';
 import { api, call } from '../../api/client';
 import { teamsQuery, usersQuery, useTeamNames } from '../../api/queries';
 import type { RoleName, Team, User } from '../../api/types';
@@ -241,7 +245,7 @@ function UserDialog({ editing, onClose }: { editing: User | 'new' | null; onClos
         ) : null}
         <fieldset className="check-grid">
           <legend>{t('users.globalRoles')}</legend>
-          {ROLES.map((r) => (
+          {GRANTABLE_ROLES.map((r) => (
             <label key={r} className="check">
               <input
                 type="checkbox"
@@ -467,7 +471,7 @@ function MembersDialog({ team, onClose }: { team: Team | null; onClose: () => vo
             onChange={(e) => setRoles({ ...roles, [u.id]: e.target.value as RoleName | '' })}
           >
             <option value="">{t('users.notMember')}</option>
-            {ROLES.map((r) => (
+            {GRANTABLE_ROLES.map((r) => (
               <option key={r} value={r}>
                 {r}
               </option>
@@ -500,7 +504,7 @@ export function RbacMatrix() {
           <thead>
             <tr>
               <th scope="col">{t('users.permission')}</th>
-              {ROLES.map((r) => (
+              {GRANTABLE_ROLES.map((r) => (
                 <th key={r} scope="col" className="center">
                   {r}
                 </th>
@@ -513,7 +517,7 @@ export function RbacMatrix() {
                 <th scope="row" className="mono">
                   {p}
                 </th>
-                {ROLES.map((r) => {
+                {GRANTABLE_ROLES.map((r) => {
                   const has = ROLE_PERMISSIONS[r].includes(p);
                   return (
                     <td key={r} className="center">

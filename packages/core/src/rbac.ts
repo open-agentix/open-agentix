@@ -1,5 +1,9 @@
-/** Roles from the product spec; permissions are granted per role, optionally scoped to a team. */
-export const ROLES = [
+/**
+ * Roles that may be granted today (user create/patch, team and agent members, group mapping).
+ * `pentest` needs an expiry and its own grant rules (ADR 0014 sections 7 and 8, slice S6), so it is
+ * refused everywhere a role is accepted until then.
+ */
+export const GRANTABLE_ROLES = [
   'admin',
   'agent-engineer',
   'integrator',
@@ -7,7 +11,15 @@ export const ROLES = [
   'auditor',
   'viewer',
 ] as const;
+
+/**
+ * Roles from the product spec; permissions are granted per role, optionally scoped to a team.
+ * `pentest` (ADR 0014 section 8: time-boxed read-only access for penetration tests) exists in the
+ * role set so the resolver and the database know it, but nothing can grant it before slice S6.
+ */
+export const ROLES = [...GRANTABLE_ROLES, 'pentest'] as const;
 export type Role = (typeof ROLES)[number];
+export type GrantableRole = (typeof GRANTABLE_ROLES)[number];
 
 export const PERMISSIONS = [
   'agents:read',
@@ -83,7 +95,21 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     'settings:read',
   ],
   viewer: READ_BASICS,
+  pentest: [
+    ...READ_BASICS,
+    'sources:read',
+    'connections:read',
+    'policies:read',
+    'audit:read',
+    'audit:verify',
+    'users:read',
+    'tokens:read',
+    'settings:read',
+  ],
 };
+
+/** Where an effective binding comes from (ADR 0014 section 3.2). */
+export type BindingSource = 'direct' | 'inherited' | 'attached' | 'team' | 'agent' | 'platform';
 
 export interface RoleBinding {
   role: Role;
@@ -94,6 +120,26 @@ export interface RoleBinding {
    * visibility (person A may be agent-engineer for agent 1 without seeing agents 3-5).
    */
   agentId?: string | null;
+  /**
+   * Permissions this binding grants. Set by the tenant role resolver (the role's permissions after
+   * restrictions and the inheritance clamp); when absent the role's permissions apply. It can only
+   * narrow: {@link bindingPermissions} never returns a permission the role does not have.
+   */
+  permissions?: readonly Permission[] | undefined;
+  /** Use case the binding is limited to (ADR 0014 section 3.3); informational until slice S8. */
+  useCase?: string | null | undefined;
+  /** Where the binding comes from; informational, never read by a permission check. */
+  source?: BindingSource | undefined;
+}
+
+/**
+ * The permissions one binding grants: its own `permissions` (intersected with the role's, so a
+ * malformed value can never widen a role) or the role's permissions.
+ */
+export function bindingPermissions(b: RoleBinding): readonly Permission[] {
+  const base = ROLE_PERMISSIONS[b.role];
+  if (!b.permissions) return base;
+  return b.permissions.filter((p) => base.includes(p));
 }
 
 /** Who acts inside which tenant: the minimum every tenant-scoped service call needs. */
@@ -126,6 +172,11 @@ export function isRole(value: string): value is Role {
   return (ROLES as readonly string[]).includes(value);
 }
 
+/** True for a role that may be granted today (everything but `pentest`, see GRANTABLE_ROLES). */
+export function isGrantableRole(value: string): value is GrantableRole {
+  return (GRANTABLE_ROLES as readonly string[]).includes(value);
+}
+
 export function isPermission(value: string): value is Permission {
   return (PERMISSIONS as readonly string[]).includes(value);
 }
@@ -143,7 +194,7 @@ export function hasPermission(
 ): boolean {
   if (principal.scopes && !principal.scopes.includes(permission)) return false;
   return principal.bindings.some((b) => {
-    if (!ROLE_PERMISSIONS[b.role].includes(permission)) return false;
+    if (!bindingPermissions(b).includes(permission)) return false;
     if (b.agentId) {
       // Route-level check (no resource given) passes; resource checks need the same agent.
       return teamId === undefined
@@ -159,7 +210,7 @@ export function visibleTeams(principal: Principal, permission: Permission): 'all
   if (principal.scopes && !principal.scopes.includes(permission)) return [];
   const teams = new Set<string>();
   for (const b of principal.bindings) {
-    if (!ROLE_PERMISSIONS[b.role].includes(permission) || b.agentId) continue;
+    if (!bindingPermissions(b).includes(permission) || b.agentId) continue;
     if (b.teamId === null) return 'all';
     teams.add(b.teamId);
   }
@@ -171,7 +222,7 @@ export function visibleAgents(principal: Principal, permission: Permission): str
   if (principal.scopes && !principal.scopes.includes(permission)) return [];
   const agents = new Set<string>();
   for (const b of principal.bindings) {
-    if (b.agentId && ROLE_PERMISSIONS[b.role].includes(permission)) agents.add(b.agentId);
+    if (b.agentId && bindingPermissions(b).includes(permission)) agents.add(b.agentId);
   }
   return [...agents];
 }
@@ -179,7 +230,7 @@ export function visibleAgents(principal: Principal, permission: Permission): str
 /** Union of permissions over all bindings (used to cap the scopes of newly created API tokens). */
 export function effectivePermissions(principal: Principal): Permission[] {
   const set = new Set<Permission>();
-  for (const b of principal.bindings) for (const p of ROLE_PERMISSIONS[b.role]) set.add(p);
+  for (const b of principal.bindings) for (const p of bindingPermissions(b)) set.add(p);
   return PERMISSIONS.filter(
     (p) => set.has(p) && (!principal.scopes || principal.scopes.includes(p)),
   );
