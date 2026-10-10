@@ -135,6 +135,11 @@ export async function createContext(
 ): Promise<AppContext> {
   const logger = overrides.logger ?? createLogger(config.logLevel);
   warnAboutKek(config, logger);
+  processSecrets.onLiveEviction = (count) =>
+    logger.warn(
+      { count },
+      'secret registry full: still-valid token values were forgotten and will not be redacted until their next use',
+    );
   // Air-gapped mode is fail-closed: invalid endpoints abort start-up before anything connects.
   const egress = activateAirgap(config);
   // Network configuration warnings (plain http proxies, unreachable routes, scheme-less proxy

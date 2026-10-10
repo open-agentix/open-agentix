@@ -22,6 +22,7 @@ import {
 } from '@openagentix/runners';
 import { readFileSync, statSync } from 'node:fs';
 import { isIP } from 'node:net';
+import { resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { OTEL_ENV_SHAPE, buildOtelConfig, type OtelConfig } from './telemetry-config.js';
 import { parseStdioEgressGrants } from './stdio-egress.js';
@@ -516,8 +517,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const result = buildConfig(e, env, database);
-  // The key now lives only in the closure of the config; do not leave it in the environment where
-  // child processes (stdio MCP servers, harness CLIs) and /proc/<pid>/environ readers would see it.
+  // The key now lives in the closure of the config. Deleting it from process.env keeps it out of
+  // what child processes inherit (stdio MCP servers, harness CLIs) and out of `process.env` readers;
+  // the kernel's copy of the start-up environment (/proc/self/environ) is NOT changed, so the file
+  // variant (OAX_MCP_OAUTH_KEK_FILE) is the recommended one.
   if (env === process.env) delete process.env.OAX_MCP_OAUTH_KEK;
   return result;
 }
@@ -706,6 +709,14 @@ function kekOf(e: z.infer<typeof EnvSchema>): Config['mcp']['oauth'] {
   let raw = e.OAX_MCP_OAUTH_KEK;
   let fileLoose = false;
   if (e.OAX_MCP_OAUTH_KEK_FILE) {
+    // The default secret resolver serves every file below OAX_SECRETS_DIR as a secret reference; a
+    // KEK there could be handed to a run node by a tenant that is allowed that reference.
+    const dir = e.OAX_SECRETS_DIR ? resolve(e.OAX_SECRETS_DIR) : null;
+    if (dir && resolve(e.OAX_MCP_OAUTH_KEK_FILE).startsWith(dir + sep))
+      throw new OaxError(
+        'config_invalid',
+        'OAX_MCP_OAUTH_KEK_FILE must not be inside OAX_SECRETS_DIR (its files are served as secrets)',
+      );
     try {
       raw = readFileSync(e.OAX_MCP_OAUTH_KEK_FILE, 'utf8');
       // Group- or world-readable: reported at start-up (Kubernetes Secret mounts are often 0444).

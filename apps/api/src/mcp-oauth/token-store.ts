@@ -72,8 +72,13 @@ export class McpOauthTokenStore {
   ) {}
 
   /** The connection as stored: owner check included. Null for anything but an HTTP MCP connection. */
-  async connection(tenantId: string, connectionId: string): Promise<McpConnectionInfo | null> {
-    const [c] = await this.db
+  async connection(
+    tenantId: string,
+    connectionId: string,
+    db: Db = this.db,
+    lock = false,
+  ): Promise<McpConnectionInfo | null> {
+    const query = db
       .select({
         config: connections.config,
         kind: connections.kind,
@@ -81,6 +86,7 @@ export class McpOauthTokenStore {
       })
       .from(connections)
       .where(and(eq(connections.id, connectionId), eq(connections.tenantId, tenantId)));
+    const [c] = await (lock ? query.for('update') : query);
     const url = (c?.config as { url?: unknown } | undefined)?.url;
     if (!c || c.kind !== 'mcp' || typeof url !== 'string') return null;
     try {
@@ -96,15 +102,6 @@ export class McpOauthTokenStore {
       assertTokenShape(w.refreshToken, [w.tenantId, w.connectionId]);
     assertHttpsUrl(w.issuer, 'the issuer');
     assertHttpsUrl(w.resource, 'the resource');
-    const conn = await this.connection(w.tenantId, w.connectionId);
-    if (!conn) throw new OaxError('not_found', 'connection not found for this tenant');
-    if (w.resource !== conn.resource)
-      throw new OaxError(
-        'mcp_resource_mismatch',
-        'the resource is not the canonical URI of the connection',
-      );
-    if (w.credentialVersion !== conn.credentialVersion)
-      throw new OaxError('conflict', 'the credential version of the connection has changed');
     const sealed = await this.keys.sealAll(
       w.refreshToken ? [w.accessToken, w.refreshToken] : [w.accessToken],
       bindingOf(w),
@@ -125,23 +122,37 @@ export class McpOauthTokenStore {
       authorizedAt: at,
       updatedAt: at,
     };
-    const written = await this.db
-      .insert(mcpOauthTokens)
-      .values({
-        id: randomUUID(),
-        tenantId: w.tenantId,
-        connectionId: w.connectionId,
-        credentialVersion: w.credentialVersion,
-        ...values,
-      })
-      .onConflictDoUpdate({
-        target: [mcpOauthTokens.connectionId, mcpOauthTokens.credentialVersion],
-        set: values,
-        setWhere: eq(mcpOauthTokens.tenantId, w.tenantId),
-      })
-      .returning({ id: mcpOauthTokens.id });
-    if (written.length === 0)
-      throw new OaxError('conflict', 'the stored tokens belong to another tenant');
+    // The connection row is locked for the check and the write: a URL change (which bumps the
+    // credential version and deletes the tokens in one transaction) either happens before and
+    // fails this write, or after and deletes the row written here. No orphan survives a bump.
+    await this.db.transaction(async (tx) => {
+      const conn = await this.connection(w.tenantId, w.connectionId, tx as unknown as Db, true);
+      if (!conn) throw new OaxError('not_found', 'connection not found for this tenant');
+      if (w.resource !== conn.resource)
+        throw new OaxError(
+          'mcp_resource_mismatch',
+          'the resource is not the canonical URI of the connection',
+        );
+      if (w.credentialVersion !== conn.credentialVersion)
+        throw new OaxError('conflict', 'the credential version of the connection has changed');
+      const written = await tx
+        .insert(mcpOauthTokens)
+        .values({
+          id: randomUUID(),
+          tenantId: w.tenantId,
+          connectionId: w.connectionId,
+          credentialVersion: w.credentialVersion,
+          ...values,
+        })
+        .onConflictDoUpdate({
+          target: [mcpOauthTokens.connectionId, mcpOauthTokens.credentialVersion],
+          set: values,
+          setWhere: eq(mcpOauthTokens.tenantId, w.tenantId),
+        })
+        .returning({ id: mcpOauthTokens.id });
+      if (written.length === 0)
+        throw new OaxError('conflict', 'the stored tokens belong to another tenant');
+    });
   }
 
   /** Metadata only; never touches the ciphertext columns. */

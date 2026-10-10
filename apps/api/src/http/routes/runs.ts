@@ -157,6 +157,7 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
     },
     async (req, reply) => {
       await runs.getVisible(principalOf(req), req.params.id);
+      const tenantId = principalOf(req).tenantId;
       const lastId = Number(req.headers['last-event-id'] ?? 0);
       let after = Number.isInteger(lastId) && lastId > 0 ? lastId : 0;
       let closed = false;
@@ -178,20 +179,20 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
         );
         for (const s of items) {
           reply.raw.write(
-            `id: ${s.seq}\nevent: step\ndata: ${stringifyScrubbed(processSecrets, stepDto(s))}\n\n`,
+            `id: ${s.seq}\nevent: step\ndata: ${stringifyScrubbed(processSecrets, stepDto(s), tenantId)}\n\n`,
           );
           after = s.seq;
         }
         const run = await runs.get(req.params.id);
         if (run.status !== lastStatus) {
           reply.raw.write(
-            `event: status\ndata: ${stringifyScrubbed(processSecrets, { status: run.status })}\n\n`,
+            `event: status\ndata: ${stringifyScrubbed(processSecrets, { status: run.status }, tenantId)}\n\n`,
           );
           lastStatus = run.status;
         }
         if (isTerminal(run.status as RunStatus) && items.length === 0) {
           reply.raw.write(
-            `event: end\ndata: ${stringifyScrubbed(processSecrets, runDto(run))}\n\n`,
+            `event: end\ndata: ${stringifyScrubbed(processSecrets, runDto(run), tenantId)}\n\n`,
           );
           break;
         }

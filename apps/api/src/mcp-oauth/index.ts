@@ -1,4 +1,3 @@
-import { telemetryRuntime } from '../telemetry-runtime.js';
 import type { Db } from '../db/client.js';
 import type { Config } from '../config.js';
 import { McpCredentials, type TrustedRole } from './credentials.js';
@@ -26,10 +25,7 @@ export function createMcpOauth(
     keys,
     tokens,
     clients: new McpOauthClientStore(ctx.db, keys),
-    // Span attributes are sanitised with the telemetry runtime's guard, not with the registry.
-    credentials: new McpCredentials(tokens, registry, ctx.now, role, () => [
-      telemetryRuntime().guard,
-    ]),
+    credentials: new McpCredentials(tokens, registry, ctx.now, role),
   };
 }
 
@@ -47,3 +43,4 @@ export {
 } from './scrub.js';
 export { canonicalResource } from './resource.js';
 export { assertTokenShape } from './token-shape.js';
+export { RegistryGuard } from './telemetry-guard.js';

@@ -166,7 +166,7 @@ export class AuditService {
       const entry = createAuditEntry(prev ?? null, {
         ...entryInput,
         // Names and ids only by convention; the registry is the net for a token in an upstream text.
-        payload: scrubPayloadWith(processSecrets, withOtel(entryInput.payload, otel)),
+        payload: scrubPayloadWith(processSecrets, withOtel(entryInput.payload, otel), tenantId),
         ts: input.ts ?? this.ctx.now(),
       });
       await db.insert(auditLog).values({
