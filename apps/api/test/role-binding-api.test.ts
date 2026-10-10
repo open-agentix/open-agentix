@@ -583,6 +583,43 @@ describe.each(sqlTargets)('role-binding API (%s)', (_kind, enabled, open) => {
       expect(a.json()).toEqual(b.json());
     });
 
+    it('honours the scopes of an operator token', async () => {
+      const [opUser] = await n.ctx.db
+        .select()
+        .from(usersTable)
+        .where(eq(usersTable.email, 'admin@example.com'));
+      const principal = await n.services.identity.principalForUser(opUser!.id);
+      const scoped = async (scopes: string[]) =>
+        (await n.services.identity.createApiToken(principal, 'op-scoped', scopes as never, 30))
+          .token;
+      const readOnly = await scoped(['agents:read']);
+      for (const dryRun of [true, false]) {
+        const r = await n.req({
+          method: 'POST',
+          url: `${rb('org-a')}/enable-inheritance`,
+          token: readOnly,
+          payload: { roles: ['admin'], dryRun },
+        });
+        expect(r.statusCode).toBe(403);
+      }
+      const reader = await scoped(['users:read']);
+      const write = await n.req({
+        method: 'POST',
+        url: `${rb('org-a')}/enable-inheritance`,
+        token: reader,
+        payload: { roles: ['admin'], dryRun: false },
+      });
+      expect(write.statusCode).toBe(403);
+      const dry = await n.req({
+        method: 'POST',
+        url: `${rb('org-a')}/enable-inheritance`,
+        token: reader,
+        payload: { roles: ['admin'], dryRun: true },
+      });
+      expect(dry.statusCode).toBe(200);
+      expect(await audit('tenant.inheritance_enabled')).toHaveLength(0);
+    });
+
     it('a dry run lists users and nodes and changes nothing', async () => {
       const before = await rows('root-inh');
       const r = await enable(null, 'org-a', { roles: ['admin'], dryRun: true });

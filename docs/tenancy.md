@@ -348,7 +348,7 @@ and lists the bindings, the users and, per binding, the descendants that would g
 organisation, and nothing from other organisations appears). Bindings of disabled users are skipped.
 It runs in one transaction under the same locks and writes one `tenant.role_binding_changed` per binding
 plus `tenant.inheritance_enabled`. Everybody but a platform operator gets the same `403` for any tenant
-id.
+id; an operator's API token needs the scope `users:read` for a dry run and `users:write` to apply.
 
 ## Audit
 

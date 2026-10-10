@@ -621,6 +621,9 @@ export class TenantRoleBindingsService {
   ): Promise<InheritancePreview> {
     // Before any lookup: everybody else gets the same 403, whether or not the tenant exists.
     if (!p.platformAdmin) throw forbidden('platform operator access required');
+    // Token scopes apply to operators too: a dry run reads users, the change writes bindings.
+    const need: Permission = input.dryRun ? 'users:read' : 'users:write';
+    if (p.scopes && !p.scopes.includes(need)) throw forbidden(`token scope ${need} required`);
     const [root] = await this.ctx.db.select().from(tenants).where(eq(tenants.id, rootId));
     if (!root) throw notFound('tenant');
     if (root.parentId !== null)
