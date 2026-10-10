@@ -1,6 +1,6 @@
 # ADR 0015: Observability with OpenTelemetry GenAI semantic conventions
 
-- Status: Proposed. Slices S1 and S2 are implemented (see "Implementation notes S2" below and
+- Status: Proposed. Slices S1, S2 and S3 are implemented (see "Implementation notes S2/S3" below and
   [`observability.md`](../observability.md)); S3 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W3-5 (#37, "Observability completion: step, model and tool spans and the missing
@@ -648,6 +648,34 @@ Decisions taken while implementing slice S2 (#207) where the text above left roo
 - `oax_otel_inbound_context_total{result=ignored|linked|invalid}` counts inbound `traceparent`
   headers; with `ignore`, and in `link` mode without an exporter, nothing is linked.
 - `run_node_sessions.trace_context` is created here but written only by slice S4.
+
+## Implementation notes S3
+
+Decisions taken while implementing slice S3 (#208) where the text above left room:
+
+- The executor lives in `@openagentix/runners`, which must not depend on the API's telemetry. It
+  calls an `ExecutorTelemetry` hook (`RunnerContext.telemetry`, `span(spec, attributes, fn)`); the
+  worker provides it (`apps/worker/src/executor-spans.ts`) on top of `withSpan` and adds
+  `oax.run.id`, `oax.tenant.id`, `oax.tenant.root_id` to every span. The hook is only handed out
+  while an SDK provider is registered. `chat` spans are now `CLIENT`.
+- Events go to the innermost step span: `oax.handover` while the input handover runs, `invoke_agent`
+  afterwards. Event names: `oax.control.decision`, `oax.budget.breach`, `oax.guard.report`,
+  `oax.handover.invalid`, `oax.handover.retry`, `oax.output.valid`; their attributes are new
+  allowlist keys of the two span kinds and carry counts, rule names and codes only.
+- A tool name that is not exposed to the step (the model invented it) is never a span name or
+  attribute: `oax.policy.check _unknown`, no `gen_ai.tool.name`, no `oax.mcp.server`.
+- `oax.approval.id` is not set (the approval wait returns an outcome only); `time_to_first_chunk`
+  is not set (the executor does not stream); `oax.policy.bundle_digests` is not set (the policy
+  decision does not carry digests yet); `oax.usage.source` is `provider` for every executor call.
+- A step that fails ends its `invoke_agent` span with the failure code as `error.type`
+  (`RunAborted` and `HandoverFailure` carry their code); the attempt span stays `OK` because the
+  executor returns the failure as a result.
+- `gen_ai.provider.name` maps the adapter family through a closed table (`genAiProviderName`); the
+  instance name appears only as `oax.provider.instance` on `chat` spans. Owner question: the
+  connection name of a BYOK provider is tenant-chosen text on a platform-wide collector.
+- Isolated steps (run nodes, harnesses) get `oax.handover` and `invoke_agent` only; their children
+  are slice S4.
+- No migration.
 
 ## Open questions (owner decisions needed)
 

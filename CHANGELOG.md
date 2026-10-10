@@ -24,6 +24,17 @@ All notable changes to this project are documented here. The format follows
   sources, connections and budgets gain `limit`/`cursor` for subtree mode; a subtree above
   `OAX_TENANT_MAX_NODES_PER_ROOT` readable nodes is `422 subtree_too_large`. No migration. OpenAPI and the UI
   schema types are updated; see `docs/tenancy.md`.
+- **Executor spans with GenAI conventions (ADR 0015 slice S3, #208)**: the step executor now emits
+  `oax.handover {step}`, `invoke_agent {step}`, `chat {model}` (CLIENT), `oax.policy.check
+  {server}/{tool}`, `oax.approval.wait {server}/{tool}` and `execute_tool {tool}` under the
+  attempt's `invoke_workflow` span, through span hooks (`RunnerContext.telemetry`) that the worker
+  implements with the guarded `withSpan`; no hooks and no behaviour change without an SDK. Control
+  decisions, guard reports, budget breaches and output validation are span events (counts, rule
+  names and codes only). `gen_ai.provider.name` comes from the adapter family via a closed table,
+  the connection name only as `oax.provider.instance`. Prompts, outputs, tool arguments and
+  results, error text and a model-invented tool name are never exported. New allowlist keys:
+  `oax.control.*`, `oax.budget.scopes`, `oax.guard.*`, `oax.validation.*`. Golden span-shape tests
+  and a redaction canary suite cover the whole export. See `docs/observability.md`.
 - **Run trace identity and audit links (ADR 0015 slice S2, #207)**: migration
   `0020_run_trace_identity` (additive, down script and snapshot included) adds `runs.trace_id`,
   `runs.trace_root_span_id` and `run_node_sessions.trace_context` (all nullable; shape checks and a
@@ -48,6 +59,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **HTTP MCP servers go through the outbound dispatcher with tenant destination checks (ADR 0016
+  slice S1, #231)**: the MCP streamable-HTTP transport used a bare proxy-aware `fetch`, so a tenant
+  MCP URL could reach cloud metadata, private ranges and localhost, follow redirects to internal
+  hosts and be rebound by DNS. Every request now uses `createOutboundDispatcher` (purpose `mcp`,
+  tenant scope for tenant, team and agent connections: https only, public addresses only, pinned
+  DNS, `redirect: error`, 64 MiB cap), is limited to the origin of the connection URL
+  (`mcp_egress_denied`), and tenant URLs are checked when a connection is saved (`422
+  egress_denied`, all numeric and IPv6 spellings). Platform-owned headers, credentials in the URL
+  and header duplicates are refused. New `POST /v1/connections/{id}/test` mode for MCP connections
+  (`initialize` + `tools/list`, category only, rate limited, audited). Air-gapped start-up check and
+  connect time cover MCP `egress` entries. See `docs/mcp.md` ("HTTP MCP servers").
+
 - **Tenant stdio MCP servers no longer run next to the worker (ADR 0016 slice S0, #230)**: any
   tenant admin could create a `stdio` MCP connection with an arbitrary `command`, and in-process
   steps (the default runner) started it as a child of the trusted worker, with the worker's
@@ -61,6 +84,15 @@ All notable changes to this project are documented here. The format follows
   stdio config could reach a node unchecked.
 
 ### Breaking
+
+- **HTTP MCP connections (ADR 0016 S1, #231)**: tenant, team and agent `streamable-http` connections
+  must use `https://` and a public destination (`422 egress_denied` on create/update, and at run
+  time for stored ones that no longer pass); URLs with credentials and the platform-owned headers
+  listed in `docs/mcp.md` are refused (`400 mcp_url_invalid`, `400 mcp_header_forbidden`; stored
+  connections that break them fail at run time); `POST /v1/connections/{id}/test` takes `model`
+  only for model connections. In-cluster HTTP MCP servers need a platform connection (or
+  `privateAllow` in the network configuration). The run-node handover has a new field
+  `http.tenantServers`; nodes of an older version reject it and fail closed.
 
 - **Tenant stdio MCP connections (ADR 0016 S0, #230)**: (1) `command` of a tenant, team or agent
   `stdio` connection must be an absolute path that matches `OAX_MCP_STDIO_COMMANDS` (default empty:

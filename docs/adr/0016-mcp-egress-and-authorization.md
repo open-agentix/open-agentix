@@ -576,6 +576,20 @@ S2.
   lists are a best-effort second layer behind the allowlist (follow-up issues). See
   `docs/mcp.md`.
 
+- **S1 (#231) implemented.** Differences from the text above: the save-time check uses the pure
+  ADR 0011 resolver (`resolveRoute`, purpose `mcp`, tenant origin) and does no DNS lookup, so saving
+  is not a resolution oracle; names are resolved and checked once at connect time by the dispatcher
+  (pinned). `egress` exists for `streamable-http` connections only and may repeat the url host;
+  `egress` for stdio servers arrives with S2. Credentials and fragments in the URL, platform-owned
+  headers (framing, hop-by-hop, trace context, `x-oax-*`) and duplicate headers are refused at save
+  and again before a transport is built (a stored connection that breaks them fails closed). The
+  connection test is `POST /v1/connections/{id}/test` (HTTP only, categories only, 10 per minute per
+  user and replica, audit `connection.tested`). Run nodes learn the tenant HTTP servers from the
+  handover field `http.tenantServers`; the DNS check of tenant destinations behind the node's egress
+  proxy is the proxy's (`proxyChecksDestination`), until the relay of S4 removes HTTP servers from
+  nodes. The `proxyResolves` audit flag of the routing record is not yet persisted per MCP request.
+  See `docs/mcp.md`.
+
 ## Alternatives considered
 
 - **Keep step-level egress for MCP servers**: simpler, but every server of a step gets the union of

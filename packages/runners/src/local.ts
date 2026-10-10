@@ -83,7 +83,12 @@ export async function runLocal(opts: LocalRunOptions): Promise<LocalRunReport> {
   ).map((c) => McpServerConfigSchema.parse(c));
   const tools = new ToolGateway(
     mcp,
-    { secrets, inMemory: inMemoryServers(demoServerFactories()) },
+    {
+      secrets,
+      inMemory: inMemoryServers(demoServerFactories()),
+      // `agentix run` is the operator's own machine: its connections are operator configuration.
+      originFor: () => 'platform',
+    },
     contextGuardFromEnv(process.env),
   );
   const control = new LocalControlPlane({

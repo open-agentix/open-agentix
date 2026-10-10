@@ -1,3 +1,4 @@
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -62,4 +63,21 @@ export function inMemoryServers(
     if (!make) throw new Error(`no in-memory MCP server named "${name}"`);
     return linkInMemory(make());
   };
+}
+
+/**
+ * Answers one request of a stateless streamable-HTTP MCP server in front of a mock server (tests of
+ * the HTTP transport and of connection tests). A fresh server and transport serve each request.
+ */
+export async function handleMockMcpHttp(
+  req: Parameters<StreamableHTTPServerTransport['handleRequest']>[0],
+  res: Parameters<StreamableHTTPServerTransport['handleRequest']>[1],
+  name: string,
+  tools: readonly MockTool[],
+): Promise<void> {
+  const server = createMockMcpServer(name, tools);
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  res.on('close', () => void transport.close());
+  await server.connect(transport);
+  await transport.handleRequest(req, res);
 }

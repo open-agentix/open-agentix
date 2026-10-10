@@ -172,6 +172,17 @@ async function readBundle(
 }
 
 /**
+ * Who defined each HTTP MCP server of the step. Without the `http` field every server counts as
+ * tenant defined (fail closed).
+ */
+export function httpOriginFor(
+  handover: Pick<StepHandover, 'http'>,
+): (server: string) => 'platform' | 'tenant' {
+  const tenant = handover.http ? new Set(handover.http.tenantServers) : undefined;
+  return (server) => (tenant && !tenant.has(server) ? 'platform' : 'tenant');
+}
+
+/**
  * Merges the broker's values into the MCP connections of the step: stdio servers get their
  * `env` values plus the step's declared credentials, HTTP servers their header values. Secret
  * references were stripped by the control node already, so no resolver is needed.
@@ -485,6 +496,10 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
         secrets: new StaticSecretResolver({}),
         env: proxyEnv,
         stdioGuard,
+        // Tenant-defined HTTP servers get the tenant destination rules; the node cannot resolve
+        // external names (the egress proxy does), so the DNS check is the proxy's (ADR 0016 4.5).
+        originFor: httpOriginFor(handover),
+        proxyChecksDestination: Boolean(proxyUrl),
         ...(opts.inMemoryMcp ? { inMemory: opts.inMemoryMcp } : {}),
       },
       guard,

@@ -40,7 +40,17 @@ export interface StepStart {
   explicit: boolean;
   /** What the step receives (validated when it declares `input.schema`). */
   value: unknown;
+  /** Digest of the validated input schema (hex), when the step declares one. */
+  schemaDigest?: string;
 }
+
+/** Reports a failed validation as numbers and a digest only (for span events). */
+export type InvalidObserver = (o: {
+  direction: 'input' | 'output';
+  attempt: number;
+  schemaDigest: string;
+  violations: number;
+}) => void;
 
 /**
  * Per-run state of the typed handover logic shared by the executors: which steps produced a
@@ -54,6 +64,7 @@ export class StepFlow {
   constructor(
     private readonly run: PreparedRun,
     private readonly record: (s: StepInput) => Promise<void>,
+    private readonly observeInvalid?: InvalidObserver,
   ) {}
 
   private get named(): Readonly<Record<string, unknown>> | undefined {
@@ -115,6 +126,7 @@ export class StepFlow {
     } else {
       value = previous ? outputValue(previous) : (this.run.event.data ?? null);
     }
+    let schemaDigest: string | undefined;
     if (agent.input?.schema) {
       const check = validateHandover(agent.input.schema, this.named, value);
       if (!check.ok) {
@@ -124,8 +136,14 @@ export class StepFlow {
           `input of agent "${agentId}" does not match its input schema`,
         );
       }
+      schemaDigest = check.schemaDigest;
     }
-    return { skipped: false, explicit: from !== undefined, value };
+    return {
+      skipped: false,
+      explicit: from !== undefined,
+      value,
+      ...(schemaDigest ? { schemaDigest } : {}),
+    };
   }
 
   /**
@@ -155,6 +173,7 @@ export class StepFlow {
     schemaDigest: string,
     errors: HandoverViolation[],
   ): Promise<void> {
+    this.notify(direction, attempt, schemaDigest, errors.length);
     await this.record({
       kind: 'handover',
       agentId,
@@ -162,6 +181,19 @@ export class StepFlow {
       status: 'error',
       output: { direction, attempt, schemaDigest, errors },
     });
+  }
+
+  private notify(
+    direction: 'input' | 'output',
+    attempt: number,
+    schemaDigest: string,
+    violations: number,
+  ): void {
+    try {
+      this.observeInvalid?.({ direction, attempt, schemaDigest, violations });
+    } catch {
+      // An observer (telemetry) must never change the outcome of a step.
+    }
   }
 
   async recordRetry(agentId: string, check: HandoverCheck): Promise<void> {

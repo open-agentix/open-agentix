@@ -499,6 +499,8 @@ describe('stored connections that break the rules fail closed at run time', () =
     );
     const shipped = handover.mcp.find((c) => c.name === 'racy');
     expect(shipped?.transport).toBe('streamable-http');
+    // ADR 0016 S1: the node learns which HTTP servers a tenant defined (tenant destination rules)
+    expect(handover.http).toEqual({ tenantServers: ['racy'] });
     expect(handover.mcp.some((c) => c.transport === 'stdio' && c.command === 'npx')).toBe(false);
   });
 

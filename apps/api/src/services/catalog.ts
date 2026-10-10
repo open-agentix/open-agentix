@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
   hasTenantPrefix,
+  resolveRoute,
   type AccessCatalog,
   evaluateToolCall,
   expandProfiles,
@@ -14,13 +15,20 @@ import {
 } from '@openagentix/core';
 import {
   McpServerConfigSchema,
+  checkHttpConfig,
   checkStdioConfig,
+  httpConfigError,
   isTenantScope,
   stdioError,
   type McpServerConfig,
 } from '@openagentix/mcp';
 import { findStdioViolations, inlineStdioSteps, stdioIsolationMessage } from '../stdio.js';
-import { assertConnectionAllowed, stdioAirgapContext, stdioAirgapProblem } from '../airgap.js';
+import {
+  assertConnectionAllowed,
+  getNetworkSettings,
+  stdioAirgapContext,
+  stdioAirgapProblem,
+} from '../airgap.js';
 import {
   CATALOG_PROVIDER_FOR,
   ProviderSettingsSchema,
@@ -28,6 +36,7 @@ import {
   secretRefsOf,
   type ModelEntry,
 } from '@openagentix/providers';
+import { legacyNetwork } from '@openagentix/providers';
 import { and, asc, eq, gt, or } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
@@ -314,8 +323,40 @@ export class CatalogService {
     }
     // Air-gapped mode: the endpoint must be on the allowlist before the connection is stored.
     assertConnectionAllowed(kind, name, stored);
-    if (kind === 'mcp') this.assertStdioAllowed(name, scope, stored);
+    if (kind === 'mcp') {
+      this.assertStdioAllowed(name, scope, stored);
+      this.assertHttpAllowed(name, scope, stored);
+    }
     return stored;
+  }
+
+  /**
+   * ADR 0016 S1: an HTTP MCP connection may not carry credentials in its URL or platform-owned
+   * headers (400), and the URL of a tenant, team or agent connection passes the ADR 0011 tenant
+   * destination rules (422 `egress_denied`): https only, no localhost, no metadata or private
+   * address in any numeric spelling, and nothing the operator's `deny` routes or air-gapped
+   * allowlist refuse. Pure checks, no DNS: the dispatcher resolves, checks and pins every address
+   * at connect time, so saving a connection is never a name-resolution oracle.
+   */
+  private assertHttpAllowed(name: string, scope: ConnectionScope, stored: unknown): void {
+    const cfg = stored as McpServerConfig;
+    if (cfg.transport !== 'streamable-http') return;
+    const issues = checkHttpConfig(cfg);
+    if (issues.length > 0) {
+      const e = httpConfigError(name, issues);
+      throw new HttpError(400, e.code, e.message, issues);
+    }
+    if (!isTenantScope(scope)) return;
+    const net = getNetworkSettings()?.net ?? legacyNetwork(process.env);
+    // `egress` may only repeat the host of the url (checkHttpConfig), so one resolution covers both.
+    const route = resolveRoute(cfg.url, 'mcp', { origin: 'tenant' }, net);
+    if (route.decision === 'deny')
+      throw new HttpError(
+        422,
+        'egress_denied',
+        `MCP connection "${name}": the destination is not allowed (${route.code ?? 'egress_denied'})`,
+        { code: route.code },
+      );
   }
 
   /**
@@ -405,14 +446,17 @@ export class CatalogService {
     scope: RunScope,
     servers: ReadonlySet<string>,
     where: { runId: string; actor: string; step?: string },
-  ): Promise<{ configs: McpServerConfig[]; tenantStdio: string[] }> {
+  ): Promise<{ configs: McpServerConfig[]; tenantStdio: string[]; tenantHttp: string[] }> {
     const rows = (await this.connectionsForRun('mcp', scope, { fresh: true })).filter((c) =>
       servers.has(c.name),
     );
     const tenantStdio: string[] = [];
+    const tenantHttp: string[] = [];
     for (const c of rows) {
       if (!isTenantScope(c.scope)) continue;
-      if ((c.config as { transport?: string } | null)?.transport !== 'stdio') continue;
+      const transport = (c.config as { transport?: string } | null)?.transport;
+      if (transport === 'streamable-http') tenantHttp.push(c.name);
+      if (transport !== 'stdio') continue;
       tenantStdio.push(c.name);
       const bad = findStdioViolations([c], this.ctx.config.mcp.stdioCommands)[0];
       if (!bad) continue;
@@ -434,7 +478,11 @@ export class CatalogService {
       });
       throw new HttpError(422, err.code, err.message, bad.issues);
     }
-    return { configs: rows.map((c) => McpServerConfigSchema.parse(c.config)), tenantStdio };
+    return {
+      configs: rows.map((c) => McpServerConfigSchema.parse(c.config)),
+      tenantStdio,
+      tenantHttp,
+    };
   }
 
   async createConnection(
