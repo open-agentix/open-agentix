@@ -3,8 +3,12 @@ import { createControlNode } from './bootstrap.js';
 import { initTelemetry } from './telemetry.js';
 
 const config = loadConfig();
-const telemetry = await initTelemetry(config.otel.endpoint, config.otel.serviceName);
+const telemetry = await initTelemetry(config.otel, {
+  warn: (fields, message) =>
+    console.warn(JSON.stringify({ level: 'warn', ...fields, msg: message })),
+});
 const node = await createControlNode(config);
+telemetry.attachStats(node.ctx.metrics.otel);
 await node.app.listen({ host: config.host, port: config.port });
 
 const shutdown = async (signal: string) => {

@@ -1,4 +1,6 @@
+import type { DropClass } from '@openagentix/core';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import type { TelemetryStats } from './telemetry-runtime.js';
 
 /** Prometheus metrics of the control node and worker (`/metrics`). */
 export class Metrics {
@@ -19,6 +21,8 @@ export class Metrics {
   readonly modelProxyDuration: Histogram<'phase'>;
   readonly modelProxyAborts: Counter<'reason'>;
   readonly modelProxyStreamsActive: Gauge<string>;
+  /** Counters of the tracing pipeline itself (ADR 0015 section 8); label values are closed sets. */
+  readonly otel: TelemetryStats;
 
   constructor(prefix = 'oax_') {
     collectDefaultMetrics({ register: this.registry, prefix });
@@ -118,5 +122,35 @@ export class Metrics {
       help: 'Open model streams on this replica',
       registers: [this.registry],
     });
+    const otelSpansDropped = new Counter({
+      name: `${prefix}otel_spans_dropped_total`,
+      help: 'Spans dropped because the export queue was full',
+      registers: [this.registry],
+    });
+    const otelExportFailures = new Counter({
+      name: `${prefix}otel_export_failures_total`,
+      help: 'Failed span exports by reason (timeout, network, http, other)',
+      labelNames: ['reason'],
+      registers: [this.registry],
+    });
+    const otelAttributesDropped = new Counter({
+      name: `${prefix}otel_attributes_dropped_total`,
+      help: 'Span attributes dropped by the allowlist, by key class (unknown, content, wrong_span, invalid, overflow)',
+      labelNames: ['key_class'],
+      registers: [this.registry],
+    });
+    const otelRedactions = new Counter({
+      name: `${prefix}otel_redactions_total`,
+      help: 'Values changed by the context guard before they reached a span, by kind',
+      labelNames: ['kind'],
+      registers: [this.registry],
+    });
+    this.otel = {
+      attributesDropped: (keyClass: DropClass, n) =>
+        otelAttributesDropped.inc({ key_class: keyClass }, n),
+      redactions: (kind, n) => otelRedactions.inc({ kind }, n),
+      spansDropped: (n) => otelSpansDropped.inc(n),
+      exportFailed: (reason) => otelExportFailures.inc({ reason }),
+    };
   }
 }

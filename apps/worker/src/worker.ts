@@ -103,7 +103,13 @@ export class Worker {
       contextGuardFromEnv(process.env),
     );
     try {
-      return await withSpan('oax.run', { 'oax.run_id': runId, 'oax.worker': this.id }, async () => {
+      const span = { name: 'oax.run', kind: 'run' } as const;
+      const attributes = {
+        'oax.run.id': runId,
+        'oax.tenant.id': run.tenantId,
+        'oax.worker': this.id,
+      };
+      return await withSpan(span, attributes, async () => {
         const prepared = await this.services.control.prepare(runId);
         log.info(
           { agent: prepared.definition.name, version: prepared.definition.version },
