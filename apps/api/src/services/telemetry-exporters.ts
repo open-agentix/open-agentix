@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
-import { hasTenantPrefix } from '@openagentix/core';
 import type { AppContext } from '../context.js';
-import { DEFAULT_TENANT_ID, connections, tenants } from '../db/schema.js';
+import { connections } from '../db/schema.js';
+import { telemetryHeaderSecretProblem } from './platform-secrets.js';
 import { parseHeaderList } from '../telemetry-config.js';
 import {
   TelemetryConnectionConfigSchema,
@@ -33,7 +33,6 @@ export function createTenantExporterSource(ctx: AppContext): TenantExporterSourc
         ),
       );
     if (rows.length === 0) return [];
-    const [tenant] = await ctx.db.select().from(tenants).where(eq(tenants.id, tenantId));
     const out: TenantExporterSpec[] = [];
     for (const row of rows) {
       const parsed = TelemetryConnectionConfigSchema.safeParse(row.config);
@@ -49,12 +48,10 @@ export function createTenantExporterSource(ctx: AppContext): TenantExporterSourc
       }
       let headers: Record<string, string> | undefined;
       if (c.headersSecret) {
-        // Same rule as when the connection was stored: the reference must be the tenant's own.
-        if (
-          tenantId !== DEFAULT_TENANT_ID &&
-          !hasTenantPrefix(tenant?.slug ?? tenantId, c.headersSecret)
-        ) {
-          warn('foreign_secret_reference');
+        // The same rules as when the connection was stored, checked again for every refresh: the
+        // allowlist or the platform's secrets may have changed since.
+        if (await telemetryHeaderSecretProblem(ctx, tenantId, c.headersSecret)) {
+          warn('secret_reference_not_allowed');
           continue;
         }
         try {
@@ -70,6 +67,7 @@ export function createTenantExporterSource(ctx: AppContext): TenantExporterSourc
         url: telemetryTracesUrl(c.endpoint),
         protocol: c.protocol,
         headers,
+        headersSecret: c.headersSecret,
         region: c.region,
         clearance: c.clearance,
         content: c.content === 'redacted',

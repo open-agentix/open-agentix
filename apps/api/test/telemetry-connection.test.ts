@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { StaticSecretResolver } from '@openagentix/core';
+import { createTenantExporterSource } from '../src/services/telemetry-exporters.js';
 import { deactivateAirgap } from '../src/index.js';
-import { auditLog, connections } from '../src/db/schema.js';
+import { DEFAULT_TENANT_ID, auditLog, connections, tenants } from '../src/db/schema.js';
 import { CVE_TRIAGE } from './fixtures.js';
 import { testNode, type TestNode } from './helpers.js';
 
@@ -13,8 +14,21 @@ import { testNode, type TestNode } from './helpers.js';
  */
 const PW = 'long-password-123';
 const HEADERS_VALUE = 'Authorization=Bearer-SECRET-VALUE-0123456789';
-const secrets = new StaticSecretResolver({ 'tenant-b.otlp': HEADERS_VALUE, otlp: HEADERS_VALUE });
-const ENV = { OAX_OTEL_TENANT_EXPORTERS: 'allow', OAX_OTEL_CONTENT: 'redacted' };
+const secrets = new StaticSecretResolver({
+  'tenant-b.otlp': HEADERS_VALUE,
+  'tenant-b.other': HEADERS_VALUE,
+  'default.otlp': HEADERS_VALUE,
+  'operator-otlp': HEADERS_VALUE,
+  'platform-openai': 'sk-platform-OPENAI-KEY-1234567890',
+});
+const ENV = {
+  OAX_OTEL_TENANT_EXPORTERS: 'allow',
+  OAX_OTEL_CONTENT: 'redacted',
+  OAX_OTEL_HEADERS_SECRET: 'operator-otlp',
+  OAX_PROVIDERS: JSON.stringify([
+    { kind: 'openai', name: 'oai', apiKeySecret: 'platform-openai', clearance: 'internal' },
+  ]),
+};
 
 let n: TestNode;
 let tenantB: string;
@@ -34,6 +48,16 @@ beforeAll(async () => {
   expect(t.statusCode).toBe(201);
   tenantB = t.json().id as string;
   bob = await n.login('admin@tenant-b.example.org', PW);
+  // A new tenant opens no secret at all until the operator allows some (tenants.secret_refs).
+  await n.ctx.db
+    .update(tenants)
+    .set({ secretRefs: ['tenant-b.otlp'] })
+    .where(eq(tenants.id, tenantB));
+  // The home tenant opens its own namespace too (a tenant opens no secret at all by default).
+  await n.ctx.db
+    .update(tenants)
+    .set({ secretRefs: ['default.*'] })
+    .where(eq(tenants.id, DEFAULT_TENANT_ID));
   await n.req({
     method: 'POST',
     url: '/v1/users',
@@ -67,7 +91,7 @@ const create = (
 
 describe('who may manage telemetry connections', () => {
   it('a tenant admin can; the stored config is the closed schema with defaults', async () => {
-    const res = await create(undefined, cfg({ headersSecret: 'otlp' }));
+    const res = await create(undefined, cfg({ headersSecret: 'default.otlp' }));
     expect(res.statusCode, res.body).toBe(201);
     expect(res.json()).toMatchObject({
       kind: 'telemetry',
@@ -75,7 +99,7 @@ describe('who may manage telemetry connections', () => {
       config: {
         endpoint: 'https://otel.tenant.example',
         protocol: 'http/protobuf',
-        headersSecret: 'otlp',
+        headersSecret: 'default.otlp',
         clearance: 'internal',
         content: 'off',
         enabled: true,
@@ -177,9 +201,56 @@ describe('who may manage telemetry connections', () => {
   });
 
   it("a tenant's secret reference must live in its own namespace", async () => {
-    const res = await create(bob, cfg({ headersSecret: 'otlp' }));
+    const res = await create(bob, cfg({ headersSecret: 'default.otlp' }));
     expect(res.statusCode).toBe(400);
     expect(res.body).toContain('tenant-b.');
+  });
+
+  describe('the header secret cannot be a platform secret or one the tenant does not hold', () => {
+    it('the default tenant cannot use the operator exporter header secret or any platform secret', async () => {
+      for (const ref of ['operator-otlp', 'OPERATOR_OTLP', 'platform-openai']) {
+        const res = await create(undefined, cfg({ headersSecret: ref }));
+        expect(res.statusCode, ref).toBe(400);
+        expect(res.body).toContain('reserved for the platform');
+      }
+      // The default tenant is not exempt from the namespace rule either.
+      const other = await create(undefined, cfg({ headersSecret: 'tenant-b.otlp' }));
+      expect(other.statusCode).toBe(400);
+    });
+
+    it('a reference outside the tenant secret_refs is refused, also inside its namespace', async () => {
+      // tenant-b holds only `tenant-b.otlp`; `tenant-b.other` exists but is not opened.
+      const res = await create(bob, cfg({ headersSecret: 'tenant-b.other' }));
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('secret_refs');
+      await n.ctx.db.update(tenants).set({ secretRefs: [] }).where(eq(tenants.id, tenantB));
+      const none = await create(bob, cfg({ headersSecret: 'tenant-b.otlp' }));
+      expect(none.statusCode).toBe(400);
+      await n.ctx.db
+        .update(tenants)
+        .set({ secretRefs: ['tenant-b.otlp'] })
+        .where(eq(tenants.id, tenantB));
+    });
+
+    it('a stored reference stops being used when the allowlist no longer opens it', async () => {
+      const created = await create(bob, cfg({ headersSecret: 'tenant-b.otlp' }));
+      expect(created.statusCode, created.body).toBe(201);
+      const source = createTenantExporterSource(n.ctx);
+      expect((await source(tenantB)).some((s) => s.headers?.Authorization)).toBe(true);
+      await n.ctx.db.update(tenants).set({ secretRefs: [] }).where(eq(tenants.id, tenantB));
+      expect(await source(tenantB)).toEqual([]);
+      await n.ctx.db
+        .update(tenants)
+        .set({ secretRefs: ['tenant-b.otlp'] })
+        .where(eq(tenants.id, tenantB));
+    });
+
+    it('the platform secrets of the network configuration are reserved too', async () => {
+      const { platformSecretRefs } = await import('../src/services/platform-secrets.js');
+      const refs = await platformSecretRefs(n.ctx);
+      expect(refs.has('operator_otlp')).toBe(true);
+      expect(refs.has('platform_openai')).toBe(true);
+    });
   });
 
   it('has no test endpoint', async () => {
@@ -309,7 +380,12 @@ describe('air-gapped mode', () => {
 
   it('refuses an endpoint outside OAX_AIRGAPPED_ALLOW and accepts one on it', async () => {
     const air = await testNode(
-      { ...ENV, OAX_AIRGAPPED: 'true', OAX_AIRGAPPED_ALLOW: 'otel.internal.example' },
+      {
+        ...ENV,
+        OAX_PROVIDERS: '[]',
+        OAX_AIRGAPPED: 'true',
+        OAX_AIRGAPPED_ALLOW: 'otel.internal.example',
+      },
       { secrets },
     );
     try {
@@ -341,7 +417,7 @@ describe('audit', () => {
     const beforeOff = (await audits('telemetry.content_disabled')).length;
     const on = cfg({
       endpoint: 'https://otel.tenant.example/secret-path',
-      headersSecret: 'otlp',
+      headersSecret: 'default.otlp',
       content: 'redacted',
       region: 'eu',
       clearance: 'confidential',
@@ -359,7 +435,7 @@ describe('audit', () => {
       host: 'otel.tenant.example',
     });
     const text = JSON.stringify(entry.payload);
-    for (const never of ['secret-path', 'otlp', 'SECRET-VALUE', 'Authorization'])
+    for (const never of ['secret-path', 'default.otlp', 'SECRET-VALUE', 'Authorization'])
       expect(text).not.toContain(never);
 
     const put = (config: unknown) =>

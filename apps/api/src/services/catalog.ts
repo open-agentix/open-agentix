@@ -47,6 +47,7 @@ import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
+import { telemetryHeaderSecretProblem } from './platform-secrets.js';
 import {
   TelemetryConnectionConfigSchema,
   notifyTelemetryConnectionChanged,
@@ -344,9 +345,9 @@ export class CatalogService {
     let stored: Record<string, unknown>;
     let refs: string[];
     if (kind === 'telemetry') {
-      const parsed = this.prepareTelemetryConfig(actor, name, scope, config);
-      stored = parsed;
-      refs = parsed.headersSecret ? [parsed.headersSecret] : [];
+      // The header secret is checked in full there (namespace, tenant allowlist, platform denylist).
+      stored = await this.prepareTelemetryConfig(actor, name, scope, config);
+      refs = [];
     } else if (kind === 'mcp') {
       const parsed = McpServerConfigSchema.parse({ ...(config as object), name });
       stored = parsed;
@@ -413,12 +414,12 @@ export class CatalogService {
    * pure checks, DNS is resolved and pinned by the dispatcher at connect time, so saving is never a
    * name-resolution oracle) and the region must be one the operator allows.
    */
-  private prepareTelemetryConfig(
+  private async prepareTelemetryConfig(
     actor: Principal,
     name: string,
     scope: ConnectionScope,
     config: unknown,
-  ): TelemetryConnectionConfig {
+  ): Promise<TelemetryConnectionConfig> {
     if (scope !== 'tenant')
       throw new HttpError(
         400,
@@ -451,6 +452,15 @@ export class CatalogService {
         'region_not_allowed',
         `telemetry connection "${name}": region must be one of ${otel.allowedRegions.join(', ')}`,
       );
+    if (parsed.headersSecret) {
+      const why = await telemetryHeaderSecretProblem(
+        this.ctx,
+        actor.tenantId,
+        parsed.headersSecret,
+      );
+      if (why)
+        throw new HttpError(400, 'validation_failed', `telemetry connection "${name}": ${why}`);
+    }
     const net = getNetworkSettings()?.net ?? legacyNetwork(process.env);
     const route = resolveRoute(
       telemetryTracesUrl(parsed.endpoint),
