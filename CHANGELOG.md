@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Docs: ADR 0017 records the owner's answers to its eight follow-up questions: Agent Developers are not
+  approvers by default; `agent-engineer` is planned to be renamed to `agent-maintainer` without an alias
+  (breaking, before 1.0, with migration of existing bindings in S10 #290); no nested groups and no Entra ID
+  overage lookup in v1 with a 15-minute maximum age of directory bindings for approvals; root-node secrets
+  default to `allowOverride: false`; strict tenant Git trust; signed commits required for review via Git
+  (relaxable only for non-production use cases); loosening or deleting agent rules is admin only. New ADR 0018
+  (Proposed, #296) records "tenant structure as code" as a design direction. Design only, nothing is
+  implemented yet.
 - Docs: ADR 0017 (agent lifecycle governance) is accepted with the owner decisions of 2026-10-10 on all 18 open
   questions: Agent Developer and Agent Maintainer roles with directory group mapping per tenant node,
   protected-branch-like agent rules, review via Git with development and publish branches over plain Git,

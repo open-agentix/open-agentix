@@ -1,7 +1,10 @@
 # ADR 0017: Agent lifecycle governance: development vs published, four-eyes publish approval with review comments, agent rules, review via Git, scoped and inherited encrypted secrets, Vault and AWS Secrets Manager backends
 
 - Status: Accepted (the owner answered all 18 open questions on 2026-10-10, see "Owner decisions
-  (2026-10-10)"; four answers changed the design and are worked into the sections named there).
+  (2026-10-10)"; four answers changed the design and are worked into the sections named there.
+  The owner also answered the eight follow-up questions of the accepted version on 2026-10-10, see
+  "Owner decisions on the follow-up questions (2026-10-10)"; one answer opened the separate design
+  direction of [ADR 0018](0018-tenant-structure-as-code.md), which is Proposed).
   **Not implemented**: every slice is planned, nothing of this ADR is built (see "Implementation
   status" in section 17).
 - Date: 2026-10-10
@@ -9,7 +12,8 @@
   updates W6-3 (#51, version approval bound to digest, model, eval set and policy), W7-2 (#54,
   multi-step approval workflows), W9-2 (#93, review and publish flow of Git-managed agents), W5-3
   (#45, secret managers), W5-1 (#43, SCIM and tenant-scoped identity providers), W6-5 (#52,
-  lifecycle console)
+  lifecycle console); follow-up decision F5 opened [ADR 0018](0018-tenant-structure-as-code.md)
+  (Proposed, design issue #296)
 - Builds on: [ADR 0002](0002-audit-hash-chain.md) (audit chain),
   [ADR 0008](0008-agents-md-data-flow-and-isolation-contract.md) (per-step credentials, credential
   broker, run node), [ADR 0010](0010-agent-authoring-builder-and-git-sync.md) (builder, Git-synced
@@ -90,6 +94,25 @@ Note on question 17: the owner's request refers to the "Git as protocol" decisio
 That decision is recorded in ADR 0010 Amendment 1 (HTTPS with a token, SSH with a deploy key, no
 host-specific API in the core, optional host extensions; ADR 0012 section 7.4 supplies the
 credential rules); section 12.2 builds on it and adds no host API.
+
+### Owner decisions on the follow-up questions (2026-10-10)
+
+The accepted version listed eight remaining questions. The owner answered them on 2026-10-10.
+Questions 1, 3, 4, 6, 7 and 8 adopt the recommendation (question 7 with a narrow relaxation),
+question 2 overrides it, and question 5 is replaced by a new design direction that is recorded
+separately and is **not** decided in this ADR. Like everything in this ADR, these outcomes are
+**planned**; none of them is built.
+
+| # | Question | Decision | Where |
+| --- | --- | --- | --- |
+| F1 | Agent Developers as approvers by default | **Adopted**: Agent Developers are **not** approvers by default; the default approver roles are `agent-maintainer` and `admin`. A tenant can widen eligibility for its agents with agent rules (`requireFrom`) or by adding `agent-developer` to `allowedApproverRoles` | 5.2, 6, 7 |
+| F2 | The `agent-engineer` alias | **Overrides the recommendation**: there is **no alias**. The project is before 1.0, so breaking changes are acceptable: `agent-engineer` is renamed to `agent-maintainer` outright in S10 (#290). The same migration rewrites every existing `agent-engineer` binding (`users.global_roles` and its mirror rows, explicit node bindings, team and agent bindings) to `agent-maintainer`. The role value `agent-engineer` in the installation-wide group mapping (`OAX_*_ROLE_MAPPING`) is configuration, not data: it is refused at start with an error that names `agent-maintainer`. The CHANGELOG entry of S10 is marked **Breaking** | 5.2, 10, 17 |
+| F3 | Directory groups | **Adopted**: v1 has **no nested-group expansion** (direct membership only, as delivered by the groups claim or the LDAP group attribute) and **no Entra ID overage lookup** through the directory API; both are documented limits. Directory bindings are re-evaluated at **login and at token refresh**; a directory binding counts for an approval only when it was verified at most **15 minutes** earlier. SCIM comes later with #43 | 5.3, 17 |
+| F4 | Override default for top-level secrets | **Adopted**: tenant secrets owned by a **root** node default to `allowOverride: false`; secrets on lower nodes keep `allowOverride: true` as default | 13.1, 13.3 |
+| F5 | Git integrations across the tree | **Replaced by a new direction**: instead of deciding whether descendants may select an ancestor's integration, the owner proposes **tenant structure as code**: a repository may carry a tenant structure, and that tenant and its sub-tenants are then built from it (tenant tree, role bindings and groups, agents, Git integrations, secret references declared in the repository and reconciled into the platform). This is recorded as [ADR 0018](0018-tenant-structure-as-code.md) (**Proposed**, design issue #296, not accepted in detail, not built). Until ADR 0018 is decided, integrations of this ADR stay node-local as designed | 12.2 |
+| F6 | Default of `OAX_GIT_TENANT_TRUST` | **Adopted**: tenant-supplied trust is available by default and **strict**: the bundle and client certificate are used only for the integration's host and port, verification failures fail closed, and there is no switch to disable verification. Together with F7 the trust in a review via Git is fail-closed end to end: contributors come only from commits signed by keys linked to platform users | 12.2 |
+| F7 | Signed commits for review via Git | **Adopted**: signed commits by keys linked to platform users are **required** whenever an approval is required. A relaxation exists only for **non-production** use cases, through the tenant policy key `gitUnsignedContributors`, and every use writes an audit entry and shows a warning on the review | 6, 12.2 |
+| F8 | Agent rules by maintainers | **Adopted**: `agent-maintainer` may add rules and tighten requirements; loosening or deleting a rule is **admin only** and writes an audit entry | 7 |
 
 ### What exists on `main` (verified 2026-10-10)
 
@@ -419,14 +442,21 @@ added to the role set of ADR 0014 (the set stays fixed; this is not a custom-rol
 | `agent-developer` | Agent Developer | `agents:write`, `agents:review` (comment), `agents:approve` (eligible only where the tenant or a rule lists the role), `runs:execute` (published versions and development runs), `runs:cancel`, `sources:read`, `connections:read`, `policies:read`, `repos:read`, `repos:sync`, `secrets:read` (metadata), `tokens:read`, `tokens:write`; personal secrets of their own | builds and changes agents, opens reviews, comments, reviews peers when the tenant allows it |
 | `agent-maintainer` | Agent Maintainer | everything of `agent-developer` plus `agents:publish`, `agents:approve` (eligible by default), `agents:rules` (create agent rules and add requirements, section 7) | approves and publishes, owns the rules for the agents of their team or node, like a maintainer who merges into a protected branch |
 
-- **Default approvers** (`allowedApproverRoles`): `admin` and `agent-maintainer`. A tenant can add
-  `agent-developer` for peer review among developers or `operator`, and can narrow the list; a rule
-  can require a specific role or team (section 7).
-- **`agent-engineer`** stays as a **deprecated alias of `agent-maintainer`**: it gets the same
-  permissions and every rule treats it as `agent-maintainer`, so existing bindings keep working and
-  existing engineers are eligible approvers. The console and the role-binding API offer the two new
-  roles; the alias is removed in a later minor release with a migration that rewrites
-  `agent-engineer` bindings to `agent-maintainer` and a changelog entry.
+- **Default approvers** (`allowedApproverRoles`): `admin` and `agent-maintainer`; Agent Developers
+  are **not** approvers by default (follow-up decision F1). A tenant can widen eligibility with an
+  agent rule (`requireFrom` naming `agent-developer` or a team, section 7) or by adding
+  `agent-developer` or `operator` to `allowedApproverRoles`, and can narrow the list; a rule can
+  require a specific role or team.
+- **`agent-engineer` is renamed, without an alias** (follow-up decision F2, overriding the earlier
+  alias proposal): S10 replaces the role `agent-engineer` by `agent-maintainer` in the role set,
+  and its migration rewrites every existing binding (`users.global_roles` and its mirror rows,
+  explicit node bindings, team and agent bindings) to `agent-maintainer`, so existing engineers
+  keep their permissions under the new name and are eligible approvers. After the migration the
+  role name `agent-engineer` is unknown: the API refuses it as an unknown role, and a value
+  `agent-engineer` in `OAX_OIDC_ROLE_MAPPING` or `OAX_LDAP_ROLE_MAPPING` is refused at start with an
+  error naming `agent-maintainer`. The project is before 1.0, so this breaking change is acceptable;
+  the CHANGELOG entry of S10 lists it under **Breaking** with the migration note. The down migration
+  maps `agent-maintainer` back to `agent-engineer` and refuses while `agent-developer` bindings exist.
 - `admin` holds all permissions including `agents:approve` and `agents:rules`. `operator` keeps
   `runs:approve` and gains `agents:review` and `agents:approve` (not eligible by default).
   `integrator` and `auditor` gain `agents:review` (comment only).
@@ -457,10 +487,22 @@ W5-1 (#43).
   third `source` value **`directory`** (next to `mirror` and `grant`, part of the key, so directory
   rows never collide with explicit grants or the mirror) and `mapping_id`; team mappings produce
   `team_members` rows marked as directory-managed. `granted_by` is the mapping's creator.
-- Refresh: at every login (as today for the installation-wide mapping) the directory bindings of the
-  user are recomputed from the groups in the assertion or the LDAP entry; later also by SCIM pushes
-  or a periodic directory sync (#43). Rows get `verified_at`. Directory bindings are added to, never
-  replace, explicit grants.
+- Refresh (follow-up decision F3): at every login (as today for the installation-wide mapping) and
+  at every **token refresh** the directory bindings of the user are recomputed from the groups in
+  the assertion, the refreshed token or the LDAP entry; later also by SCIM pushes or a periodic
+  directory sync (#43). Rows get `verified_at`. Directory bindings are added to, never replace,
+  explicit grants.
+- **Maximum age for approvals**: a directory binding counts for an approval decision only when its
+  `verified_at` is at most **15 minutes** old; otherwise the decision is refused with
+  `409 directory_binding_stale` and the console asks the reviewer to refresh the session (OIDC token
+  refresh or LDAP lookup). At publish (section 4.3) a counted approval whose directory binding was
+  removed by a later refresh no longer counts.
+- **Documented limits of v1** (F3): **no nested-group expansion** (only direct membership, as the
+  groups claim or the LDAP group attribute delivers it; the LDAP matching rule for chains is not
+  used) and **no Entra ID overage lookup** (a token that signals group overage instead of listing
+  groups yields no directory bindings from groups, the login is audited with
+  `directory.groups_overage`, and the documentation recommends "groups assigned to the application"
+  or app roles). No host-specific directory API is called. SCIM provisioning comes later with #43.
 - **Grant rules** (ADR 0014 section 7): creating, changing or deleting a mapping is a grant to every
   present and future member and needs rules 1, 2 and 3 on the node (`users:write`, no role above
   one's own, coverage of the subtree for `inherit: true`); rule 5 holds per derived binding (users of
@@ -472,8 +514,9 @@ W5-1 (#43).
 - The installation-wide variables keep working and are treated as mappings on the default
   tenant's node; whether they are migrated into table rows is an open question.
 - For approvals, directory bindings count like any other binding (A3) and A4 applies to the
-  mapping's creator. Removal from a group takes effect at the next refresh; until SCIM or a
-  periodic sync exists, that is the next login (see open questions).
+  mapping's creator. Removal from a group takes effect at the next refresh (login or token refresh);
+  for approvals the 15-minute maximum age above bounds the delay until SCIM or a periodic sync
+  exists.
 
 ### 6. Tenant policy
 
@@ -489,7 +532,7 @@ come from `OAX_LIFECYCLE_*` environment variables.
 | `productionUseCases` | list of use-case globs that count as production (used by `production-only`) | `[]` | add entries (union) |
 | `selfApproval` | `never` | `never` (fixed, shown for clarity) | n/a |
 | `minApprovals` | 1 to 5 | 1 (the documentation recommends 2 for production use cases) | raise |
-| `allowedApproverRoles` | subset of `admin`, `agent-maintainer`, `agent-developer`, `operator` (`agent-engineer` counts as `agent-maintainer`) | `[admin, agent-maintainer]` | narrow (intersection, never empty) |
+| `allowedApproverRoles` | subset of `admin`, `agent-maintainer`, `agent-developer`, `operator` | `[admin, agent-maintainer]` (Agent Developers not by default, F1) | narrow (intersection, never empty) |
 | `approverScope` | `tenant`, `team`, `other-team` | `tenant` | `tenant` -> `team` or `other-team` |
 | `approvalExpiryHours` | 1 to 720 | 168 | lower |
 | `allowTokenApprovals` | `true`, `false` | `false` | set to `false` |
@@ -499,6 +542,7 @@ come from `OAX_LIFECYCLE_*` environment variables.
 | `allowPersonalSecretsInDevRuns` | `true`, `false` | `true` | set to `false` |
 | `allowPersonalSecretsInPublishedAgents` | `never`, `with-approval` | `never` | set to `never` |
 | `allowProductionSecretsInDraftRuns` | `true`, `false` | `false` | set to `false` |
+| `gitUnsignedContributors` | `declared-non-production`, `refuse` | `refuse` (F7) | set to `refuse` |
 
 The earlier keys `breakGlass`, `breakGlassRatifyHours` (owner decision 11) and
 `approverBindingMinAgeHours` (owner decision 18) are removed; the earlier `pathRules` key moved into
@@ -557,10 +601,14 @@ which agents and which kinds of change.
 - **Tree**: rules are stored on a node and apply to the agents of that node and its descendants
   (ancestor rules apply to the subtree; a descendant adds rules, never removes or relaxes an
   ancestor's). Rules are part of the policy snapshot and its digest.
-- **Who manages rules**: `agents:rules` on the node. `admin` may create, change and delete any rule
-  of the node. `agent-maintainer` may create rules and add requirements for agents of teams they
-  maintain; removing a rule or reducing a requirement needs `admin` (`settings:write`), so a
-  maintainer cannot loosen the rule that governs their own next review. Every change is audited
+- **Who manages rules** (follow-up decision F8): `agents:rules` on the node. `admin` may create,
+  change and delete any rule of the node. `agent-maintainer` may create rules and add or tighten
+  requirements for agents of teams they maintain; **loosening a requirement or deleting a rule is
+  admin only** (`settings:write`, `403 rule_loosening_admin_only` otherwise) and always writes an
+  audit entry, so a maintainer cannot loosen the rule that governs their own next review. Whether a
+  change loosens is computed field by field (lower `minApprovals`, removed `requireFrom` entry or
+  lower `min`, wider `approverScope`, a flag turned off, a removed check, wider `restrictPublishers`,
+  narrower `match`); a change that mixes tightening and loosening counts as loosening. Every change is audited
   (`agent.rule.created|changed|deleted` with field names, old and new values) and notified to the
   node's admins. A looser change does not invalidate approvals; a stricter one re-checks them at
   publish (section 4.3).
@@ -637,8 +685,9 @@ the existing cancel and disable actions (section 3.1).
 New permissions in `packages/core/src/rbac.ts`: `agents:review` (admin, agent-maintainer,
 agent-developer, integrator, operator, auditor), `agents:approve` (admin, agent-maintainer,
 agent-developer, operator; narrowed by `allowedApproverRoles` and rules), `agents:rules` (admin,
-agent-maintainer), `secrets:read` and `secrets:write` (section 13.4). `agent-engineer` maps to
-`agent-maintainer`. The UI types are regenerated as usual.
+agent-maintainer), `secrets:read` and `secrets:write` (section 13.4). The role `agent-engineer` is
+renamed to `agent-maintainer` without an alias (F2); the role enum in `openapi.yaml` loses
+`agent-engineer`. The UI types are regenerated as usual.
 
 ### 11. Audit events (hash-chained, ADR 0002; names, ids and digests only)
 
@@ -649,9 +698,11 @@ digest, expansionDigest, resolutionDigest, policyDigest, requiredApprovals }`,
 reason }`, `agent.review.comment { review, thread }` (no comment text in the audit chain),
 `agent.review.closed { review, outcome }`, `agent.published { version, digest, review,
 approvedBy[], policyDigest, source? }`, `agent.version.deprecated { version, rollbackTo? }`,
-`agent.rule.created|changed|deleted { rule, fields, from, to }`, `tenant.lifecycle_policy_changed {
-fields, from, to }`, `directory.mapping_created|changed|deleted { mapping, identitySource,
-groupKey, role, team, inherit }`, `directory.self_grant_skipped { mapping }`,
+`agent.rule.created|changed|deleted { rule, fields, from, to, loosening }`,
+`tenant.lifecycle_policy_changed { fields, from, to }`, `directory.mapping_created|changed|deleted
+{ mapping, identitySource, groupKey, role, team, inherit }`, `directory.self_grant_skipped {
+mapping }`, `directory.groups_overage { identitySource }`, `repo.unsigned_contributors_declared {
+binding, agent, revision, commits, declaredBy }`,
 `repo.integration_created|changed|deleted { integration, fields }`,
 `repo.unapproved_publish_content { binding, agent, digest, commit }`,
 `secret.created|rotated|revoked|deleted { scope, scopeId, name, version, backend, inherit }`,
@@ -696,12 +747,17 @@ ADR 0011 relay; no host-specific API in the core.
   certificate with key (key as a tenant secret). They are used **only** for TLS from the Git relay
   to this integration's host and port, never added to the platform trust store, never used for
   another tenant, another host or another purpose; `mode: extra-only` trusts only the supplied
-  bundle. The operator can switch tenant-supplied trust off installation-wide
-  (`OAX_GIT_TENANT_TRUST=off`; default is an open question). Certificate expiry is shown and
-  notified 14 and 3 days ahead; there is still no switch to disable verification.
+  bundle. `OAX_GIT_TENANT_TRUST` defaults to **strict** (follow-up decision F6): tenant-supplied
+  trust is available, scoped to the integration's host and port, and every verification failure
+  (unknown issuer, expired or mismatched certificate, wrong host name) fails closed; the operator
+  can switch the feature off installation-wide (`OAX_GIT_TENANT_TRUST=off`). Certificate expiry is
+  shown and notified 14 and 3 days ahead; there is no switch to disable verification.
 - One repository serves one tenant node (ADR 0010 A1.9): an integration is **node-local**, also
   when secrets inherit (section 13.3); descendants create their own integration for their own
-  repository. Whether descendants may select an ancestor's integration is an open question.
+  repository. Sharing an ancestor's integration with descendants is not part of this ADR: the
+  owner's answer to that question (F5) is the separate design direction "tenant structure as code"
+  of [ADR 0018](0018-tenant-structure-as-code.md) (Proposed), in which one repository may own a
+  subtree root. Until ADR 0018 is decided and built, integrations stay node-local.
 
 **Binding with review via Git.** A binding (ADR 0010 section 6) references an integration and is
 scoped to a team or a use case of the node. With `reviewVia: git` it has two branch roles whose
@@ -730,6 +786,16 @@ names are free:
    unlinked key cannot be approved (`contributor_unverified`), because the platform could not prove
    that the approver is not the author. Commit author names and e-mail addresses are never trusted.
    Linking a key to a user needs the user's own confirmation (signed challenge) and is audited.
+   **Relaxation for non-production only** (follow-up decision F7): when the effective tenant policy
+   sets `gitUnsignedContributors: declared-non-production`, a revision with unsigned or unlinked
+   commits can be approved only if the agent's use case (union of base version and draft, as for
+   `production-only`) matches **none** of the effective `productionUseCases`, and the effective
+   `productionUseCases` list is not empty (an empty list means the platform cannot tell production
+   apart, so the relaxation is refused). The user who opens the review then declares the platform
+   users who authored the unsigned commits; the declared users are contributors (A1), the review
+   shows a permanent warning ("contributors declared, not proven by signatures"), and
+   `repo.unsigned_contributors_declared` is audited. Any agent rule that matches the agent can set
+   `requireSignedCommits: true` to forbid the relaxation for it; production agents never use it.
 3. **Review in the platform**: the review of sections 3 to 7 runs on that revision (four-eyes,
    agent rules, comments). Teams may additionally discuss in the host's pull request from the
    development to the publish branch; that pull request has no authority unless section 12.3 is
@@ -789,7 +855,8 @@ is the version row with digest and approvals.
 Each secret has `usage: development | production | any` (default `any`), an optional
 `allowedDestinations` list (host globs: the broker refuses to issue the secret to a step whose
 effective egress or MCP connection URL lies outside it), `inherit` (tenant scope, default `true`),
-`allowOverride` (tenant scope, default `true`), a description, `created_by`, `rotated_at`,
+`allowOverride` (tenant scope; default `false` for secrets owned by a root node and `true` for
+secrets on lower nodes, follow-up decision F4), a description, `created_by`, `rotated_at`,
 `expires_at` (optional) and a backend pointer. Team and personal secrets never inherit (teams are
 node-local, ADR 0014 section 2).
 
@@ -818,7 +885,10 @@ siblings or other organisations (ADR 0014 "never up, never sideways").
   `inherit: true` (or `inherit: false` when it is M itself). No match is `secret_not_found`.
 - **Override (shadowing)**: a node may create a secret with the same name as an inherited one; for
   its subtree the nearer secret wins. An owner can forbid that with `allowOverride: false`: creating
-  a same-named secret in the subtree is then `422 secret_name_reserved`. Shadowing is audited
+  a same-named secret in the subtree is then `422 secret_name_reserved`. Secrets owned by a **root**
+  node default to `allowOverride: false` (F4), so an organisation-wide credential cannot be shadowed
+  below unless the root's secret managers allow it explicitly; secrets on lower nodes default to
+  `allowOverride: true`. Shadowing is audited
   (`secret.shadowed`) and the admins of the owning node are notified (downward oversight).
 - **Restrict at a lower node**: a node may block inherited names for its subtree with the
   narrowing-only setting `settings.secrets.blockInherited` (name globs, union down the tree); a
@@ -1027,8 +1097,9 @@ ADR 0016 S4 keeps header secrets in the control node.
 
 - **Unit (core)**: rule module A1 to A10 with a table of principals (author, co-author, opener, admin
   author, platform admin author, token, repo actor, guest, local vs OIDC, binding granted by a
-  contributor, directory binding from a mapping created by a contributor, agent-developer vs
-  agent-maintainer vs alias `agent-engineer`); agent-rule matching and aggregation (union of base and
+  contributor, directory binding from a mapping created by a contributor, directory binding older
+  than 15 minutes, agent-developer vs agent-maintainer, `agent-engineer` refused as unknown role
+  after the rename); agent-rule matching and aggregation (union of base and
   draft, field rules on the semantic diff, reformatting does not evade); policy resolver narrowing
   (each key, `not_narrowing`), union of production use cases; digest, expansion digest and
   resolution digest stability; secret resolution along the chain (nearest wins, `allowOverride`,
@@ -1039,10 +1110,15 @@ ADR 0016 S4 keeps header secrets in the control node.
   after approval); the absence of any publish path without approval (route-table test: no
   break-glass parameter or endpoint); rollback by deprecation and `rollback_target_unapproved`;
   dev runs (manual only, dev budget default 10 % and hard stop, `stage` on costs and audit);
-  directory mappings (grant rules, self-grant skipped, refresh at login, no collision with grants);
-  agent-rule management (maintainer cannot loosen).
+  directory mappings (grant rules, self-grant skipped, refresh at login and token refresh, maximum
+  age 15 minutes for approvals, overage token yields no group bindings, no collision with grants);
+  agent-rule management (maintainer may add and tighten, cannot loosen or delete; mixed changes
+  count as loosening); migration test of the `agent-engineer` to `agent-maintainer` rename (every
+  binding table, up and down).
 - **Git**: review via Git against a real Git server in a container (development and publish
-  branches with free names, signed and unsigned commits, linked and unlinked keys, approved and
+  branches with free names, signed and unsigned commits, linked and unlinked keys, the
+  `declared-non-production` relaxation refused for production use cases and for an empty
+  `productionUseCases`, approved and
   unapproved digests on the publish branch, approval after merge, tenant CA bundle and client
   certificate on a private-CA server), reusing the hostile-server suite of W9-2-7.
 - **Secrets**: no endpoint returns a value (route-table test over the OpenAPI document); AAD swap
@@ -1077,15 +1153,15 @@ endpoint of this ADR exists on `main` (2026-10-10). This table is updated by eac
 | S1 (#244) | Lifecycle policy, revisions, reviews and approval records (API only, not enforced) | planned | `agent_draft_revisions`, `agent_reviews`, `agent_review_decisions`; `tenants.settings` (or reuse W13-2) and the lifecycle policy resolver; rule module A1 to A8 and A10; permissions `agents:review`, `agents:approve`; endpoints to open, decide, withdraw; binding of digest, expansion digest, resolution digest (placeholder until S4) and policy digest; publish reports "would be refused" in the response and audit (shadow mode) | S10 | yes: A1/A2 cannot be bypassed by role, token or platform admin; binding fields complete |
 | S2 (#245) | Comment threads and review UI | planned | threads and comments API, outdated anchors, Review tab with rule requirements, decision bar, status badges, inbox `GET /v1/me/reviews`, i18n en/de | S1 | yes: rendering without HTML; comment content out of audit and model context |
 | S3 (#246) | Enforcement at publish, deprecation and rollback, audit | planned | publish with `reviewId` and `expectedDigest` under row lock, re-checks of section 4.3, no publish path without approval (no break-glass), version deprecation with rollback to approved versions, audit events of section 11 | S1 | yes: TOCTOU tests; no publish path without approval when required |
-| S4 (#247) | Secret scopes, inheritance and encrypted store | planned | key service (shared with ADR 0016 S5 #235), `secrets` table, scoped references, top-down inheritance with override, `allowOverride`, `blockInherited` and pinned resolution, secrets API without read, broker checks, rotation and revocation, leak canaries, migration helper for env pointers | – (coordinates with #235) | yes: no plaintext at rest, AAD binding, no value in any response, shadowing cannot change a published agent's credential |
+| S4 (#247) | Secret scopes, inheritance and encrypted store | planned | key service (shared with ADR 0016 S5 #235), `secrets` table, scoped references, top-down inheritance with override, `allowOverride` (default `false` on root nodes, F4), `blockInherited` and pinned resolution, secrets API without read, broker checks, rotation and revocation, leak canaries, migration helper for env pointers | – (coordinates with #235) | yes: no plaintext at rest, AAD binding, no value in any response, shadowing cannot change a published agent's credential |
 | S5 (#248) | Personal secrets and development runs | planned | personal scope rules, draft runs of a revision (manual only, dev budget with 10 % default, `stage`), `allowDraftRuns`, `allowProductionSecretsInDraftRuns`, publish refusal and `with-approval` flag path | S3, S4 | yes: confused-deputy tests; personal secret never in a published version by default |
 | S6 (#249) | HashiCorp Vault backend | planned | `vault` backend connection, KV v2 and dynamic secrets with leases, Kubernetes and AppRole auth first, JWT/OIDC next, per-tenant path template against the owning node, dispatcher purpose `secrets`, fakes | S4 | yes: tokens never to nodes; lease revocation; path scope |
 | S7 (#250) | AWS Secrets Manager backend | planned | `aws-sm` backend connection, IRSA and per-node `AssumeRole` with `ExternalId`, ARN prefix enforcement against the owning node, version stages, fakes | S4 | yes: cross-tenant ARN refusal; no credentials to nodes |
-| S8 (#251) | Agent rules | planned | protected-branch-like rules per agent or pattern (section 7): matching, aggregation, `minApprovals`, `requireFrom` with field rules on the semantic diff, `approverScope`, required checks, resolved threads, `restrictPublishers`, `reviewVia`; inheritance down the tree; management with `agents:rules` (maintainers cannot loosen) | S3, S10 | yes: rules evaluated on the semantic diff; no bypass; loosening needs admin |
+| S8 (#251) | Agent rules | planned | protected-branch-like rules per agent or pattern (section 7): matching, aggregation, `minApprovals`, `requireFrom` with field rules on the semantic diff, `approverScope`, required checks, resolved threads, `restrictPublishers`, `reviewVia`; inheritance down the tree; management with `agents:rules` (maintainers add and tighten; loosening or deleting is admin only and audited, F8) | S3, S10 | yes: rules evaluated on the semantic diff; no bypass; loosening needs admin |
 | S9 (#252) | Host review as approval | planned (later, owner decision 10) | verified identity links to host accounts, host review as approval under section 12.3, optional version tag push | S3, S12, W9-2-4 (#93) | yes: no approval from an unverified host account; attestation never counts |
-| S10 (#290) | Agent Developer and Agent Maintainer roles | planned | fixed roles `agent-developer`, `agent-maintainer`, alias `agent-engineer` -> `agent-maintainer`, permissions `agents:review`, `agents:approve`, `agents:rules`, role check constraints, role-binding API, group mapping and console accept them | ADR 0014 S4 (merged) | yes: permission matrix; alias cannot widen; grant rules unchanged |
-| S11 (#291) | Directory group mappings per tenant node | planned | `directory_group_mappings`, binding source `directory`, refresh at login, grant rules for mappings, self-grant skipped, API and console, audit; installation-wide mapping kept | S10 (coordinates with #43) | yes: escalation through mappings; no collision with grants; stable group identifiers |
-| S12 (#292) | Git integrations and review via Git | planned | tenant Git integrations (URL, credential, host keys, tenant CA bundle and client certificate for that host only), bindings with `reviewVia: git`, development and publish branches, contributors from linked signing keys, publish of approved digests only, unapproved-content alerts | S3, S4, S8, W9-2-1 (#90), W9-2-2 (#91) | yes: only approved digests publish; signer linking; tenant trust scoped to one host |
+| S10 (#290) | Agent Developer and Agent Maintainer roles | planned | fixed roles `agent-developer`, `agent-maintainer`; `agent-engineer` **renamed** to `agent-maintainer` without an alias, migration of every existing binding in the same migration, CHANGELOG **Breaking** entry (F2); permissions `agents:review`, `agents:approve`, `agents:rules`, role check constraints, role-binding API, group mapping and console accept the new roles | ADR 0014 S4 (merged) | yes: permission matrix; the migration grants nothing beyond the old role; grant rules unchanged |
+| S11 (#291) | Directory group mappings per tenant node | planned | `directory_group_mappings`, binding source `directory`, refresh at login and token refresh, maximum age 15 minutes for approvals, no nested groups and no overage lookup (documented limits, F3), grant rules for mappings, self-grant skipped, API and console, audit; installation-wide mapping kept | S10 (coordinates with #43) | yes: escalation through mappings; no collision with grants; stable group identifiers |
+| S12 (#292) | Git integrations and review via Git | planned | tenant Git integrations (URL, credential, host keys, tenant CA bundle and client certificate for that host only, `OAX_GIT_TENANT_TRUST` strict by default, F6), bindings with `reviewVia: git`, development and publish branches, contributors from linked signing keys (required when approval is required; `declared-non-production` relaxation with audit and warning, F7), publish of approved digests only, unapproved-content alerts | S3, S4, S8, W9-2-1 (#90), W9-2-2 (#91) | yes: only approved digests publish; signer linking; tenant trust scoped to one host |
 | S13 (#293) | Review notifications | planned | notifications for review requested, decisions, comments, expiry, rule and mapping changes, shadowed secrets and unapproved publish-branch content through the in-console inbox and W2-5/W3-1 channels when available | S2, S3 | yes: notifications contain nothing the recipient may not read |
 
 ### 18. Roadmap mapping
@@ -1213,7 +1289,9 @@ and never readable, so that agents follow the same four-eyes rules as our softwa
   resolution and shadowing rules add concepts that operators must understand.
 - Negative: review via Git needs signed commits with keys linked to platform users when approval is
   required, which some teams do not use today.
-- Negative: two more fixed roles and an alias; the first stored secret values and keys bring
+- Negative: two more fixed roles, and renaming `agent-engineer` to `agent-maintainer` without an
+  alias is a breaking change for API clients and group-mapping configuration that use the old name
+  (acceptable before 1.0, F2); the first stored secret values and keys bring
   key-management duties (KEK backup, rotation) to operators; documented in
   `docs/configuration.md`.
 - Negative: more tables and states in the agent registry; the review page and its comments are
@@ -1243,6 +1321,12 @@ and never readable, so that agents follow the same four-eyes rules as our softwa
   model the owner asked for and removes a whole class of leaks.
 - **External secret managers only, no internal store**: rejected; small installations need a
   built-in encrypted store; external backends are pointers on top.
+- **`agent-engineer` as a deprecated alias of `agent-maintainer`** (accepted version of this ADR):
+  rejected by the owner (follow-up decision F2); the role is renamed outright before 1.0.
+- **Nested-group expansion and Entra ID overage lookup in v1**: rejected for v1 (F3); they need
+  host-specific directory calls or recursive LDAP queries and are documented limits.
+- **Descendants selecting an ancestor's Git integration**: not decided here; replaced by the
+  separate design direction of [ADR 0018](0018-tenant-structure-as-code.md) (F5).
 - **Node-only tenant secrets with opt-in inheritance** (first version of this ADR): replaced by
   top-down inheritance (owner decision 15).
 - **Live resolution of inherited secrets for published versions**: rejected; a lower node could
@@ -1256,31 +1340,36 @@ and never readable, so that agents follow the same four-eyes rules as our softwa
 ### Answered by the owner on 2026-10-10
 
 All 18 questions of the first version are answered; see "Owner decisions (2026-10-10)" in the
-Context section.
+Context section. The eight follow-up questions of the accepted version are answered as well; see
+"Owner decisions on the follow-up questions (2026-10-10)". In short:
+
+1. Agent Developers as approvers by default: **no**; default approvers are `agent-maintainer` and
+   `admin`, tenants widen with agent rules (F1).
+2. `agent-engineer` alias: **no alias**; renamed to `agent-maintainer` in S10 with the binding
+   migration in the same migration and a CHANGELOG **Breaking** entry (F2).
+3. Directory groups: **no nested-group expansion and no Entra ID overage lookup in v1** (documented
+   limits); re-evaluation at login and token refresh; a directory binding counts for an approval
+   only when verified within the last 15 minutes; SCIM later with #43 (F3).
+4. Top-level (root node) tenant secrets default to `allowOverride: false` (F4).
+5. Git integrations across the tree: replaced by the new design direction **tenant structure as
+   code**, [ADR 0018](0018-tenant-structure-as-code.md) (**Proposed**, not accepted in detail, not
+   built); integrations stay node-local until it is decided (F5).
+6. `OAX_GIT_TENANT_TRUST` defaults to strict and fails closed (F6).
+7. Signed commits by keys linked to platform users are required for review via Git whenever an
+   approval is required; relaxable only for non-production use cases with an audit entry and a
+   warning (F7).
+8. Maintainers may add and tighten agent rules; loosening or deleting is admin only, with an audit
+   entry (F8).
 
 ### Remaining
 
-1. **Agent Developers as approvers by default.** The design makes `agent-maintainer` (and `admin`)
-   the default approvers and lets a tenant add `agent-developer` for peer review. Confirm, or make
-   developers eligible by default as some code hosts do.
-2. **Removal of the `agent-engineer` alias**: in which release, and whether existing
-   `agent-engineer` bindings become `agent-maintainer` (proposed) or `agent-developer`.
-3. **Directory groups**: (a) Entra ID group overage (more groups than fit into the token): rely on
-   "groups assigned to the application" or app roles, or call the directory API (a host-specific
-   call outside the core)? (b) nested Active Directory groups: resolve with the LDAP matching rule
-   for chains or only direct membership? (c) how fresh must a directory binding be to count for an
-   approval before SCIM or a periodic sync exists (proposal: verified at the last login, no extra
-   window)? (d) migrate the installation-wide `OAX_*_ROLE_MAPPING` into table rows on the root node
-   or keep them as configuration? (e) per-tenant identity providers stay in #43; which comes first?
-4. **Shadowing default**: Jenkins allows overriding by default (adopted); should secrets created on
-   a root default to `allowOverride: false` instead?
-5. **Git integrations across the tree**: integrations are node-local because one repository serves
-   one tenant node (ADR 0010 A1.9). Should descendants be able to select an ancestor's integration
-   for their own paths?
-6. **Tenant-supplied certificates for Git**: default of `OAX_GIT_TENANT_TRUST` (proposal: `on`,
-   scoped to the integration's host).
-7. **Signed commits for review via Git**: required whenever approval is required (proposal), so
-   that contributors are provable. Is a weaker mode acceptable for teams without commit signing (for
-   example the platform user who opens the review declares the authors), with a visible warning?
-8. **Agent rules by maintainers**: may an `agent-maintainer` add rules without an admin (proposal:
-   yes, add and tighten only), or should every rule change need `admin`?
+Two sub-points of the former question 3 were not part of the answers and stay open; they do not
+block S10 and are decided at the latest in S11 (#291):
+
+1. Whether the installation-wide `OAX_OIDC_ROLE_MAPPING` and `OAX_LDAP_ROLE_MAPPING` are migrated
+   into `directory_group_mappings` rows on the root node or stay configuration treated as mappings
+   on the default tenant's node (the design keeps them as configuration until decided).
+2. The order of S11 relative to per-tenant identity providers and SCIM (#43); the design assumes
+   S11 first, with #43 feeding the same table later.
+
+Questions about tenant structure as code are listed in ADR 0018.
