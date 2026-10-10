@@ -115,7 +115,10 @@ export function registerPassthroughRoutes(
       },
       async (req, reply) => {
         // Authenticate first: an unauthenticated caller learns nothing from request validation.
-        const auth = await modelProxy.authenticatePassthrough(modelCredentialOf(req));
+        const auth = await modelProxy.authenticatePassthrough(
+          modelCredentialOf(req),
+          req.headers['traceparent'],
+        );
         const parsed = parse(req.body);
         reply.header('cache-control', 'no-store');
         const gone = new AbortController();
@@ -175,7 +178,10 @@ export function registerPassthroughRoutes(
         },
       },
       async (req, reply) => {
-        const auth = await modelProxy.authenticatePassthrough(modelCredentialOf(req));
+        const auth = await modelProxy.authenticatePassthrough(
+          modelCredentialOf(req),
+          req.headers['traceparent'],
+        );
         reply.header('cache-control', 'no-store');
         return render(await modelProxy.stepModel(auth));
       },

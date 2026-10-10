@@ -92,8 +92,15 @@ can only narrow). Further rules, all enforced when the Job is built:
   passed as `OAX_EGRESS_ALLOW` for an egress gateway/proxy and a warning is logged.
 
 The control node is reachable through `controlPlane` (non-empty pod/namespace selectors, prefer
-`kubernetes.io/metadata.name`; CIDRs; ports). DNS goes to kube-dns (see follow-ups). With an empty
-`controlPlane` and `dnsEgress: false` the Pod is completely isolated. Checked at config load and in
+`kubernetes.io/metadata.name`; CIDRs; ports). DNS to kube-dns is **off by default** (`dnsEgress`,
+`OAX_K8S_DNS_EGRESS`): the cluster resolver forwards any name, so with it on a compromised step can
+carry data out in DNS query names. `dnsEgress: true` fails the configuration unless
+`OAX_K8S_DNS_EGRESS_ACK=true` acknowledges that, and with it off the control URL must be an IP
+address (the Pod cannot resolve names) or an egress gateway must resolve them. With an empty
+`controlPlane` and `dnsEgress: false` the Pod is completely isolated. A NetworkPolicy applies to a
+whole Pod, so stdio MCP servers cannot have a network of their own here: a server's `egress` is
+accepted only where the step's own `runtime.egress` already lists the entry (otherwise the step is
+refused), see [`mcp.md`](mcp.md#egress-of-stdio-servers). Checked at config load and in
 the runner constructor:
 
 - at least one port (`ports: []` in a NetworkPolicy rule would mean every port);

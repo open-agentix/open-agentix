@@ -366,3 +366,19 @@ export function stdioError(server: string, issues: readonly StdioIssue[]): OaxEr
     issues,
   );
 }
+
+/**
+ * The program a stdio connection really runs, as the literal path the operator reviewed: the
+ * command, or for an interpreter (`node /opt/mcp/jira/server.js`) the program file it is given.
+ * Per-program grants (such as `OAX_MCP_STDIO_EGRESS`) are keyed by it. The control node never
+ * resolves tenant-chosen paths, so this is the literal spelling; the run node checks the real path
+ * against the allowlist separately (symlinks cannot lead out of it).
+ */
+export function stdioProgramOf(cfg: Pick<StdioFields, 'command' | 'args'>): string {
+  const args = cfg.args ?? [];
+  const rule = interpreterRule(cfg.command);
+  if (!rule) return cfg.command;
+  const { index, message } = interpreterProgram(rule, args);
+  const file = args[index];
+  return message === undefined && file !== undefined && file.startsWith('/') ? file : cfg.command;
+}

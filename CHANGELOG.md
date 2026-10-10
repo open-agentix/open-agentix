@@ -30,6 +30,22 @@ All notable changes to this project are documented here. The format follows
   reconcile and the `0019` trigger now touch mirror rows only, so an explicit grant survives an unrelated
   `global_roles` change and a home move. New `OAX_MAX_BINDINGS_PER_USER` (default 200). OpenAPI and the UI schema
   types are updated; see `docs/tenancy.md`.
+- **Control node spans for isolated steps (ADR 0015 slice S4, #209)**: the worker stores the
+  dispatching `invoke_agent` span as `run_node_sessions.trace_context` (migration
+  `0022_run_node_otel_session`, additive, down script and snapshot included, adds the bounded
+  `otel_session` column) and the control node parents everything it makes for the node from that
+  stored context: the model proxy emits `chat {model}` from its own measurement (also for the
+  harness pass-through, `oax.model.surface`; refusals end as `ERROR` with the proxy code), the gate
+  route wraps its decision in `oax.policy.check` (the tool name is the grant's, `_unknown` when no
+  grant covers the call), and `oax.node.session` is emitted when the session ends with the node's
+  reports as bounded **events** (`oax.claim=node`, receipt time, status from a fixed set, claimed
+  duration capped at 1 h, tool name only if granted, no code, message or free text), at most
+  `OAX_OTEL_NODE_EVENTS_MAX` per session. The node gets `TRACEPARENT` (strict W3C shape) for log
+  correlation only; a `traceparent` it sends is ignored and counted in
+  `oax_otel_node_context_mismatch_total`; dropped events in `oax_otel_node_events_dropped_total`.
+  No span is ever created from node data; nothing changes without an SDK. Golden tests for isolated
+  and harness steps and node threat tests (forged context, flood of 10 000 reports, ungranted tool,
+  absurd duration, model-call report) cover it. See `docs/observability.md`.
 - **Subtree reads (ADR 0014 slice S3, #188)**: `?scope=node|subtree` (default `node`, unchanged) and `?tenantId=`
   (narrowing only) on `GET /v1/agents`, `/v1/runs`, `/v1/approvals`, `/v1/events`, `/v1/event-sources`,
   `/v1/connections`, `/v1/costs/summary`, `/v1/budgets` and `/v1/audit`. The server builds the node list from
@@ -73,6 +89,28 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **Per-connection egress for stdio MCP servers, per-server proxy grants and DNS lockdown (ADR 0016
+  slice S2, #232)**: every stdio child of a run node used the step's egress account, so any one
+  server (or a compromised update of it) could reach every host the step may reach, and Docker's
+  resolver was left unrestricted as a data channel. Stdio connections now carry `egress` (default:
+  none, no network). The container runner mints one egress grant per (node, connection) under its
+  own proxy account and hands it to that server's process only: the step's account never reaches
+  an MCP child, a server without `egress` gets no proxy variables at all, and proxy variables a
+  connection, the broker or the step's credentials try to set are dropped. For tenant connections
+  `egress` is bounded by the operator's per-program grant `OAX_MCP_STDIO_EGRESS` (deny by default;
+  tenants can only narrow), by the runner ceiling and by the air-gapped allowlist (wildcards and
+  CIDRs are refused there); the control node re-checks it before every step (`422 egress_denied`,
+  audit `mcp.egress.refused`). Run nodes of the container runner get `Dns: ["127.0.0.1"]` (nothing
+  listens there; no external name resolves, the egress proxy resolves) and `assertSafeCreateBody`
+  refuses any other DNS setting. Kubernetes: `OAX_K8S_DNS_EGRESS` is off by default and `true`
+  needs `OAX_K8S_DNS_EGRESS_ACK=true`; a Pod cannot give one server a network of its own, so
+  server egress there must already be listed in the step's `runtime.egress`. Agent Check reports
+  `egress_unused` for hosts that only serve a stdio server with its own grant. Tenant HTTP
+  connection tests no longer tell `dns_failed` from `egress_denied` (#278 item 1). Limits that
+  remain: children of one node share a UID and can read each other's environment (#140), and HTTP
+  MCP servers are still reached with the step's account until the relay of slice S4. See
+  `docs/mcp.md` ("Egress of stdio servers").
+
 - **HTTP MCP servers go through the outbound dispatcher with tenant destination checks (ADR 0016
   slice S1, #231)**: the MCP streamable-HTTP transport used a bare proxy-aware `fetch`, so a tenant
   MCP URL could reach cloud metadata, private ranges and localhost, follow redirects to internal
@@ -98,6 +136,21 @@ All notable changes to this project are documented here. The format follows
   stdio config could reach a node unchecked.
 
 ### Breaking
+
+- **Stdio MCP egress and Kubernetes DNS (ADR 0016 S2, #232)**: (1) stdio MCP servers of a run node
+  no longer inherit the step's egress: a server that needs a host must list it in its connection's
+  `egress` (and, for tenant connections, the operator must grant it with `OAX_MCP_STDIO_EGRESS`);
+  hosts left in `runtime.egress` for that purpose are reported as `egress_unused`. (2) The
+  run-node stdin bundle gains a version marker (`oax-bundle:v2` on line 2) and further lines
+  (`<server> <proxy url>`) whenever egress accounts are sent; run-node images older than this
+  change read the marker as the step's proxy URL and fail at start with `config_invalid`
+  (fail closed) instead of giving the step's account to every server, so update the worker and
+  run-node images together. Bundles without egress are unchanged. (3) `OAX_K8S_DNS_EGRESS` now defaults to `false`; `true` needs
+  `OAX_K8S_DNS_EGRESS_ACK=true`, and with DNS off `OAX_NODE_CONTROL_URL` must use an IP address or
+  start-up fails. (4) The container runner sets the DNS of run nodes to a resolver where nothing
+  listens: host names outside the internal network no longer resolve from a node (the control node
+  and the egress proxy must be reachable by container name/alias or IP). (5) `createSession`
+  returns `mcpEgress`; the Helm chart needs the new variables (mirror issue to follow).
 
 - **HTTP MCP connections (ADR 0016 S1, #231)**: tenant, team and agent `streamable-http` connections
   must use `https://` and a public destination (`422 egress_denied` on create/update, and at run

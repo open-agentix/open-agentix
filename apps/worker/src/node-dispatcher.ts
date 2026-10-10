@@ -201,7 +201,9 @@ export class NodeDispatcher implements StepDispatcher {
           runToken: session.token,
           limits: { ...this.opts.limits, timeoutSeconds },
           egress,
+          ...(session.mcpEgress.length > 0 ? { mcpEgress: session.mcpEgress } : {}),
           ...(harness ? { harness } : {}),
+          ...(session.traceparent ? { traceparent: session.traceparent } : {}),
         },
         { signal: cancel.signal },
       );

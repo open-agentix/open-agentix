@@ -162,6 +162,16 @@ export const ATTRIBUTE_SPECS = {
   'oax.claim': choice('node'),
   // A node-claimed duration is capped, never trusted (ADR 0015 6.2).
   'oax.claimed.duration_ms': { t: 'int', min: 0, max: 3_600_000, clamp: true },
+  // The status a node attached to its report (a fixed set; the report schema enforces it too).
+  'oax.claimed.status': choice(
+    'ok',
+    'error',
+    'denied',
+    'pending',
+    'approved',
+    'rejected',
+    'skipped',
+  ),
   'http.request.method': { t: 'string', max: 8, enum: HTTP_METHODS },
   'http.route': { t: 'string', max: 128, pattern: /^\/[\x21-\x7e]{0,127}$/ },
   'http.response.status_code': { t: 'int', min: 100, max: 599 },
@@ -292,7 +302,13 @@ const PER_KIND: Record<Exclude<SpanKind, 'unknown'>, readonly AttributeKey[]> = 
     'oax.node.events_dropped',
     'oax.claim',
     'oax.claimed.duration_ms',
+    'oax.claimed.status',
+    'oax.guard.source',
+    'oax.guard.invisible',
+    'oax.guard.secrets',
+    'oax.guard.secret_kinds',
     'gen_ai.tool.name',
+    'oax.mcp.server',
   ],
   http_server: ['http.request.method', 'http.route', 'http.response.status_code', 'oax.access'],
 };

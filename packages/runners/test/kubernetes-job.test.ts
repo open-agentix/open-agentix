@@ -6,6 +6,7 @@ import {
   KubernetesJobRunner,
   REQUIRED_RBAC,
   buildJob,
+  assertMcpEgressWithinStep,
   buildNetworkPolicy,
   buildSecret,
   isCidr,
@@ -209,6 +210,20 @@ describe('manifests', () => {
     );
   });
 
+  it('gives the node TRACEPARENT for log correlation only, and only when well formed', () => {
+    const tp = `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`;
+    const env = (spec_: RunNodeSpec) =>
+      ((buildJob(spec_, cfg()) as any).spec.template.spec.containers[0].env as {
+        name: string;
+        value: string;
+      }[]) ?? [];
+    expect(env(spec({ traceparent: tp })).filter((e) => /trace/i.test(e.name))).toEqual([
+      { name: 'TRACEPARENT', value: tp },
+    ]);
+    expect(env(spec()).some((e) => /trace/i.test(e.name))).toBe(false);
+    expect(env(spec({ traceparent: `${tp}\nX=1` })).some((e) => /trace/i.test(e.name))).toBe(false);
+  });
+
   it('caps the deadline by the configured maximum and applies pull secrets/node selector', () => {
     const j = buildJob(
       spec({ limits: { cpus: 1, memoryMb: 128, timeoutSeconds: 99999, pids: 1 } }),
@@ -244,7 +259,10 @@ describe('manifests', () => {
   });
 
   it('builds a deny-by-default NetworkPolicy with an explicit allowlist', () => {
-    const p = buildNetworkPolicy(spec({ egress: ['10.1.0.0/16', '192.0.2.0/25'] }), cfg()) as any;
+    const p = buildNetworkPolicy(
+      spec({ egress: ['10.1.0.0/16', '192.0.2.0/25'] }),
+      cfg({ dnsEgress: true, dnsEgressAcknowledged: true }),
+    ) as any;
     expect(p.spec.policyTypes).toEqual(['Ingress', 'Egress']);
     expect(p.spec.ingress).toEqual([]);
     expect(p.spec.podSelector.matchLabels['openagentix.io/node-id']).toBe(NODE);
@@ -1042,5 +1060,48 @@ describe('worker wiring helpers', () => {
     expect(() =>
       mk({ toolboxImages: { nmap: `ghcr.io/open-agentix/toolbox-nmap@${DIGEST}` } }),
     ).toThrow(/allowlist/);
+  });
+});
+
+describe('DNS egress needs an acknowledgement and MCP egress cannot widen the Pod (ADR 0016 S2)', () => {
+  it('is off by default', () => {
+    expect(KubernetesJobRunnerConfigSchema.parse({}).dnsEgress).toBe(false);
+    const p = buildNetworkPolicy(spec({ egress: [] }), cfg()) as any;
+    expect(JSON.stringify(p.spec.egress)).not.toContain('kube-dns');
+  });
+  it('dnsEgress: true without the acknowledgement is refused, with it the policy opens kube-dns', () => {
+    expect(() => KubernetesJobRunnerConfigSchema.parse({ dnsEgress: true })).toThrow(
+      /OAX_K8S_DNS_EGRESS_ACK/,
+    );
+    expect(() =>
+      KubernetesJobRunnerConfigSchema.parse({ dnsEgress: true, dnsEgressAcknowledged: false }),
+    ).toThrow(/exfiltration/);
+    // the acknowledgement alone opens nothing
+    expect(KubernetesJobRunnerConfigSchema.parse({ dnsEgressAcknowledged: true }).dnsEgress).toBe(
+      false,
+    );
+    const p = buildNetworkPolicy(
+      spec({ egress: [] }),
+      cfg({ dnsEgress: true, dnsEgressAcknowledged: true }),
+    ) as any;
+    expect(JSON.stringify(p.spec.egress[0])).toContain('kube-dns');
+  });
+  it('a Pod cannot give one MCP server its own network: only entries of the step egress pass', () => {
+    const s = spec({ egress: ['10.1.0.0/16', 'api.example.org'] });
+    expect(() =>
+      assertMcpEgressWithinStep({
+        ...s,
+        mcpEgress: [{ server: 'jira', egress: ['api.example.org'] }],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertMcpEgressWithinStep({
+        ...s,
+        mcpEgress: [{ server: 'jira', egress: ['evil.example.org'] }],
+      }),
+    ).toThrow(/does not list/);
+    expect(() =>
+      assertMcpEgressWithinStep({ ...s, mcpEgress: [{ server: 'jira', egress: ['10.0.0.0/8'] }] }),
+    ).toThrow(/does not list/);
   });
 });

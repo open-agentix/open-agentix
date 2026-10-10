@@ -351,6 +351,12 @@ describe('a failing telemetry pipeline never breaks the run', () => {
     inboundContext: () => {
       throw new Error('stats failure');
     },
+    nodeEventsDropped: () => {
+      throw new Error('stats failure');
+    },
+    nodeContextMismatch: () => {
+      throw new Error('stats failure');
+    },
   };
 
   it('a throwing guard drops attributes and names, the run completes', async () => {

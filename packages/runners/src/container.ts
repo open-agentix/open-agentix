@@ -1,7 +1,8 @@
 import { HARNESS_KINDS, OaxError, type HarnessKind, type RunnerKind } from '@openagentix/core';
 import { z } from 'zod';
 import type { EngineHijack } from './container-hijack.js';
-import { mintEgressGrant } from './egress-proxy.js';
+import { egressAccount, mintEgressGrant } from './egress-proxy.js';
+import { nodeTraceparent } from './node-env.js';
 import { assertWithinCeiling, parseEgressEntry } from './egress-rules.js';
 import {
   EngineClient,
@@ -141,6 +142,13 @@ export const INSTANCE_LABEL = 'io.openagentix.instance';
 /** Unix seconds after which the container must not exist any more (hard lifetime). */
 export const EXPIRES_LABEL = 'io.openagentix.expires';
 const TOKEN_DIR = '/run/oax';
+/** Line 2 of the node's stdin when it carries egress accounts (see `parseBundle` in the worker). */
+export const BUNDLE_MARKER = 'oax-bundle:v2';
+/** Resolver of every node: loopback, where nothing listens (no upstream forwarding). */
+export const NODE_DNS = '127.0.0.1';
+/** At most this many stdio MCP servers with their own egress grant per node. */
+const MAX_MCP_EGRESS_SERVERS = 16;
+const MAX_MCP_EGRESS_ENTRIES = 16;
 /** The token arrives on stdin: not env, not a command line, not copyable, not in `inspect`. */
 const TOKEN_STDIN = '/dev/stdin';
 const ID = /^[A-Za-z0-9][A-Za-z0-9-]{7,63}$/;
@@ -199,6 +207,14 @@ export function assertSafeCreateBody(body: Record<string, unknown>): void {
     net.startsWith('container:')
   )
     problems.push(`network mode "${net}"`);
+  // DNS lockdown (ADR 0016 section 4.5): the only resolver is the loopback address of the node
+  // itself, where nothing listens. Container names on the internal network still resolve through
+  // the engine's embedded resolver, but nothing is forwarded upstream: no external name resolves,
+  // so names cannot be used to carry data out.
+  const dns = h.Dns as unknown;
+  if (!Array.isArray(dns) || dns.length !== 1 || dns[0] !== NODE_DNS)
+    problems.push('HostConfig.Dns is not the non-forwarding resolver');
+  for (const k of ['DnsSearch', 'DnsOptions']) if (nonEmpty(h[k])) problems.push(`HostConfig.${k}`);
   if (h.ReadonlyRootfs !== true) problems.push('rootfs is not read-only');
   const drop = (h.CapDrop as string[] | undefined) ?? [];
   if (!drop.map((c) => c.toUpperCase()).includes('ALL'))
@@ -385,6 +401,7 @@ export class ContainerRunner implements IsolatingRunner {
           'a harness step must not declare egress (OAX_HARNESS_EGRESS_ALLOWED is not set); it reaches the control node only',
         );
     }
+    this.validateMcpEgress(spec);
     if (spec.egress.length > 0) {
       if (!c.egressProxyUrl || !c.egressGrantSecret)
         throw new OaxError(
@@ -397,6 +414,41 @@ export class ContainerRunner implements IsolatingRunner {
     const l = spec.limits;
     if (!(l.cpus > 0 && l.memoryMb >= 64 && l.pids > 0 && l.timeoutSeconds > 0))
       throw new OaxError('run_node_invalid', 'run node limits must be positive');
+  }
+
+  /**
+   * Per-server egress of stdio MCP servers (ADR 0016 section 4.1): deny by default, every entry
+   * inside the operator ceiling, and the same limits as the step's own egress. The proxy applies
+   * the ceiling once more per connection, so a wider grant would still not open anything.
+   */
+  private validateMcpEgress(spec: RunNodeSpec): void {
+    const list = spec.mcpEgress ?? [];
+    if (list.length === 0) return;
+    const c = this.config;
+    if (list.length > MAX_MCP_EGRESS_SERVERS)
+      throw new OaxError('run_node_invalid', 'too many MCP servers with egress');
+    if (!c.egressProxyUrl || !c.egressGrantSecret)
+      throw new OaxError(
+        'egress_proxy_missing',
+        'an MCP server declares egress but no egress proxy is configured; refusing to start (deny by default)',
+      );
+    if (spec.harness && !c.harnessEgressAllowed)
+      throw new OaxError(
+        'harness_egress_denied',
+        'a harness step must not run MCP servers with egress (OAX_HARNESS_EGRESS_ALLOWED is not set)',
+      );
+    const seen = new Set<string>();
+    for (const m of list) {
+      if (!SLUG.test(m.server) || seen.has(m.server))
+        throw new OaxError('run_node_invalid', 'MCP server names of the egress list are invalid');
+      seen.add(m.server);
+      if (m.egress.length === 0 || m.egress.length > MAX_MCP_EGRESS_ENTRIES)
+        throw new OaxError(
+          'run_node_invalid',
+          `MCP server "${m.server}" needs 1-${MAX_MCP_EGRESS_ENTRIES} egress entries (a server without egress is not listed)`,
+        );
+      assertWithinCeiling(m.egress, this.egressCeiling);
+    }
   }
 
   /** The options of the container; exposed for tests and `assertSafeCreateBody`. */
@@ -427,6 +479,9 @@ export class ContainerRunner implements IsolatingRunner {
         `OAX_NODE_DEADLINE_SECONDS=${Math.ceil(spec.limits.timeoutSeconds) + 30}`,
         'NODE_ENV=production',
         'HOME=/tmp',
+        ...(nodeTraceparent(spec.traceparent)
+          ? [`TRACEPARENT=${nodeTraceparent(spec.traceparent)}`]
+          : []),
       ],
       Labels: {
         [NODE_LABEL]: 'true',
@@ -459,6 +514,7 @@ export class ContainerRunner implements IsolatingRunner {
         RestartPolicy: { Name: 'no' },
         AutoRemove: false,
         IpcMode: 'private',
+        Dns: [NODE_DNS],
       },
       NetworkingConfig: { EndpointsConfig: { [c.network]: {} } },
     };
@@ -485,6 +541,21 @@ export class ContainerRunner implements IsolatingRunner {
             ttlSeconds: Math.ceil(spec.limits.timeoutSeconds) + 60,
           })
         : undefined;
+    // One grant per (node, MCP server): its own account, its own egress list (ADR 0016 4.2).
+    const ttlSeconds = Math.ceil(spec.limits.timeoutSeconds) + 60;
+    const serverProxies = (spec.mcpEgress ?? []).map((m) => ({
+      server: m.server,
+      url: proxyUrlWithCredentials(
+        this.config.egressProxyUrl!,
+        egressAccount(spec.nodeId, m.server),
+        mintEgressGrant(this.config.egressGrantSecret!, {
+          nodeId: spec.nodeId,
+          server: m.server,
+          egress: m.egress,
+          ttlSeconds,
+        }),
+      ),
+    }));
     let id: string | undefined;
     const cleanup = async () => {
       if (id) await this.engine.removeContainer(id).catch(() => undefined);
@@ -495,13 +566,22 @@ export class ContainerRunner implements IsolatingRunner {
       // Attach before the start so that the node can never miss its token.
       stdin = await this.engine.attachStdin(id, ctx.signal);
       await this.engine.startContainer(id);
-      // Line 1: the run token. Line 2 (only with egress): the node's account at the egress proxy.
-      const lines = [
-        spec.runToken,
-        ...(proxyPassword
-          ? [proxyUrlWithCredentials(this.config.egressProxyUrl!, spec.nodeId, proxyPassword)]
-          : []),
-      ];
+      // Line 1: the run token. With egress accounts: line 2 is the marker `oax-bundle:v2` (a node
+      // from before S2 reads line 2 as a URL and refuses it instead of misusing the step's
+      // account), line 3 the step's own account (empty without step egress), further lines
+      // `<server> <proxy url>`, the account of one MCP server, which the node hands to that
+      // server's process and to nobody else.
+      const lines =
+        proxyPassword || serverProxies.length > 0
+          ? [
+              spec.runToken,
+              BUNDLE_MARKER,
+              proxyPassword
+                ? proxyUrlWithCredentials(this.config.egressProxyUrl!, spec.nodeId, proxyPassword)
+                : '',
+              ...serverProxies.map((p) => `${p.server} ${p.url}`),
+            ]
+          : [spec.runToken];
       await stdin.send(Buffer.from(`${lines.join('\n')}\n`));
     } catch (e) {
       stdin?.abort();

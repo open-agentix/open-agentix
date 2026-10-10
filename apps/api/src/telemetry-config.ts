@@ -30,7 +30,7 @@ export const OTEL_ENV_SHAPE = {
   OAX_OTEL_KEEP_BUFFER_SPANS: bounded(512, 1, 100_000),
   OAX_OTEL_MAX_QUEUE: bounded(2048, 1, 1_000_000),
   OAX_OTEL_EXPORT_TIMEOUT_MS: bounded(10_000, 100, 600_000),
-  OAX_OTEL_NODE_EVENTS_MAX: bounded(128, 0, 10_000),
+  OAX_OTEL_NODE_EVENTS_MAX: bounded(128, 0, 1000),
   OAX_OTEL_INBOUND_CONTEXT: z.enum(['ignore', 'link']).default('ignore'),
   OAX_OTEL_MCP_PROPAGATION: z.enum(['deny', 'allow']).default('deny'),
   OAX_OTEL_EXCEPTION_DETAIL: z.enum(['off', 'guarded']).default('off'),

@@ -590,6 +590,23 @@ S2.
   nodes. The `proxyResolves` audit flag of the routing record is not yet persisted per MCP request.
   See `docs/mcp.md`.
 
+- **S2 (#232) implemented.** Differences from the text above: there is no connection-type catalog
+  in the code yet, so the "floor" of section 4.1 is the operator's per-program grant
+  `OAX_MCP_STDIO_EGRESS` (deny by default, tenants can only narrow); platform connections choose
+  freely within the runner ceiling. Per-server grants exist for **stdio** servers of the
+  **container** runner (account `<node id>.<connection>`, one stdin line each); HTTP servers in a
+  node still use the step's account until S4, so `egress_unused` reports only hosts that serve a
+  stdio server. The Kubernetes runner cannot separate servers inside a Pod: it accepts a server's
+  `egress` only where the step's `runtime.egress` already lists it. DNS lockdown is
+  `Dns: ["127.0.0.1"]` on every node plus an `assertSafeCreateBody` check (the embedded resolver
+  keeps answering container names, nothing is forwarded); Kubernetes `dnsEgress` is now off by
+  default and `true` needs `OAX_K8S_DNS_EGRESS_ACK=true`, with a host name in
+  `OAX_NODE_CONTROL_URL` refused while DNS is off. The control node re-checks the effective egress
+  before every step and passes it to the worker (`createSession().mcpEgress`). Opened for review:
+  the opt-in real-engine test asserts the DNS refusal, but the raw-socket and "exactly the expected
+  CONNECTs" checks run in unit tests with a real proxy and real child processes, not inside a
+  container namespace. See `docs/mcp.md` ("Egress of stdio servers").
+
 ## Alternatives considered
 
 - **Keep step-level egress for MCP servers**: simpler, but every server of a step gets the union of
