@@ -19,5 +19,6 @@ are immutable; a later ADR may supersede one.
 | [0012](0012-connections-instances-scopes-and-data-protection.md) | Connections: MCP servers and model providers as separate areas, multiple instances per tenant, central vs tenant scope, data protection | Proposed |
 | [0013](0013-hierarchical-tenants-and-setup-modes.md) | Hierarchical tenants (inherited, narrowing-only settings, shared budget caps across the tree) and setup modes (single-tenant, multi-tenant) | Accepted |
 | [0014](0014-tenant-tree-role-inheritance.md) | Role inheritance over the tenant tree (opt-in per binding, resolution, caching, grant rules, `pentest`, threat model, slices) | Proposed |
+| [0015](0015-opentelemetry-genai-tracing.md) | Observability with OpenTelemetry GenAI semantic conventions (span model, metadata-only default, node threat model, exporters and air gap, sampling, metrics, audit links, slices) | Proposed |
 
 Template: Context, Decision, Consequences (positive/negative), Alternatives considered.
