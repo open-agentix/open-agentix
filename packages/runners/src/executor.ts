@@ -24,6 +24,7 @@ import {
 } from '@openagentix/core';
 import type { ExposedTool, GuardedToolError } from '@openagentix/mcp';
 import type { ChatMessage, ChatResponse, ModelProvider, ToolSpec } from '@openagentix/providers';
+import type { ExecutorObserver } from './executor-observer.js';
 import { recordGuardReport, type GuardSource } from './context-guard-audit.js';
 import {
   NOOP_EXECUTOR_SPAN,
@@ -195,6 +196,15 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
   const guard = ctx.guard ?? ctx.tools.guard;
   // Span hooks (ADR 0015 S3): metadata only; every call is a pass-through without a host.
   const tele = ctx.telemetry ?? NOOP_EXECUTOR_TELEMETRY;
+  // Metric hooks (ADR 0015 S5): a failing observer must never change the outcome of a run.
+  const observe = (fn: (o: ExecutorObserver) => void): void => {
+    if (!ctx.observer) return;
+    try {
+      fn(ctx.observer);
+    } catch {
+      // metrics only
+    }
+  };
   // Innermost step span: control decisions, guard reports and validation results are its events.
   let eventSpan: ExecutorSpan = NOOP_EXECUTOR_SPAN;
   const event = (name: string, attributes: Record<string, unknown>): void => {
@@ -296,6 +306,9 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
         return { 'gen_ai.provider.name': genAiProviderName(p.kind, p.family) };
       };
       const before = { tokensIn, tokensOut, cost: metrics.costMicros };
+      const stepStarted = now();
+      let stepOk = false;
+      let stepCode: string | undefined;
       await tele.span(
         { kind: 'invoke_agent', name: `invoke_agent ${agentId}` },
         {
@@ -373,6 +386,7 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
               flow.complete(res.output);
               // The node recorded the `output` step itself; nothing else is recorded for it here.
               previous = res.output;
+              stepOk = true;
               return;
             }
             const provider = ctx.providers.get(agent.provider);
@@ -664,6 +678,7 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
                   output: { effect: decision.effect, reasons: decision.reasons },
                 });
                 if (decision.effect === 'deny') {
+                  observe((o) => o.toolCall('deny', 'not_executed'));
                   recordPolicyDenial(
                     metrics,
                     decision.reasons.some((r) => r.code === 'tool_forbidden'),
@@ -684,13 +699,21 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
                     { kind: 'approval_wait', name: `oax.approval.wait ${label}` },
                     {},
                     async (aw) => {
-                      const o = await ctx.control.awaitApproval(
-                        run.runId,
-                        agentId,
-                        call,
-                        decision,
-                        signal,
-                      );
+                      const waitStarted = now();
+                      let o: Awaited<ReturnType<typeof ctx.control.awaitApproval>>;
+                      try {
+                        o = await ctx.control.awaitApproval(
+                          run.runId,
+                          agentId,
+                          call,
+                          decision,
+                          signal,
+                        );
+                      } catch (e) {
+                        observe((ob) => ob.approval('cancelled', (now() - waitStarted) / 1000));
+                        throw e;
+                      }
+                      observe((ob) => ob.approval(o, (now() - waitStarted) / 1000));
                       aw.setAttributes({ 'oax.approval.outcome': o });
                       return o;
                     },
@@ -702,6 +725,8 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
                     status: outcome === 'approved' ? 'approved' : 'rejected',
                     output: { outcome },
                   });
+                  if (outcome !== 'approved')
+                    observe((o) => o.toolCall('require_approval', 'not_executed'));
                   if (outcome === 'timeout') {
                     throw new RunAborted({
                       status: 'failed',
@@ -768,6 +793,7 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
                   const fromGateway =
                     res2 instanceof Error ? (res2 as GuardedToolError).guard : undefined;
                   if (fromGateway) mergeGuardReports(guarded.report, fromGateway);
+                  observe((o) => o.toolCall(decision.effect, 'error'));
                   guardEvent('tool_error', guarded.report);
                   await recordGuardReport(step, agentId, 'tool_error', guarded.report, call.tool);
                   recordStepResult(metrics, false);
@@ -788,6 +814,7 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
                     isError: true,
                   });
                 } else {
+                  observe((o) => o.toolCall(decision.effect, res2.result.isError ? 'error' : 'ok'));
                   guardEvent('tool_result', res2.guard);
                   await recordGuardReport(step, agentId, 'tool_result', res2.guard, call.tool);
                   metrics.costMicros += toolCost;
@@ -830,7 +857,20 @@ export async function executePipeline(run: PreparedRun, ctx: RunnerContext): Pro
             flow.complete(out);
             await step({ kind: 'output', agentId, name: format, status: 'ok', output: out });
             previous = out;
+            stepOk = true;
+          } catch (e) {
+            const code = (e as { code?: unknown } | null)?.code;
+            if (typeof code === 'string') stepCode = code;
+            throw e;
           } finally {
+            observe((o) =>
+              o.step(
+                agent.runtime?.runner ?? def.runtime.runner,
+                stepOk,
+                (now() - stepStarted) / 1000,
+                stepCode,
+              ),
+            );
             // Step totals, also for a step that failed half way.
             as.setAttributes({
               'gen_ai.usage.input_tokens': tokensIn - before.tokensIn,

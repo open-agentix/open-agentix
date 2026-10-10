@@ -16,6 +16,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Metrics completion and opt-in GenAI metrics (ADR 0015 slice S5, #210)**: new Prometheus
+  metrics `oax_run_duration_seconds{status,trigger}`, `oax_step_duration_seconds{runner,status}`,
+  `oax_tool_calls_total{decision,result}`, `oax_approvals_total{outcome}`,
+  `oax_approval_wait_seconds{outcome}`, `oax_tokens_total{direction,provider,via}` (in-process and
+  proxied calls on one metric), `oax_budget_exhausted_total{scope,limit}`,
+  `oax_guard_replacements_total{source,class}` and `oax_node_reports_total{kind,result}`. Every
+  label value is a member of a closed set and is normalised right before it is recorded
+  (`apps/api/src/metric-labels.ts`); a cardinality suite runs tenants with random connection,
+  agent and source names and fails when a series appears, a value leaves its set or a metric has
+  no declared allowlist. `OAX_OTEL_GENAI_METRICS=true` exposes `gen_ai_client_inference_*`,
+  `gen_ai_execute_tool_*`, `gen_ai_invoke_agent_*` and `gen_ai_invoke_workflow_*` with a
+  catalog-bounded model label (anything else is `_OTHER`). `scripts/bench.mjs --otel` runs the
+  benchmark with the exporter on against a local fake collector, and `deploy/grafana/` ships a
+  dashboard. No migration. See `docs/observability.md`.
 - **Control node spans for isolated steps (ADR 0015 slice S4, #209)**: the worker stores the
   dispatching `invoke_agent` span as `run_node_sessions.trace_context` (migration
   `0022_run_node_otel_session`, additive, down script and snapshot included, adds the bounded
@@ -122,6 +136,16 @@ All notable changes to this project are documented here. The format follows
   stdio config could reach a node unchecked.
 
 ### Breaking
+
+- **Tenant-safe metric labels (ADR 0015 S5, #210; pre-1.0)**: `oax_cost_micro_usd_total{provider}` now
+  carries the provider **family** (`anthropic`, `openai`, `aws.bedrock`, `azure.ai.openai`, ..., `tool`
+  for tool cost, `other`) instead of the provider instance name, which for a tenant (BYOK) connection
+  is tenant-chosen text. `oax_events_ingested_total{source}` becomes `{kind}` (`webhook`, `mail`,
+  `kafka`, `cron`): the event source name is tenant-chosen. `oax_runs_created_total{trigger}` and
+  `oax_runs_refused_total{trigger}` now hold only the trigger family (`manual`, `webhook`, `mail`,
+  `kafka`, `cron`, `demo`, else `other`; `demo-scenario` is `demo`). Update dashboards and alerts
+  that select or group by the old labels (`sum by (source)` becomes `sum by (kind)`; per-provider
+  panels group by the family). Per-tenant numbers come from the cost and run APIs.
 
 - **Stdio MCP egress and Kubernetes DNS (ADR 0016 S2, #232)**: (1) stdio MCP servers of a run node
   no longer inherit the step's egress: a server that needs a host must list it in its connection's

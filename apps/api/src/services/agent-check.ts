@@ -16,6 +16,7 @@ import {
   type PlanFinding,
   type Principal,
   type ValidationIssue,
+  genAiProviderName,
 } from '@openagentix/core';
 import type { ModelProvider } from '@openagentix/providers';
 import { costLedger } from '../db/schema.js';
@@ -318,7 +319,7 @@ export class AgentCheckService {
         });
         await this.budgets.raiseAlerts(tx as unknown as Db, target, costMicros);
       });
-      this.ctx.metrics.costMicros.inc({ provider: provider.name }, costMicros);
+      this.ctx.metrics.cost(genAiProviderName(provider.kind, provider.family), costMicros);
     }
     return {
       findings,

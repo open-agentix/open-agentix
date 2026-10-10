@@ -27,6 +27,7 @@ import {
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
+import { triggerLabel } from '../metric-labels.js';
 import type { ResolvedScope } from './subtree-scope.js';
 
 /** What `enqueue` reads before it opens its transaction. */
@@ -192,7 +193,7 @@ export class RunsService {
     }
     if (disabled) {
       this.ctx.metrics.runsRefused.inc({
-        trigger: input.triggeredBy.split(':')[0] ?? 'unknown',
+        trigger: triggerLabel(input.triggeredBy),
         reason: 'agent_disabled',
       });
       await this.audit.append(
@@ -247,7 +248,7 @@ export class RunsService {
           : {}),
       })
       .returning();
-    this.ctx.metrics.runsCreated.inc({ trigger: input.triggeredBy.split(':')[0] ?? 'unknown' });
+    this.ctx.metrics.runsCreated.inc({ trigger: triggerLabel(input.triggeredBy) });
     const queued = await this.audit.append(
       {
         actor: input.triggeredBy,
