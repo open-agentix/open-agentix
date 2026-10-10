@@ -36,6 +36,49 @@ All notable changes to this project are documented here. The format follows
   backends; design in ADR 0017, issues #244 to #252) in v0.4, with notes on W5-3, W6-3, W7-2 and W9-2.
   Nothing of it is built yet.
 
+### Security
+
+- **Tenant stdio MCP servers no longer run next to the worker (ADR 0016 slice S0, #230)**: any
+  tenant admin could create a `stdio` MCP connection with an arbitrary `command`, and in-process
+  steps (the default runner) started it as a child of the trusted worker, with the worker's
+  network, database credentials and run-token secret (the air-gapped guard patches the Node
+  process only). Tenant, team and agent `stdio` connections now run only in run nodes; in the
+  worker the gateway starts platform (operator-defined) stdio servers only. See `docs/mcp.md`
+  ("Stdio MCP servers") and the Breaking entry below. Hardened in review: platform connections
+  could be changed or deleted by any administrator of the operator's home tenant (and then run any
+  command in the worker for every tenant), an allowlisted interpreter could run a file of the
+  workspace, the api resolved tenant paths on its own host (file existence oracle), and a cached
+  stdio config could reach a node unchecked.
+
+### Breaking
+
+- **Tenant stdio MCP connections (ADR 0016 S0, #230)**: (1) `command` of a tenant, team or agent
+  `stdio` connection must be an absolute path that matches `OAX_MCP_STDIO_COMMANDS` (default empty:
+  no tenant stdio command is accepted, so `POST`/`PUT /v1/connections` return
+  `400 mcp_command_forbidden` until the operator lists binaries); shells, `env`, wrappers,
+  run-time installers (`npx`, `npm`, `pnpm`, `yarn`, `bunx`, `uvx`, `pip`, `docker`, `podman`,
+  `curl`, `wget`, `git`, ...) and interpreters with an inline program or code-loading flag
+  (`node -e`, `python -c`, ...) are refused even when listed; `env`/`envSecrets` names follow the
+  reserved-name rules (no `PATH`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `BASH_ENV`, proxy variables,
+  `OAX_*`, ...) and return `400 mcp_env_forbidden`. (2) A step on `in-process` or `local` that
+  holds a grant on such a connection cannot be published (`400 mcp_stdio_requires_isolation`) and
+  fails at run time with the same code; set `runtime.runner` to `container` or `kubernetes-job`.
+  (3) Existing stored connections are kept unchanged but fail closed at run time
+  (`422 mcp_command_forbidden`, audit entry `mcp.stdio.refused`); they are reported at start-up
+  (warning, gauge `oax_mcp_stdio_violations`), in `GET /v1/connections/stdio-violations` and as
+  `warnings` on `GET /v1/connections`. (4) Air-gapped mode refuses platform stdio connections
+  unless `OAX_AIRGAPPED_STDIO=trusted`, and tenant stdio connections unless an isolating runner is
+  enabled. Platform connections are not subject to the command and environment rules. Run nodes
+  receive `stdio` in the step handover and reject it when older than this change (fail closed).
+  (5) Interpreters (`node`, `python`, `java`, `deno`, ...) must run a program file that is itself
+  an allowlisted absolute path, with only value-less options before it: `python -m`, `java -cp`,
+  relative scripts and `dotnet <tool>` are refused, and `bun` is refused as a run-time installer.
+  Allowlist entries in or below `/tmp`, `/var/tmp`, `/dev`, `/proc`, `/sys`, `/run`, `/workspace`
+  or `/work` fail start-up, and the run node refuses a command or program file that it could
+  change (file or directory writable). (6) `PUT` and `DELETE /v1/connections/{id}` on a `platform`
+  connection need platform operator access (`403` for other administrators of the operator's home
+  tenant).
+
 ## [0.2.0-alpha.1] - 2026-10-10
 
 This is the first pre-release that ships release images (signed `api`, `worker` and `ui` images on

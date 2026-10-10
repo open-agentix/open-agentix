@@ -1,5 +1,6 @@
 import { isSpanContextValid, trace } from '@opentelemetry/api';
 import { CostModel, DefaultSecretResolver, type SecretResolver } from '@openagentix/core';
+import { eq } from 'drizzle-orm';
 import pino, { type Logger } from 'pino';
 import {
   catalogPriceTable,
@@ -12,10 +13,12 @@ import {
 import {
   activateAirgap,
   checkStoredConnections,
+  stdioAirgapContext,
   failClosed,
   getNetworkSettings,
 } from './airgap.js';
 import { connections } from './db/schema.js';
+import { findStdioViolations } from './stdio.js';
 import { createCache, type Cache } from './cache.js';
 import type { Config } from './config.js';
 import { createDatabase, waitForDatabase, type Database, type Db } from './db/client.js';
@@ -70,6 +73,32 @@ export function createLogger(level: string, name = 'openagentix'): Logger {
   });
 }
 
+/**
+ * Existing tenant stdio connections that break the stdio rules (ADR 0016 S0) are never changed or
+ * deleted: they fail closed at run time. This makes them visible at start-up (a warning and the
+ * `oax_mcp_stdio_violations` gauge); `GET /v1/connections/stdio-violations` lists them per tenant.
+ */
+export async function reportStdioViolations(
+  db: Db,
+  config: Config,
+  logger: Logger,
+  metrics: Metrics,
+): Promise<void> {
+  try {
+    const rows = await db.select().from(connections).where(eq(connections.kind, 'mcp'));
+    const bad = findStdioViolations(rows, config.mcp.stdioCommands);
+    metrics.mcpStdioViolations.set(bad.length);
+    if (bad.length > 0)
+      logger.warn(
+        { count: bad.length, connections: bad.map((v) => v.connection.id) },
+        'tenant stdio MCP connections violate the stdio rules and are refused at run time (OAX_MCP_STDIO_COMMANDS, docs/mcp.md)',
+      );
+  } catch (err) {
+    // A start-up without the table (fresh database, migrations pending) is not an error here.
+    logger.debug({ err }, 'stdio violation report skipped');
+  }
+}
+
 export async function createContext(
   config: Config,
   overrides: Partial<AppContext> = {},
@@ -98,20 +127,22 @@ export async function createContext(
   }
   if (egress.airgapped) {
     const rows = await database.db.select().from(connections);
-    const problems = checkStoredConnections(rows, egress);
+    const problems = checkStoredConnections(rows, egress, stdioAirgapContext(config));
     if (problems.length > 0) failClosed(problems);
     logger.info(
       { allowlist: egress.status().allowlist },
       'air-gapped mode: egress allowlist active',
     );
   }
+  const metrics = overrides.metrics ?? new Metrics();
+  await reportStdioViolations(database.db, config, logger, metrics);
   const modelCatalog = overrides.modelCatalog ?? loadModelCatalog();
   return {
     config,
     database,
     db: database.db,
     cache: overrides.cache ?? (await createCache(config.cache.url, config.cache.maxEntries)),
-    metrics: overrides.metrics ?? new Metrics(),
+    metrics,
     logger,
     secrets: overrides.secrets ?? new DefaultSecretResolver(process.env, config.secrets.dir),
     // Prices: pinned model catalog snapshot, overridden by OAX_PRICE_TABLE.

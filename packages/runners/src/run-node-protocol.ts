@@ -35,6 +35,18 @@ export const StepHandoverSchema = z.strictObject({
    * through the credential broker.
    */
   mcp: z.array(McpServerConfigSchema),
+  /**
+   * Present only when a tenant defined a stdio server of the step (ADR 0016 S0): the node applies
+   * the command rules to the real binaries of its image before it starts one. The control node has
+   * already checked the connection; this is the second wall for symlinks, which only the node can
+   * resolve. Nodes of an older version reject the field and fail closed.
+   */
+  stdio: z
+    .strictObject({
+      tenantServers: z.array(z.string()),
+      allowlist: z.array(z.string()),
+    })
+    .optional(),
 });
 export type StepHandover = z.infer<typeof StepHandoverSchema>;
 

@@ -9,6 +9,7 @@ import {
   type Runner,
 } from '@openagentix/runners';
 import {
+  OaxError,
   contextGuardFromEnv,
   runTraceIdentity,
   type HarnessKind,
@@ -17,6 +18,22 @@ import {
 import type { PullRequestDelivery } from './git/delivery.js';
 import { NodeDispatcher } from './node-dispatcher.js';
 import { RunQueue } from './queue.js';
+
+/**
+ * The gateway of the worker process starts only operator-defined (platform) stdio servers. A
+ * stdio server a tenant defined runs in a run node or not at all (ADR 0016 section 3.1).
+ */
+export function workerStdioGuard(
+  platformNames: ReadonlySet<string>,
+): (cfg: { name: string }) => void {
+  return (cfg) => {
+    if (platformNames.has(cfg.name)) return;
+    throw new OaxError(
+      'mcp_stdio_requires_isolation',
+      `stdio connection "${cfg.name}" was defined by a tenant and may only run in a run node, not in the worker process`,
+    );
+  };
+}
 
 export interface WorkerOptions {
   workerId?: string;
@@ -94,15 +111,18 @@ export class Worker {
     // Tool servers resolve per run: only connections of the run's tenant (and platform ones) exist.
     const run = await this.services.runs.get(runId);
     const toolScope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
+    // Configs and platform names from one resolution: the stdio guard below decides by name.
+    const { configs: mcp, platformNames } = await this.services.catalog.mcpRunConfigs(toolScope);
     const tools = new ToolGateway(
-      await this.services.catalog.mcpConfigs(toolScope),
+      mcp,
       {
         // Tenant allowlist (tenants.secret_refs) applies in-process exactly as it does for nodes;
         // only connections of PLATFORM scope keep the unrestricted (operator-chosen) resolver.
-        ...(await this.services.runNodes.resolverForRun(
-          run.tenantId,
-          await this.services.catalog.platformMcpNames(toolScope),
-        )),
+        ...(await this.services.runNodes.resolverForRun(run.tenantId, platformNames)),
+        // ADR 0016 S0, last wall: whatever reaches this gateway runs in the trusted worker, where
+        // only operator-defined (platform) stdio servers may start. A tenant stdio server runs in
+        // a run node or not at all.
+        stdioGuard: workerStdioGuard(platformNames),
         ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
       },
       contextGuardFromEnv(process.env),
@@ -133,6 +153,27 @@ export class Worker {
         ...(rootId ? { 'oax.tenant.root_id': rootId } : {}),
       };
       return await withSpan(span, attributes, async (attempt) => {
+        // Second wall (also for versions published before the rule): a step that runs in this
+        // process must not hold a grant on a tenant-defined stdio server.
+        const stdio = await this.services.catalog.stdioIsolationIssues(
+          prepared.definition,
+          toolScope,
+        );
+        if (stdio.length > 0) {
+          this.ctx.metrics.mcpStdioRefused.inc({ code: 'mcp_stdio_requires_isolation' });
+          await this.services.audit.append({
+            actor: `worker:${this.id}`,
+            tenantId: run.tenantId,
+            action: 'mcp.stdio.refused',
+            target: runId,
+            runId,
+            payload: {
+              code: 'mcp_stdio_requires_isolation',
+              issues: stdio.map((v) => ({ step: v.step, connection: v.server, path: v.path })),
+            },
+          });
+          throw new OaxError('mcp_stdio_requires_isolation', stdio[0]!.message, stdio);
+        }
         const scope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
         const result = await this.runner.execute(prepared, {
           // Providers resolve per run: platform providers plus the run tenant's BYOK connections.
@@ -179,7 +220,10 @@ export class Worker {
         status: 'failed',
         outputs: [],
         usage: { tokensIn: 0, tokensOut: 0, costMicros: 0, steps: 0, toolCalls: 0 },
-        error: { code: 'worker_error', message: (e as Error).message },
+        error: {
+          code: e instanceof OaxError && e.code.startsWith('mcp_') ? e.code : 'worker_error',
+          message: (e as Error).message,
+        },
       };
       await control
         .completeRun(runId, result)

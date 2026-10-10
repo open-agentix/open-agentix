@@ -160,7 +160,7 @@ export const eventDto = (e: EventRow) => ({
   payload: e.payload,
 });
 
-export const connectionDto = (c: ConnectionRow) => ({
+export const connectionDto = (c: ConnectionRow, warnings: string[] = []) => ({
   id: c.id,
   tenantId: c.tenantId,
   scope: c.scope as 'platform' | 'tenant' | 'team' | 'agent',
@@ -168,6 +168,7 @@ export const connectionDto = (c: ConnectionRow) => ({
   name: c.name,
   kind: c.kind as 'mcp' | 'model',
   config: c.config as Record<string, unknown>,
+  warnings,
   createdAt: iso(c.createdAt),
   updatedAt: iso(c.updatedAt),
 });

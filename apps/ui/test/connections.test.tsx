@@ -29,6 +29,23 @@ describe('connections', () => {
     await expectNoA11yViolations();
   });
 
+  it('flags a stored stdio connection that is refused at run time', async () => {
+    const reason = 'command "npx" must be an absolute path';
+    server.use(
+      http.get(api('/v1/connections'), () =>
+        HttpResponse.json({
+          items: [
+            { ...f.connections[0]!, name: 'legacy-stdio', warnings: [reason] },
+            f.connections[0]!,
+          ],
+        }),
+      ),
+    );
+    await renderApp('/connections');
+    expect(await screen.findByText(/must be an absolute path/)).toBeInTheDocument();
+    expect(screen.getAllByText('Refused at run time')).toHaveLength(1);
+  });
+
   it('creates a connection and rejects inline secrets', async () => {
     let body: unknown;
     server.use(

@@ -1,4 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,7 +13,7 @@ import { OaxError, type StepCredentials } from '@openagentix/core';
 import { McpServerConfigSchema, type McpServerConfig } from '@openagentix/mcp';
 import type { FetchFn } from '@openagentix/runners';
 import { describe, expect, it } from 'vitest';
-import { mergeCredentials, parseNodeEnv, runNode } from '../src/run-node.js';
+import { mergeCredentials, parseNodeEnv, runNode, stdioGuardFor } from '../src/run-node.js';
 
 const RUN = '99999999-2222-4333-8444-555555555555';
 const env = (over: Record<string, string | undefined> = {}): NodeJS.ProcessEnv => ({
@@ -414,6 +421,135 @@ describe('runNode', () => {
         }),
       ),
     ).toBe(2);
+  });
+});
+
+describe('tenant stdio servers in a run node (ADR 0016 S0)', () => {
+  const fixture = fileURLToPath(
+    new URL('../../../packages/mcp/test/fixtures/stdio-server.mjs', import.meta.url),
+  );
+  const node = realpathSync(process.execPath);
+  const stdioConfig = (command: string, args: string[] = [fixture]) =>
+    McpServerConfigSchema.parse({
+      name: 'srv',
+      transport: 'stdio',
+      command,
+      args,
+      tools: { echo: { access: 'read' } },
+    });
+  const modelReply = (toolCalls: unknown[], text: string) =>
+    Response.json({
+      callId: `call-${Math.random()}`,
+      response: {
+        text,
+        toolCalls,
+        usage: { inputTokens: 1, outputTokens: 1 },
+        stopReason: toolCalls.length ? 'tool_use' : 'end_turn',
+        model: 'sim-1',
+      },
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        source: 'provider',
+      },
+      costMicros: 1,
+      priced: true,
+      remaining: {},
+    });
+  const withStdio = (command: string, allowlist: string[], args?: string[]) => {
+    let calls = 0;
+    const c = control({
+      'POST /v1/worker/runs/:id/model': () =>
+        calls++ === 0
+          ? modelReply([{ id: 't1', name: 'srv__echo', args: {} }], '')
+          : modelReply([], '{"ok":true}'),
+    });
+    Object.assign(c.handover, {
+      mcp: [stdioConfig(command, args)],
+      stdio: { tenantServers: ['srv'], allowlist },
+    });
+    (c.handover.agent as Record<string, unknown>).tools = [{ server: 'srv', tool: 'echo' }];
+    return c;
+  };
+
+  // The checkout is writable by the test user; the image of a real node is read-only.
+  const readOnly = (fetchImpl: Parameters<typeof base>[0]) => ({
+    ...base(fetchImpl),
+    stdioWritable: () => false,
+  });
+
+  it('starts an allowlisted command running an allowlisted program file, and the step succeeds', async () => {
+    const { calls, fetchImpl } = withStdio(node, [node, realpathSync(fixture)]);
+    expect(await runNode(readOnly(fetchImpl))).toBe(0);
+    expect(results(calls)[0]).toMatchObject({ format: 'json', content: '{"ok":true}' });
+    expect(results(calls)[0]!.failure).toBeUndefined();
+    // the server really started and answered the tool call
+    const tool = calls.find((c) => c.path.endsWith('/steps') && c.body?.kind === 'tool_call');
+    expect(JSON.stringify(tool?.body)).toContain('"status":"ok"');
+  });
+
+  it.each([
+    ['a command that is not allowlisted', node, ['/opt/mcp/bin/*'], undefined],
+    ['an interpreter with an inline program', node, [node], ['-e', 'process.exit(0)']],
+    ['an interpreter running a program file that is not allowlisted', node, [node], undefined],
+  ])(
+    'fails the step with mcp_command_forbidden for %s, and starts nothing',
+    async (_l, command, allow, args) => {
+      const { calls, fetchImpl } = withStdio(command, allow, args);
+      expect(await runNode(readOnly(fetchImpl))).toBe(1);
+      expect(results(calls)[0]).toMatchObject({
+        failure: { status: 'failed', code: 'mcp_command_forbidden' },
+      });
+      expect(calls.some((c) => c.path.endsWith('/model'))).toBe(false);
+    },
+  );
+
+  it('refuses binaries the node could replace between the check and the start (writable)', async () => {
+    // default probe: the checkout (fixture and its directory) is writable by the test user
+    const { calls, fetchImpl } = withStdio(node, [node, realpathSync(fixture)]);
+    expect(await runNode(base(fetchImpl))).toBe(1);
+    expect(results(calls)[0]!.failure).toMatchObject({ code: 'mcp_command_forbidden' });
+    expect(JSON.stringify(results(calls)[0])).toContain('writable by the run node');
+    expect(calls.some((c) => c.path.endsWith('/model'))).toBe(false);
+  });
+
+  it('refuses a command that does not exist in the image of the node', async () => {
+    const { calls, fetchImpl } = withStdio('/opt/mcp/bin/missing', ['/opt/mcp/bin/*']);
+    expect(await runNode(base(fetchImpl))).toBe(1);
+    expect(results(calls)[0]!.failure).toMatchObject({ code: 'mcp_command_forbidden' });
+    expect(JSON.stringify(results(calls)[0])).toContain('does not exist');
+  });
+
+  it('applies the rules to the real binary: a symlink to a shell or out of the list is refused', () => {
+    const handover = {
+      mcp: [stdioConfig('/opt/mcp/bin/innocent', [])],
+      stdio: { tenantServers: ['srv'], allowlist: ['/opt/mcp/bin/*'] },
+    };
+    const guard = (real: string) => () =>
+      stdioGuardFor(
+        handover,
+        () => real,
+        () => false,
+      )(handover.mcp[0] as never);
+    expect(guard('/opt/mcp/bin/innocent')).not.toThrow();
+    expect(guard('/bin/bash')).toThrow(/refused even if allowlisted/);
+    expect(guard('/usr/local/bin/other')).toThrow(/symlink may not lead out/);
+  });
+
+  it('leaves servers alone that the control node did not mark as tenant-defined', () => {
+    const cfg = stdioConfig('/bin/sh', ['-c', 'id']);
+    expect(() => stdioGuardFor({ mcp: [cfg] })(cfg as never)).not.toThrow();
+  });
+
+  it('refuses a configuration that differs from the one the control node checked', () => {
+    const handover = {
+      mcp: [stdioConfig('/opt/mcp/bin/a', [])],
+      stdio: { tenantServers: ['srv'], allowlist: ['/opt/mcp/bin/*'] },
+    };
+    const changed = stdioConfig('/opt/mcp/bin/a', ['--extra']);
+    expect(() => stdioGuardFor(handover, (p) => p)(changed as never)).toThrow(/changed after/);
   });
 });
 

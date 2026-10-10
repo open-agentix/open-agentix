@@ -5,3 +5,6 @@ export * from './testing.js';
 export * from './demo.js';
 export * from './gate-server.js';
 export * from './gate-http.js';
+export * from './stdio-policy.js';
+export * from './stdio-programs.js';
+export * from './stdio-env.js';
