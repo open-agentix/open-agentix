@@ -121,6 +121,70 @@ describe('creating and updating tenant stdio connections', () => {
   });
 });
 
+describe('platform connections stay operator configuration', () => {
+  it('a tenant admin of the operator home tenant cannot change or delete a platform connection', async () => {
+    // The platform connection lives in the bootstrap admin's tenant; a second admin of that
+    // tenant without platform operator access must not be able to turn it into a shell that the
+    // worker starts for every tenant (platform stdio is exempt from the command rules).
+    const plat = await post(
+      'plat-owned',
+      { transport: 'stdio', command: '/usr/local/bin/oax-workspace' },
+      { scope: 'platform' },
+    );
+    expect(plat.statusCode).toBe(201);
+    const id = plat.json().id as string;
+    for (const role of ['admin', 'integrator']) {
+      const email = `home-${role}@example.com`;
+      const u = await n.req({
+        method: 'POST',
+        url: '/v1/users',
+        payload: { email, displayName: role, password: 'home-password-123', globalRoles: [role] },
+      });
+      expect(u.statusCode).toBe(201);
+      const token = await n.login(email, 'home-password-123');
+      const changed = await n.req({
+        method: 'PUT',
+        url: `/v1/connections/${id}`,
+        token,
+        payload: {
+          config: {
+            transport: 'stdio',
+            command: '/bin/sh',
+            args: ['-c', 'id'],
+            envSecrets: { X: 'platform-secret' },
+          },
+        },
+      });
+      expect(changed.statusCode).toBe(403);
+      const deleted = await n.req({ method: 'DELETE', url: `/v1/connections/${id}`, token });
+      expect(deleted.statusCode).toBe(403);
+      // a tenant connection of their own tenant is still theirs to manage
+      const own = await n.req({
+        method: 'POST',
+        url: '/v1/connections',
+        token,
+        payload: { name: `own-${role}`, config: OK },
+      });
+      expect(own.statusCode).toBe(201);
+      const ownPut = await n.req({
+        method: 'PUT',
+        url: `/v1/connections/${own.json().id}`,
+        token,
+        payload: { config: { ...OK, args: [] } },
+      });
+      expect(ownPut.statusCode).toBe(200);
+    }
+    const after = await n.req({ method: 'GET', url: `/v1/connections/${id}` });
+    expect(after.json().config.command).toBe('/usr/local/bin/oax-workspace');
+    // the platform operator still can
+    expect(
+      (
+        await put(id, { transport: 'stdio', command: '/usr/local/bin/oax-workspace', args: ['-v'] })
+      ).statusCode,
+    ).toBe(200);
+  });
+});
+
 describe('the default allows no tenant command at all', () => {
   it('refuses every tenant stdio connection when OAX_MCP_STDIO_COMMANDS is unset', async () => {
     const bare = await testNode({});

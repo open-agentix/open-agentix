@@ -430,11 +430,19 @@ export class CatalogService {
     return row!;
   }
 
-  /** Own rows only: platform connections of another tenant are read-only here. */
+  /**
+   * Own rows only: platform connections of another tenant are read-only here. A platform
+   * connection stored in the actor's own tenant (the operator's home tenant) still needs platform
+   * operator access, exactly as creating one does: its command, secrets and environment are exempt
+   * from the tenant rules (ADR 0016 section 3.1), so a tenant admin who could change it would run
+   * code in the worker process for every tenant.
+   */
   private async getOwnConnection(actor: Principal, id: string): Promise<ConnectionRow> {
     const row = await this.getConnection(actor, id);
     if (row.tenantId !== actor.tenantId)
       throw forbidden('platform connections are managed by the platform operator');
+    if (row.scope === 'platform' && !actor.platformAdmin)
+      throw forbidden('platform connections need platform operator access');
     return row;
   }
 
