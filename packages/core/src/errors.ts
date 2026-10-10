@@ -14,6 +14,8 @@ export class OaxError extends Error {
 export interface ValidationIssue {
   path: string;
   message: string;
+  /** Stable machine code for the few issues a client reacts to (e.g. `mcp_tools_unreviewed`). */
+  code?: string;
 }
 
 export class ValidationError extends OaxError {
