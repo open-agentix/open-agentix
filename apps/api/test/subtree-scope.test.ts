@@ -488,6 +488,30 @@ describe.each(sqlTargets)('scope=subtree on the list routes (%s)', (_kind, enabl
       const plain = (await ok('inh-viewer', '/v1/budgets', 'org-a')) as unknown as object;
       expect(plain).not.toHaveProperty('nodes');
     });
+
+    it('pages the budgets through long slug paths (the cursor carries the slug path)', async () => {
+      const long = (c: string) => `${c}${'x'.repeat(62)}`;
+      const chain = [(await n.services.tenants.create(op(), { slug: long('l'), name: 'L' })).id];
+      for (const c of ['m', 'n', 'o'])
+        chain.push(
+          (await n.services.tenants.createChild(op(), chain.at(-1)!, { slug: long(c), name: c }))
+            .id,
+        );
+      const seen: string[] = [];
+      let cursor: string | null | undefined;
+      for (let i = 0; i < 10; i++) {
+        const r = await n.req({
+          method: 'GET',
+          url: `/v1/budgets?scope=subtree&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+          headers: { 'x-oax-tenant': chain[0]! },
+        });
+        expect(r.statusCode, r.body).toBe(200);
+        seen.push(...r.json().nodes.map((x: { node: { id: string } }) => x.node.id));
+        cursor = r.json().nextCursor;
+        if (!cursor) break;
+      }
+      expect(seen).toEqual(chain);
+    });
   });
 
   describe('audit', () => {

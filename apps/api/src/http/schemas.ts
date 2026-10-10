@@ -70,9 +70,10 @@ export const SubtreePageQuery = SubtreeQuery.extend({
     .max(1000)
     .optional()
     .describe('with scope=subtree: page size (default 200)'),
+  // A budgets cursor carries a slug path (up to 33 slugs of 63 characters), base64url-encoded.
   cursor: z
     .string()
-    .max(200)
+    .max(4096)
     .optional()
     .describe('with scope=subtree: `nextCursor` of the previous page'),
 });
