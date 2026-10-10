@@ -1,5 +1,8 @@
 import {
   PERMISSIONS,
+  ROLE_PERMISSIONS,
+  hasPermission,
+  isRole,
   appliedAt,
   bindingPermissions,
   pathIds,
@@ -11,6 +14,7 @@ import {
   type RoleNode,
 } from '@openagentix/core';
 import type { AppContext } from '../context.js';
+import type { users } from '../db/schema.js';
 import { forbidden, notFound } from '../errors.js';
 import { loadActor, permissionsAt, visibleUser } from './grant-authority.js';
 import { loadRawGrants } from './role-bindings.js';
@@ -86,24 +90,51 @@ export class AccessExplainService {
     if (!node) throw notFound('tenant');
     const now = this.ctx.now();
     const db = this.ctx.db;
+    const legacy = this.ctx.config.auth.roleBindingsRead === 'legacy';
     const actor = await loadActor(db, p);
-    if (!permissionsAt(actor, node, now).has('users:read')) throw forbidden();
+    // The legacy read path decides from the global roles of the home node, as everywhere else.
+    const mayRead = legacy
+      ? hasPermission(p, 'users:read')
+      : permissionsAt(actor, node, now).has('users:read');
+    if (!mayRead) throw forbidden();
     const user = await visibleUser(db, actor, node, userId, now);
-    const loaded = await loadRawGrants(db, {
+    const applied = user.disabled ? [] : await this.userBindings(user, node, legacy, now);
+    const shown = { id: user.id, email: user.email, displayName: user.displayName };
+    return this.view(node, shown, user.platformAdmin, applied, undefined);
+  }
+
+  /**
+   * A user's bindings at `node`, only those on the chain of the node. A platform operator is
+   * `admin` at the node (ADR 0013 7.1) and the answer never names their home node. With the legacy
+   * read path the global roles of the user's home node are the bindings.
+   */
+  private async userBindings(
+    user: typeof users.$inferSelect,
+    node: TenantRow,
+    legacy: boolean,
+    now: Date,
+  ): Promise<AppliedBinding[]> {
+    if (legacy) {
+      if (user.tenantId !== node.id) return [];
+      return user.globalRoles.filter(isRole).map((role) => ({
+        role,
+        teamId: null,
+        permissions: ROLE_PERMISSIONS[role],
+        useCase: null,
+        source: 'direct' as const,
+        tenantId: node.id,
+        inherit: false,
+        expiresAt: null,
+      }));
+    }
+    const loaded = await loadRawGrants(this.ctx.db, {
       id: user.id,
       tenantId: user.tenantId,
       platformAdmin: user.platformAdmin,
     });
-    // A disabled user holds nothing; a user whose grants cannot be loaded holds nothing.
-    const applied =
-      loaded && !user.disabled
-        ? appliedAt(loaded.raw, user.platformAdmin ? loaded.home : this.roleNode(node), {
-            now,
-            implicitPlatformAdmin: false,
-          })
-        : [];
-    const shown = { id: user.id, email: user.email, displayName: user.displayName };
-    return this.view(node, shown, user.platformAdmin, applied, undefined);
+    if (!loaded) return [];
+    const chain = new Set(pathIds(node.path));
+    return appliedAt(loaded.raw, this.roleNode(node), { now }).filter((b) => chain.has(b.tenantId));
   }
 
   private roleNode(n: TenantRow): RoleNode {
