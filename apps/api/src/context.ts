@@ -26,6 +26,7 @@ import { createDatabase, waitForDatabase, type Database, type Db } from './db/cl
 import { Metrics } from './metrics.js';
 import type { LdapClientFactory } from './auth/ldap.js';
 import type { OidcClient } from './auth/oidc.js';
+import { processSecrets, scrubbingDestination, type LineSink } from './mcp-oauth/index.js';
 
 /** Shared dependencies of the control node services (API and in-process worker). */
 export interface AppContext {
@@ -69,13 +70,24 @@ export function traceLogFields(): { trace_id?: string; span_id?: string } {
   return ctx && isSpanContextValid(ctx) ? { trace_id: ctx.traceId, span_id: ctx.spanId } : {};
 }
 
-export function createLogger(level: string, name = 'openagentix'): Logger {
-  return pino({
-    name,
-    level,
-    redact: { paths: LOG_REDACT_PATHS, censor: '[REDACTED]' },
-    mixin: traceLogFields,
-  });
+/**
+ * Log destination of every process: stdout, minus the secret values registered at run time (OAuth
+ * access tokens, see `mcp-oauth/secret-registry.ts`). `sink` is for tests.
+ */
+export function logDestination(sink: LineSink = process.stdout): LineSink {
+  return scrubbingDestination(processSecrets, sink);
+}
+
+export function createLogger(level: string, name = 'openagentix', sink?: LineSink): Logger {
+  return pino(
+    {
+      name,
+      level,
+      redact: { paths: LOG_REDACT_PATHS, censor: '[REDACTED]' },
+      mixin: traceLogFields,
+    },
+    logDestination(sink) as pino.DestinationStream,
+  );
 }
 
 /**
@@ -104,11 +116,30 @@ export async function reportStdioViolations(
   }
 }
 
+/** Operator-facing hints about how the MCP OAuth key-encryption key was provided. */
+export function warnAboutKek(config: Config, logger: Logger): void {
+  const { source, fileLoose } = config.mcp.oauth;
+  if (source === 'env')
+    logger.warn(
+      'OAX_MCP_OAUTH_KEK was read from the environment (removed from it now); prefer OAX_MCP_OAUTH_KEK_FILE with a mounted Secret',
+    );
+  if (fileLoose)
+    logger.warn(
+      'the OAX_MCP_OAUTH_KEK_FILE file is readable by group or others; restrict it to the service user (mode 0400) where the platform allows',
+    );
+}
+
 export async function createContext(
   config: Config,
   overrides: Partial<AppContext> = {},
 ): Promise<AppContext> {
   const logger = overrides.logger ?? createLogger(config.logLevel);
+  warnAboutKek(config, logger);
+  processSecrets.onLiveEviction = (count) =>
+    logger.warn(
+      { count },
+      'secret registry full: still-valid token values were forgotten and will not be redacted until their next use',
+    );
   // Air-gapped mode is fail-closed: invalid endpoints abort start-up before anything connects.
   const egress = activateAirgap(config);
   // Network configuration warnings (plain http proxies, unreachable routes, scheme-less proxy

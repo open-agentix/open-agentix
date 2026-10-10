@@ -371,6 +371,9 @@ endpoint must be on `OAX_AIRGAPPED_ALLOW`, see [`airgapped.md`](airgapped.md#ope
 | `OAX_MCP_RELAY_BODY_READ_SECONDS` | `15` | Time a run node has to deliver one relay request body (1 to 120); a slower trickle is cut off. |
 | `OAX_MCP_RELAY_IDLE_SECONDS` | `300` | A relay session nobody used for this long is closed (5 to 3600). |
 | `OAX_MCP_STDIO_COMMANDS` | – (none) | Comma list of absolute paths (or `dir/*`, direct children only) that tenant, team and agent `stdio` MCP connections may start, in run nodes only. Empty means no tenant stdio command. Shells, installers and inline-code interpreters are refused even when listed; unsafe entries fail start-up. See [`mcp.md`](mcp.md#stdio-mcp-servers). |
+| `OAX_MCP_OAUTH_KEK` | – (none) | Platform key-encryption key for the secrets the platform stores (MCP OAuth tokens): 32 random bytes, base64 (`openssl rand -base64 32`). Prefer `OAX_MCP_OAUTH_KEK_FILE`; set only one of the two. The variable is removed from the process environment once read, and a warning is logged at start-up if it was used. Without a key, no token can be stored or read (`key_service_unconfigured`). See [`mcp.md`](mcp.md#stored-oauth-tokens-and-the-key-service). |
+| `OAX_MCP_OAUTH_KEK_FILE` | – (none) | Path of a file (a mounted Secret) that holds the same base64 key. A start-up warning is logged if the file is readable by group or others. Only the api and the worker may have the key; keep key-holding workers on hosts or node pools that do not run untrusted run nodes. |
+| `OAX_MCP_OAUTH_KEK_ID` | `kek-1` | Name recorded with every data key the KEK wraps (`[A-Za-z0-9._-]`, up to 64). A data key wrapped with another id is refused until a KEK rotation exists. |
 
 ## Air-gapped mode
 

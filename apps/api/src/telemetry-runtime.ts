@@ -1,7 +1,9 @@
+import { processSecrets } from './mcp-oauth/secret-registry.js';
+import { RegistryGuard } from './mcp-oauth/telemetry-guard.js';
 import {
-  ContextGuard,
   sanitizeAttributes,
   sanitizeName,
+  type ContextGuard,
   type DropClass,
   type SanitizedAttributes,
   type SpanKind,
@@ -52,7 +54,7 @@ export interface TelemetryRuntime {
 }
 
 const defaults = (): TelemetryRuntime => ({
-  guard: new ContextGuard(),
+  guard: new RegistryGuard(processSecrets),
   stats: NOOP_STATS,
   exceptionDetail: 'off',
   warn: () => undefined,

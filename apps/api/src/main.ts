@@ -2,8 +2,11 @@ import { loadConfig } from './config.js';
 import { createControlNode } from './bootstrap.js';
 import { activateAirgap } from './airgap.js';
 import { initTelemetry } from './telemetry.js';
+import { processSecrets, scrubStdio } from './mcp-oauth/index.js';
 
 const config = loadConfig();
+// Console output and uncaught traces pass the redactor registry too (ADR 0016 section 7.5).
+scrubStdio(processSecrets);
 // The air-gapped check runs before the exporter (and its header secret) exists (#220); the
 // context activates the same configuration again once the exporter is up.
 const egress = activateAirgap(config);

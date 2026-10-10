@@ -71,7 +71,7 @@ const GLOBAL_PATTERNS: readonly (readonly [string, RegExp])[] = SECRET_PATTERNS.
  * Kubernetes Secret or an encoded `.env` puts the value at any offset). The characters at either
  * end mix in neighbouring bits and are left out, so the core matches whatever surrounds it.
  */
-function base64Cores(bytes: Buffer): string[] {
+export function base64Cores(bytes: Buffer): string[] {
   const out: string[] = [];
   for (let shift = 0; shift < 3; shift++) {
     const enc = Buffer.concat([Buffer.alloc(shift), bytes]).toString('base64');
@@ -80,7 +80,8 @@ function base64Cores(bytes: Buffer): string[] {
   return out;
 }
 
-function forms(secret: string): string[] {
+/** Every spelling of a secret the guards look for: plain, URL-encoded, base64 cores, base64url, hex. */
+export function secretForms(secret: string): string[] {
   const bytes = Buffer.from(secret);
   const b64 = base64Cores(bytes);
   const hex = bytes.toString('hex');
@@ -109,7 +110,7 @@ export class ContextGuard {
   /** Registers a secret value that is in use (resolved reference, brokered credential, token). */
   addSecret(value: string): void {
     if (value.length < MIN_KNOWN_SECRET_LENGTH) return;
-    for (const f of forms(value)) {
+    for (const f of secretForms(value)) {
       if (this.known.includes(f)) continue;
       this.known.push(f);
     }

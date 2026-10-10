@@ -13,6 +13,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { modelCredentialOf } from '../app.js';
+import { processSecrets, stringifyScrubbed } from '../../mcp-oauth/index.js';
 import type { StreamSink } from '../../services/model-proxy.js';
 import type { ZApp } from '../zapp.js';
 import { modelRateKey, passthroughErrorHandler } from './model-errors.js';
@@ -21,7 +22,12 @@ const tags = ['model-proxy'];
 const modelSec: Record<string, string[]>[] = [{ modelToken: [] }];
 
 /** Writes the events of a pass-through stream; never throws and never writes after the close. */
-function passSink(reply: FastifyReply, surface: PassthroughSurface, callId: string): StreamSink {
+function passSink(
+  reply: FastifyReply,
+  surface: PassthroughSurface,
+  callId: string,
+  tenantId: string,
+): StreamSink {
   const raw = reply.raw;
   reply.hijack();
   raw.writeHead(200, {
@@ -52,8 +58,8 @@ function passSink(reply: FastifyReply, surface: PassthroughSurface, callId: stri
   };
   const frame = (ev: ClientEvent) =>
     surface === 'anthropic'
-      ? `event: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`
-      : `data: ${JSON.stringify(ev.data)}\n\n`;
+      ? `event: ${ev.event}\ndata: ${stringifyScrubbed(processSecrets, ev.data, tenantId)}\n\n`
+      : `data: ${stringifyScrubbed(processSecrets, ev.data, tenantId)}\n\n`;
   return {
     delta: () => Promise.resolve(),
     event: (ev) => write(frame(ev)),
@@ -65,8 +71,8 @@ function passSink(reply: FastifyReply, surface: PassthroughSurface, callId: stri
       const body = protocolError(surface, code, message);
       void write(
         surface === 'anthropic'
-          ? `event: error\ndata: ${JSON.stringify(body)}\n\n`
-          : `data: ${JSON.stringify(body)}\n\n`,
+          ? `event: error\ndata: ${stringifyScrubbed(processSecrets, body, tenantId)}\n\n`
+          : `data: ${stringifyScrubbed(processSecrets, body, tenantId)}\n\n`,
       ).then(end);
     },
   };
@@ -128,7 +134,7 @@ export function registerPassthroughRoutes(
         if (parsed.stream) {
           await modelProxy.streamPassthrough(auth, parsed, req.headers['anthropic-beta'], {
             signal: gone.signal,
-            begin: (callId) => passSink(reply, surface, callId),
+            begin: (callId) => passSink(reply, surface, callId, auth.tenantId),
           });
           return reply;
         }

@@ -98,7 +98,7 @@ export class Worker {
     private readonly opts: WorkerOptions = {},
   ) {
     this.id = opts.workerId ?? `worker-${randomUUID().slice(0, 8)}`;
-    this.services = createServices(ctx);
+    this.services = createServices(ctx, 'worker');
     this.delivery = opts.delivery?.(this.services, this.id);
     this.queue = new RunQueue(ctx, this.id, (runId) =>
       this.services.runNodes.revokeRun(runId, 'lease_lost'),

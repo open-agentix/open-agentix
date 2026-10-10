@@ -19,6 +19,8 @@ import type { Db } from '../db/client.js';
 import { auditCheckpoints, auditLog, runs } from '../db/schema.js';
 import { decodeSeqCursor, encodeSeqCursor, page } from '../pagination.js';
 import type { ResolvedScope } from './subtree-scope.js';
+import { processSecrets } from '../mcp-oauth/secret-registry.js';
+import { scrubPayloadWith } from '../mcp-oauth/scrub.js';
 import { activeGuardedSpan, activeSpanIdIn } from '../telemetry.js';
 
 const AUDIT_LOCK = 734_201;
@@ -163,7 +165,8 @@ export class AuditService {
         .limit(1);
       const entry = createAuditEntry(prev ?? null, {
         ...entryInput,
-        payload: withOtel(entryInput.payload, otel),
+        // Names and ids only by convention; the registry is the net for a token in an upstream text.
+        payload: scrubPayloadWith(processSecrets, withOtel(entryInput.payload, otel), tenantId),
         ts: input.ts ?? this.ctx.now(),
       });
       await db.insert(auditLog).values({
