@@ -330,6 +330,32 @@ describe.each(sqlTargets)('role-binding API (%s)', (_kind, enabled, open) => {
       expect(left[0]!.inherit).toBe(true);
     });
 
+    it('rule 8: an expiring co-admin does not count as the remaining administrator', async () => {
+      id['org-c'] = (
+        await n.services.tenants.create(op(), { slug: 'org-c', name: 'Org org-c' })
+      ).id;
+      await mkUser('perm-c', 'org-c', []);
+      await mkUser('temp-c', 'org-c', []);
+      const perm = (await post(null, 'org-c', grant('perm-c', 'admin', true))).json().id as string;
+      const temp = await post(
+        null,
+        'org-c',
+        grant('temp-c', 'admin', true, { expiresAt: '2999-01-01T00:00:00Z' }),
+      );
+      expect(temp.statusCode).toBe(201);
+      // the time-boxed admin cannot remove the permanent one, and the permanent one cannot leave
+      for (const who of ['temp-c', 'perm-c']) {
+        const r = await n.req({
+          method: 'DELETE',
+          url: `${rb('org-c')}/${perm}`,
+          token: tok[who]!,
+        });
+        expect(r.statusCode).toBe(409);
+        expect(r.json().error).toBe('last_admin');
+      }
+      expect(await bound('perm-c', 'org-c', 'admin', 'grant')).toHaveLength(1);
+    });
+
     it('rule 9: revoking follows the grant rules; leaving one own binding is always allowed', async () => {
       const made = await post(null, 'org-a', grant('viewer-a', 'operator'));
       expect(made.statusCode).toBe(201);

@@ -326,7 +326,7 @@ Team and agent scoped bindings never give the right to grant.
 | 5 the grantee's home organisation is the node's organisation | `404 user` for organisation members; platform operators get `422 cross_organisation_grant` (the `trb_same_org` trigger is the backstop) |
 | 6 no self-grant, also not by changing one's own binding | `403 self_grant` (platform operators excepted) |
 | 7 `pentest` | not accepted before S6 (`400 validation_failed`); its expiry rules arrive with it |
-| 8 the last inheriting `admin` of an organisation root | `409 last_admin` on DELETE or on a PATCH that narrows, re-roles or time-boxes it (platform operators excepted; disabled users do not count) |
+| 8 the last inheriting `admin` of an organisation root | `409 last_admin` on DELETE or on a PATCH that narrows, re-roles or time-boxes it (platform operators excepted; disabled users and expiring bindings do not count) |
 | 9 who may grant may revoke; a user may always remove their own binding | PATCH checks the old and the new tuple; DELETE of a foreign binding needs rules 1 and 2, of an own binding only rule 8 |
 
 Other behaviour: `expiresAt` must be in the future (`422 validation_failed`); a user holds at most

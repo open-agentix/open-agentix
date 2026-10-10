@@ -299,10 +299,9 @@ export class TenantRoleBindingsService {
           eq(tenantRoleBindings.role, 'admin'),
           isNull(tenantRoleBindings.useCase),
           eq(tenantRoleBindings.inherit, true),
-          or(
-            isNull(tenantRoleBindings.expiresAt),
-            gt(tenantRoleBindings.expiresAt, this.ctx.now()),
-          ),
+          // Same shape as `counts`: a co-admin whose binding expires does not keep the organisation
+          // administered (it would be left without one at that second).
+          isNull(tenantRoleBindings.expiresAt),
           eq(users.disabled, false),
           ne(tenantRoleBindings.id, before.id),
         ),
