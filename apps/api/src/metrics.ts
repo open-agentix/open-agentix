@@ -79,8 +79,8 @@ export class Metrics {
       name: `${prefix}role_bindings_reconcile_fixes_total`,
       help:
         'Rows the reconcile of tenant_role_bindings against users.global_roles changed (ADR 0014 ' +
-        'S1, #216): kind added or removed; blocked = a wanted role whose key is held by a ' +
-        'non-managed row (kept, needs a look). A non-zero rate outside a deploy means an old ' +
+        'S1, #216): kind added or removed (mirror rows only; explicit grants are never touched). ' +
+        'A non-zero rate outside a deploy means an old ' +
         'application version or a manual change writes global_roles without the mirror',
       labelNames: ['kind', 'trigger'],
       registers: [this.registry],

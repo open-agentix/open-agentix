@@ -36,11 +36,10 @@ export class BindingReconciler {
     private readonly deps: { db: Db; metrics: Metrics; logger: Logger; now: () => Date },
   ) {}
 
-  private count(trigger: ReconcileTrigger, s: { added: number; removed: number; blocked: number }) {
+  private count(trigger: ReconcileTrigger, s: { added: number; removed: number }) {
     const c = this.deps.metrics.roleBindingsReconcileFixes;
     if (s.added) c.inc({ kind: 'added', trigger }, s.added);
     if (s.removed) c.inc({ kind: 'removed', trigger }, s.removed);
-    if (s.blocked) c.inc({ kind: 'blocked', trigger }, s.blocked);
   }
 
   /**

@@ -155,16 +155,29 @@ export const tenantRoleBindings = pgTable(
     inherit: boolean('inherit').notNull().default(false),
     expiresAt: ts('expires_at'),
     grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
+    /**
+     * `mirror` = a row that mirrors `users.global_roles` (home node, legacy roles; owned by the
+     * mirror, the reconcile and the home-move trigger), `grant` = created through the role-binding
+     * API (ADR 0014 S4, #226). Part of the unique key, so the two never share a slot.
+     */
+    source: text('source').notNull().default('mirror'),
     createdAt: created(),
   },
   (t) => [
     check('trb_role_check', sql`${t.role} in ${ROLE_SQL}`),
+    check('trb_source_check', sql`${t.source} in ('mirror','grant')`),
     check('trb_pentest_expiry', sql`${t.role} <> 'pentest' or ${t.expiresAt} is not null`),
     check(
       'trb_use_case_len',
       sql`${t.useCase} is null or char_length(${t.useCase}) between 1 and 200`,
     ),
-    uniqueIndex('trb_uq').on(t.userId, t.tenantId, t.role, sql`coalesce(${t.useCase}, '')`),
+    uniqueIndex('trb_uq').on(
+      t.userId,
+      t.tenantId,
+      t.role,
+      sql`coalesce(${t.useCase}, '')`,
+      t.source,
+    ),
     index('trb_tenant_idx').on(t.tenantId),
     index('trb_user_idx').on(t.userId),
   ],
