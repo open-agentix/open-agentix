@@ -21,6 +21,12 @@ import {
   PolicySchema,
   PolicyUpdateBody,
   SubtreePageQuery,
+  ToolRefreshResultSchema,
+  ToolSnapshotApproveBody,
+  ToolSnapshotDetailSchema,
+  ToolSnapshotListSchema,
+  ToolSnapshotParams,
+  ToolSnapshotSummarySchema,
 } from '../schemas.js';
 import { SUBTREE_DEFAULT_PAGE, assertPagingNeedsSubtree, rowTenants } from '../subtree.js';
 import { HttpError } from '../../errors.js';
@@ -174,6 +180,108 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
         throw new HttpError(400, 'validation_failed', 'a model connection test needs "model"');
       return services.models.test(actor, req.params.id, req.body.model);
     },
+  );
+
+  // ---------- pinned tool definitions (ADR 0016 section 5) ----------
+
+  app.post(
+    '/v1/connections/:id/tools/refresh',
+    {
+      config: { access: 'connections:write' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'Fetch the tool definitions of an HTTP MCP connection and store them as a pending snapshot (audited; shares the rate limit of the connection test)',
+        description:
+          'Connects like a run does (outbound dispatcher, destination checks) and lists the tools. The definitions are bounded, reduced to the model-visible fields and refused when they contain a credential. The answer carries the category and the snapshot summary, never a tool text; read the snapshot to review it.',
+        security: sec,
+        params: IdParams,
+        response: {
+          200: ToolRefreshResultSchema,
+          400: ErrorSchema,
+          404: ErrorSchema,
+          422: ErrorSchema,
+          429: ErrorSchema,
+        },
+      },
+    },
+    async (req) => services.mcpTools.refresh(principalOf(req), req.params.id),
+  );
+
+  app.get(
+    '/v1/connections/:id/tool-snapshots',
+    {
+      config: { access: 'connections:read' },
+      schema: {
+        tags: ['connections'],
+        summary: 'List the tool snapshots of an MCP connection (newest first, summaries only)',
+        security: sec,
+        params: IdParams,
+        response: { 200: ToolSnapshotListSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => services.mcpTools.list(principalOf(req), req.params.id),
+  );
+
+  app.get(
+    '/v1/connections/:id/tool-snapshots/:digest',
+    {
+      config: { access: 'connections:read' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'One tool snapshot with its definitions, the current approved snapshot to diff against and the versions that pinned it',
+        description:
+          'Tool names, descriptions and schemas are untrusted text from the server; show them as data (escape invisible characters), never as instructions.',
+        security: sec,
+        params: ToolSnapshotParams,
+        response: { 200: ToolSnapshotDetailSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => services.mcpTools.get(principalOf(req), req.params.id, req.params.digest),
+  );
+
+  app.post(
+    '/v1/connections/:id/tool-snapshots/:digest/approve',
+    {
+      config: { access: 'connections:write' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'Approve a pending tool snapshot (audited as mcp.tools.approved); `existing-versions` is refused when the granted tools or their access classes changed',
+        security: sec,
+        params: ToolSnapshotParams,
+        body: ToolSnapshotApproveBody,
+        response: {
+          200: ToolSnapshotSummarySchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
+      },
+    },
+    async (req) =>
+      services.mcpTools.approve(principalOf(req), req.params.id, req.params.digest, req.body.scope),
+  );
+
+  app.post(
+    '/v1/connections/:id/tool-snapshots/:digest/reject',
+    {
+      config: { access: 'connections:write' },
+      schema: {
+        tags: ['connections'],
+        summary: 'Reject a pending tool snapshot (audited as mcp.tools.rejected)',
+        security: sec,
+        params: ToolSnapshotParams,
+        response: {
+          200: ToolSnapshotSummarySchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
+      },
+    },
+    async (req) => services.mcpTools.reject(principalOf(req), req.params.id, req.params.digest),
   );
 
   app.get(

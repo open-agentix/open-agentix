@@ -269,6 +269,14 @@ servers belong in containers (3.3). The documentation says so.
 - **During a session** the list is fetched once and never re-read; `notifications/tools/list_changed`
   is ignored for the running step (already true: `McpConnection` caches the list).
 - Changes to tools that are not granted do not affect the digest and are only shown in the console.
+- **Implementation notes (S3, #233).** `toolsDigest` of a version is recorded together with the digest of
+  the whole snapshot it was taken from and the version's grants (`toolPins`), so that an
+  `existing-versions` acceptance can be resolved per version: acceptances are keyed by snapshot digest and are
+  transitive. HTTP connections are pinned; `stdio` and `in-memory` connections cannot be refreshed in this
+  slice and publish and run as before (container servers follow with S2/W5-5). Approval uses the existing
+  `connections:write` permission (no new permission): agent engineers, who publish, cannot approve. There is no
+  outbound notification channel yet; "notify the admins" is the audit entry, the pending snapshot flagged in the
+  console and `oax_mcp_tools_changed_total`. See [docs/mcp.md](../mcp.md#pinned-tool-definitions).
 
 ### 6. Control-node MCP relay (decides ADR 0012 open question 2)
 

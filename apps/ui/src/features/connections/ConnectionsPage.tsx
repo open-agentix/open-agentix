@@ -28,6 +28,7 @@ import { useDocumentTitle } from '../../lib/hooks';
 import { redact } from '../../lib/redact';
 import { findInlineSecrets, secretReferences } from './secrets';
 import { ToolAccessSummary, ToolProfilesEditor } from './ToolProfiles';
+import { ToolsDialog } from './ToolSnapshots';
 
 const EXAMPLE = `{
   "transport": "streamable-http",
@@ -81,6 +82,7 @@ export function ConnectionsPage() {
   const connections = useQuery(connectionsQuery);
   const [editing, setEditing] = useState<Connection | 'new' | null>(null);
   const [deleting, setDeleting] = useState<Connection | null>(null);
+  const [toolsOf, setToolsOf] = useState<Connection | null>(null);
   const remove = async (c: Connection) => {
     await call(api.DELETE('/v1/connections/{id}', { params: { path: { id: c.id } } }));
     await queryClient.invalidateQueries({ queryKey: connectionsQuery.queryKey });
@@ -155,6 +157,13 @@ export function ConnectionsPage() {
                 <p className="muted">
                   {t('connections.updated', { when: fmt.relative(c.updatedAt) })}
                 </p>
+                {c.kind === 'mcp' && c.config.transport === 'streamable-http' ? (
+                  <div className="actions">
+                    <Button size="sm" icon="lock" onClick={() => setToolsOf(c)}>
+                      {t('connections.tools.open')}
+                    </Button>
+                  </div>
+                ) : null}
                 {can('connections:write') ? (
                   <div className="actions">
                     <Button size="sm" variant="ghost" icon="trash" onClick={() => setDeleting(c)}>
@@ -171,6 +180,7 @@ export function ConnectionsPage() {
         </ul>
       )}
       <ConnectionDialog editing={editing} onClose={() => setEditing(null)} />
+      <ToolsDialog connection={toolsOf} onClose={() => setToolsOf(null)} />
       <ConfirmTenantAction
         open={!!deleting}
         onClose={() => setDeleting(null)}

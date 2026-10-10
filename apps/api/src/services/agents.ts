@@ -551,10 +551,17 @@ export class AgentsService {
         target: id,
         payload: { version: def.version, digest: def.digest, errors },
       });
+      // ADR 0016 S3: tool definitions that were never reviewed (or a tool the review does not list)
+      // are a refusal of their own, so a client can send the user to the Tools tab.
+      const pinCode = errors.find(
+        (e) => e.code === 'mcp_tools_unreviewed' || e.code === 'mcp_tool_unknown',
+      )?.code;
       throw new HttpError(
         400,
-        'validation_failed',
-        'tool grants are not allowed on this platform',
+        pinCode ?? 'validation_failed',
+        pinCode
+          ? 'the tool definitions of an MCP connection are not approved for these grants'
+          : 'tool grants are not allowed on this platform',
         errors,
       );
     }

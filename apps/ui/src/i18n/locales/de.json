@@ -648,6 +648,60 @@
     "noPermission": "Du kannst nicht über Freigaben entscheiden (Berechtigung runs:approve)."
   },
   "connections": {
+    "tools": {
+      "open": "Tools",
+      "title": "Tools von {name}",
+      "intro": "Agenten werden gegen eine geprüfte Liste der Tools dieses Servers veröffentlicht. Ändert der Server ein freigegebenes Tool, stoppen Runs, bis ein Admin die neuen Definitionen freigibt. Der Text kommt vom Server: lies ihn als Daten, nicht als Anweisung.",
+      "refresh": "Tools abrufen",
+      "fetchedNew": "Neue Tool-Liste abgerufen. Vor der Freigabe prüfen.",
+      "fetchedSame": "Der Server bietet weiterhin eine bekannte Liste an.",
+      "fetchFailed": "Die Tools konnten nicht abgerufen werden ({category}).",
+      "empty": "Noch keine Tool-Liste",
+      "emptyText": "Rufe die Tools dieses Servers ab, prüfe sie und gib sie frei. Zum Veröffentlichen eines Agenten ist eine freigegebene Liste nötig.",
+      "snapshots": "Tool-Stände",
+      "digest": "Prüfsumme",
+      "status": "Status",
+      "count": "Tools",
+      "pinned": "Versionen",
+      "review": "Prüfen",
+      "current": "In Benutzung",
+      "fromRun": "Von einem Run gesehen",
+      "needsConfirm": "Diese Liste wurde von einem Run gemeldet, nicht von dir abgerufen. Rufe zuerst die Tools ab: Freigeben geht nur, wenn der Server genau diese Liste liefert.",
+      "statuses": {
+        "pending": "Offen",
+        "approved": "Freigegeben",
+        "rejected": "Abgelehnt"
+      },
+      "diffTitle": "Änderungen gegenüber der verwendeten Liste ({base}…)",
+      "noBase": "Noch keine freigegebene Liste: alles unten ist neu.",
+      "noChanges": "Kein Tool weicht von der verwendeten Liste ab.",
+      "change": {
+        "added": "neu",
+        "removed": "entfernt",
+        "changed": "geändert"
+      },
+      "field": {
+        "title": "Titel",
+        "description": "Beschreibung",
+        "inputSchema": "Eingabeschema",
+        "outputSchema": "Ausgabeschema",
+        "annotations": "Annotationen"
+      },
+      "before": "Vorher",
+      "after": "Nachher",
+      "invisible": "Enthält unsichtbare Zeichen",
+      "pinnedBy": "Veröffentlichte Versionen mit dieser Liste",
+      "scope": "Wer sie nutzt",
+      "scopeHint": "Bestehende Versionen sind nur erlaubt, wenn sich Namen und Zugriffsklassen ihrer Tools nicht geändert haben.",
+      "scopes": {
+        "new-versions": "Ab jetzt veröffentlichte Versionen",
+        "existing-versions": "Auch veröffentlichte Versionen mit der vorherigen Liste"
+      },
+      "approve": "Freigeben",
+      "reject": "Ablehnen",
+      "approved": "Tool-Liste freigegeben.",
+      "rejected": "Tool-Liste abgelehnt."
+    },
     "stdioRefused": "Wird zur Laufzeit abgelehnt",
     "title": "Verbindungen",
     "subtitle": "MCP-Server und APIs, die Agenten nutzen dürfen – bereitgestellt von Integratoren.",

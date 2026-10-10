@@ -45,6 +45,8 @@ export interface AppContext {
   hostLookup?: HostLookup;
   /** Outbound dispatcher of HTTP MCP connection tests (tests inject one; default: per call). */
   mcpOutbound?: OutboundDispatcher;
+  /** Connection tests and tool refreshes per user and minute (default 10; tests raise it). */
+  mcpProbeLimit?: number;
   now: () => Date;
   ldapFactory?: LdapClientFactory;
   oidcClient?: OidcClient;
@@ -168,6 +170,7 @@ export async function createContext(
     ...(overrides.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {}),
     ...(overrides.hostLookup ? { hostLookup: overrides.hostLookup } : {}),
     ...(overrides.mcpOutbound ? { mcpOutbound: overrides.mcpOutbound } : {}),
+    ...(overrides.mcpProbeLimit ? { mcpProbeLimit: overrides.mcpProbeLimit } : {}),
     ...(overrides.ldapFactory ? { ldapFactory: overrides.ldapFactory } : {}),
     ...(overrides.oidcClient ? { oidcClient: overrides.oidcClient } : {}),
   };

@@ -1,6 +1,7 @@
 import { canonicalJson, sha256Hex } from '../canonical.js';
 import type { ValidationIssue } from '../errors.js';
 import type { AgentDefinition, AgentSpec } from './parser.js';
+import { pinFor, unknownGrants, type PinnedTool, type ToolPinRecord } from '../mcp-pin.js';
 import { ToolGrantSchema, type ProfileGrant, type ToolGrant } from './schema.js';
 
 /**
@@ -21,6 +22,17 @@ export interface ConnectionAccess {
   profiles: Readonly<Record<string, readonly string[]>>;
   /** Identifies the state of the connection the expansion was made from (e.g. `updatedAt`). */
   version: string;
+  /**
+   * Set for connections whose tool definitions are pinned (ADR 0016 section 5). `snapshot` is the
+   * latest approved snapshot, `null` when none was approved yet (publish is then refused with
+   * `mcp_tools_unreviewed`). Absent for connections that cannot be pinned: they publish as before.
+   */
+  pin?:
+    | {
+        connectionId: string;
+        snapshot: { digest: string; tools: readonly PinnedTool[] } | null;
+      }
+    | undefined;
 }
 
 /** `server name -> connection access`; servers that are not in the catalog are unknown. */
@@ -40,8 +52,10 @@ export interface PublishedExpansion {
   expansion: ExpansionRecord[];
   /** Classification of every declared tool of the servers the definition uses (`server/tool`). */
   toolAccess: Record<string, ToolAccess>;
-  /** SHA-256 over the expanded grants, the records and the classification. */
+  /** SHA-256 over the expanded grants, the records, the classification and the tool pins. */
   expansionDigest: string;
+  /** Pinned tool definitions per connection (ADR 0016 section 5); absent without pinned servers. */
+  toolPins?: Record<string, ToolPinRecord>;
 }
 
 /** A stored definition may carry the expansion next to the parsed agents.md. */
@@ -170,6 +184,53 @@ function expandAgent(
 }
 
 /**
+ * ADR 0016 section 5: records, per pinned connection, the digest over the granted tools of its
+ * latest approved snapshot. A connection without an approved snapshot (`mcp_tools_unreviewed`) or a
+ * granted tool the snapshot does not list (`mcp_tool_unknown`) is an error. Connections that are
+ * not in the catalog or cannot be pinned are left alone.
+ */
+function pinTools(
+  agents: readonly AgentSpec[],
+  catalog: AccessCatalog,
+  errors: ValidationIssue[],
+): Record<string, ToolPinRecord> {
+  const out: Record<string, ToolPinRecord> = {};
+  const first = new Map<string, number>();
+  const patterns = new Map<string, Set<string>>();
+  agents.forEach((a, i) => {
+    for (const t of a.tools) {
+      if (!first.has(t.server)) first.set(t.server, i);
+      let set = patterns.get(t.server);
+      if (!set) patterns.set(t.server, (set = new Set()));
+      set.add(t.tool);
+    }
+  });
+  for (const server of [...patterns.keys()].sort()) {
+    const pin = catalog[server]?.pin;
+    if (!pin) continue;
+    const path = `agents.${first.get(server)}.tools`;
+    if (!pin.snapshot) {
+      errors.push({
+        path,
+        code: 'mcp_tools_unreviewed',
+        message: `connection "${server}" has no approved tool snapshot (refresh and approve its tools first)`,
+      });
+      continue;
+    }
+    const granted = [...patterns.get(server)!];
+    const unknown = unknownGrants(pin.snapshot.tools, granted);
+    for (const tool of unknown)
+      errors.push({
+        path,
+        code: 'mcp_tool_unknown',
+        message: `tool "${server}/${tool}" is not in the approved snapshot of connection "${server}"`,
+      });
+    if (unknown.length === 0) out[server] = pinFor(pin.snapshot, granted, pin.connectionId);
+  }
+  return out;
+}
+
+/**
  * Expands profile grants into concrete grants and enforces `access: read-only`. Pure: the caller
  * passes the connection catalog. Returns every error (unknown connection/profile, write tool for a
  * read-only step); the definition is only usable when `errors` is empty.
@@ -191,15 +252,27 @@ export function expandProfiles(def: AgentDefinition, catalog: AccessCatalog): Ex
       for (const [tool, access] of Object.entries(conn.tools))
         toolAccess[`${server}/${tool}`] = access;
   }
+  const toolPins = pinTools(agents, catalog, errors);
+  const hasPins = Object.keys(toolPins).length > 0;
+  // `toolPins` only enters the digest when there are pins, so the digest of a definition without
+  // pinned connections is the one it always had.
   const expansionDigest = sha256Hex(
     canonicalJson({
       expansion,
       toolAccess,
       grants: agents.map((a) => ({ id: a.id, access: a.access ?? null, tools: a.tools })),
+      ...(hasPins ? { toolPins } : {}),
     }),
   );
   return {
-    definition: { ...def, agents, expansion, toolAccess, expansionDigest },
+    definition: {
+      ...def,
+      agents,
+      expansion,
+      toolAccess,
+      expansionDigest,
+      ...(hasPins ? { toolPins } : {}),
+    },
     errors,
   };
 }

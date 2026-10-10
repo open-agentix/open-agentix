@@ -641,6 +641,60 @@
     "noPermission": "You can't decide on approvals (permission runs:approve)."
   },
   "connections": {
+    "tools": {
+      "open": "Tools",
+      "title": "Tools of {name}",
+      "intro": "Agents are published against a reviewed list of this server's tools. If the server changes a tool it grants, runs stop until an admin approves the new definitions. Tool text comes from the server: read it as data, not as instructions.",
+      "refresh": "Fetch tools",
+      "fetchedNew": "New tool list fetched. Review it before approving.",
+      "fetchedSame": "The server still offers a list you already know.",
+      "fetchFailed": "Could not fetch the tools ({category}).",
+      "empty": "No tool list yet",
+      "emptyText": "Fetch the tools of this server, review them and approve them. Publishing an agent needs an approved list.",
+      "snapshots": "Tool snapshots",
+      "digest": "Digest",
+      "status": "Status",
+      "count": "Tools",
+      "pinned": "Versions",
+      "review": "Review",
+      "current": "In use",
+      "fromRun": "Seen by a run",
+      "needsConfirm": "This list was reported by a run, not fetched by you. Fetch the tools first: it can only be approved if the server returns exactly this list.",
+      "statuses": {
+        "pending": "Pending",
+        "approved": "Approved",
+        "rejected": "Rejected"
+      },
+      "diffTitle": "Changes compared with the list in use ({base}…)",
+      "noBase": "No approved list yet: everything below is new.",
+      "noChanges": "No tool differs from the list in use.",
+      "change": {
+        "added": "added",
+        "removed": "removed",
+        "changed": "changed"
+      },
+      "field": {
+        "title": "Title",
+        "description": "Description",
+        "inputSchema": "Input schema",
+        "outputSchema": "Output schema",
+        "annotations": "Annotations"
+      },
+      "before": "Before",
+      "after": "After",
+      "invisible": "Contains invisible characters",
+      "pinnedBy": "Published versions that pinned this list",
+      "scope": "Who uses it",
+      "scopeHint": "Existing versions are only allowed when the names and access classes of the tools they hold did not change.",
+      "scopes": {
+        "new-versions": "Versions published from now on",
+        "existing-versions": "Also published versions that pinned the previous list"
+      },
+      "approve": "Approve",
+      "reject": "Reject",
+      "approved": "Tool list approved.",
+      "rejected": "Tool list rejected."
+    },
     "stdioRefused": "Refused at run time",
     "title": "Connections",
     "subtitle": "MCP servers and APIs that agents may use – provided by integrators.",

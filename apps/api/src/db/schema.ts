@@ -604,6 +604,84 @@ export const connections = pgTable(
   ],
 );
 
+/**
+ * Snapshots of the tool definitions an MCP connection offered (ADR 0016 section 5). One row per
+ * (connection, digest). `digest` is SHA-256 over the RFC 8785 JSON of the tools, `tools` the
+ * reduced definitions (untrusted server text, bounded by the check below and by the application,
+ * never holding a secret). `tenant_id` is the owner of the connection; every query filters by it.
+ * Written by the control node only: a tool list reported by a run node is stored as `pending`
+ * with `source = 'run'` and needs an admin before anything uses it.
+ */
+export const mcpToolSnapshots = pgTable(
+  'mcp_tool_snapshots',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: tenant(),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => connections.id, { onDelete: 'cascade' }),
+    digest: text('digest').notNull(),
+    tools: jsonb('tools').notNull(),
+    toolCount: integer('tool_count').notNull(),
+    /** `pending` until an admin decides; only `approved` snapshots are used for publishing. */
+    status: text('status').notNull().default('pending'),
+    /** `refresh` (an admin fetched it) or `run` (a run saw a changed list: rug-pull detection). */
+    source: text('source').notNull().default('refresh'),
+    fetchedAt: ts('fetched_at').notNull().defaultNow(),
+    fetchedBy: uuid('fetched_by'),
+    runId: uuid('run_id'),
+    approvedBy: uuid('approved_by'),
+    approvedAt: ts('approved_at'),
+    /** `new-versions` or `existing-versions` (set with the approval). */
+    approvalScope: text('approval_scope'),
+    rejectedBy: uuid('rejected_by'),
+    rejectedAt: ts('rejected_at'),
+  },
+  (t) => [
+    uniqueIndex('mcp_tool_snapshots_connection_digest_uq').on(t.connectionId, t.digest),
+    index('mcp_tool_snapshots_tenant_connection_idx').on(t.tenantId, t.connectionId, t.status),
+    check('mcp_tool_snapshots_status', sql`${t.status} in ('pending', 'approved', 'rejected')`),
+    check('mcp_tool_snapshots_source', sql`${t.source} in ('refresh', 'run')`),
+    check(
+      'mcp_tool_snapshots_scope',
+      sql`${t.approvalScope} is null or ${t.approvalScope} in ('new-versions', 'existing-versions')`,
+    ),
+    check('mcp_tool_snapshots_digest', sql`${t.digest} ~ '^[0-9a-f]{64}$'`),
+    check(
+      'mcp_tool_snapshots_tools',
+      sql`jsonb_typeof(${t.tools}) = 'array' and jsonb_array_length(${t.tools}) <= 500 and ${t.toolCount} = jsonb_array_length(${t.tools})`,
+    ),
+  ],
+);
+
+/**
+ * `existing-versions` approvals (ADR 0016 section 5): every published version that pinned a
+ * snapshot from which `to_digest` is reachable through these rows accepts `to_digest`. The versions
+ * themselves stay immutable; this is the connection-level record of the decision.
+ */
+export const mcpToolSnapshotAcceptances = pgTable(
+  'mcp_tool_snapshot_acceptances',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: tenant(),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => connections.id, { onDelete: 'cascade' }),
+    fromDigest: text('from_digest').notNull(),
+    toDigest: text('to_digest').notNull(),
+    acceptedBy: uuid('accepted_by'),
+    acceptedAt: ts('accepted_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('mcp_tool_snapshot_acceptances_uq').on(t.connectionId, t.fromDigest, t.toDigest),
+    index('mcp_tool_snapshot_acceptances_tenant_idx').on(t.tenantId, t.connectionId),
+    check(
+      'mcp_tool_snapshot_acceptances_digests',
+      sql`${t.fromDigest} ~ '^[0-9a-f]{64}$' and ${t.toDigest} ~ '^[0-9a-f]{64}$' and ${t.fromDigest} <> ${t.toDigest}`,
+    ),
+  ],
+);
+
 export const policies = pgTable(
   'policies',
   {

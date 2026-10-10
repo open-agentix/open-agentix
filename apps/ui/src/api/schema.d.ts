@@ -1973,6 +1973,19 @@ export interface paths {
                             }[];
                             /** @description SHA-256 over the expanded grants and the tool classification at publish */
                             expansionDigest?: string;
+                            /** @description pinned tool definitions per MCP connection (ADR 0016 section 5); absent for versions published before pinning */
+                            toolPins?: {
+                                [key: string]: {
+                                    /** @description the connection the snapshot belongs to; acceptances of other connections do not count */
+                                    connectionId: string;
+                                    /** @description digest of the approved snapshot the version was published against */
+                                    snapshotDigest: string;
+                                    /** @description SHA-256 over the granted tools of that snapshot (RFC 8785) */
+                                    toolsDigest: string;
+                                    /** @description the version's grants on the connection (names and `prefix*`) */
+                                    granted: string[];
+                                };
+                            };
                         };
                     };
                 };
@@ -4400,6 +4413,593 @@ export interface paths {
                 };
                 /** @description Default Response */
                 429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/tools/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch the tool definitions of an HTTP MCP connection and store them as a pending snapshot (audited; shares the rate limit of the connection test)
+         * @description Connects like a run does (outbound dispatcher, destination checks) and lists the tools. The definitions are bounded, reduced to the model-visible fields and refused when they contain a credential. The answer carries the category and the snapshot summary, never a tool text; read the snapshot to review it.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ok: boolean;
+                            /** @enum {string} */
+                            category: "ok" | "config_invalid" | "egress_denied" | "dns_failed" | "connect_failed" | "proxy_refused" | "tls_untrusted" | "tls_hostname_mismatch" | "auth_failed" | "http_error" | "protocol_error" | "timeout" | "error";
+                            snapshot?: {
+                                /** @description SHA-256 over the RFC 8785 JSON of the tools, sorted by name */
+                                digest: string;
+                                /** @enum {string} */
+                                status: "pending" | "approved" | "rejected";
+                                /**
+                                 * @description `run`: a run saw this list and failed closed
+                                 * @enum {string}
+                                 */
+                                source: "refresh" | "run";
+                                toolCount: number;
+                                /** @description ISO 8601 timestamp */
+                                fetchedAt: string;
+                                approvedAt: string | null;
+                                approvalScope: ("new-versions" | "existing-versions") | null;
+                                rejectedAt: string | null;
+                                /** @description the snapshot a version published now would pin */
+                                current: boolean;
+                                /** @description published versions of your tenant that pinned it */
+                                pinnedVersions: number;
+                            };
+                            /** @description false when a snapshot with this digest already existed */
+                            created?: boolean;
+                            matchesCurrent?: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/tool-snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the tool snapshots of an MCP connection (newest first, summaries only) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** @description SHA-256 over the RFC 8785 JSON of the tools, sorted by name */
+                                digest: string;
+                                /** @enum {string} */
+                                status: "pending" | "approved" | "rejected";
+                                /**
+                                 * @description `run`: a run saw this list and failed closed
+                                 * @enum {string}
+                                 */
+                                source: "refresh" | "run";
+                                toolCount: number;
+                                /** @description ISO 8601 timestamp */
+                                fetchedAt: string;
+                                approvedAt: string | null;
+                                approvalScope: ("new-versions" | "existing-versions") | null;
+                                rejectedAt: string | null;
+                                /** @description the snapshot a version published now would pin */
+                                current: boolean;
+                                /** @description published versions of your tenant that pinned it */
+                                pinnedVersions: number;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/tool-snapshots/{digest}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One tool snapshot with its definitions, the current approved snapshot to diff against and the versions that pinned it
+         * @description Tool names, descriptions and schemas are untrusted text from the server; show them as data (escape invisible characters), never as instructions.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    digest: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description SHA-256 over the RFC 8785 JSON of the tools, sorted by name */
+                            digest: string;
+                            /** @enum {string} */
+                            status: "pending" | "approved" | "rejected";
+                            /**
+                             * @description `run`: a run saw this list and failed closed
+                             * @enum {string}
+                             */
+                            source: "refresh" | "run";
+                            toolCount: number;
+                            /** @description ISO 8601 timestamp */
+                            fetchedAt: string;
+                            approvedAt: string | null;
+                            approvalScope: ("new-versions" | "existing-versions") | null;
+                            rejectedAt: string | null;
+                            /** @description the snapshot a version published now would pin */
+                            current: boolean;
+                            /** @description published versions of your tenant that pinned it */
+                            pinnedVersions: number;
+                            tools: {
+                                name: string;
+                                title?: string | null;
+                                description?: string | null;
+                                inputSchema: {
+                                    [key: string]: unknown;
+                                };
+                                outputSchema?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                annotations?: {
+                                    [key: string]: unknown;
+                                } | null;
+                            }[];
+                            /** @description the current approved snapshot to compare with */
+                            base: {
+                                digest: string;
+                                tools: {
+                                    name: string;
+                                    title?: string | null;
+                                    description?: string | null;
+                                    inputSchema: {
+                                        [key: string]: unknown;
+                                    };
+                                    outputSchema?: {
+                                        [key: string]: unknown;
+                                    } | null;
+                                    annotations?: {
+                                        [key: string]: unknown;
+                                    } | null;
+                                }[];
+                            } | null;
+                            /** @description tool names added, removed or changed relative to `base` */
+                            changed: string[];
+                            pinnedBy: {
+                                /** Format: uuid */
+                                agentId: string;
+                                agent: string;
+                                version: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/tool-snapshots/{digest}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a pending tool snapshot (audited as mcp.tools.approved); `existing-versions` is refused when the granted tools or their access classes changed */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    digest: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /**
+                         * @description `new-versions`: only versions published afterwards pin it. `existing-versions`: published versions that pinned the previous snapshot accept it too; refused when the names or access classes of the granted tools changed
+                         * @enum {string}
+                         */
+                        scope: "new-versions" | "existing-versions";
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description SHA-256 over the RFC 8785 JSON of the tools, sorted by name */
+                            digest: string;
+                            /** @enum {string} */
+                            status: "pending" | "approved" | "rejected";
+                            /**
+                             * @description `run`: a run saw this list and failed closed
+                             * @enum {string}
+                             */
+                            source: "refresh" | "run";
+                            toolCount: number;
+                            /** @description ISO 8601 timestamp */
+                            fetchedAt: string;
+                            approvedAt: string | null;
+                            approvalScope: ("new-versions" | "existing-versions") | null;
+                            rejectedAt: string | null;
+                            /** @description the snapshot a version published now would pin */
+                            current: boolean;
+                            /** @description published versions of your tenant that pinned it */
+                            pinnedVersions: number;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/tool-snapshots/{digest}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a pending tool snapshot (audited as mcp.tools.rejected) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    digest: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description SHA-256 over the RFC 8785 JSON of the tools, sorted by name */
+                            digest: string;
+                            /** @enum {string} */
+                            status: "pending" | "approved" | "rejected";
+                            /**
+                             * @description `run`: a run saw this list and failed closed
+                             * @enum {string}
+                             */
+                            source: "refresh" | "run";
+                            toolCount: number;
+                            /** @description ISO 8601 timestamp */
+                            fetchedAt: string;
+                            approvedAt: string | null;
+                            approvalScope: ("new-versions" | "existing-versions") | null;
+                            rejectedAt: string | null;
+                            /** @description the snapshot a version published now would pin */
+                            current: boolean;
+                            /** @description published versions of your tenant that pinned it */
+                            pinnedVersions: number;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -8676,6 +9276,13 @@ export interface paths {
                             http?: {
                                 tenantServers: string[];
                             };
+                            /** @description pinned tool definitions of the step's HTTP MCP servers: grants and acceptable digests (ADR 0016 section 5) */
+                            toolPins?: {
+                                [key: string]: {
+                                    granted: string[];
+                                    accepted: string[];
+                                };
+                            };
                         };
                     };
                 };
@@ -8864,6 +9471,83 @@ export interface paths {
                             steps: number;
                             toolCalls: number;
                         };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/worker/runs/{id}/mcp-tools-changed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run node: report that the tools of a pinned MCP server differ from the pin (audit entry and pending snapshot)
+         * @description The node fails the step closed on its own; this call lets the control node record what it saw. The digest is recomputed here, the list is bounded and scanned for credentials, and only a server the step holds a pin and a grant for is accepted.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        agentId: string;
+                        server: string;
+                        /** @description digest of the granted tools as the node computed it */
+                        liveDigest: string;
+                        /** @description the tool list the node read (bounded and re-checked); absent when it is too large */
+                        tools?: unknown[];
                     };
                 };
             };

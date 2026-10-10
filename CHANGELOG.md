@@ -8,6 +8,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **Publishing against an HTTP MCP connection needs an approved tool snapshot** (ADR 0016 S3): refresh
+  and approve the connection's tools once, then publish. Existing published versions are not
+  affected. `stdio` and `in-memory` connections publish as before.
 - Docs: ADR 0017 records the owner's answers to its eight follow-up questions: Agent Developers are not
   approvers by default; `agent-engineer` is planned to be renamed to `agent-maintainer` without an alias
   (breaking, before 1.0, with migration of existing bindings in S10 #290); no nested groups and no Entra ID
@@ -39,7 +42,25 @@ All notable changes to this project are documented here. The format follows
   metrics `oax_otel_keep_kept_total{class}` and `oax_otel_keep_evicted_total{reason}` (closed
   labels, added to the cardinality allowlist). Ratio 1 changes nothing. `docs/observability.md`
   documents the behaviour and a collector `tail_sampling` example. No migration.
-
+- **Pinned MCP tool definitions (ADR 0016 slice S3, #233)**: protection against "rug pulls" and tool
+  poisoning. New endpoints `POST /v1/connections/{id}/tools/refresh`, `GET .../tool-snapshots`,
+  `GET .../tool-snapshots/{digest}` and `POST .../{digest}/approve` (`scope`: `new-versions` or
+  `existing-versions`) and `.../reject`; snapshots are the model-visible fields of every tool
+  (`name`, `title`, `description`, `inputSchema`, `outputSchema`, `annotations`), hashed with
+  SHA-256 over their RFC 8785 JSON (new strict canonicalizer with the RFC's test vectors), bounded and
+  refused when they contain a credential. Publish records `toolPins` (digest of the granted tools,
+  part of `expansionDigest`, shown in the version detail) and refuses with `mcp_tools_unreviewed` or
+  `mcp_tool_unknown`; runs compare the live granted tools with the pin, expose none of the
+  connection's tools and fail with `mcp_tools_changed` on any difference (audit `mcp.tools.changed`
+  with names and digests only, a pending snapshot, metric `oax_mcp_tools_changed_total`). An
+  `existing-versions` approval lets published versions accept the new snapshot and is refused
+  (`mcp_tools_access_changed`) when the names or access classes of the tools they hold changed.
+  Versions published earlier keep working and are audited as `mcp.tools.unpinned`;
+  `OAX_MCP_REQUIRE_TOOL_PIN=true` refuses them. Run nodes receive the pins in the handover and report
+  changes to `POST /v1/worker/runs/{id}/mcp-tools-changed`. Migration `0024_mcp_tool_snapshots`
+  (tables `mcp_tool_snapshots`, `mcp_tool_snapshot_acceptances`; down script and snapshot included).
+  The Console gets a Tools view per HTTP connection with a diff against the approved list (EN/DE).
+  OpenAPI and the UI schema types are updated; see `docs/mcp.md`.
 - **Role-binding API (ADR 0014 slice S4, #189, #226)**: `GET/POST /v1/tenants/{id}/role-bindings`,
   `PATCH/DELETE .../{bindingId}` (`inherit` required on POST) and the platform-operator bulk opt-in
   `POST /v1/tenants/{rootId}/role-bindings/enable-inheritance { roles, dryRun }` with a dry run that lists the

@@ -72,6 +72,10 @@ a tool can be narrowed with constraints. Overlapping profile grants merge to the
    undeclared tool. A successful expansion is audited as `agent.profiles.expanded`.
 4. `POST /v1/agents/validate`, the dry run and `POST /v1/policies/evaluate` apply the same expansion,
    so authors see the errors before publishing.
+5. For every `streamable-http` connection the version grants tools on, publish records the pinned
+   tool definitions (`toolPins`, part of `expansionDigest`) and refuses with `mcp_tools_unreviewed`
+   or `mcp_tool_unknown` when there is no approved snapshot or a granted tool is not in it; see
+   [Pinned tool definitions](#pinned-tool-definitions).
 
 `GET /v1/agents/{id}/versions/{version}` returns `expansion` and `expansionDigest`. The agent overview
 shows which profile each grant came from.
@@ -152,6 +156,131 @@ with the category). It takes no URL (only a stored connection), is limited to 10
 per user and replica, needs `connections:write`, tests a platform connection only for platform
 operators, and refuses stdio connections (`400 mcp_test_unsupported`: a test would start a process).
 A test ends after 30 seconds in total (`timeout`) and reads at most 8 MiB per response.
+
+## Pinned tool definitions
+
+Tool names, descriptions and schemas come from a server the platform does not control, and they
+become part of the model's context. A server (or whoever took it over) can change them after you
+reviewed them ("rug pull") or hide instructions in them ("tool poisoning"). Since
+[ADR 0016](adr/0016-mcp-egress-and-authorization.md) section 5 the control node therefore pins them:
+what was reviewed is what runs.
+
+**Snapshot.** A snapshot is the list of tools of an HTTP connection at one moment, reduced to the six
+fields the model can see: `name`, `title`, `description`, `inputSchema`, `outputSchema`,
+`annotations`. Everything else of the wire format (`_meta`, icons, ...) is dropped. Its `digest` is the
+SHA-256 (hex) of the [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) JSON of that list, sorted by
+name; an absent field is omitted, an empty one is not. Any change to any of the six fields, an added,
+removed or renamed tool, or a hidden character in a description gives another digest. The canonical
+form is implemented in `packages/core/src/jcs.ts` (strict: values outside the JSON data model and
+lone surrogates are refused instead of dropped) and checked against the test vectors of the RFC.
+
+Snapshots are stored per connection (`mcp_tool_snapshots`, owned by the tenant of the connection) with
+the status `pending`, `approved` or `rejected`. They are bounded (at most 500 tools, 64 KiB per tool,
+1 MiB in total; more is refused with `422 mcp_tools_too_large`, malformed definitions with
+`422 mcp_tool_invalid`, which includes a list that names a tool twice) and a list that contains
+something that looks like a credential (the patterns of the context guard, or a secret value
+resolved for the connection) is refused with `422 mcp_tools_contain_secret` and not stored.
+
+Two limits to know about. **A server that lists more than 500 tools cannot be pinned**: refresh is
+refused with `mcp_tools_too_large`, so no approved snapshot exists and publish is refused with
+`mcp_tools_unreviewed`; put a narrower server (or a gateway that exposes only the tools an agent
+needs) in front of it. **The credential scan is a safeguard, not a guarantee**: it finds known
+patterns and the secret values resolved for the connection in clear text; a secret that the server
+encodes (base64, split, obfuscated) is not detected. Reviewers read the diff; the platform does not
+send secrets to `tools/list` in the first place.
+
+| Call | Needs | Purpose |
+| --- | --- | --- |
+| `POST /v1/connections/{id}/tools/refresh` | `connections:write` | Connects like a run does (same dispatcher and destination rules) and stores the list as a `pending` snapshot, or finds the one with the same digest. Answers with the category of the connection test and the snapshot summary, never with tool text. Shares the rate limit of the connection test (10 per minute and user). `400 mcp_refresh_unsupported` for stdio connections. |
+| `GET /v1/connections/{id}/tool-snapshots` | `connections:read` | Summaries: digest, status, source (`refresh` or `run`), count, which one is in use, how many published versions of your tenant pinned it. |
+| `GET /v1/connections/{id}/tool-snapshots/{digest}` | `connections:read` | The definitions, the snapshot in use to diff against, the changed tool names and the versions that pinned it. The text is untrusted: show it as data. |
+| `POST .../{digest}/approve` `{ "scope" }` | `connections:write` | `new-versions` or `existing-versions` (below). Audited as `mcp.tools.approved`. |
+| `POST .../{digest}/reject` | `connections:write` | Marks a pending snapshot `rejected` (`mcp.tools.rejected`). A later explicit refresh that sees the same list reopens it. |
+
+Approving needs `connections:write` (admin and integrator), which agent engineers, who publish, do not
+have: whoever publishes an agent cannot approve the tools it will use. A platform connection can only
+be refreshed, approved and rejected by platform operators; tenants can read its snapshots. A
+connection or digest of another tenant answers `404`, exactly like one that does not exist.
+
+**Publish.** The profile expansion records, per connection the version holds grants on,
+`toolPins[<connection>] = { snapshotDigest, toolsDigest, granted }`: the digest of the latest approved
+snapshot, the digest over **the granted tools** of it (exact names, `prefix*` patterns and the tools
+of profile grants, over all steps of the version) and the grants themselves. It is part of
+`expansionDigest` and shown by `GET /v1/agents/{id}/versions/{version}`. Publish is refused with
+`400 mcp_tools_unreviewed` when the connection has no approved snapshot (a pending one does not
+count) and with `400 mcp_tool_unknown` when a granted tool is not in it. A change to a tool that is
+not granted does not change `toolsDigest`.
+
+**Connection identity.** `toolPins` also records the id of the connection the snapshot belongs to.
+`existing-versions` acceptances are honoured only for that connection: a connection of the same
+name at a narrower scope (for example a tenant connection that shadows a platform one) that is
+resolved for a run decides nothing for a version that pinned the other connection; such a run
+accepts the pinned digest only.
+
+**Run.** The gateway of the worker (and of a run node) lists the tools of a pinned server once per
+session, computes the digest over the granted tools it actually received and compares it with the
+version's `toolsDigest` and with the digests the control node resolved as accepted (below). On a
+mismatch it exposes **none** of that connection's tools, refuses calls too (the harness gate calls
+without listing first) and the step fails with `mcp_tools_changed`; the message names the
+connection, never the changed text. The control node then writes the audit entry `mcp.tools.changed`
+(connection, old and new digest, names of the changed tools, no descriptions), stores the live list
+as a `pending` snapshot with source `run` (at most 20 are kept per connection, a list with a
+credential is not stored), and increments `oax_mcp_tools_changed_total` (no labels). There is no
+outbound notification channel in the platform yet: admins find the event in the audit log, the
+`Seen by a run` badge in the Tools view of the connection and the metric. `notifications/tools/list_changed`
+during a session is ignored; the next session sees the change. The definitions that were checked are
+the ones that are exposed: for a pinned server the gateway keeps the verified granted tools of the
+first list and never reads a second answer of the server, and a call to a tool that was not in the
+verified list is refused with `mcp_tools_changed`, so a server cannot answer the check with the
+approved definitions and the model with others.
+
+**Re-approval.** An admin reviews the diff and approves the new snapshot. A list that a *run* reported
+(source `run`) cannot be approved directly (`409 mcp_snapshot_unconfirmed`): an untrusted node may
+have sent it. The admin first fetches the tools (`tools/refresh`); if the server returns exactly that
+list, the snapshot becomes a normal pending one (source `refresh`) and can be approved; if the server
+returns something else, the reported list stays unapproved. The Console disables Approve and says so.
+
+- `new-versions`: only versions published afterwards pin it. Published versions stay blocked.
+- `existing-versions`: every published version that pinned the previous approved snapshot (or one
+  that already accepts it) also accepts the new one. It is refused with
+  `409 mcp_tools_access_changed` (audited as `mcp.tools.approval_denied`) when for any such version
+  the names of the tools it holds or their access classes (the declared class, else derived from the
+  annotations like the gateway does) differ. The versions stay immutable; the decision is the
+  connection-level record `mcp_tool_snapshot_acceptances (from_digest, to_digest)`. Acceptance is
+  transitive along these records and is checked against every version it reaches. At run time the
+  control node resolves, per version, the digests it accepts and hands them to the gateway.
+
+**Recommendation.** Set `OAX_MCP_REQUIRE_TOOL_PIN=true` on new installations: every run then uses
+pinned definitions. The default stays `false` so that upgrades keep running versions that were
+published before pinning existed.
+
+**Compatibility (decision).** Published versions are immutable and are never rewritten:
+
+- A version published before this change has no `toolPins`. It keeps working: the run proceeds with a
+  warning, audited as `mcp.tools.unpinned` (connection, version) once per run and server, until the
+  operator sets `OAX_MCP_REQUIRE_TOOL_PIN=true`, which fails such runs with `mcp_tools_unpinned`.
+  The default is `false`; it is meant to become `true` from v1.0 (ADR 0016, owner question 4).
+  Publish a new version to pin an existing agent. An unchanged re-publish returns the existing
+  version and does not add pins.
+- **Publishing against an HTTP connection now needs a reviewed tool list**, also for agents that
+  published fine before: refresh and approve the connection's tools once, then publish. This is the
+  one behaviour change for existing installations and is listed in the changelog.
+- Connections that cannot be pinned in this slice behave exactly as before: `stdio` connections (a
+  refresh would start a process; container servers come with ADR 0016 S2/W5-5) and `in-memory`
+  servers. They are never reported as unpinned and are not affected by `OAX_MCP_REQUIRE_TOOL_PIN`.
+- A version whose connection is shadowed by a connection of the same name with another scope at run
+  time is compared against the pinned digest of the version and the acceptances of the connection
+  that is resolved; if that connection offers different tools the run fails closed.
+- Run nodes get the pins in their handover (digests only) and enforce them in their gateway; they
+  report the list they read to `POST /v1/worker/runs/{id}/mcp-tools-changed`. A node is untrusted, so
+  the control node recomputes the digest, bounds and scans the list, accepts the report only for a
+  server the step holds a pin and a grant for, ignores a report of an accepted digest and records at
+  most 10 changes per run. Until the control-node relay of ADR 0016 S4 the node's own check is
+  cooperative: a compromised node can ignore it.
+
+Configuration: `OAX_MCP_REQUIRE_TOOL_PIN` (see [`configuration.md`](configuration.md)). Migration
+`0024_mcp_tool_snapshots` adds the two tables; the down script drops them (published versions keep
+their `toolPins`, which an older build ignores).
 
 ## Stdio MCP servers
 

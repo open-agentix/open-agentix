@@ -58,13 +58,20 @@ export const versionDetailDto = (v: AgentVersionRow) => ({
 /** Profile expansion stored with a version (absent for versions published before profiles). */
 function expansionOf(
   definition: unknown,
-): Partial<Pick<PublishedExpansion, 'expansion' | 'expansionDigest'>> {
-  const d = (definition ?? {}) as { expansion?: unknown; expansionDigest?: unknown };
+): Partial<Pick<PublishedExpansion, 'expansion' | 'expansionDigest' | 'toolPins'>> {
+  const d = (definition ?? {}) as {
+    expansion?: unknown;
+    expansionDigest?: unknown;
+    toolPins?: unknown;
+  };
   return {
     ...(Array.isArray(d.expansion)
       ? { expansion: d.expansion as PublishedExpansion['expansion'] }
       : {}),
     ...(typeof d.expansionDigest === 'string' ? { expansionDigest: d.expansionDigest } : {}),
+    ...(d.toolPins && typeof d.toolPins === 'object'
+      ? { toolPins: d.toolPins as NonNullable<PublishedExpansion['toolPins']> }
+      : {}),
   };
 }
 

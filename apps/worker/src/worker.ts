@@ -205,6 +205,43 @@ export class Worker {
           });
           throw new OaxError('mcp_stdio_requires_isolation', stdio[0]!.message, stdio);
         }
+        // ADR 0016 S3: pinned tool definitions. A version published before pinning (or against a
+        // server that could not be pinned) runs with a warning unless the operator requires pins.
+        const unpinned = await this.services.mcpTools.unpinnedServers(
+          prepared.definition,
+          toolScope,
+        );
+        for (const server of unpinned)
+          await this.services.audit.append({
+            actor: `worker:${this.id}`,
+            tenantId: run.tenantId,
+            action: 'mcp.tools.unpinned',
+            target: runId,
+            runId,
+            payload: {
+              connection: server,
+              version: prepared.definition.version,
+              required: this.ctx.config.mcp.requireToolPin,
+            },
+          });
+        if (unpinned.length > 0 && this.ctx.config.mcp.requireToolPin)
+          throw new OaxError(
+            'mcp_tools_unpinned',
+            `this version pinned no tool definitions of MCP connection "${unpinned[0]}" (OAX_MCP_REQUIRE_TOOL_PIN); publish it again after approving the connection's tools`,
+          );
+        tools.pinTools(
+          await this.services.mcpTools.pinsFor(prepared.definition, toolScope),
+          async (e) =>
+            this.services.mcpTools.reportChange({
+              runId,
+              actor: `worker:${this.id}`,
+              definition: prepared.definition,
+              scope: toolScope,
+              server: e.server,
+              liveDigest: e.liveDigest,
+              tools: e.tools,
+            }),
+        );
         const scope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
         const telemetry = executorTelemetry({
           runId,

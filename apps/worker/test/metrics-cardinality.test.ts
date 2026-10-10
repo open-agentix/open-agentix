@@ -143,6 +143,7 @@ const ALLOWED: Record<string, Record<string, Set<string> | RegExp>> = {
   authz_epoch_rejected_total: { reason: oneOf('stale', 'invalid') },
   mcp_stdio_violations: {},
   mcp_stdio_refused_total: { code: slug },
+  mcp_tools_changed_total: {},
   role_bindings_reconcile_fixes_total: { kind: slug, trigger: slug },
   role_bindings_reconcile_runs_total: { trigger: slug, outcome: slug },
 };

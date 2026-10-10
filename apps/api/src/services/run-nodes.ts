@@ -233,11 +233,37 @@ export class RunNodesService {
     return out;
   }
 
-  private async runContext(runId: string) {
+  async runContext(runId: string) {
     const [run] = await this.ctx.db.select().from(runs).where(eq(runs.id, runId));
     if (!run) throw notFound('run');
     const { definition } = await this.agents.definitionOf(run.agentVersionId);
     return { run, definition };
+  }
+
+  /** Resolves the tool pins of a step's servers; set by `createServices` (it needs the snapshots). */
+  pinResolver:
+    | ((
+        definition: AgentDefinition,
+        scope: { tenantId: string; teamId: string | null; agentId: string },
+        servers: ReadonlySet<string>,
+      ) => Promise<Record<string, { granted: readonly string[]; accepted: readonly string[] }>>)
+    | undefined;
+
+  private async toolPinsOf(
+    definition: AgentDefinition,
+    scope: { tenantId: string; teamId: string | null; agentId: string },
+    agent: AgentSpec,
+  ): Promise<{ toolPins?: Record<string, { granted: string[]; accepted: string[] }> }> {
+    const pins = await this.pinResolver?.(definition, scope, this.serversOf(agent));
+    if (!pins || Object.keys(pins).length === 0) return {};
+    return {
+      toolPins: Object.fromEntries(
+        Object.entries(pins).map(([k, v]) => [
+          k,
+          { granted: [...v.granted], accepted: [...v.accepted] },
+        ]),
+      ),
+    };
   }
 
   private stripSecrets(cfg: McpServerConfig): McpServerConfig {
@@ -348,6 +374,7 @@ export class RunNodesService {
         ? { stdio: { tenantServers: tenantStdio, allowlist: cfg.mcp.stdioCommands } }
         : {}),
       http: { tenantServers: tenantHttp },
+      ...(await this.toolPinsOf(definition, stdioScope, agent)),
     };
     const traceContext = dispatchTraceContext(run);
     const otelSession: StoredNodeSession | null = traceContext
