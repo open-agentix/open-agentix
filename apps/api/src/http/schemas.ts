@@ -771,9 +771,14 @@ export const TenantSchema = z.object({
   createdAt: Iso,
 });
 export const TenantCreateBody = z.object({
+  parentId: Id.optional().describe(
+    'create a sub-tenant below this tenant. Needed for everybody but platform operators (who ' +
+      'create organisations without it): the caller must hold an inheriting `admin` binding on ' +
+      'the parent or an ancestor (403 `inheritance_required` otherwise)',
+  ),
   slug: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
   name: z.string().min(1).max(200),
-  monthlyBudgetUsd: z.number().positive().optional(),
+  monthlyBudgetUsd: z.number().positive().optional().describe('platform operators only'),
   admin: z
     .object({
       email: z.string().email(),
@@ -781,7 +786,7 @@ export const TenantCreateBody = z.object({
       password: z.string().min(12).max(200),
     })
     .optional()
-    .describe('first local administrator of the new tenant'),
+    .describe('first local administrator of the new tenant (platform operators only)'),
 });
 export const TenantPatchBody = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -877,6 +882,24 @@ export const ActingTenantSchema = z.object({
       'breadcrumb, root first, ending with the acting tenant itself; ancestors by name only',
     ),
 });
+const BindingSourceSchema = z
+  .enum(['direct', 'inherited', 'attached', 'team', 'agent', 'platform'])
+  .describe(
+    '`direct`: bound on the node; `inherited`: bound on an ancestor with `inherit = true`; ' +
+      '`team` / `agent`: a team membership or agent binding of the node',
+  );
+const EffectiveBindingSchema = z.object({
+  role: z.string(),
+  teamId: Id.nullable(),
+  tenantId: Id.describe('the node the role is bound on'),
+  tenantSlugPath: z.string(),
+  useCase: z.string().nullable().describe('use case restriction; null = the whole node'),
+  inherit: z
+    .boolean()
+    .describe('true: the binding also applies to every descendant of its node (opt-in)'),
+  expiresAt: Iso.nullable().describe('end of the binding; null = does not expire'),
+  source: BindingSourceSchema,
+});
 export const MeSchema = z.object({
   user: UserSchema,
   tenant: TenantSchema.pick({ id: true, slug: true, name: true }).describe(
@@ -890,26 +913,7 @@ export const MeSchema = z.object({
   kind: z.enum(['user', 'token']),
   permissions: z.array(z.string()),
   bindings: z
-    .array(
-      z.object({
-        role: z.string(),
-        teamId: Id.nullable(),
-        tenantId: Id.describe('the node the role is bound on'),
-        tenantSlugPath: z.string(),
-        useCase: z.string().nullable().describe('use case restriction; null = the whole node'),
-        inherit: z
-          .boolean()
-          .describe('true: the binding also applies to every descendant of its node (opt-in)'),
-        expiresAt: Iso.nullable().describe('end of the binding; null = does not expire'),
-        source: z
-          .enum(['direct', 'inherited', 'attached', 'team', 'agent', 'platform'])
-          .describe(
-            '`direct`: bound on the acting node; `inherited`: bound on an ancestor with ' +
-              '`inherit = true` (read permissions only until ADR 0014 S5); `team` / `agent`: a ' +
-              'team membership or agent binding of the acting node',
-          ),
-      }),
-    )
+    .array(EffectiveBindingSchema)
     .describe('the grants that apply at the acting node, anchored at the node they are bound on'),
   visibleTenantCount: z
     .number()
@@ -918,6 +922,49 @@ export const MeSchema = z.object({
   installationMode: z
     .enum(['single', 'multi'])
     .describe('`multi` when the caller can act in more than one tenant, else `single`'),
+});
+
+export const AccessQuery = z.object({
+  tenant: z
+    .string()
+    .min(1)
+    .max(2048)
+    .optional()
+    .describe('tenant id or slug path; the acting tenant when omitted'),
+});
+export const UserAccessQuery = z.object({ userId: Id });
+export const AccessSchema = z.object({
+  tenant: RowTenantSchema,
+  user: z
+    .object({ id: Id, email: z.string(), displayName: z.string() })
+    .nullable()
+    .describe('the user the answer is about; null for `/v1/me/access` (the caller)'),
+  platformAdmin: z.boolean(),
+  limitedByToken: z
+    .boolean()
+    .describe('true when the scopes of the API token removed permissions the bindings give'),
+  bindings: z
+    .array(
+      z.object({
+        role: z.string(),
+        teamId: Id.nullable(),
+        agentId: Id.nullable(),
+        tenantId: Id.describe('the node the role is bound on'),
+        tenantSlugPath: z.string(),
+        inherit: z.boolean(),
+        expiresAt: Iso.nullable(),
+        source: BindingSourceSchema,
+      }),
+    )
+    .describe('the grants that apply at the tenant, with the node each one is bound on'),
+  permissions: z
+    .array(
+      z.object({
+        permission: z.string(),
+        sources: z.array(BindingSourceSchema).describe('the kinds of binding that give it'),
+      }),
+    )
+    .describe('effective permissions at the tenant (token scopes applied), with their sources'),
 });
 
 export const TenantTreeQuery = z.object({

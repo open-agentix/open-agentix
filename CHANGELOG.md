@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **Write inheritance (ADR 0014 slice S5, #190)**: the read-only clamp on inherited bindings is removed. An
+  inheriting binding (`inherit = true`, opt-in per binding, default off) now gives its whole role at every node
+  below it, so an inheriting tenant admin administers its subtree. Clamp rules that stay, documented in
+  `docs/tenancy.md` and tested: the role is the ceiling, down-only and opt-in, no grant above one's own role
+  or outside one's coverage, no self-grant, the last inheriting admin of a root stays, operations naming a node
+  are decided on that node and never on the acting node, token scopes intersect. Nothing changes for installations
+  that do not use inheritance (no binding reaches below its node; `OAX_ROLE_BINDINGS_READ=legacy` is untouched).
+  **Before setting `OAX_ROLE_BINDINGS_READ=bindings` with inheriting bindings in place, review who holds them:
+  they now carry write authority below their node.**
+
 - **The OTLP trace exporter now sends through the outbound dispatcher** (ADR 0015 S7, #212): purpose
   `telemetry`, so routes, proxies, trust bundles, client certificates (mTLS), the air-gapped allowlist and
   the cloud metadata veto apply; redirects are never followed and request time and response size are
@@ -43,7 +53,11 @@ All notable changes to this project are documented here. The format follows
   and `oax_mcp_relay_sessions`; audit `mcp.relay.call`, `mcp.relay.denied`, `mcp.relay.refused`. Migration
   `0025_approvals_consumed_at` (down script included; approvals decided before the upgrade count as used).
   Approvals whose arguments were redacted are flagged (`argsRedacted`) in the API, the audit entry and the approval card. Decides ADR 0012 open question 2.
-
+- Tenant creation and the role-binding API take the organisation's tree lock and binding lock in the two-key
+  advisory form `(namespace, hashtext(rootId))` (#288 item 4); old and new replicas do not exclude each other
+  during a rolling deploy, so do not create nodes or grants while deploying.
+- `PATCH /v1/tenants/{id}` and `POST /v1/tenants` are no longer guarded by the route-level `settings:write` check
+  but by the service, on the node the request names (operators with `settings:write` as before).
 - **Publishing against an HTTP MCP connection needs an approved tool snapshot** (ADR 0016 S3): refresh
   and approve the connection's tools once, then publish. Existing published versions are not
   affected. `stdio` and `in-memory` connections publish as before.
@@ -70,6 +84,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Sub-tenants by tenant admins and access explanation (ADR 0014 slice S5, #190)**:
+  `POST /v1/tenants { parentId }` for an inheriting `admin` on the parent or an ancestor (`403 inheritance_required`
+  for a direct admin; depth, node and slug limits as for operators; `tenant.created` audited in the new node's
+  partition; budget, first admin and organisations stay operator-only), `PATCH /v1/tenants/{id}` (name) by an
+  inheriting `admin` on the node in the path or an ancestor, `GET /v1/me/access?tenant=` and `GET /v1/tenants/{id}/access?userId=`
+  (effective permissions with the bindings that give them; the basis for the `actions` block of #160). Both tenant
+  routes stay operator-only unless `OAX_ROLE_BINDINGS_READ=bindings`. OpenAPI and UI schema types regenerated.
+  No migration.
 - **Sampling with always-keep classes (ADR 0015 slice S6, #211)**: `OAX_OTEL_SAMPLE_RATIO`
   (default `1`, validated 0 to 1) samples by the run's trace id, so the api and the worker decide
   alike. Below 1, `OAX_OTEL_KEEP` (default `error,deny,approval,budget,guard`) still exports the

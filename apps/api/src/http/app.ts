@@ -31,6 +31,7 @@ import { verifyStreamToken } from '../auth/stream-token.js';
 import { decorateOpenApi } from './openapi-decorate.js';
 import { registerAgentRoutes } from './routes/agents.js';
 import { registerAuditRoutes } from './routes/audit.js';
+import { registerAccessRoutes } from './routes/access.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerDemoRoutes } from './routes/demo.js';
@@ -314,6 +315,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   registerAuditRoutes(typed, deps);
   registerUserRoutes(typed, deps);
   registerTenantRoutes(typed, deps);
+  registerAccessRoutes(typed, deps);
   registerDemoRoutes(typed, deps);
   registerBudgetRoutes(typed, deps);
   registerWorkerRoutes(typed, deps);

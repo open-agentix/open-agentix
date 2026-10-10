@@ -63,8 +63,8 @@ organisation therefore cost the same queries and give the same status and body (
 
 Permissions at the acting node are the **effective bindings there** (ADR 0014 section 3.2), not the
 roles of the home node: an `admin` binding on the home node does not make anybody an admin of the
-child, an inheriting binding on an ancestor does, but only for **read** permissions
-(`INHERITED_READ_ONLY`: `*:read` and `audit:verify`) until slice S5 lifts the clamp. API token
+child, an inheriting binding on an ancestor does, with the **whole role** (write inheritance, slice S5;
+the read-only clamp of S2 to S4 is gone, see "Write inheritance" below). API token
 scopes still intersect with the effective permissions. A platform operator acting in another node
 keeps the roles of its home tenant (`homeTenantId` on the principal), as before.
 
@@ -218,8 +218,7 @@ refuses to start) chooses what authorises. **The default changes nothing for any
 - `legacy`: `users.global_roles`, team memberships and agent bindings of the home node decide, the
   resolver only shadows (`oax_role_bindings_shadow_total{authoritative="legacy"}`).
 - `bindings`: the principal's raw grants of its home organisation are loaded (one statement) and the
-  resolver (`effectiveAt`, ADR 0014 3.2) decides at the **acting node**, with the read-only clamp for
-  inherited bindings; the legacy sources are compared (`authoritative="bindings"`), so a mirror that
+  resolver (`effectiveAt`, ADR 0014 3.2) decides at the **acting node**; the legacy sources are compared (`authoritative="bindings"`), so a mirror that
   drifted (a role in `global_roles` without its binding, or a binding the legacy model does not
   know) shows up as a `mismatch`. Platform operators are unchanged: every node, the roles of the
   home tenant (the implicit "admin everywhere" of ADR 0013 7.1 is a later decision).
@@ -311,10 +310,9 @@ is ignored): an unknown or invisible node is the same `404`, a visible node with
 the organisation's tree lock in shared mode and a per-organisation exclusive binding lock, so a grant
 never races a node creation, two binding writes never interleave (the grantor's coverage and the
 last-admin check see every earlier write), and a PATCH or DELETE locks the binding row. The effective
-permissions come from the same resolver as the request path, **read-only clamp included**: an
-administrator who only holds an inheriting binding on an ancestor reads the subtree but cannot grant
-there until slice S5 lifts the clamp; the coverage check for `inherit` is already written to the
-final rule. Token scopes intersect (a token scoped to `users:write` alone cannot grant `operator`).
+permissions come from the same resolver as the request path: since S5 an administrator who holds an
+inheriting binding on an ancestor also grants there (`users:write` is inherited with the role), within
+rules 2 and 6 below; the coverage check for `inherit` is the final rule. Token scopes intersect (a token scoped to `users:write` alone cannot grant `operator`).
 Team and agent scoped bindings never give the right to grant.
 
 | Rule (ADR 0014 section 7) | Where / error |
@@ -353,6 +351,71 @@ It runs in one transaction under the same locks and writes one `tenant.role_bind
 plus `tenant.inheritance_enabled`. Everybody but a platform operator gets the same `403` for any tenant
 id; an operator's API token needs the scope `users:read` for a dry run and `users:write` to apply.
 
+## Write inheritance and sub-tenants (ADR 0014, slice S5)
+
+The read-only clamp is gone: an inheriting binding (`inherit = true`, opt-in per binding as before) gives
+its **whole role** at every node below its own, so an inheriting `admin` of a division administers the
+division and its descendants. Nothing changes for an installation that does not use inheritance: without
+`inherit = true` no binding reaches below its node, and with `OAX_ROLE_BINDINGS_READ=legacy` (the
+default) the read path is untouched; the two tenant routes below stay operator-only there, as before.
+
+**What stays clamped (the rules, each with a test).**
+
+1. **The role is the ceiling.** An inherited binding gives exactly what the same role gives held at the
+   node, minus restrictions (S9), never more. Property tests: `packages/core/test/tenant-roles.test.ts`.
+2. **Down only, by opt-in.** Never up, never sideways, never across organisations, never from team or
+   agent bindings (those are node-local). Same property tests, against a parent-walking reference.
+3. **No grant above one's own role, none outside one's coverage.** A grantor gives only roles whose
+   permissions it holds at the node, and an inheriting grant needs an inheriting binding of at least that
+   role on the node or an ancestor (grant rules 2 and 6, `apps/api/test/role-binding-api.test.ts`,
+   `grant-authority.test.ts`). Nobody grants to themselves; the last inheriting admin of a root stays.
+4. **Operations that name a node are decided on that node**, from grants re-read inside the transaction,
+   never on the acting node (`X-OAX-Tenant`), and an invisible node is the same `404` as an unknown one.
+5. **Budget, secret references and organisations stay operator-only.** A tenant admin renames and creates
+   sub-tenants; it does not set ceilings, secret patterns or create organisations.
+6. **Token scopes still intersect** with the effective permissions of every node; creating and renaming
+   need the `settings:write` scope.
+
+**Creating a sub-tenant.** `POST /v1/tenants { parentId, slug, name }`. With `OAX_ROLE_BINDINGS_READ=bindings`
+a non-operator needs an **inheriting** `admin` binding (no use case, unexpired) on the parent or an ancestor,
+so nobody creates a node they cannot administer: `403 inheritance_required` for a direct admin,
+`403 forbidden` for anybody else, `404 tenant` for a parent the caller cannot see (same body as an unknown
+id). `admin` and `monthlyBudgetUsd` in the body are operator-only (`403`), organisations (no `parentId`) too.
+The limits are the same for everybody: `OAX_TENANT_MAX_DEPTH` (`422 tenant_depth_exceeded`),
+`OAX_TENANT_MAX_NODES_PER_ROOT` (`422 tenant_node_limit_exceeded`, race-free: creations are serialised by
+the installation-wide creation lock) and the slug rules (`400`; a slug that is taken or overlaps another in
+secret names is `409 this slug is not available` for non-operators, **without naming the other tenant**;
+the bare fact that a slug is taken cannot be hidden while slugs are installation-wide, W13-7). It runs
+in one transaction with the organisation's tree lock held **shared** (ADR 0014 6.2), re-reads the creator's
+grants under it, and writes `tenant.created { slug, name, authority, parentId, depth }` in the partition
+of the **new** node. The insert bumps the authz epoch (trigger `0021`), so the creator acts in the new node
+with its next request. Not done: the `parent_admins_do_not_inherit` warning for operators.
+
+**Renaming.** `PATCH /v1/tenants/{id} { name }`: an **inheriting** `admin` binding on the node or an ancestor
+(`403 inheritance_required` for a direct admin, `403` for anybody else), `404` for an invisible node;
+`monthlyBudgetUsd` and `secretRefs` answer `403` to everybody but operators. Requiring the inheriting form
+keeps installations that do not use inheritance unchanged. Audited as `tenant.updated` in the node's partition.
+
+**Why may this user do that?**
+
+```text
+GET /v1/me/access?tenant=<id|slug path>          own permissions at a node (default: the acting node)
+GET /v1/tenants/{id}/access?userId=<uuid>        another user's, needs users:read on {id}
+```
+
+Both answer `{ tenant, user, platformAdmin, limitedByToken, bindings[], permissions[] }`: every
+permission with the kinds of binding that give it (`direct`, `inherited`, `team`, `agent`) and every
+binding with the node it is bound on, `inherit` and expiry. They use the resolver of the request path, so
+they cannot disagree with what is enforced (a test compares them with `GET /v1/me` at every node); this is
+the basis for the `actions` block of #160. A node the caller cannot see is `404 tenant`, a user it cannot
+see `404 user` (the grantee visibility of the grant API), token scopes are applied and reported as
+`limitedByToken`.
+
+**Locks.** The tree lock and the binding lock now use the two-key form `(namespace, hashtext(rootId))`
+(`apps/api/src/services/tree-lock.ts`, #288 item 4). Replicas of the old and the new version do not
+exclude each other during a rolling deploy for the duration of the rollout; do not create nodes and
+grants at the same time as deploying.
+
 ## Audit
 
 The hash chain is global (one chain keeps ordering and tamper detection simple); every entry carries
@@ -363,7 +426,7 @@ Merkle proofs are on the roadmap.
 
 ## Operations
 
-- Create the first extra tenant: `POST /v1/tenants` with `{ "slug": "acme", "name": "Acme",
+- Create the first extra organisation: `POST /v1/tenants` with `{ "slug": "acme", "name": "Acme",
   "admin": { "email": "...", "displayName": "...", "password": "..." } }` as the bootstrap admin.
 - LDAP/OIDC users are created in the default tenant; move them with a tenant specific IdP mapping
   (planned) or create local users per tenant.

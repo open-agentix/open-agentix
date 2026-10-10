@@ -1,6 +1,6 @@
 # ADR 0014: Role inheritance over the tenant tree
 
-- Status: Proposed. Slices S1, S1b, S2, S3 and S4 are implemented (see "Implementation status" below); S5 to S10 are open.
+- Status: Proposed. Slices S1, S1b, S2, S3, S4 and S5 are implemented (see "Implementation status" below); S6 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
   resolver pattern); wave 13 of the [implementation plan](../IMPLEMENTATION-PLAN.md)
@@ -24,6 +24,7 @@
 | S2 | implemented behind a flag (PR for #187, #227) | Acting node for every visible tenant, read-only inheritance, authz epoch and the resolver as read path **behind `OAX_ROLE_BINDINGS_READ=legacy|bindings`** (default `legacy`). Migration **`0021_authz_epoch`**. See "S2" below. |
 | S3 | implemented (PR for #188) | `?scope=node` or `subtree` and `?tenantId=` on the list routes, `tenant` on their rows. No migration. See "S3" below. |
 | S4 | implemented (PR for #189, #226) | Role-binding API, grant rules 1 to 9, audit, bulk opt-in; migration **`0023_trb_source`** (mirror rows get their own key). See "S4" below. |
+| S5 | implemented (PR for #190) | Write inheritance (clamp removed), `POST /v1/tenants { parentId }` and `PATCH /v1/tenants/{id}` for tenant admins, `GET /v1/me/access` and `GET /v1/tenants/{id}/access`. No migration. See "S5" below. |
 
 Differences between the plan below and what S1 shipped:
 
@@ -40,7 +41,7 @@ Differences between the plan below and what S1 shipped:
   narrowed `permissions` (never wider than the role, `bindingPermissions`).
 - The resolver takes the acting node's placement (`id`, `rootId`, `path`) instead of a tree
   snapshot: the chain comes from the path. `visibleNodeIds` takes the snapshot for the visible set.
-  The inheritance clamp (`INHERITED_READ_ONLY`, default on) and role restrictions are already in the
+  The inheritance clamp (`INHERITED_READ_ONLY`, default on; removed by S5) and role restrictions were already in the
   pure resolver and its property tests; nothing feeds restrictions before S9.
 - `implicitPlatformAdmin` (default `true`, ADR 0013 7.1) is switched off by the shadow check
   because today a platform operator acts with the roles of its home tenant.
@@ -178,9 +179,9 @@ S4 (role-binding API; #189, #226):
   one exists, grants included.
 - **Where the rules live.** `TenantRoleBindingsService` (`apps/api/src/services/tenant-role-bindings.ts`)
   evaluates every rule on the node of the path, from grants re-read inside the transaction, with the
-  request-path resolver (clamp included: until S5 an inheriting binding above the node gives no
-  `users:write`, so grants happen on the node the grantor is directly bound on; the coverage check for
-  `inherit` is already the final rule). Writes hold the tree lock of the organisation shared and a
+  request-path resolver (with the S4 clamp an inheriting binding above the node gave no
+  `users:write`, so grants happened on the node the grantor was directly bound on; S5 removed the clamp;
+  the coverage check for `inherit` was already the final rule). Writes hold the tree lock of the organisation shared and a
   per-organisation exclusive binding lock; that lock also makes the last-admin check (rule 8) race
   free. Rule 3 (use-case admins) and rule 7 (`pentest`) are not reachable before S8 and S6: use-case
   bindings are `422 use_case_bindings_unsupported`, `pentest` is not an accepted role.
@@ -195,6 +196,40 @@ S4 (role-binding API; #189, #226):
 - Tests: `apps/api/test/role-binding-api.test.ts` (one refusal per rule, enumeration parity, scoped
   tokens, last-admin race, audit partitions, survival of grants across `global_roles` changes and home
   moves), `migration-trb-source.test.ts`, and the updated `binding-reconcile.test.ts`.
+
+S5 (write inheritance and sub-tenant creation; #190):
+
+- **Clamp removed.** `INHERITED_READ_ONLY` and `ResolveOptions.clampInherited` are gone; an inherited binding
+  gives its role's permissions at the node (after restrictions). The clamp rules that remain are written in
+  `docs/tenancy.md` ("Write inheritance and sub-tenants"): role as ceiling, down-only opt-in, no grant above
+  one's own role, node-named operations decided on that node, operator-only budget/secret references/
+  organisations, token scopes. The route-table test now compares an inherited admin with a direct admin on
+  every permission route and checks that a viewer (inherited) is refused every write.
+- **`POST /v1/tenants { parentId }`** (`TenantsService.createFromRequest`): operators as before (they also create
+  sub-tenants over HTTP now); everybody else only with `OAX_ROLE_BINDINGS_READ=bindings` (with `legacy` it is
+  the same `403` as before), only below a parent, and only with an inheriting `admin` binding on the parent or
+  an ancestor, **re-read inside the transaction** under the shared tree lock, evaluated on the parent of the
+  body (confused deputy tests). `403 inheritance_required` only when the caller is a direct admin of the parent.
+  `admin`, `monthlyBudgetUsd` and a fixed `id` are operator-only. Depth, node limit and slug rules are shared
+  with operators; a slug conflict is answered without naming the other tenant. `tenant.created` carries
+  `authority: platform | inheriting_admin`.
+- **`PATCH /v1/tenants/{id}`**: `name` by an **inheriting** `admin` binding on the node in the path or an ancestor
+  (section 4.2 "tenant admin"; a direct admin gets `403 inheritance_required`, so installations that do not use
+  inheritance see no change); `monthlyBudgetUsd` and `secretRefs` stay operator-only. The route is `authenticated`; the permission is
+  decided in the service on the path node.
+- **Access explanation** (`AccessExplainService`): `GET /v1/me/access?tenant=` and
+  `GET /v1/tenants/{id}/access?userId=` use `appliedAt` (the request-path resolver); the user variant needs
+  `users:read` at the path node and the rule-4 grantee visibility.
+- **Shared code.** `grant-authority.ts` holds what the grant API, creation, rename and the explanation share
+  (`loadActor`, `permissionsAt`, `coversSubtree`, `isInheritingAdminAt`, `visibleUser`); `tree-lock.ts` holds the
+  two-key tree and binding locks (#288 item 4).
+- **Follow-ups looked at.** #288 item 4 done (two-key locks). #281 item 3 (subtree mode needs the permission at
+  the acting node) is documented in `docs/tenancy.md` already; items 1, 2, 4 to 6 and #273, #288 items 1 to 3, 5
+  and 6 are not S5 and stay open (#288 item 1, the last-admin guard for `global_roles`/disable/delete, becomes
+  more relevant now that administrators below a root can be created by inheriting admins; it concerns roots
+  only).
+- Not in S5: the `parent_admins_do_not_inherit` warning for operators, `actions` on detail responses (A6 #160
+  builds on the access endpoints), node deletion and moves (S10).
 
 ## Context
 
@@ -336,7 +371,7 @@ return out
   permissions after restrictions), `useCase` and `source`. `hasPermission`, `visibleTeams` and
   `visibleAgents` read `permissions` instead of `ROLE_PERMISSIONS[role]`; with no restrictions
   both are identical, so every existing service keeps working unchanged.
-- **Read-only clamp (first slices only).** Until slice S5 (section 12) lifts it, bindings with
+- **Read-only clamp (slices S2 to S4 only; removed by S5).** Until slice S5 (section 12) lifted it, bindings with
   `source = inherited | attached` are clamped to the read permissions
   `*:read` and `audit:verify` (`INHERITED_READ_ONLY`), so the first slices can ship subtree reads
   without any write authority flowing down. The clamp is one constant and one test.
@@ -630,7 +665,7 @@ so the chain records where bindings came from.
 | **Cross-organisation leakage** | same-organisation trigger on bindings; cross-organisation moves remove bindings of other-organisation users (ADR 0013 9.2) |
 | **Token scope bypass** | token scopes intersect with effective permissions at every node |
 | **Upward leakage through aggregates** | usage of ancestors only as the tightest remaining headroom number (ADR 0013 7.4); `scope=subtree` never includes ancestors or siblings; counts in the tree endpoint only for visible nodes |
-| **Clamp regression** (write authority flowing down before S5) | `INHERITED_READ_ONLY` constant with a route-table test: with the clamp on, every write route is `403` for a user whose only binding is inherited |
+| **Write authority flowing down by accident** | since S5 an inherited binding gives its role, not more: property tests (role as ceiling, down-only opt-in), a route-table walk comparing an inherited admin with a direct admin and an inherited viewer, and the grant rules (no grant above one's own role, coverage for `inherit`, no self-grant, last admin) |
 
 ### 12. Implementation slices
 

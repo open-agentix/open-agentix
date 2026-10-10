@@ -19,6 +19,7 @@ import { ModelsService } from './models.js';
 import { RunNodesService } from './run-nodes.js';
 import { RunsService } from './runs.js';
 import { SubtreeScopes } from './subtree-scope.js';
+import { AccessExplainService } from './access-explain.js';
 import { TenantRoleBindingsService } from './tenant-role-bindings.js';
 import { TenantsService } from './tenants.js';
 
@@ -39,6 +40,7 @@ export interface Services {
   guidelines: GuidelinesService;
   tenants: TenantsService;
   roleBindings: TenantRoleBindingsService;
+  accessExplain: AccessExplainService;
   models: ModelsService;
   mcpTest: McpTestService;
   mcpTools: McpToolsService;
@@ -111,6 +113,7 @@ export function createServices(ctx: AppContext): Services {
     guidelines,
     tenants,
     roleBindings: new TenantRoleBindingsService(ctx, audit, identity),
+    accessExplain: new AccessExplainService(ctx),
     models,
     mcpTest,
     mcpTools,
