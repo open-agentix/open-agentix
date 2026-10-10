@@ -404,6 +404,7 @@ export const connections: Connection[] = [
       headerSecrets: { authorization: 'TICKETS_TOKEN' },
       tools: ['get_ticket', 'update_ticket'],
     },
+    warnings: [],
     createdAt: iso(-86_400_000),
     updatedAt: iso(-3_600_000),
   },

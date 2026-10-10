@@ -12,8 +12,15 @@ import {
   type TenantActor,
   type ToolCallRequest,
 } from '@openagentix/core';
-import { McpServerConfigSchema, type McpServerConfig } from '@openagentix/mcp';
-import { assertConnectionAllowed } from '../airgap.js';
+import {
+  McpServerConfigSchema,
+  checkStdioConfig,
+  isTenantScope,
+  stdioError,
+  type McpServerConfig,
+} from '@openagentix/mcp';
+import { findStdioViolations, inlineStdioSteps, stdioIsolationMessage } from '../stdio.js';
+import { assertConnectionAllowed, stdioAirgapContext, stdioAirgapProblem } from '../airgap.js';
 import {
   CATALOG_PROVIDER_FOR,
   ProviderSettingsSchema,
@@ -139,18 +146,29 @@ export class CatalogService {
 
   /** Names of the MCP servers of a run that come from PLATFORM-scope connections. */
   async platformMcpNames(scope: RunScope): Promise<Set<string>> {
-    return new Set(
-      (await this.connectionsForRun('mcp', scope))
-        .filter((c) => c.scope === 'platform')
-        .map((c) => c.name),
-    );
+    return (await this.mcpRunConfigs(scope)).platformNames;
   }
 
   /** MCP server configs for a run (secrets stay references). */
   async mcpConfigs(scope: RunScope): Promise<McpServerConfig[]> {
-    return (await this.connectionsForRun('mcp', scope)).map((c) =>
-      McpServerConfigSchema.parse(c.config),
-    );
+    return (await this.mcpRunConfigs(scope)).configs;
+  }
+
+  /**
+   * The MCP server configs of a run together with the names that come from PLATFORM-scope
+   * connections, both from ONE resolution. The worker decides by name which stdio servers it may
+   * start (ADR 0016 S0); two separate (cached) reads could disagree when a tenant creates or
+   * deletes a connection that shadows a platform one in between, and the worker would then start
+   * the tenant's command as if it were the operator's.
+   */
+  async mcpRunConfigs(
+    scope: RunScope,
+  ): Promise<{ configs: McpServerConfig[]; platformNames: Set<string> }> {
+    const rows = await this.connectionsForRun('mcp', scope);
+    return {
+      configs: rows.map((c) => McpServerConfigSchema.parse(c.config)),
+      platformNames: new Set(rows.filter((c) => c.scope === 'platform').map((c) => c.name)),
+    };
   }
 
   /**
@@ -267,7 +285,127 @@ export class CatalogService {
     }
     // Air-gapped mode: the endpoint must be on the allowlist before the connection is stored.
     assertConnectionAllowed(kind, name, stored);
+    if (kind === 'mcp') this.assertStdioAllowed(name, scope, stored);
     return stored;
+  }
+
+  /**
+   * ADR 0016 S0: a tenant-defined stdio connection needs an allowlisted absolute command, no
+   * always-refused program and no loader or interpreter hook in its environment; in air-gapped
+   * mode the stdio air-gap rules apply to every scope. Platform connections are operator
+   * configuration and skip the command rules.
+   */
+  private assertStdioAllowed(name: string, scope: ConnectionScope, stored: unknown): void {
+    const cfg = stored as McpServerConfig;
+    if (cfg.transport !== 'stdio') return;
+    const airgap = this.ctx.config.airgap.enabled
+      ? stdioAirgapProblem(name, scope, cfg, stdioAirgapContext(this.ctx.config))
+      : null;
+    if (airgap) throw new HttpError(422, 'airgap_violation', airgap);
+    if (!isTenantScope(scope)) return;
+    const issues = checkStdioConfig(cfg, {
+      allowlist: this.ctx.config.mcp.stdioCommands,
+      // Never resolve tenant-chosen paths on the api host (file existence and symlink oracle);
+      // the run node resolves them against its own image.
+      realpath: 'skip',
+    });
+    if (issues.length > 0) {
+      const e = stdioError(name, issues);
+      throw new HttpError(400, e.code, e.message, issues);
+    }
+  }
+
+  /** Stdio rule issues of one stored connection, for the console (`[]` when it is fine). */
+  stdioIssues(row: ConnectionRow): string[] {
+    return findStdioViolations([row], this.ctx.config.mcp.stdioCommands).flatMap((v) =>
+      v.issues.map((i) => i.message),
+    );
+  }
+
+  /** Tenant stdio connections of the actor's tenant that break the rules (migration report). */
+  async stdioViolations(
+    actor: TenantActor,
+  ): Promise<
+    { connection: ConnectionRow; issues: { code: string; path: string; message: string }[] }[]
+  > {
+    const rows = await this.ctx.db
+      .select()
+      .from(connections)
+      .where(and(eq(connections.tenantId, actor.tenantId), eq(connections.kind, 'mcp')))
+      .orderBy(asc(connections.name));
+    return findStdioViolations(rows, this.ctx.config.mcp.stdioCommands);
+  }
+
+  /** Resolved MCP connections of a run scope that a tenant defined with the stdio transport. */
+  async tenantStdioConnections(scope: RunScope): Promise<ConnectionRow[]> {
+    return (await this.connectionsForRun('mcp', scope, { fresh: true })).filter(
+      (c) =>
+        isTenantScope(c.scope) &&
+        (c.config as { transport?: string } | null)?.transport === 'stdio',
+    );
+  }
+
+  /**
+   * Steps of a definition that would start a tenant stdio server inside the worker (`[]` = fine).
+   * Used at publish and by the worker before it builds the gateway (second wall).
+   */
+  async stdioIsolationIssues(
+    def: Parameters<typeof inlineStdioSteps>[0],
+    scope: RunScope,
+  ): Promise<{ path: string; message: string; step: string; server: string }[]> {
+    const names = new Set((await this.tenantStdioConnections(scope)).map((c) => c.name));
+    if (names.size === 0) return [];
+    return inlineStdioSteps(def, names).map((v) => ({
+      path: v.path,
+      message: stdioIsolationMessage(v),
+      step: v.step,
+      server: v.server,
+    }));
+  }
+
+  /**
+   * The MCP server configs a run node receives for a step (`servers`: the servers it holds grants
+   * on), read fresh and checked in the same pass: the tenant stdio connections among them must
+   * still satisfy the command rules. A stored connection that does not (created before the rules,
+   * or the allowlist shrank) is refused with an audit entry and an error the console shows with
+   * the run. The configs that are checked are exactly the configs that are shipped: a separate
+   * (cached) read for the handover could still hold an older stdio configuration of a connection
+   * that the check already saw as changed, and the node would start it unchecked.
+   */
+  async stepMcpConfigs(
+    scope: RunScope,
+    servers: ReadonlySet<string>,
+    where: { runId: string; actor: string; step?: string },
+  ): Promise<{ configs: McpServerConfig[]; tenantStdio: string[] }> {
+    const rows = (await this.connectionsForRun('mcp', scope, { fresh: true })).filter((c) =>
+      servers.has(c.name),
+    );
+    const tenantStdio: string[] = [];
+    for (const c of rows) {
+      if (!isTenantScope(c.scope)) continue;
+      if ((c.config as { transport?: string } | null)?.transport !== 'stdio') continue;
+      tenantStdio.push(c.name);
+      const bad = findStdioViolations([c], this.ctx.config.mcp.stdioCommands)[0];
+      if (!bad) continue;
+      const err = stdioError(c.name, bad.issues);
+      this.ctx.metrics.mcpStdioRefused.inc({ code: err.code });
+      await this.audit.append({
+        actor: where.actor,
+        tenantId: scope.tenantId,
+        action: 'mcp.stdio.refused',
+        target: c.id,
+        runId: where.runId,
+        payload: {
+          connection: c.name,
+          scope: c.scope,
+          ...(where.step ? { step: where.step } : {}),
+          code: err.code,
+          issues: bad.issues.map((i) => ({ code: i.code, path: i.path, message: i.message })),
+        },
+      });
+      throw new HttpError(422, err.code, err.message, bad.issues);
+    }
+    return { configs: rows.map((c) => McpServerConfigSchema.parse(c.config)), tenantStdio };
   }
 
   async createConnection(
@@ -313,11 +451,19 @@ export class CatalogService {
     return row!;
   }
 
-  /** Own rows only: platform connections of another tenant are read-only here. */
+  /**
+   * Own rows only: platform connections of another tenant are read-only here. A platform
+   * connection stored in the actor's own tenant (the operator's home tenant) still needs platform
+   * operator access, exactly as creating one does: its command, secrets and environment are exempt
+   * from the tenant rules (ADR 0016 section 3.1), so a tenant admin who could change it would run
+   * code in the worker process for every tenant.
+   */
   private async getOwnConnection(actor: Principal, id: string): Promise<ConnectionRow> {
     const row = await this.getConnection(actor, id);
     if (row.tenantId !== actor.tenantId)
       throw forbidden('platform connections are managed by the platform operator');
+    if (row.scope === 'platform' && !actor.platformAdmin)
+      throw forbidden('platform connections need platform operator access');
     return row;
   }
 

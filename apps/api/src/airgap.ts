@@ -149,14 +149,63 @@ export function connectionEndpoints(kind: string, name: string, config: unknown)
   return [];
 }
 
+/** What the air-gapped check needs to know about stdio MCP servers (ADR 0016 section 4.2). */
+export interface StdioAirgapContext {
+  /** `OAX_AIRGAPPED_STDIO=trusted`: the operator accepts unguarded platform stdio servers. */
+  trusted: boolean;
+  /** An isolating runner (container, kubernetes-job) is enabled, so tenant stdio can run at all. */
+  isolatingRunner: boolean;
+}
+
+export const stdioAirgapContext = (config: Config): StdioAirgapContext => ({
+  trusted: config.airgap.stdioTrusted,
+  isolatingRunner: config.runners.enabled.some((r) => r === 'container' || r === 'kubernetes-job'),
+});
+
+/**
+ * Why a stdio MCP connection cannot exist in air-gapped mode, or `null`. The network guard patches
+ * the sockets of the Node process only, so a child process is invisible to it: a platform stdio
+ * server (in-process) needs the operator's explicit acknowledgement, and a tenant stdio server runs
+ * only in a run node, which needs an isolating runner whose network is closed by the runner.
+ */
+export function stdioAirgapProblem(
+  name: string,
+  scope: string,
+  config: unknown,
+  ctx: StdioAirgapContext,
+): string | null {
+  if ((config as { transport?: string } | null)?.transport !== 'stdio') return null;
+  if (scope === 'platform')
+    return ctx.trusted
+      ? null
+      : `MCP connection "${name}": platform stdio servers start as children of the worker, where the air-gapped network guard cannot see their sockets (set OAX_AIRGAPPED_STDIO=trusted to accept this)`;
+  return ctx.isolatingRunner
+    ? null
+    : `MCP connection "${name}": tenant stdio servers run only in run nodes, and no isolating runner is enabled (OAX_RUNNERS_ENABLED)`;
+}
+
 /** Violations among stored connections (MCP servers and BYOK model connections). */
 export function checkStoredConnections(
-  rows: ReadonlyArray<{ name: string; kind: string; config: unknown }>,
+  rows: ReadonlyArray<{ name: string; kind: string; config: unknown; scope?: string }>,
   policy: EgressPolicy,
+  stdio?: StdioAirgapContext,
 ): string[] {
   if (!policy.airgapped) return [];
   const problems: string[] = [];
   for (const r of rows) {
+    if (r.kind === 'mcp') {
+      // Without a context the strictest reading applies: nothing is trusted, nothing isolates.
+      const p = stdioAirgapProblem(
+        r.name,
+        r.scope ?? 'platform',
+        r.config,
+        stdio ?? {
+          trusted: false,
+          isolatingRunner: false,
+        },
+      );
+      if (p) problems.push(p);
+    }
     for (const ep of connectionEndpoints(r.kind, r.name, r.config)) {
       try {
         const u = new URL(ep.url);

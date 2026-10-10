@@ -648,6 +648,7 @@
     "noPermission": "Du kannst nicht über Freigaben entscheiden (Berechtigung runs:approve)."
   },
   "connections": {
+    "stdioRefused": "Wird zur Laufzeit abgelehnt",
     "title": "Verbindungen",
     "subtitle": "MCP-Server und APIs, die Agenten nutzen dürfen – bereitgestellt von Integratoren.",
     "new": "Neue Verbindung",

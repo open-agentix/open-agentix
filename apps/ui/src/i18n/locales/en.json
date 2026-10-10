@@ -641,6 +641,7 @@
     "noPermission": "You can't decide on approvals (permission runs:approve)."
   },
   "connections": {
+    "stdioRefused": "Refused at run time",
     "title": "Connections",
     "subtitle": "MCP servers and APIs that agents may use – provided by integrators.",
     "new": "New connection",
