@@ -103,6 +103,9 @@ export function mintEgressGrant(
 ): string {
   if (secret.length < 32)
     throw new OaxError('config_invalid', 'the egress grant secret needs at least 32 characters');
+  // A dot separates node id and server in the account name; a node id with one could collide.
+  if (grant.nodeId.includes('.') || grant.nodeId === '')
+    throw new OaxError('config_invalid', 'the node id of an egress grant must not contain a dot');
   if (grant.server !== undefined && !SERVER.test(grant.server))
     throw new OaxError('config_invalid', 'the MCP server name of an egress grant is not a slug');
   const claims: GrantClaims = {
@@ -131,6 +134,7 @@ export function verifyEgressGrant(
     const c = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as GrantClaims;
     if (
       typeof c.n !== 'string' ||
+      c.n.includes('.') ||
       (c.s !== undefined && (typeof c.s !== 'string' || !SERVER.test(c.s))) ||
       // The grant is only valid under the account it was minted for.
       egressAccount(c.n, c.s) !== account ||

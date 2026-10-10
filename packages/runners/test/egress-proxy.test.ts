@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import * as net from 'node:net';
 import { EgressPolicy, parseAllowlist } from '@openagentix/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -353,6 +354,17 @@ describe('per-server egress accounts (ADR 0016 S2)', () => {
     // and the step's grant is not valid under a server account
     const step = grant(['a.example.com'], 'n1');
     expect(verifyEgressGrant(SECRET, 'n1.jira', step)).toBeNull();
+  });
+
+  it('refuses a node id with a dot (it could collide with a server account)', () => {
+    for (const nodeId of ['n.jira', 'a.b', ''])
+      expect(() => mintEgressGrant(SECRET, { nodeId, egress: [], ttlSeconds: 1 })).toThrow(/dot/);
+    // a forged claim with a dotted node id does not verify even under the matching account
+    const payload = Buffer.from(JSON.stringify({ n: 'n.jira', e: [], x: 9e9 })).toString(
+      'base64url',
+    );
+    const sig = createHmac('sha256', SECRET).update(`oax-egress.${payload}`).digest('base64url');
+    expect(verifyEgressGrant(SECRET, 'n.jira', `${payload}.${sig}`)).toBeNull();
   });
 
   it('refuses a server name that is not a slug when minting', () => {

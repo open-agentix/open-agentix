@@ -111,9 +111,11 @@ All notable changes to this project are documented here. The format follows
   no longer inherit the step's egress: a server that needs a host must list it in its connection's
   `egress` (and, for tenant connections, the operator must grant it with `OAX_MCP_STDIO_EGRESS`);
   hosts left in `runtime.egress` for that purpose are reported as `egress_unused`. (2) The
-  run-node stdin gains further lines (`<server> <proxy url>`); run-node images older than this
-  change ignore them and keep giving the step's account to every server, so update the worker and
-  run-node images together. (3) `OAX_K8S_DNS_EGRESS` now defaults to `false`; `true` needs
+  run-node stdin bundle gains a version marker (`oax-bundle:v2` on line 2) and further lines
+  (`<server> <proxy url>`) whenever egress accounts are sent; run-node images older than this
+  change read the marker as the step's proxy URL and fail at start with `config_invalid`
+  (fail closed) instead of giving the step's account to every server, so update the worker and
+  run-node images together. Bundles without egress are unchanged. (3) `OAX_K8S_DNS_EGRESS` now defaults to `false`; `true` needs
   `OAX_K8S_DNS_EGRESS_ACK=true`, and with DNS off `OAX_NODE_CONTROL_URL` must use an IP address or
   start-up fails. (4) The container runner sets the DNS of run nodes to a resolver where nothing
   listens: host names outside the internal network no longer resolve from a node (the control node

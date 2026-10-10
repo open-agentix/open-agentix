@@ -370,8 +370,9 @@ describe('startNode: lifecycle', () => {
     const handle = await runner(e, withEgress).startNode(spec({ egress: ['jira.example.com'] }));
     await new Promise((r) => setTimeout(r, 10));
     const [lines] = e.stdin as string[];
-    const [token, proxyLine] = lines!.split('\n');
+    const [token, marker, proxyLine] = lines!.split('\n');
     expect(token).toBe('oaxrt.payload.signature');
+    expect(marker).toBe('oax-bundle:v2');
     const u = new URL(proxyLine!);
     expect(decodeURIComponent(u.username)).toBe(NODE);
     const claims = verifyEgressGrant(GRANT_SECRET, NODE, decodeURIComponent(u.password));
@@ -687,7 +688,7 @@ describe('per-server egress grants for stdio MCP servers (ADR 0016 S2)', () => {
   };
 
   it('mints one grant per server, under its own account and with only its own list', async () => {
-    const [token, step, ...rest] = await lines({
+    const [token, marker, step, ...rest] = await lines({
       egress: [],
       mcpEgress: [
         { server: 'jira', egress: ['jira.example.com'] },
@@ -695,6 +696,7 @@ describe('per-server egress grants for stdio MCP servers (ADR 0016 S2)', () => {
       ],
     });
     expect(token).toBe('oaxrt.payload.signature');
+    expect(marker).toBe('oax-bundle:v2');
     expect(step).toBe(''); // no step egress: no step account
     const parsed = rest.filter(Boolean).map((l) => {
       const [name, url] = l.split(' ') as [string, string];
@@ -719,7 +721,7 @@ describe('per-server egress grants for stdio MCP servers (ADR 0016 S2)', () => {
   });
 
   it('keeps the step account and the server accounts apart', async () => {
-    const [, step, server] = await lines({
+    const [, , step, server] = await lines({
       egress: ['jira.example.com'],
       mcpEgress: [{ server: 'crm', egress: ['crm.example.com'] }],
     });
@@ -730,7 +732,7 @@ describe('per-server egress grants for stdio MCP servers (ADR 0016 S2)', () => {
   });
 
   it('a server without egress is not listed: no grant, no proxy line', async () => {
-    expect(await lines({ egress: [], mcpEgress: [] })).toEqual(['oaxrt.payload.signature', '']);
+    expect(await lines({ egress: [], mcpEgress: [] })).toEqual(['oaxrt.payload.signature', '']); // bare token, no marker
   });
 
   it('fails closed before anything is created', async () => {

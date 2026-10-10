@@ -209,7 +209,7 @@ export function egressUnusedWarnings(
       if (owners.length > 0)
         out.push({
           path: `agents.${i}.runtime.egress.${j}`,
-          message: `egress_unused: "${raw}" in runtime.egress of step "${a.id}" only serves MCP server ${owners.map((n) => `"${n}"`).join(', ')}, which gets its own egress grant from its connection; the step's account no longer reaches it, so the entry can be removed`,
+          message: `egress_unused: "${raw}" in runtime.egress of step "${a.id}" may only serve MCP server ${owners.map((n) => `"${n}"`).join(', ')}, which gets its own egress grant from its connection; the step's account no longer reaches it, so the entry can be removed`,
         });
     });
   });

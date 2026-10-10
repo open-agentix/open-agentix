@@ -34,6 +34,7 @@ import {
   type PreparedRun,
   type StepHandover,
   type StepHandoverResult,
+  BUNDLE_MARKER,
 } from '@openagentix/runners';
 
 /**
@@ -150,6 +151,44 @@ function httpUrlOf(raw: string, what: string): string {
 }
 
 /**
+ * Parses the stdin/file bundle of a node; `null` while no token has arrived yet. Formats:
+ *  - `<token>`                                  no egress accounts;
+ *  - `<token>\n<step proxy url>`               legacy: the step's account only;
+ *  - `<token>\noax-bundle:v2\n<step proxy url or empty>\n<server> <url>...`  (ADR 0016 S2).
+ * The marker is deliberately not an http(s) URL: a node from before S2 reads line 2 as the step's
+ * proxy URL and fails at once with `config_invalid` instead of giving the step's account to every
+ * MCP server. Anything malformed is refused (fail closed).
+ */
+export function parseBundle(text: string): TokenBundle | null {
+  const [token = '', second = '', ...rest] = text.split('\n').map((l) => l.trim());
+  if (!token.startsWith('oaxrt.')) return null;
+  const serverProxies = new Map<string, string>();
+  if (second !== BUNDLE_MARKER) {
+    if (second.startsWith('oax-bundle:'))
+      throw new OaxError('config_invalid', 'unsupported bundle version');
+    if (rest.some(Boolean))
+      throw new OaxError('config_invalid', 'the MCP server proxy list needs the bundle marker');
+    return {
+      token,
+      ...(second ? { proxyUrl: httpUrlOf(second, 'the egress proxy URL') } : {}),
+      serverProxies,
+    };
+  }
+  const [step = '', ...servers] = rest;
+  for (const line of servers.filter(Boolean)) {
+    const m = /^([a-z][a-z0-9-]{0,62}) (\S+)$/.exec(line);
+    if (!m || serverProxies.has(m[1]!) || serverProxies.size >= MAX_SERVER_PROXIES)
+      throw new OaxError('config_invalid', 'the MCP server proxy list is malformed');
+    serverProxies.set(m[1]!, httpUrlOf(m[2]!, 'an MCP server proxy URL'));
+  }
+  return {
+    token,
+    ...(step ? { proxyUrl: httpUrlOf(step, 'the egress proxy URL') } : {}),
+    serverProxies,
+  };
+}
+
+/**
  * Reads the run token (line 1) and the optional egress proxy URL (line 2). In a container the file
  * is `/dev/stdin`: the runner writes both once and closes stdin, so a read returns exactly when the
  * secrets arrived. Files that do not exist yet (mounted Secrets) are retried until the deadline.
@@ -172,22 +211,8 @@ async function readBundle(
           ).unref(),
         ),
       ]);
-      // Line 1: token. Line 2: the step's proxy account (may be empty). Then `<server> <url>`.
-      const [token = '', proxy = '', ...rest] = text.split('\n').map((l) => l.trim());
-      if (token.startsWith('oaxrt.')) {
-        const serverProxies = new Map<string, string>();
-        for (const line of rest.filter(Boolean)) {
-          const m = /^([a-z][a-z0-9-]{0,62}) (\S+)$/.exec(line);
-          if (!m || serverProxies.has(m[1]!) || serverProxies.size >= MAX_SERVER_PROXIES)
-            throw new OaxError('config_invalid', 'the MCP server proxy list is malformed');
-          serverProxies.set(m[1]!, httpUrlOf(m[2]!, 'an MCP server proxy URL'));
-        }
-        return {
-          token,
-          ...(proxy ? { proxyUrl: httpUrlOf(proxy, 'the egress proxy URL') } : {}),
-          serverProxies,
-        };
-      }
+      const bundle = parseBundle(text);
+      if (bundle) return bundle;
     } catch (e) {
       if (e instanceof OaxError) throw e;
       // not there yet

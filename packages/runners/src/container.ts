@@ -141,6 +141,8 @@ export const INSTANCE_LABEL = 'io.openagentix.instance';
 /** Unix seconds after which the container must not exist any more (hard lifetime). */
 export const EXPIRES_LABEL = 'io.openagentix.expires';
 const TOKEN_DIR = '/run/oax';
+/** Line 2 of the node's stdin when it carries egress accounts (see `parseBundle` in the worker). */
+export const BUNDLE_MARKER = 'oax-bundle:v2';
 /** Resolver of every node: loopback, where nothing listens (no upstream forwarding). */
 export const NODE_DNS = '127.0.0.1';
 /** At most this many stdio MCP servers with their own egress grant per node. */
@@ -560,13 +562,16 @@ export class ContainerRunner implements IsolatingRunner {
       // Attach before the start so that the node can never miss its token.
       stdin = await this.engine.attachStdin(id, ctx.signal);
       await this.engine.startContainer(id);
-      // Line 1: the run token. Line 2: the step's own account at the egress proxy (empty without
-      // step egress). Further lines: `<server> <proxy url>`, the account of one MCP server, which
-      // the node hands to that server's process and to nobody else.
+      // Line 1: the run token. With egress accounts: line 2 is the marker `oax-bundle:v2` (a node
+      // from before S2 reads line 2 as a URL and refuses it instead of misusing the step's
+      // account), line 3 the step's own account (empty without step egress), further lines
+      // `<server> <proxy url>`, the account of one MCP server, which the node hands to that
+      // server's process and to nobody else.
       const lines =
         proxyPassword || serverProxies.length > 0
           ? [
               spec.runToken,
+              BUNDLE_MARKER,
               proxyPassword
                 ? proxyUrlWithCredentials(this.config.egressProxyUrl!, spec.nodeId, proxyPassword)
                 : '',

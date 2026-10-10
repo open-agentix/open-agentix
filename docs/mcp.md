@@ -269,6 +269,11 @@ must lie within the allowlist. Names are not resolved by the node (see "DNS"). W
 runner the per-node NetworkPolicy applies to the whole Pod, and `OAX_K8S_DNS_EGRESS=true` opens
 kube-dns only with `OAX_K8S_DNS_EGRESS_ACK=true`.
 
+**Upgrading (egress accounts).** When egress accounts are sent, line 2 of the node's stdin is the
+marker `oax-bundle:v2`. A run-node image from before ADR 0016 S2 reads it as the step's proxy URL
+and refuses to start (`config_invalid`), so a mixed install fails closed instead of handing the
+step's account to every server. Bundles without egress are the bare token, as before.
+
 **Upgrading.** The step handover carries a new field `stdio` when a tenant stdio server is
 involved. Run-node images older than this change reject the unknown field (strict schema) and fail
 such steps closed; update the worker and run-node images together. Steps without tenant stdio
@@ -305,7 +310,9 @@ valid only under its own account, so a server cannot use another server's or the
 and the proxy counts connections per account (`EgressProxy.connectionCounts()`).
 
 **Kubernetes.** A NetworkPolicy applies to a whole Pod, so the runner cannot give one server its
-own network. It accepts a server's `egress` only if the step's `runtime.egress` already lists each
+own network, so a server **without** `egress` can still reach every CIDR the Pod's policy opens
+through raw sockets (there is no proxy variable to withhold; the NetworkPolicy is the only wall).
+It accepts a server's `egress` only if the step's `runtime.egress` already lists each
 entry (otherwise the step is refused) and does not widen the Pod's policy. Per-server isolation
 needs the container runner (or, later, one Pod per server, ADR 0016 section 3.3).
 
@@ -322,7 +329,7 @@ depend on that engine behaviour or on how the network was created (the runner al
 network that is not `internal`).
 
 **Lint.** `POST /v1/agents/validate` reports the warning `egress_unused` for a host in a step's
-`runtime.egress` of a step on the container runner that only serves a stdio server with its own
+`runtime.egress` of a step on the container runner that may only serve a stdio server with its own
 `egress`: the step's account no longer reaches it. Kubernetes steps are not reported (there the
 entry must stay in `runtime.egress`). Hosts of HTTP MCP servers are not reported, because until the
 control-node relay (slice S4) the node still reaches them with the step's account.

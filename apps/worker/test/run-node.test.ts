@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   httpOriginFor,
   mergeCredentials,
+  parseBundle,
   parseNodeEnv,
   runNode,
   stdioGuardFor,
@@ -694,6 +695,7 @@ describe('per-server egress inside a run node (ADR 0016 S2)', () => {
     // line 2 is the STEP's account: wide on purpose, it must not reach any server
     const bundle = [
       'oaxrt.a.b',
+      'oax-bundle:v2',
       account(['a.example.com', 'b.example.org']),
       `srv-a ${account(['a.example.com'], 'srv-a')}`,
       `srv-b ${account(['b.example.org'], 'srv-b')}`,
@@ -782,14 +784,58 @@ describe('per-server egress inside a run node (ADR 0016 S2)', () => {
 
   it('refuses a malformed server proxy list instead of guessing', async () => {
     for (const bad of [
-      'oaxrt.a.b\n\nsrv-a not-a-url',
-      'oaxrt.a.b\n\nSrv_A http://p',
-      'oaxrt.a.b\n\nsrv-a http://p\nsrv-a http://q',
-      'oaxrt.a.b\n\nsrv-a file:///etc/passwd',
+      'oaxrt.a.b\noax-bundle:v2\n\nsrv-a not-a-url',
+      'oaxrt.a.b\noax-bundle:v2\n\nSrv_A http://p',
+      'oaxrt.a.b\noax-bundle:v2\n\nsrv-a http://p\nsrv-a http://q',
+      'oaxrt.a.b\noax-bundle:v2\n\nsrv-a file:///etc/passwd',
+      'oaxrt.a.b\noax-bundle:v3\n\nsrv-a http://p', // unknown version
+      'oaxrt.a.b\n\nsrv-a http://p', // server lines without the marker
+      'oaxrt.a.b\noax-bundle:v2\nfile:///etc/passwd', // bad step proxy
     ]) {
       const { calls, fetchImpl } = control();
       expect(await runNode({ ...base(fetchImpl), readFile: async () => bad })).toBe(2);
       expect(calls).toHaveLength(0); // nothing was fetched with a half-understood bundle
     }
+  });
+});
+
+describe('run-node bundle version marker (ADR 0016 S2)', () => {
+  /** The parser of a node from before S2: line 2 is the step's proxy URL, further lines ignored. */
+  const oldParser = (text: string) => {
+    const [token = '', proxy = ''] = text.split('\n').map((l) => l.trim());
+    if (!token.startsWith('oaxrt.')) return null;
+    if (!proxy) return { token };
+    const u = new URL(proxy);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:')
+      throw new OaxError('config_invalid', 'the egress proxy URL must be http(s)');
+    return { token, proxyUrl: proxy };
+  };
+  const v2 =
+    'oaxrt.a.b\noax-bundle:v2\nhttp://n:pw@proxy:3128/\nsrv-a http://n.srv-a:pw@proxy:3128/';
+
+  it('an old-style parser fails closed on a v2 bundle, at once, with config_invalid', () => {
+    expect(() => oldParser(v2)).toThrow(expect.objectContaining({ code: 'config_invalid' }));
+    // also when only server lines are sent (empty step account)
+    expect(() => oldParser('oaxrt.a.b\noax-bundle:v2\n\nsrv-a http://p/')).toThrow(
+      expect.objectContaining({ code: 'config_invalid' }),
+    );
+  });
+  it('the new parser accepts v2, the bare token and the legacy step-only form', () => {
+    const b = parseBundle(v2)!;
+    expect(b.proxyUrl).toBe('http://n:pw@proxy:3128/');
+    expect([...b.serverProxies.keys()]).toEqual(['srv-a']);
+    expect(parseBundle('oaxrt.a.b\n')).toEqual({ token: 'oaxrt.a.b', serverProxies: new Map() });
+    expect(parseBundle('oaxrt.a.b\nhttp://p:1/\n')!.proxyUrl).toBe('http://p:1/');
+    expect(parseBundle('oaxrt.a.b\noax-bundle:v2\n\nsrv-a http://p/')!.proxyUrl).toBeUndefined();
+    expect(parseBundle('not-a-token')).toBeNull();
+  });
+  it('refuses a malformed or unknown marker', () => {
+    for (const bad of [
+      'oaxrt.a.b\noax-bundle:v3\nhttp://p/',
+      'oaxrt.a.b\noax-bundle:\nhttp://p/',
+      'oaxrt.a.b\nOAX-BUNDLE:V2\nhttp://p/\nsrv-a http://p/',
+      'oaxrt.a.b\nsrv-a http://p/\nsrv-b http://q/',
+    ])
+      expect(() => parseBundle(bad)).toThrow(expect.objectContaining({ code: 'config_invalid' }));
   });
 });
