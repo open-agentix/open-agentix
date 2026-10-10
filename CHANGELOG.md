@@ -386,6 +386,10 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Changed
 
+- **Roadmap**: new planned wave W14 (agent lifecycle governance: four-eyes publish approval with review
+  comments, development vs published agents, scoped and encrypted secrets, Vault and AWS Secrets Manager
+  backends; design in ADR 0017, issues #244 to #252) in v0.4, with notes on W5-3, W6-3, W7-2 and W9-2.
+  Nothing of it is built yet.
 - **Telemetry**: the worker's `oax.run` span carries `oax.run.id` (was `oax.run_id`) and
   `oax.tenant.id`. The default OTLP protocol is now `http/protobuf` (was JSON); set
   `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` to keep the old wire format. **Breaking:**
