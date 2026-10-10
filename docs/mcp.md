@@ -286,26 +286,52 @@ their `toolPins`, which an older build ignores).
 OAuth tokens of MCP connections (ADR 0016 section 7.5, slice S5) are the first credential values the
 platform stores. Nothing is stored in plaintext.
 
-- **Envelope encryption.** The operator provides a platform key-encryption key (`OAX_MCP_OAUTH_KEK` or
-  `OAX_MCP_OAUTH_KEK_FILE`). Each tenant has one data key, created on first use, wrapped with the KEK
-  and kept in `tenant_data_keys`. Tokens are sealed with AES-256-GCM under the tenant's data key; the
-  additional authenticated data is the tenant, connection, issuer, resource and credential version,
-  so a ciphertext copied to another row, tenant, issuer, resource or version does not decrypt.
-- **Tables** (migration `0026_mcp_oauth_tokens`): `mcp_oauth_tokens`, `mcp_oauth_clients` (client
-  secrets of dynamically registered clients, per tenant and issuer) and `tenant_data_keys`. No API
-  route selects the ciphertext columns.
-- **Who can read a token.** Only `McpCredentials.accessToken(connection, scope, { guard })`, which the
-  api and the trusted worker construct (a run node, harness or model never has the KEK or a database
-  connection; a test pins that no run-node package references the module). The value is registered
-  with the run's `ContextGuard` and with the process-wide redactor before it is returned; the
-  redactor scrubs log lines, audit payloads and JSON responses. An expired, revoked or
-  re-authorization-pending token, a changed resource and missing scopes fail closed
-  (`mcp_auth_required`, `mcp_resource_mismatch`, `mcp_insufficient_scope`). Refresh follows with the
-  OAuth flows (S6).
-- **Crypto-shredding.** Destroying a tenant's data keys makes everything sealed under them unreadable.
-- **Rotation of the KEK** is not part of this slice: the key id is recorded, and data keys wrapped
-  with another id are refused (`key_unavailable`). Back the KEK up with the database backups; without it
-  the tokens are lost and connections must be authorized again.
+- **Envelope encryption.** The operator provides a platform key-encryption key (KEK,
+  `OAX_MCP_OAUTH_KEK_FILE`; `OAX_MCP_OAUTH_KEK` is read once and removed from the environment). Each
+  tenant has one data key, created on first use, wrapped with the KEK and kept in `tenant_data_keys`.
+  Tokens are sealed with AES-256-GCM under the tenant's data key; the additional authenticated data is
+  the tenant, connection, issuer, resource and credential version, so a ciphertext copied to another
+  row, tenant, issuer, resource or version does not decrypt.
+- **Tables** (migration `0026_mcp_oauth_tokens`): `mcp_oauth_tokens` (tied to the tenant of its
+  connection by a composite foreign key), `mcp_oauth_clients`, `tenant_data_keys`, and
+  `connections.credential_version`. No API route selects the ciphertext columns.
+- **What a stored value may be.** The value is chosen by the authorization server, and the redactors
+  rewrite it everywhere, so it must look like a credential: RFC 6750 `b64token` characters, 20 to 4096
+  of them, random enough, not a UUID, not all digits, and not containing the tenant or connection id.
+  Anything else is refused with `token_invalid`.
+- **Who can read a token.** Only `McpCredentials.accessToken(connection, scope, { guard })`, built by
+  the api (`createServices(ctx)`) and by the worker (`createServices(ctx, 'worker')`). The connection's
+  URL and credential version come from the database, not from the caller. A run node, harness or model
+  has neither the KEK nor a database connection; a test follows the imports from the run-node entry
+  point and fails if they reach this module. Expired, revoked or re-authorization-pending tokens, a
+  moved URL, missing scopes and a destroyed tenant key fail closed (`mcp_auth_required`,
+  `mcp_resource_mismatch`, `mcp_insufficient_scope`). Refresh follows with the OAuth flows (S6).
+- **Credential version.** Changing the connection URL to another canonical URI bumps
+  `credential_version` and deletes the stored tokens.
+- **Redaction.** Before `accessToken` returns, the value is registered with the run's `ContextGuard`,
+  the telemetry guard (span attributes) and a bounded per-process registry that scrubs log lines
+  (logger, request log, stdout/stderr, uncaught traces), audit payloads (string leaves, before
+  hashing), JSON responses and run/relay event streams. All spellings the guards know are matched
+  (plain, URL-encoded, base64, base64url, hex). The registry is per process: a token read in the worker
+  is not known to the api. Entries leave at expiry (plus 5 minutes), on revocation or deletion and,
+  when the set is full, least recently used first (a warning is logged if a live entry is dropped).
+  This in-memory set is a recorded deviation from "not cached beyond one call" in ADR 0016.
+
+### Limits and operations
+
+- **Crypto-shredding is partial.** `KeyService.destroyTenantKeys` removes the wrapped data keys from
+  the live database (nothing calls it yet). While the KEK is unchanged, a database backup or WAL
+  segment taken earlier still holds the wrapped key and the KEK unwraps it. Complete shredding needs a
+  per-tenant key-encryption key or a KMS (ADR 0012 W12-2).
+- **Runbook: the KEK is lost or must be replaced.** There is no rotation yet. A data key wrapped with
+  another KEK id is refused (`key_unavailable`), and so is one wrapped with different key material
+  under the same id (the error says the KEK differs). If the KEK is lost, the stored tokens are
+  unrecoverable: stop the api and worker, delete the rows of `mcp_oauth_tokens`, `mcp_oauth_clients`
+  and `tenant_data_keys`, start with the new KEK (and a new `OAX_MCP_OAUTH_KEK_ID`), and authorize the
+  OAuth connections again. Back the KEK up with the database backups.
+- **Where the KEK lives.** Give it to the api and the worker only; the worker process reads it into
+  memory, so keep key-holding workers on hosts or node pools that do not run untrusted run nodes (use
+  the container or Kubernetes runner for those).
 
 ## Control-node relay for run nodes
 

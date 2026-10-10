@@ -399,23 +399,32 @@ the platform refuses to use the stored client and marks the connection `reauthor
   `refresh_token_enc`, `expires_at`, `status` (`active | refresh_failed |
   reauthorization_required | revoked`), `authorized_by`, `authorized_at`. Table
   `mcp_oauth_clients` for DCR results (per tenant and issuer, secret encrypted).
-- **Encryption**: AES-256-GCM envelope encryption with the tenant's data key (ADR 0012 section 7.6,
-  `tenants.data_key_id`); additional authenticated data = `tenant_id | connection_id | issuer |
+- **Encryption**: AES-256-GCM envelope encryption with the tenant's data key (ADR 0012 section 7.6).
+  Implemented in S5 with an own table `tenant_data_keys` (wrapped data key per tenant and version)
+  instead of a `tenants.data_key_id` column; W12-2 may fold it into the tenant record. Additional
+  authenticated data = `tenant_id | connection_id | issuer |
   resource | credential_version`, so a ciphertext copied to another row does not decrypt. The
   key-encryption key comes from operator configuration first and from a KMS (customer-managed keys,
-  owner decision for v1.0) later; destroying the tenant key makes the tokens unreadable
-  (crypto-shredding). This is the first stored credential value of the platform; until ADR 0012
+  owner decision for v1.0) later. Destroying a tenant data key (`destroyTenantKeys`, no caller yet)
+  makes the tokens unreadable in the live database; with one platform KEK this is **not** complete
+  crypto-shredding, because a backup or WAL taken earlier still holds the wrapped key and the KEK
+  unwraps it. Shredding that covers backups needs a per-tenant key-encryption key or a KMS that
+  deletes it (W12-2). This is the first stored credential value of the platform; until ADR 0012
   slice W12-2 delivers tenant data keys, slice S6 of this ADR provides the minimal key service
   (one platform key-encryption key, one data key per tenant) that W12-2 then extends.
 - **Who can read tokens**: the api (relay, refresh) and the trusted worker (in-process steps) via
-  one internal service `McpCredentials.accessToken(connection, scope)`; never a run node, never a
+  one internal service `McpCredentials.accessToken(connection, scope)` (S5: the caller names the
+  connection by id and tenant; URL and credential version are read from the database); never a run node, never a
   harness, never an API response, never the model context. Values are registered with the run's
   `ContextGuard` and the log redactor before use.
 - **Refresh**: single flight per `(connection_id, credential_version)` under a PostgreSQL advisory
   lock; refresh 60 s before expiry; rotated refresh tokens are written atomically with the new
   access token; `invalid_grant` sets `reauthorization_required`, fails new calls closed
   (`mcp_auth_required`) and notifies the connection's admins. Access tokens are not cached in
-  process memory beyond one call and never across tenants.
+  process memory beyond one call and never across tenants. **Deviation recorded in S5:** the redactor
+  registry keeps the value of every token handed out in a bounded, per-process in-memory set so that
+  logs, audit payloads, responses and streams can be scrubbed; entries leave at expiry (plus 5
+  minutes), on revocation or deletion, and least recently used first when the set is full.
 - **Revocation**: deleting or disabling a connection, revoking a grant (ADR 0012), rotating the
   client secret, changing the URL or issuer, and an admin's "disconnect" delete the stored tokens
   and call the authorization server's revocation endpoint (RFC 7009) when advertised (best effort,
