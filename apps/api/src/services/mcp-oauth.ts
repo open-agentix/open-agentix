@@ -188,7 +188,7 @@ export class McpOauthService {
   private limit(userId: string): void {
     const now = this.ctx.now().getTime();
     const recent = (this.hits.get(userId) ?? []).filter((t) => now - t < WINDOW_MS);
-    if (recent.length >= AUTHORIZE_LIMIT)
+    if (recent.length >= (this.ctx.mcpProbeLimit ?? AUTHORIZE_LIMIT))
       throw new HttpError(429, 'rate_limited', 'too many authorizations, try again in a minute');
     recent.push(now);
     this.hits.set(userId, recent);
@@ -478,7 +478,7 @@ export class McpOauthService {
     const nowMs = this.ctx.now().getTime();
     if (last !== undefined && nowMs - last < MIN_REFRESH_GAP_MS) {
       this.ctx.metrics.oauthRefresh('skipped');
-      throw new OaxError('mcp_auth_required', 'the access token was renewed a moment ago');
+      throw new OaxError('mcp_auth_refresh_failed', 'the access token was renewed a moment ago');
     }
     this.lastRefresh.set(gapKey, nowMs);
     if (this.lastRefresh.size > 5000) this.lastRefresh.clear();
@@ -498,10 +498,14 @@ export class McpOauthService {
         payload: { connection: row.id, outcome: 'ok' },
       });
     } catch (e) {
-      await this.failRefresh(row, e);
-      throw e instanceof OaxError && e.code.startsWith('mcp_auth')
+      const permanent = await this.failRefresh(row, e);
+      // `mcp_auth_required`: the credentials are no good until an administrator acts. The other
+      // code is a failure that may pass; a token that has not expired yet is still used meanwhile.
+      throw e instanceof OaxError && e.code === 'mcp_auth_required'
         ? e
-        : new OaxError('mcp_auth_required', 'the access token could not be renewed');
+        : permanent
+          ? new OaxError('mcp_auth_required', 'the connection needs to be authorized again')
+          : new OaxError('mcp_auth_refresh_failed', 'the access token could not be renewed');
     }
   }
 
@@ -614,7 +618,8 @@ export class McpOauthService {
     });
   }
 
-  private async failRefresh(row: ConnectionRow, e: unknown): Promise<void> {
+  /** Records the failure; true when the credentials are rejected for good. */
+  private async failRefresh(row: ConnectionRow, e: unknown): Promise<boolean> {
     let status: TokenStatus | null = null;
     let outcome = 'failed';
     let code = e instanceof OaxError ? e.code : 'error';
@@ -651,6 +656,7 @@ export class McpOauthService {
       target: row.id,
       payload: { connection: row.id, error: code.slice(0, 64), status },
     });
+    return status === 'reauthorization_required';
   }
 
   // ---------- revocation ----------

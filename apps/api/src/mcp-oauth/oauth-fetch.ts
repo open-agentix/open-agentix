@@ -59,7 +59,7 @@ export function assertOauthUrl(value: string, what: string): URL {
   return u;
 }
 
-async function readCapped(res: Response, max: number): Promise<string> {
+async function readCapped(res: Response, max: number, signal: AbortSignal): Promise<string> {
   const declared = Number(res.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > max) {
     await res.body?.cancel().catch(() => undefined);
@@ -69,8 +69,18 @@ async function readCapped(res: Response, max: number): Promise<string> {
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  // The total time limit also covers a body that trickles: do not rely on the transport to abort.
+  const aborted = new Promise<never>((_, reject) => {
+    const stop = () => reject(fail('mcp_oauth_timeout', 'the response took too long'));
+    if (signal.aborted) stop();
+    else signal.addEventListener('abort', stop, { once: true });
+  });
+  aborted.catch(() => undefined);
   for (;;) {
-    const { done, value } = await reader.read();
+    const { done, value } = await Promise.race([reader.read(), aborted]).catch(async (e) => {
+      await reader.cancel().catch(() => undefined);
+      throw e;
+    });
     if (done) break;
     total += value.byteLength;
     if (total > max) {
@@ -130,7 +140,7 @@ export class OauthFetch {
         await res.body?.cancel().catch(() => undefined);
         return { res, text: '' };
       }
-      return { res, text: await readCapped(res, this.maxBytes) };
+      return { res, text: await readCapped(res, this.maxBytes, signal) };
     } catch (e) {
       if (e instanceof OaxError) {
         // Denials keep their code (egress_denied); everything else of ours is already closed.

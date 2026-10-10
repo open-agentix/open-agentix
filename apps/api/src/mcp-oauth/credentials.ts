@@ -109,7 +109,8 @@ export class McpCredentials {
           await this.refresher.refresh(connection);
           continue;
         } catch (e) {
-          if (!usable) throw e;
+          // Rejected credentials are final; any other failure may pass while the token still works.
+          if (!usable || (e instanceof OaxError && e.code === 'mcp_auth_required')) throw e;
           // The old token still works for a moment: use it, the next call tries again.
         }
       }
