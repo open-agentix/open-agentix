@@ -553,6 +553,20 @@ S2.
 - Negative: re-approval of tool snapshots is new admin work, and a vendor that updates descriptions
   often will stop runs until someone approves.
 
+## Implementation status
+
+- **S0 (#230) implemented.** Differences from the text above, decided while implementing:
+  `OAX_MCP_STDIO_COMMANDS` defaults to **empty** (no tenant stdio command) instead of "the binaries
+  shipped in the images", because the platform cannot know which binaries are safe to run; an entry
+  `dir/*` matches files directly inside `dir` only; the real path of a symlinked command must be
+  allowlisted as well; allowlist entries naming a system directory as prefix fail start-up; the
+  `env` rule is the `agents[].credentials` rule plus further loader and interpreter hooks, compared
+  case-insensitively; interpreters (`node`, `python`, ...) are accepted without code-injecting
+  flags rather than refused outright; platform connections are exempt from the command and
+  environment rules; the step handover carries `stdio` so that the run node re-checks the real
+  binaries of its image; stored violations are reported at start-up, in
+  `GET /v1/connections/stdio-violations` and as `warnings` on connections. See `docs/mcp.md`.
+
 ## Alternatives considered
 
 - **Keep step-level egress for MCP servers**: simpler, but every server of a step gets the union of

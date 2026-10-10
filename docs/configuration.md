@@ -345,6 +345,12 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 endpoint set, `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER` other than `otlp` is refused too
 (they are not read; unset the endpoint to turn the export off). Details and the data that is never exported: [`observability.md`](observability.md).
 
+## Stdio MCP servers
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_MCP_STDIO_COMMANDS` | – (none) | Comma list of absolute paths (or `dir/*`, direct children only) that tenant, team and agent `stdio` MCP connections may start, in run nodes only. Empty means no tenant stdio command. Shells, installers and inline-code interpreters are refused even when listed; unsafe entries fail start-up. See [`mcp.md`](mcp.md#stdio-mcp-servers). |
+
 ## Air-gapped mode
 
 `OAX_AIRGAPPED=true` enables a fail-closed egress policy: start-up is refused when an enabled
@@ -356,6 +362,7 @@ on the vendored snapshot. `/readyz` reports `airgapped`. Details: [`airgapped.md
 | --- | --- | --- |
 | `OAX_AIRGAPPED` | `false` | Fail-closed air-gapped mode. |
 | `OAX_AIRGAPPED_ALLOW` | – | Internal hosts/suffixes/CIDRs that may be contacted (loopback, database and cache are implicit). |
+| `OAX_AIRGAPPED_STDIO` | – | `trusted` accepts platform stdio MCP connections in air-gapped mode (child processes are invisible to the network guard). Without it they are refused at start-up and on create; tenant stdio connections need an enabled isolating runner. |
 
 ## What the UI needs
 

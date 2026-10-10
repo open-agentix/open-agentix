@@ -36,11 +36,18 @@ export interface ConnectDeps {
   inMemory?: InMemoryTransportFactory | undefined;
   /** Environment for proxy resolution (defaults to process.env). */
   env?: Record<string, string | undefined>;
+  /**
+   * Called with the config of every stdio server right before its process would be started; it
+   * throws to refuse (ADR 0016 S0). The worker uses it to keep tenant-defined commands out of the
+   * trusted process, run nodes to apply the command rules to the binaries of their image.
+   */
+  stdioGuard?: ((cfg: Extract<McpServerConfig, { transport: 'stdio' }>) => void) | undefined;
 }
 
 export async function createTransport(cfg: McpServerConfig, deps: ConnectDeps): Promise<Transport> {
   switch (cfg.transport) {
     case 'stdio': {
+      deps.stdioGuard?.(cfg);
       const env: Record<string, string> = { ...cfg.env };
       for (const [k, ref] of Object.entries(cfg.envSecrets))
         env[k] = await deps.secrets.resolve(ref);

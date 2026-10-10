@@ -284,6 +284,14 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 ### Security
 
+- **Tenant stdio MCP servers no longer run next to the worker (ADR 0016 slice S0, #230)**: any
+  tenant admin could create a `stdio` MCP connection with an arbitrary `command`, and in-process
+  steps (the default runner) started it as a child of the trusted worker, with the worker's
+  network, database credentials and run-token secret (the air-gapped guard patches the Node
+  process only). Tenant, team and agent `stdio` connections now run only in run nodes; in the
+  worker the gateway starts platform (operator-defined) stdio servers only. See `docs/mcp.md`
+  ("Stdio MCP servers") and the Breaking entry below.
+
 - **Telemetry no longer exports error messages or stacks.** `withSpan` used to record the raw
   exception (message and stack) and the message as the span status, so provider response bodies,
   tool output and secrets inside an error could reach the collector. A failed span now carries the
@@ -395,6 +403,25 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
   uses the informal "du" form throughout.
 
 ### Breaking
+
+- **Tenant stdio MCP connections (ADR 0016 S0, #230)**: (1) `command` of a tenant, team or agent
+  `stdio` connection must be an absolute path that matches `OAX_MCP_STDIO_COMMANDS` (default empty:
+  no tenant stdio command is accepted, so `POST`/`PUT /v1/connections` return
+  `400 mcp_command_forbidden` until the operator lists binaries); shells, `env`, wrappers,
+  run-time installers (`npx`, `npm`, `pnpm`, `yarn`, `bunx`, `uvx`, `pip`, `docker`, `podman`,
+  `curl`, `wget`, `git`, ...) and interpreters with an inline program or code-loading flag
+  (`node -e`, `python -c`, ...) are refused even when listed; `env`/`envSecrets` names follow the
+  reserved-name rules (no `PATH`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `BASH_ENV`, proxy variables,
+  `OAX_*`, ...) and return `400 mcp_env_forbidden`. (2) A step on `in-process` or `local` that
+  holds a grant on such a connection cannot be published (`400 mcp_stdio_requires_isolation`) and
+  fails at run time with the same code; set `runtime.runner` to `container` or `kubernetes-job`.
+  (3) Existing stored connections are kept unchanged but fail closed at run time
+  (`422 mcp_command_forbidden`, audit entry `mcp.stdio.refused`); they are reported at start-up
+  (warning, gauge `oax_mcp_stdio_violations`), in `GET /v1/connections/stdio-violations` and as
+  `warnings` on `GET /v1/connections`. (4) Air-gapped mode refuses platform stdio connections
+  unless `OAX_AIRGAPPED_STDIO=trusted`, and tenant stdio connections unless an isolating runner is
+  enabled. Platform connections are not subject to the command and environment rules. Run nodes
+  receive `stdio` in the step handover and reject it when older than this change (fail closed).
 
 - **Network start-up checks (W10-1-1)**: the api now aborts start-up (`tls_insecure`) when
   `NODE_TLS_REJECT_UNAUTHORIZED=0` is set, air-gapped or not; add the CA to a trust bundle or

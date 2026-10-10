@@ -89,3 +89,85 @@ holds even if a write grant reached the stored version some other way. Without a
 - Classification is declared by the integrator; the platform cannot verify that a tool declared
   `read` really has no side effects. Review profiles like any other grant.
 - Argument constraints are not part of a profile; use concrete grants for narrowing.
+
+## Stdio MCP servers
+
+A `stdio` connection starts a child process. Who defined the connection decides where it may run and
+what it may start (ADR 0016 section 3).
+
+| Connection scope | Where it may run | Rules for `command`, `args`, `env` |
+| --- | --- | --- |
+| `platform` (operator) | worker process or run node | none: operator configuration, like any binary of the worker image |
+| `tenant`, `team`, `agent` | **run nodes only** (`container`, `kubernetes-job`) | the rules below |
+
+**Where.** A step on `in-process` or `local` (the pipeline default, or `agents[].runtime.runner`)
+that holds a grant on a tenant-defined stdio connection is refused at publish with
+`mcp_stdio_requires_isolation` (`POST /v1/agents/validate` reports it as well). The worker repeats
+the check before it builds its gateway, so versions published earlier fail the run with the same
+code and an audit entry `mcp.stdio.refused`; the worker's gateway additionally refuses to start any
+stdio server that is not a platform one. Fix: `runtime.runner: container` (or `kubernetes-job`) for
+those steps.
+
+**What may be started** (checked when the connection is created or updated, again by the control
+node when a run node is prepared, and by the run node against its own image):
+
+1. `command` is an absolute, normalized path (no `.`, `..`, `//`, trailing `/`; no `PATH` lookup).
+2. The path is listed in the operator allowlist `OAX_MCP_STDIO_COMMANDS`: comma-separated absolute
+   files or `dir/*` (files directly inside `dir`, not below). The default is empty: no tenant stdio
+   command. Entries that are relative, contain other glob characters, or name a system directory as
+   prefix (`/*`, `/usr/bin/*`, `/bin/*`, `/tmp/*`, `/workspace/*`, ...) fail start-up. Use dedicated
+   directories of reviewed binaries.
+3. Symlinks: the run node resolves `command` with `realpath`; the **real path must also be
+   allowlisted**, so a link cannot lead out of the list (list the target too when you install via
+   links), and the real file's name is checked against rules 4 and 5. The control node resolves the
+   path only when the file exists on its own host. A command missing in the node image fails the
+   step.
+4. Refused whatever the allowlist says (`mcp_command_forbidden`), by the lower-cased name of the file
+   and of its real path, with a trailing version and `.exe/.cmd/.bat/.com/.ps1` removed (`pip3.11`,
+   `python3.12`):
+   - shells and multi-call binaries: `sh bash zsh dash ash ksh csh tcsh fish busybox toybox coreutils
+     cmd powershell pwsh`, and programs that execute their arguments: `env sudo su doas xargs nohup
+     timeout nice setsid chroot nsenter strace gdb find awk sed make tar rsync vim less man ...`;
+   - run-time installers and package managers: `npx npm pnpm pnpx yarn bunx uvx uv pip pipx poetry
+     conda gem cargo go composer apt apk dpkg brew corepack mvn gradle ...`;
+   - container, network and VCS tools: `docker podman nerdctl kubectl helm curl wget nc socat ssh
+     scp telnet openssl git svn`; the dynamic loader (`ld-linux*.so`, `ld.so`);
+   - interpreters that take their program on the command line (`tclsh jshell Rscript irb ...`).
+5. Interpreters that are useful for real servers (`node`, `python`, `perl`, `ruby`, `php`, `lua`,
+   `java`, `deno`, `bun`, `dotnet`) are accepted, but arguments are refused when they inject or load
+   code: `node -e/-p/-r/--eval/--print/--require/--import/--loader/--env-file/--inspect*/--run`,
+   `python -c` and `-m pip|ensurepip|venv|http|code|...`, `perl -e/-E/-M/-I/-x`, `ruby -e/-r/-I`,
+   `php -r/-d/-S`, `java -javaagent/-agentlib/@argfile`, `deno|bun` sub-commands that evaluate or
+   install and URL arguments, a bare `-` (program from stdin). Short options are matched inside
+   clusters (`-Sc`) and with attached values (`-ecode`), long options with `_` read as `-`. Arguments
+   are scanned up to a `--`; an option of the script itself such as `node server.js -e x` is
+   refused too (deliberate: the scan does not know where the script ends).
+6. At most 64 arguments of 4096 characters, no NUL bytes. There is no field for a working
+   directory, shell or uid (the schema rejects unknown keys); the child starts in the process
+   directory with `env` plus `PATH` only.
+7. `env` and `envSecrets` names must be valid identifiers and not reserved: the reserved names of
+   `agents[].credentials` (`PATH HOME USER SHELL PWD TMPDIR LANG NODE_OPTIONS NODE_PATH`, proxy
+   variables, `OAX_*`, `LD_*`, `DYLD_*`) plus other loader and interpreter hooks (`BASH_ENV ENV
+   IFS PYTHON* PERL5* RUBYOPT JAVA_TOOL_OPTIONS CLASSPATH GIT_* NODE_* NPM_* PIP_* UV_* XDG_*
+   SSL_CERT_* GLIBC_* MALLOC_* ...`), compared case-insensitively (`https_proxy`).
+
+Allowlist the binary, not a launcher: `/opt/mcp/bin/jira-mcp` is a fine entry, `/usr/bin/env` and
+`/bin/sh` are never accepted, and a wrapper script is as trusted as everything it calls. The
+allowlist is only as safe as the directories it names: do not list a directory a run can write to.
+
+**Existing connections.** Nothing is deleted or rewritten. A stored tenant stdio connection that
+breaks the rules is reported at start-up (warning and gauge `oax_mcp_stdio_violations`), listed by
+`GET /v1/connections/stdio-violations` (own tenant), shown as `warnings` on `GET /v1/connections`,
+and refused at run time with `mcp_command_forbidden` (the run fails with the reason; audit entry
+`mcp.stdio.refused`, metric `oax_mcp_stdio_refused_total{code}`). Fix it with `PUT` after the
+operator listed the binary, or delete it.
+
+**Air-gapped mode.** The air-gapped guard patches the sockets of the Node process; a child process is
+invisible to it. Start-up (and creating a connection) therefore refuses platform stdio connections
+unless `OAX_AIRGAPPED_STDIO=trusted` acknowledges that those servers share the worker's network, and
+refuses tenant stdio connections unless an isolating runner (`container`, `kubernetes-job`) is
+enabled, because those run only in nodes on the closed runner network.
+
+**Not covered yet** (ADR 0016 slices S2 and later): per-server egress rules (every stdio server of a
+step shares the step's egress grant), the shared UID of a node's children, and signed toolbox
+images.

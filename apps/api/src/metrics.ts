@@ -24,6 +24,9 @@ export class Metrics {
   /** Counters of the tracing pipeline itself (ADR 0015 section 8); label values are closed sets. */
   readonly otel: TelemetryStats;
   readonly roleBindingsShadow: Counter<'outcome'>;
+  /** Stored tenant stdio MCP connections that break the ADR 0016 S0 rules (no tenant labels). */
+  readonly mcpStdioViolations: Gauge<string>;
+  readonly mcpStdioRefused: Counter<'code'>;
 
   constructor(prefix = 'oax_') {
     collectDefaultMetrics({ register: this.registry, prefix });
@@ -46,6 +49,17 @@ export class Metrics {
         'Shadow comparison of the tenant role resolver with the legacy bindings (ADR 0014 S1): ' +
         'outcome match, mismatch or error; the legacy result stays authoritative',
       labelNames: ['outcome'],
+      registers: [this.registry],
+    });
+    this.mcpStdioViolations = new Gauge({
+      name: `${prefix}mcp_stdio_violations`,
+      help: 'Stored tenant stdio MCP connections that violate the stdio rules (ADR 0016 S0)',
+      registers: [this.registry],
+    });
+    this.mcpStdioRefused = new Counter({
+      name: `${prefix}mcp_stdio_refused_total`,
+      help: 'Stdio MCP servers refused at run time (code: error code)',
+      labelNames: ['code'],
       registers: [this.registry],
     });
     this.runsCreated = new Counter({

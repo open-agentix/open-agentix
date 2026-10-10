@@ -9,6 +9,7 @@ import {
   type PriceEntry,
   type RoleBinding,
 } from '@openagentix/core';
+import { parseStdioAllowlist } from '@openagentix/mcp';
 import { parseProviderConfigs, type ProviderConfig } from '@openagentix/providers';
 import {
   ContainerRunnerConfigSchema,
@@ -239,6 +240,13 @@ export const EnvSchema = z.object({
   /** Reserved outbound features; refused while air-gapped, checked so they cannot be enabled by mistake. */
   OAX_CATALOG_REFRESH_URL: z.string().url().optional(),
   OAX_WEBHOOK_OUT_URLS: z.string().default(''),
+  /**
+   * Allowlist of absolute stdio MCP commands that tenant-defined connections may start in run nodes
+   * (paths or `dir/*`; default empty = none; ADR 0016 section 3.2).
+   */
+  OAX_MCP_STDIO_COMMANDS: z.string().default(''),
+  /** `trusted`: platform stdio connections may start in air-gapped mode (child sockets are not guarded). */
+  OAX_AIRGAPPED_STDIO: z.enum(['trusted']).optional(),
 });
 
 export interface Config {
@@ -365,8 +373,12 @@ export interface Config {
     /** `anthropic-beta` values the Anthropic pass-through surface forwards (allowlist). */
     anthropicBetas: string[];
   };
+  /** Stdio MCP servers (ADR 0016): the operator allowlist for tenant-defined commands. */
+  mcp: { stdioCommands: string[] };
   airgap: {
     enabled: boolean;
+    /** `OAX_AIRGAPPED_STDIO=trusted`: platform stdio connections are accepted in air-gapped mode. */
+    stdioTrusted: boolean;
     /** Raw `OAX_AIRGAPPED_ALLOW` (hosts, suffixes, CIDRs). */
     allow: string;
     catalogRefreshUrl: string | undefined;
@@ -552,13 +564,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         /^[a-z0-9._-]{1,64}$/.test(b),
       ),
     },
+    mcp: { stdioCommands: stdioCommandsOf(e.OAX_MCP_STDIO_COMMANDS) },
     airgap: {
       enabled: e.OAX_AIRGAPPED,
+      stdioTrusted: e.OAX_AIRGAPPED_STDIO === 'trusted',
       allow: e.OAX_AIRGAPPED_ALLOW,
       catalogRefreshUrl: e.OAX_CATALOG_REFRESH_URL,
       webhookOutUrls: list(e.OAX_WEBHOOK_OUT_URLS),
     },
   };
+}
+
+function stdioCommandsOf(raw: string): string[] {
+  try {
+    return parseStdioAllowlist(raw);
+  } catch (e) {
+    throw new OaxError('config_invalid', `invalid configuration: ${(e as Error).message}`);
+  }
 }
 
 const list = (s: string) =>

@@ -9,6 +9,7 @@ import {
   ConnectionTestBody,
   ConnectionTestResultSchema,
   ConnectionUpdateBody,
+  StdioViolationsSchema,
   DecisionSchema,
   ErrorSchema,
   EvaluateBody,
@@ -38,7 +39,9 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
       },
     },
     async (req) => ({
-      items: (await catalog.listConnections(principalOf(req))).map(connectionDto),
+      items: (await catalog.listConnections(principalOf(req))).map((c) =>
+        connectionDto(c, catalog.stdioIssues(c)),
+      ),
     }),
   );
 
@@ -54,10 +57,33 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
         response: { 201: ConnectionSchema, 409: ErrorSchema },
       },
     },
-    async (req, reply) =>
-      reply
-        .status(201)
-        .send(connectionDto(await catalog.createConnection(principalOf(req), req.body))),
+    async (req, reply) => {
+      const row = await catalog.createConnection(principalOf(req), req.body);
+      return reply.status(201).send(connectionDto(row, catalog.stdioIssues(row)));
+    },
+  );
+
+  app.get(
+    '/v1/connections/stdio-violations',
+    {
+      config: { access: 'connections:read' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'Stored tenant stdio connections that break the stdio rules (ADR 0016); they fail closed at run time',
+        security: sec,
+        response: { 200: StdioViolationsSchema },
+      },
+    },
+    async (req) => ({
+      items: (await catalog.stdioViolations(principalOf(req))).map((v) => ({
+        connection: connectionDto(
+          v.connection,
+          v.issues.map((i) => i.message),
+        ),
+        issues: v.issues,
+      })),
+    }),
   );
 
   app.post(
@@ -119,7 +145,10 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
         response: { 200: ConnectionSchema },
       },
     },
-    async (req) => connectionDto(await catalog.getConnection(principalOf(req), req.params.id)),
+    async (req) => {
+      const row = await catalog.getConnection(principalOf(req), req.params.id);
+      return connectionDto(row, catalog.stdioIssues(row));
+    },
   );
 
   app.put(
@@ -135,10 +164,10 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
         response: { 200: ConnectionSchema },
       },
     },
-    async (req) =>
-      connectionDto(
-        await catalog.updateConnection(principalOf(req), req.params.id, req.body.config),
-      ),
+    async (req) => {
+      const row = await catalog.updateConnection(principalOf(req), req.params.id, req.body.config);
+      return connectionDto(row, catalog.stdioIssues(row));
+    },
   );
 
   app.delete(

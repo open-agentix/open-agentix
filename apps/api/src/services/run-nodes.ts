@@ -298,6 +298,14 @@ export class RunNodesService {
     delete (spec as Partial<AgentSpec>).when;
     delete (spec as Partial<AgentSpec>).input;
     delete (spec as Partial<AgentSpec>).credentials;
+    // ADR 0016 S0: a stored tenant stdio connection that breaks the command rules fails closed
+    // here (audit entry, error visible with the run), before a node exists for the step.
+    const stdioScope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
+    const tenantStdio = await this.catalog.assertStdioRunnable(stdioScope, this.serversOf(agent), {
+      runId,
+      actor: `worker:${orchestratorId}`,
+      step: agent.id,
+    });
     const handover: StepHandover = {
       agentId: agent.id,
       agent: spec,
@@ -311,6 +319,9 @@ export class RunNodesService {
         budget: this.remainingBudget(definition.budget, run, now.getTime()),
       },
       mcp: (await this.configsFor(run, agent)).map((c) => this.stripSecrets(c)),
+      ...(tenantStdio.length > 0
+        ? { stdio: { tenantServers: tenantStdio, allowlist: cfg.mcp.stdioCommands } }
+        : {}),
     };
     await this.ctx.db.insert(runNodeSessions).values({
       id: sessionId,

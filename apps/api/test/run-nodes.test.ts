@@ -18,6 +18,8 @@ const ENV = {
   OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',
   OAX_CONTAINER_EGRESS_GRANT_SECRET: 'g'.repeat(40),
   OAX_CONTAINER_EGRESS_ALLOW: 'jira.example.org,*.corp.example',
+  // tenant stdio servers are refused unless the operator listed the binary (ADR 0016 S0)
+  OAX_MCP_STDIO_COMMANDS: '/opt/mcp/bin/*',
   // a platform provider key: never handed to a node, whatever the tenant allows
   OAX_PROVIDERS: JSON.stringify([
     { kind: 'simulated', name: 'simulated' },
@@ -134,7 +136,7 @@ beforeAll(async () => {
       name: 'jira',
       config: {
         transport: 'stdio',
-        command: 'jira-mcp',
+        command: '/opt/mcp/bin/jira-mcp',
         env: { JIRA_URL: 'https://jira.example.org' },
         envSecrets: { JIRA_TOKEN: 'trivy-hook' },
         tools: { get_issue: { access: 'read' } },
@@ -870,7 +872,10 @@ describe('tenants cannot reach each other through spelling', () => {
         method: 'POST',
         url: '/v1/connections',
         token,
-        payload: { name, config: { transport: 'stdio', command: 'x', envSecrets: { T: ref } } },
+        payload: {
+          name,
+          config: { transport: 'stdio', command: '/opt/mcp/bin/x', envSecrets: { T: ref } },
+        },
       });
     expect((await conn('c-a', 'zeta.token')).statusCode).toBe(201);
     expect((await conn('c-b', 'ZETA-token')).statusCode).toBe(201);

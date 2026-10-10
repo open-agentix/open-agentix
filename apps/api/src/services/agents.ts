@@ -139,8 +139,14 @@ export class AgentsService {
       agentId: '',
     });
     const { errors } = expandProfiles(result.definition, catalog);
-    if (errors.length === 0) return result;
-    return { ...result, valid: false, definition: null, errors: [...result.errors, ...errors] };
+    const stdio = await this.catalog.stdioIsolationIssues(result.definition, {
+      tenantId: principal.tenantId,
+      teamId: await this.teamIdForOwner(principal.tenantId, result.definition.owner),
+      agentId: '',
+    });
+    const all = [...errors, ...stdio.map(({ path, message }) => ({ path, message }))];
+    if (all.length === 0) return result;
+    return { ...result, valid: false, definition: null, errors: [...result.errors, ...all] };
   }
 
   /** `opts.id` fixes the agent id (deterministic demo seed); random when omitted. */
@@ -518,6 +524,33 @@ export class AgentsService {
         400,
         'validation_failed',
         'tool grants are not allowed on this platform',
+        errors,
+      );
+    }
+    // ADR 0016 S0: a tenant-defined stdio server never starts in the worker process.
+    const stdio = await this.catalog.stdioIsolationIssues(def, {
+      tenantId: principal.tenantId,
+      teamId: agent.teamId,
+      agentId: id,
+    });
+    if (stdio.length > 0) {
+      const errors = stdio.map(({ path, message }) => ({ path, message }));
+      await this.audit.append({
+        actor: principal.userId,
+        tenantId: principal.tenantId,
+        action: 'agent.publish.denied',
+        target: id,
+        payload: {
+          version: def.version,
+          digest: def.digest,
+          code: 'mcp_stdio_requires_isolation',
+          errors,
+        },
+      });
+      throw new HttpError(
+        400,
+        'mcp_stdio_requires_isolation',
+        'tenant stdio connections run only in run nodes',
         errors,
       );
     }

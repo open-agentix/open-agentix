@@ -129,6 +129,12 @@ export function ConnectionsPage() {
                     <Badge tone="accent">{t(`connections.kinds.${c.kind}`)}</Badge>
                   </span>
                 </div>
+                {c.warnings.length > 0 ? (
+                  <div role="alert" className="muted">
+                    <Badge tone="danger">{t('connections.stdioRefused')}</Badge>{' '}
+                    {c.warnings.join(' ')}
+                  </div>
+                ) : null}
                 {c.kind === 'model' ? <Code>{String(c.config.kind ?? '')}</Code> : null}
                 {typeof c.config.url === 'string' ? <Code>{c.config.url}</Code> : null}
                 {c.kind === 'model' && Array.isArray(c.config.models) && c.config.models.length ? (
