@@ -2,33 +2,29 @@ import { randomUUID } from 'node:crypto';
 import {
   GRANTABLE_ROLES,
   ROLE_PERMISSIONS,
-  appliedAt,
-  isRole,
-  pathIds,
   type Permission,
   type GrantableRole,
   type Principal,
-  type RawGrants,
   type Role,
   type RoleNode,
 } from '@openagentix/core';
-import { and, asc, count, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import {
-  agentRoleBindings,
-  agents,
-  teamMembers,
-  teams,
-  tenantRoleBindings,
-  tenants,
-  users,
-} from '../db/schema.js';
+import { tenantRoleBindings, tenants, users } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import { decodeTimeCursor, encodeTimeCursor } from '../pagination.js';
 import type { AuditService } from './audit.js';
 import type { IdentityService, TenantRow } from './identity.js';
-import { loadRawGrants } from './role-bindings.js';
+import { lockBindings, lockTreeShared } from './tree-lock.js';
+import {
+  assertNotLastAdmin,
+  coversSubtree,
+  loadActor,
+  permissionsAt,
+  visibleUser,
+  type Actor,
+} from './grant-authority.js';
 import { TenantAccess } from './tenant-access.js';
 import { TenantTree } from './tenant-tree.js';
 
@@ -41,13 +37,12 @@ import { TenantTree } from './tenant-tree.js';
  * binding lock (binding writes of one organisation are serialised, so the grantor's coverage and
  * the last-admin check are read after every earlier write committed), then **re-reads the grantor's
  * grants from the database** (never from the cached principal) and evaluates the nine grant rules
- * with the same resolver the request path uses, clamp included. Epoch bumps come from the triggers
+ * with the same resolver the request path uses. Epoch bumps come from the triggers
  * of migration 0021; cached principals of the grantee are dropped after the commit.
  *
  * Node-level authority only: team and agent scoped bindings never give the right to grant.
  */
 
-const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 const LIST_NODE_CAP = 50;
 /**
  * `created_at` as the API sees it. The database keeps microseconds, a JavaScript date (and so the
@@ -103,14 +98,6 @@ export interface InheritancePreview {
   }[];
 }
 
-/** What the grantor holds, read inside the transaction. */
-interface Actor {
-  userId: string;
-  platformAdmin: boolean;
-  raw: RawGrants;
-  scopes: readonly Permission[] | undefined;
-}
-
 type Row = typeof tenantRoleBindings.$inferSelect;
 
 function pgCode(e: unknown): string | undefined {
@@ -143,48 +130,12 @@ export class TenantRoleBindingsService {
   }
 
   private async lock(tx: Db, rootId: string): Promise<void> {
-    await tx.execute(sql`select pg_advisory_xact_lock_shared(hashtext(${rootId}))`);
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`role-bindings:${rootId}`}))`);
+    await lockTreeShared(tx, rootId);
+    await lockBindings(tx, rootId);
   }
 
-  private async loadActor(tx: Db, p: Principal): Promise<Actor> {
-    const [u] = await tx.select().from(users).where(eq(users.id, p.userId));
-    if (!u || u.disabled) throw forbidden();
-    const loaded = await loadRawGrants(tx, {
-      id: u.id,
-      tenantId: u.tenantId,
-      platformAdmin: u.platformAdmin,
-    });
-    if (!loaded) throw forbidden();
-    return { userId: u.id, platformAdmin: u.platformAdmin, raw: loaded.raw, scopes: p.scopes };
-  }
-
-  /** Node-level permissions of the grantor at `node` (platform admin: admin; token scopes apply). */
   private permissionsAt(actor: Actor, node: RoleNode): Set<Permission> {
-    const out = new Set<Permission>();
-    for (const b of appliedAt(actor.raw, node, { now: this.ctx.now() })) {
-      if (b.source !== 'direct' && b.source !== 'inherited' && b.source !== 'platform') continue;
-      for (const perm of b.permissions) out.add(perm);
-    }
-    if (actor.scopes) for (const perm of out) if (!actor.scopes.includes(perm)) out.delete(perm);
-    return out;
-  }
-
-  /**
-   * Whether the grantor's inheriting bindings on `node` or an ancestor together cover everything
-   * `role` gives (ADR 0014 rule 2: a grant that inherits is a grant on the whole subtree).
-   */
-  private coversSubtree(actor: Actor, node: RoleNode, role: Role): boolean {
-    if (actor.platformAdmin) return true;
-    const chain = new Set(pathIds(node.path));
-    const now = this.ctx.now().getTime();
-    const have = new Set<Permission>();
-    for (const b of actor.raw.nodeBindings) {
-      if (!b.inherit || b.useCase !== null || !isRole(b.role) || !chain.has(b.tenantId)) continue;
-      if (b.expiresAt !== null && !(b.expiresAt.getTime() > now)) continue;
-      for (const perm of ROLE_PERMISSIONS[b.role]) have.add(perm);
-    }
-    return ROLE_PERMISSIONS[role].every((perm) => have.has(perm));
+    return permissionsAt(actor, node, this.ctx.now());
   }
 
   /** Rules 1 and 2 for one tuple: nothing above the grantor's own authority, coverage for `inherit`. */
@@ -197,7 +148,7 @@ export class TenantRoleBindingsService {
   ): void {
     if (!ROLE_PERMISSIONS[role].every((perm) => perms.has(perm)))
       throw deny('grant_exceeds_own', `role ${role} gives more than the permissions you hold here`);
-    if (inherit && !this.coversSubtree(actor, node, role))
+    if (inherit && !coversSubtree(actor, node, role, this.ctx.now()))
       throw deny(
         'inheritance_required',
         'an inheriting binding needs an inheriting binding of at least the same role on this ' +
@@ -218,56 +169,11 @@ export class TenantRoleBindingsService {
    * agent) inside it. Platform admins see every user but still cannot cross organisations.
    */
   private async grantee(tx: Db, actor: Actor, node: TenantRow, userId: string) {
-    const [u] = await tx.select().from(users).where(eq(users.id, userId));
-    if (actor.platformAdmin) {
-      if (!u) throw notFound('user');
-    } else {
-      const nodes = await tx
-        .select({ id: tenants.id, rootId: tenants.rootId, path: tenants.path })
-        .from(tenants)
-        .where(eq(tenants.rootId, node.rootId));
-      const covered = nodes
-        .filter((n) => this.permissionsAt(actor, n).has('users:read'))
-        .map((n) => n.id);
-      const probe = u?.id ?? NIL_UUID;
-      const hit = async (q: PromiseLike<{ n: number }[]>) => Number((await q)[0]?.n ?? 0) > 0;
-      const none = covered.length === 0;
-      const ids = none ? [NIL_UUID] : covered;
-      const visible =
-        (await hit(
-          tx
-            .select({ n: count() })
-            .from(users)
-            .where(and(eq(users.id, probe), inArray(users.tenantId, ids))),
-        )) ||
-        (await hit(
-          tx
-            .select({ n: count() })
-            .from(tenantRoleBindings)
-            .where(
-              and(eq(tenantRoleBindings.userId, probe), inArray(tenantRoleBindings.tenantId, ids)),
-            ),
-        )) ||
-        (await hit(
-          tx
-            .select({ n: count() })
-            .from(teamMembers)
-            .innerJoin(teams, eq(teams.id, teamMembers.teamId))
-            .where(and(eq(teamMembers.userId, probe), inArray(teams.tenantId, ids))),
-        )) ||
-        (await hit(
-          tx
-            .select({ n: count() })
-            .from(agentRoleBindings)
-            .innerJoin(agents, eq(agents.id, agentRoleBindings.agentId))
-            .where(and(eq(agentRoleBindings.userId, probe), inArray(agents.tenantId, ids))),
-        ));
-      if (!u || none || !visible) throw notFound('user');
-    }
+    const u = await visibleUser(tx, actor, node, userId, this.ctx.now());
     const [home] = await tx
       .select({ rootId: tenants.rootId })
       .from(tenants)
-      .where(eq(tenants.id, u!.tenantId));
+      .where(eq(tenants.id, u.tenantId));
     if (!home || home.rootId !== node.rootId)
       throw new HttpError(
         422,
@@ -275,46 +181,9 @@ export class TenantRoleBindingsService {
         'a role can only be bound inside the organisation of the user',
       );
     // After the visibility check, so a disabled user is not an oracle for hidden users.
-    if (u!.disabled)
+    if (u.disabled)
       throw new HttpError(422, 'grantee_disabled', 'a role cannot be bound to a disabled user');
-    return u!;
-  }
-
-  /** Rule 8: would this change leave the organisation root without an inheriting admin? */
-  private async assertNotLastAdmin(
-    tx: Db,
-    actor: Actor,
-    node: TenantRow,
-    before: Row,
-    after: { role: string; inherit: boolean; expiresAt: Date | null } | null,
-  ): Promise<void> {
-    if (actor.platformAdmin || node.parentId !== null) return;
-    const counts = (b: { role: string; inherit: boolean; expiresAt: Date | null }) =>
-      b.role === 'admin' && b.inherit && b.expiresAt === null;
-    if (before.useCase !== null || !counts(before) || (after && counts(after))) return;
-    const [others] = await tx
-      .select({ n: count() })
-      .from(tenantRoleBindings)
-      .innerJoin(users, eq(users.id, tenantRoleBindings.userId))
-      .where(
-        and(
-          eq(tenantRoleBindings.tenantId, node.id),
-          eq(tenantRoleBindings.role, 'admin'),
-          isNull(tenantRoleBindings.useCase),
-          eq(tenantRoleBindings.inherit, true),
-          // Same shape as `counts`: a co-admin whose binding expires does not keep the organisation
-          // administered (it would be left without one at that second).
-          isNull(tenantRoleBindings.expiresAt),
-          eq(users.disabled, false),
-          ne(tenantRoleBindings.id, before.id),
-        ),
-      );
-    if (Number(others?.n ?? 0) === 0)
-      throw new HttpError(
-        409,
-        'last_admin',
-        'this is the last inheriting administrator of the organisation',
-      );
+    return u;
   }
 
   private async viewOf(tx: Db, id: string): Promise<BindingView> {
@@ -365,7 +234,7 @@ export class TenantRoleBindingsService {
     q: { userId?: string | undefined; limit: number; cursor?: string | undefined },
   ): Promise<{ items: BindingView[]; nextCursor: string | null }> {
     const node = await this.visibleNode(p, tenantId);
-    const actor = await this.loadActor(this.ctx.db, p);
+    const actor = await loadActor(this.ctx.db, p);
     if (!this.permissionsAt(actor, node).has('users:read')) throw forbidden();
     const cursor = decodeTimeCursor(q.cursor);
     const where = and(
@@ -399,7 +268,7 @@ export class TenantRoleBindingsService {
       .transaction(async (t) => {
         const tx = t as unknown as Db;
         await this.lock(tx, node.rootId);
-        const actor = await this.loadActor(tx, p);
+        const actor = await loadActor(tx, p);
         const perms = this.permissionsAt(actor, node);
         // Rule 1 (permission): users:write at this node.
         if (!perms.has('users:write')) throw forbidden();
@@ -486,7 +355,7 @@ export class TenantRoleBindingsService {
       .transaction(async (t) => {
         const tx = t as unknown as Db;
         await this.lock(tx, node.rootId);
-        const actor = await this.loadActor(tx, p);
+        const actor = await loadActor(tx, p);
         const perms = this.permissionsAt(actor, node);
         if (!perms.has('users:write')) throw forbidden();
         const row = await this.binding(tx, node, bindingId);
@@ -527,7 +396,7 @@ export class TenantRoleBindingsService {
         this.assertMayHold(actor, perms, node, row.role as Role, row.inherit);
         this.assertMayHold(actor, perms, node, next.role, next.inherit);
         if (changes.some((c) => c.field === 'expiresAt')) this.checkExpiry(next.expiresAt);
-        await this.assertNotLastAdmin(tx, actor, node, row, next);
+        await assertNotLastAdmin(tx, actor, node, row, next);
         await tx
           .update(tenantRoleBindings)
           .set({ role: next.role, inherit: next.inherit, expiresAt: next.expiresAt })
@@ -558,7 +427,7 @@ export class TenantRoleBindingsService {
     const userId = await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
       await this.lock(tx, node.rootId);
-      const actor = await this.loadActor(tx, p);
+      const actor = await loadActor(tx, p);
       const perms = this.permissionsAt(actor, node);
       const [found] = await tx
         .select()
@@ -577,7 +446,7 @@ export class TenantRoleBindingsService {
           'this binding mirrors the global roles of the user; change the global roles instead',
         );
       if (!own) this.assertMayHold(actor, perms, node, found.role as Role, found.inherit);
-      await this.assertNotLastAdmin(tx, actor, node, found, null);
+      await assertNotLastAdmin(tx, actor, node, found, null);
       await tx.delete(tenantRoleBindings).where(eq(tenantRoleBindings.id, found.id));
       await this.audit.append(
         {
@@ -633,7 +502,7 @@ export class TenantRoleBindingsService {
       throw new HttpError(422, 'validation_failed', 'the tenant is not an organisation root');
     const roles = [...new Set(input.roles)];
     const run = async (tx: Db): Promise<InheritancePreview> => {
-      const actor = await this.loadActor(tx, p);
+      const actor = await loadActor(tx, p);
       if (!actor.platformAdmin) throw forbidden('platform operator access required');
       const orgNodes = await tx
         .select()

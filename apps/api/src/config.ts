@@ -78,6 +78,16 @@ export const EnvSchema = z.object({
   OAX_TOKEN_MAX_TTL_DAYS: int(365),
   OAX_TENANT_MAX_DEPTH: z.coerce.number().int().min(1).max(32).default(32),
   OAX_TENANT_MAX_NODES_PER_ROOT: z.coerce.number().int().min(1).default(1000),
+  /** Slugs a tenant admin cannot claim (comma separated), e.g. those with staged secrets. */
+  OAX_TENANT_RESERVED_SLUGS: z
+    .string()
+    .default('')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((x) => x.trim().toLowerCase())
+        .filter((x) => x.length > 0),
+    ),
   /** Role bindings one user may hold (ADR 0014 3.1); more is `422 binding_limit_exceeded`. */
   OAX_MAX_BINDINGS_PER_USER: z.coerce.number().int().min(1).max(10_000).default(200),
   OAX_AUTH_CACHE_TTL_SECONDS: int(30),
@@ -323,7 +333,12 @@ export interface Config {
   rateLimit: { max: number; loginMax: number; planMax: number };
   bodyLimit: number;
   /** Tenant tree guards (ADR 0013): levels below a root (1 to 32) and nodes per organisation. */
-  tenancy: { maxDepth: number; maxNodesPerRoot: number; maxBindingsPerUser: number };
+  tenancy: {
+    maxDepth: number;
+    maxNodesPerRoot: number;
+    maxBindingsPerUser: number;
+    reservedSlugs: string[];
+  };
   auth: {
     bootstrapAdmin: { email: string; password: string } | null;
     sessionTtlSeconds: number;
@@ -553,6 +568,7 @@ function buildConfig(
     tenancy: {
       maxDepth: e.OAX_TENANT_MAX_DEPTH,
       maxNodesPerRoot: e.OAX_TENANT_MAX_NODES_PER_ROOT,
+      reservedSlugs: e.OAX_TENANT_RESERVED_SLUGS,
       maxBindingsPerUser: e.OAX_MAX_BINDINGS_PER_USER,
     },
     auth: {

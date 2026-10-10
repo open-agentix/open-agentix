@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
-  INHERITED_READ_ONLY,
   PERMISSIONS,
+  ROLE_PERMISSIONS,
   bindingFingerprint,
   type Principal,
   type Role,
@@ -26,7 +26,7 @@ import { testNode, type TestNode } from './helpers.js';
 
 /**
  * ADR 0014 slice S2 (#187, #227): the acting node can be any visible node, permissions are
- * evaluated there by the resolver (read-only for inherited bindings), unknown and invisible nodes
+ * evaluated there by the resolver (inherited bindings give their whole role, ADR 0014 S5), unknown and invisible nodes
  * are indistinguishable, and a cached principal is rejected as soon as the authz epoch of its
  * organisation moved. Runs on PGlite and, with OAX_TEST_DATABASE_URL, on a real PostgreSQL.
  *
@@ -130,6 +130,8 @@ describe.each(sqlTargets)('acting node and read path (%s)', (_kind, enabled, ope
     // inheriting admin of div-1, living in team-1
     await mkUser('inh-admin-div1', 'team-1', []);
     await bind(uid['inh-admin-div1']!, id['div-1']!, 'admin', { inherit: true });
+    // direct administrator of div-1 (the control for the route-table walk)
+    await mkUser('direct-div1', 'div-1', ['admin']);
     // home org-a, but a team membership in a team of div-1 only
     await mkUser('team-only', 'org-a', []);
     const team = await n.services.identity.createTeam(
@@ -269,55 +271,97 @@ describe.each(sqlTargets)('acting node and read path (%s)', (_kind, enabled, ope
     });
   });
 
-  describe('read-only clamp (INHERITED_READ_ONLY)', () => {
-    it('gives an inherited admin read permissions only, on every route', async () => {
-      const me = (await get(tok['inh-admin']!, '/v1/me', 'div-1')).json();
-      expect(me.permissions.length).toBeGreaterThan(5);
-      for (const p of me.permissions) expect(INHERITED_READ_ONLY).toContain(p);
+  describe('write inheritance (S5): the role is the ceiling', () => {
+    const walk = async (token: string, ref: string) => {
       const routes = routeIndex(n.app).filter((r) =>
         (PERMISSIONS as readonly string[]).includes(String(r.access)),
       );
-      expect(routes.length).toBeGreaterThan(40);
-      let writes = 0;
-      let reads = 0;
+      const out = new Map<string, number>();
       for (const r of routes) {
         const url = r.url.replace(/:[A-Za-z]+/g, '00000000-0000-4000-8000-000000000000');
         const res = await n.req({
           method: r.method as 'GET',
           url,
-          token: tok['inh-admin']!,
-          headers: { 'x-oax-tenant': 'org-a/div-1' },
+          token,
+          headers: { 'x-oax-tenant': ref },
           payload: r.method === 'GET' || r.method === 'DELETE' ? undefined : {},
         });
-        if ((INHERITED_READ_ONLY as readonly string[]).includes(String(r.access))) {
+        out.set(`${r.method} ${r.url}`, res.statusCode);
+      }
+      return { routes, out };
+    };
+
+    it('an inherited admin gets the same permissions as a direct admin of that node', async () => {
+      const inh = (await get(tok['inh-admin']!, '/v1/me', 'div-1')).json();
+      const direct = (await get(tok['direct-div1']!, '/v1/me', 'div-1')).json();
+      expect(inh.permissions).toEqual(direct.permissions);
+      expect(inh.permissions).toContain('agents:write');
+      expect(inh.permissions).toContain('users:write');
+    });
+
+    it('route-table walk: inherited admin = direct admin on every permission route, viewer is refused every write', async () => {
+      const inh = await walk(tok['inh-admin']!, 'org-a/div-1');
+      const direct = await walk(tok['direct-div1']!, 'org-a/div-1');
+      const viewer = await walk(tok['inh-viewer']!, 'org-a/div-1');
+      let writes = 0;
+      let reads = 0;
+      let adminWrites = 0;
+      for (const r of inh.routes) {
+        const key = `${r.method} ${r.url}`;
+        expect(inh.out.get(key), `${key}: inherited vs direct`).toBe(direct.out.get(key));
+        expect(inh.out.get(key), key).not.toBe(401);
+        const readOnly = ROLE_PERMISSIONS.viewer.includes(String(r.access) as never);
+        if (readOnly) {
           reads++;
-          expect(res.statusCode, `${r.method} ${r.url} (read)`).not.toBe(403);
+          expect(viewer.out.get(key), `${key} (viewer read)`).not.toBe(403);
         } else {
           writes++;
-          expect(res.statusCode, `${r.method} ${r.url} (write)`).toBe(403);
+          expect(viewer.out.get(key), `${key} (viewer write)`).toBe(403);
+          if (inh.out.get(key) !== 403) adminWrites++;
         }
-        expect(res.statusCode).not.toBe(401);
       }
+      // most write routes answer the inherited admin with something other than 403 (a few have
+      // further rules of their own, such as operator-only routes, and answer direct admins alike)
+      expect(adminWrites).toBeGreaterThan(15);
       expect(writes).toBeGreaterThan(15);
       expect(reads).toBeGreaterThan(10);
     });
 
-    it('control: the same admin holding the binding directly may write', async () => {
-      const r = await n.req({
+    it('control: a non-inheriting admin of the parent still cannot act below', async () => {
+      const refused = await n.req({
+        method: 'POST',
+        url: '/v1/teams',
+        token: tok['plain-admin']!,
+        headers: { 'x-oax-tenant': 'div-1' },
+        payload: { slug: 'ctl2', name: 'Ctl' },
+      });
+      expect(refused.statusCode).toBe(404);
+      const own = await n.req({
         method: 'POST',
         url: '/v1/teams',
         token: tok['plain-admin']!,
         payload: { slug: 'ctl', name: 'Ctl' },
       });
-      expect(r.statusCode).toBe(201);
-      const refused = await n.req({
+      expect(own.statusCode).toBe(201);
+    });
+
+    it('an inherited admin writes at the node it acts in, and only there', async () => {
+      const ok = await n.req({
         method: 'POST',
         url: '/v1/teams',
         token: tok['inh-admin']!,
         headers: { 'x-oax-tenant': 'div-1' },
-        payload: { slug: 'ctl2', name: 'Ctl' },
+        payload: { slug: 'by-inh', name: 'By inherited admin' },
       });
-      expect(refused.statusCode).toBe(403);
+      expect(ok.statusCode).toBe(201);
+      // the team lives in div-1: visible there, absent in the sibling and in the home node
+      const list = async (ref: string) =>
+        (await get(tok['inh-admin']!, '/v1/teams', ref))
+          .json()
+          .items.map((t: { slug: string }) => t.slug);
+      expect(await list('div-1')).toContain('by-inh');
+      expect(await list('div-2')).not.toContain('by-inh');
+      expect(await list('org-a')).not.toContain('by-inh');
     });
   });
 

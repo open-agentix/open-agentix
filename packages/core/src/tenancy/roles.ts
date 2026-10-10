@@ -1,5 +1,4 @@
 import {
-  PERMISSIONS,
   ROLE_PERMISSIONS,
   bindingPermissions,
   isRole,
@@ -24,16 +23,15 @@ import { MAX_TENANT_DEPTH, isValidPath, pathIds } from './path.js';
  * - **Never across organisations.** Nothing applies at a node of another organisation than the
  *   user's home organisation (the database enforces the same with a trigger).
  * - **Team and agent bindings never inherit**: they apply at the node that owns the team or agent.
+ * - **The role is the ceiling.** An inherited binding gives what its role gives at the node where
+ *   it applies, after restrictions, never more (write inheritance, slice S5; the read-only clamp of
+ *   the first slices is gone). What an inheriting administrator may do to the tree and to grants is
+ *   decided by the grant rules, not here.
  * - **Union, minus restrictions.** Restrictions only ever remove permissions, never from `admin`
  *   and never for bindings that sit above the restricting node.
  * - **Fail closed.** Anything that does not look right (a malformed node path, an unknown role, a
  *   `pentest` binding without an expiry, a use-case binding before slice S8) contributes nothing.
  */
-
-/** The permissions an inherited binding may use while the first slices of ADR 0014 are live. */
-export const INHERITED_READ_ONLY: readonly Permission[] = PERMISSIONS.filter(
-  (p) => p.endsWith(':read') || p === 'audit:verify',
-);
 
 /** The placement of a node: what the resolver needs to know about the acting node. */
 export interface RoleNode {
@@ -91,11 +89,6 @@ export interface ResolveOptions {
   now: Date;
   /** Restrictions on the chain of the acting node; anything else is ignored. */
   restrictions?: readonly RoleRestriction[] | undefined;
-  /**
-   * Clamp inherited bindings to {@link INHERITED_READ_ONLY} (default `true`). Slice S5 of ADR 0014
-   * turns it off; until then no write authority may flow down the tree.
-   */
-  clampInherited?: boolean | undefined;
   /**
    * A platform admin is `admin` at every node (ADR 0013 7.1; default `true`). The shadow check of
    * slice S1 passes `false` because today a platform admin acts with the roles of the home tenant.
@@ -177,7 +170,6 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
   if (node.rootId !== raw.homeRootId) return [];
 
   const now = opts.now.getTime();
-  const clamp = opts.clampInherited !== false;
   const position = new Map(chain.map((id, i) => [id, i] as const));
   const restrictions = opts.restrictions ?? [];
 
@@ -216,9 +208,9 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
     if (b.tenantId === node.id) source = 'direct';
     else if (b.inherit) source = 'inherited';
     else continue; // an ancestor's binding that did not opt in
-    let permissions = permissionsFor(b.role, at);
-    if (source === 'inherited' && clamp)
-      permissions = permissions.filter((p) => INHERITED_READ_ONLY.includes(p));
+    // No further clamp for inherited bindings (slice S5): the role, minus restrictions, is the
+    // ceiling at the node where it applies, exactly as for a binding held there directly.
+    const permissions = permissionsFor(b.role, at);
     out.push({
       role: b.role,
       teamId: null,
