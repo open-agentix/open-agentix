@@ -24,12 +24,20 @@ export const CONTENT_KEYS: readonly string[] = [CONTENT_INPUT_KEY, CONTENT_OUTPU
 
 /** Characters of one message that are scanned for secrets and personal data (the tail is kept). */
 const SCAN_MAX_CHARS = 32_768;
+/**
+ * Characters scanned in all messages of one attribute, newest first. Scanning is the expensive part
+ * (the guard and the redactor are regex based) and runs on the request path, so it is bounded by
+ * what can be kept anyway, not by what the caller sent.
+ */
+const SCAN_BUDGET_CHARS = 65_536;
 /** Messages scanned per attribute, newest first. */
 const MAX_MESSAGES = 64;
 
 export interface ContentMessage {
   role: string;
   content?: unknown;
+  /** Visible text when `content` also holds reasoning data (pass-through); preferred when present. */
+  captureText?: unknown;
 }
 
 export interface ContentRedactions {
@@ -49,15 +57,15 @@ const TEXT_ROLES = new Set(['system', 'user', 'assistant']);
 const byteLength = (s: string) => Buffer.byteLength(s, 'utf8');
 
 /** The tail of a long text, without the (possibly cut) first word, so a cut token is never scanned. */
-function scanWindow(text: string): string {
-  if (text.length <= SCAN_MAX_CHARS) return text;
-  const tail = text.slice(text.length - SCAN_MAX_CHARS);
+function scanWindow(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const tail = text.slice(text.length - max);
   const ws = tail.search(/\s/);
   return ws < 0 ? '' : tail.slice(ws + 1);
 }
 
-function clean(text: string, guard: ContextGuard, acc: ContentRedactions): string {
-  const g = guard.text(scanWindow(text));
+function clean(text: string, max: number, guard: ContextGuard, acc: ContentRedactions): string {
+  const g = guard.text(scanWindow(text, max));
   acc.secrets += g.report.secrets.total + g.report.invisible.total;
   const p = redactPii(g.text);
   for (const [k, n] of Object.entries(p.counts) as [PiiKind, number][])
@@ -131,23 +139,35 @@ export function buildContentAttributes(
   if (typeof call.system === 'string' && call.system !== '')
     input.push({ role: 'system', text: call.system });
   for (const m of call.messages) {
-    if (!TEXT_ROLES.has(m.role) || typeof m.content !== 'string' || m.content === '') continue;
-    input.push({ role: m.role, text: m.content });
+    const text = typeof m.captureText === 'string' ? m.captureText : m.content;
+    if (!TEXT_ROLES.has(m.role) || typeof text !== 'string' || text === '') continue;
+    input.push({ role: m.role, text });
   }
-  // Newest messages first for the bound, then cleaned (an older message is never scanned).
+  // Newest first: scan only what can be kept (a budget of characters, and stop once more than twice
+  // the cap is cleaned), so the cost does not depend on how much the caller sent.
   const recent = input.slice(-MAX_MESSAGES);
-  const cleanedIn = recent
-    .map((e) => ({ role: e.role, text: clean(e.text, guard, redactions) }))
-    .filter((e) => e.text !== '');
+  const cleanedIn: { role: string; text: string }[] = [];
+  let budget = SCAN_BUDGET_CHARS;
+  let cleanedBytes = 0;
+  for (let i = recent.length - 1; i >= 0 && budget > 0; i--) {
+    const e = recent[i]!;
+    const max = Math.min(SCAN_MAX_CHARS, budget);
+    budget -= Math.min(e.text.length, max);
+    const text = clean(e.text, max, guard, redactions);
+    if (text === '') continue;
+    cleanedIn.unshift({ role: e.role, text });
+    cleanedBytes += byteLength(text);
+    if (cleanedBytes > 2 * CONTENT_MAX_BYTES) break;
+  }
   const attributes: ContentAttributes['attributes'] = {};
-  let truncated = recent.length < input.length;
+  let truncated = cleanedIn.length < input.length;
   const packedIn = pack(cleanedIn);
   if (packedIn) {
     attributes[CONTENT_INPUT_KEY] = packedIn.value;
     truncated ||= packedIn.truncated;
   }
   if (typeof call.outputText === 'string' && call.outputText !== '') {
-    const out = clean(call.outputText, guard, redactions);
+    const out = clean(call.outputText, SCAN_MAX_CHARS, guard, redactions);
     const packedOut = out === '' ? null : pack([{ role: 'assistant', text: out }]);
     if (packedOut) {
       attributes[CONTENT_OUTPUT_KEY] = packedOut.value;

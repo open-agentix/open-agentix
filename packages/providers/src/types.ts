@@ -17,9 +17,14 @@ export interface ToolCall {
   args: Record<string, unknown>;
 }
 
+/**
+ * `captureText`: the part of `content` that is plain visible text (a pass-through request can fold
+ * model reasoning blocks and their signatures into `content` for the token estimate). Telemetry
+ * content capture (ADR 0015 5.4) reads `captureText` when present and never reasoning data.
+ */
 export type ChatMessage =
-  | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
+  | { role: 'user'; content: string; captureText?: string }
+  | { role: 'assistant'; content: string; toolCalls?: ToolCall[]; captureText?: string }
   | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean };
 
 export interface ChatRequest {

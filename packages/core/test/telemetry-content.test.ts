@@ -141,6 +141,38 @@ describe('content attributes (ADR 0015 5.4)', () => {
     expect(r.attributes).toEqual({});
   });
 
+  it('prefers the visible text of a message over folded reasoning data', () => {
+    const r = buildContentAttributes(
+      {
+        messages: [
+          {
+            role: 'assistant',
+            content: 'THINKING-CANARY SIGNATURE-CANARY visible answer',
+            captureText: 'visible answer',
+          },
+        ],
+        outputText: '',
+      },
+      guard(),
+    );
+    expect(r.attributes[CONTENT_INPUT_KEY]).toContain('visible answer');
+    expect(r.attributes[CONTENT_INPUT_KEY]).not.toMatch(/THINKING-CANARY|SIGNATURE-CANARY/);
+  });
+
+  it('has a hard time budget for adversarial input: 64 messages of 32k characters', () => {
+    const nasty = '0-12-'.repeat(7000); // looks like phone and card prefixes everywhere
+    const messages = Array.from({ length: 64 }, () => ({ role: 'user', content: nasty }));
+    const start = Date.now();
+    const r = buildContentAttributes({ messages, outputText: nasty }, guard());
+    const ms = Date.now() - start;
+    // Scanning is bounded by a character budget (64k per attribute plus one output window), not
+    // by the 2 MiB that was sent.
+    expect(ms).toBeLessThan(500);
+    for (const v of Object.values(r.attributes))
+      expect(bytes(v!)).toBeLessThanOrEqual(CONTENT_MAX_BYTES);
+    expect(r.truncated).toBe(true);
+  });
+
   it('stays fast on a megabyte of text', () => {
     const start = Date.now();
     buildContentAttributes(

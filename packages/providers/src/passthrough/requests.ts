@@ -296,6 +296,9 @@ function flattenAnthropic(
       continue;
     }
     const text: string[] = [];
+    // Visible text only: reasoning blocks and their signatures are in `text` for the estimate but
+    // are never captured as content.
+    const visible: string[] = [];
     const calls: ToolCall[] = [];
     const results: ChatMessage[] = [];
     countImages(m.content);
@@ -303,6 +306,7 @@ function flattenAnthropic(
       switch (b.type) {
         case 'text':
           text.push(b.text);
+          visible.push(b.text);
           break;
         case 'thinking':
           text.push(b.thinking, b.signature);
@@ -332,11 +336,16 @@ function flattenAnthropic(
     messages.push(...results);
     if (m.role === 'user') {
       if (text.length || results.length === 0)
-        messages.push({ role: 'user', content: text.join('\n') });
+        messages.push({
+          role: 'user',
+          content: text.join('\n'),
+          captureText: visible.join('\n'),
+        });
     } else {
       messages.push({
         role: 'assistant',
         content: text.join('\n'),
+        captureText: visible.join('\n'),
         ...(calls.length ? { toolCalls: calls } : {}),
       });
     }
