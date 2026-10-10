@@ -155,6 +155,47 @@ per user and replica, needs `connections:write`, tests a platform connection onl
 operators, and refuses stdio connections (`400 mcp_test_unsupported`: a test would start a process).
 A test ends after 30 seconds in total (`timeout`) and reads at most 8 MiB per response.
 
+## Trace context propagation (opt-in)
+
+By default an MCP server learns nothing about the run's trace: no `traceparent`, no `tracestate`, no
+`baggage`, no header ([ADR 0015](adr/0015-opentelemetry-genai-tracing.md) section 6.4). Two switches
+turn on one narrow exception, and both must be on:
+
+| Switch | Who sets it | Default |
+| --- | --- | --- |
+| `OAX_OTEL_MCP_PROPAGATION=allow` | operator, platform-wide | `deny` |
+| `"telemetry": { "propagate": true }` in the connection config | tenant admin (tenant, team, agent connections) or platform operator (platform connections) | off |
+
+An integrator with `connections:write` can save a connection but gets `403` when turning
+`propagate` on; turning it off is always allowed. The platform `deny` wins over every connection.
+
+With both on, each `tools/call` of the run carries `params._meta.traceparent` (version `00`, the
+trace id of the run and the span id of that call's `execute_tool` span, flags `00` or `01`) and
+nothing else: no `tracestate`, no `baggage`, no other `_meta` key and no HTTP header (the
+forbidden-header list above stays). `initialize`, `tools/list`, connection tests and tool refresh never
+carry it. For a call relayed for a run node the control node opens the `execute_tool` span itself
+(`oax.mcp.relay=true`); whatever the node sends (a `traceparent` header, `params._meta`) is dropped.
+Harness steps and nodes without the relay send nothing. A running run keeps the connection config it
+started with. The sampled flag is passed on as it is (an unsampled span goes out with `-00`).
+Changing the destination (transport, url, command, args) of a connection that has `propagate` on
+needs a tenant admin again, and a concurrent edit gets `409`.
+
+**Shared collectors.** A server that receives the trace id can send spans with it to your collector
+if it can reach it, and can set any attribute (for example `oax.tenant.id`) on them. Do not let a
+shared collector trust span attributes of foreign spans for routing or tenant separation; route by
+authenticated resource (see
+[observability](observability.md#mcp-trace-context-and-shared-collectors)).
+
+The server is untrusted and can see the run's trace id and call timing once you opt in; that is the
+price of joining its own traces to yours. Nothing a server returns is used as a trace parent or
+exported. The `execute_tool` span of a propagated call gets `mcp.method.name=tools/call`,
+`mcp.protocol.version` (when known) and `oax.mcp.propagated=true`.
+
+```json
+{ "transport": "streamable-http", "url": "https://mcp.example.internal/jira",
+  "telemetry": { "propagate": true } }
+```
+
 ## Pinned tool definitions
 
 Tool names, descriptions and schemas come from a server the platform does not control, and they

@@ -11,8 +11,10 @@ export interface MockTool {
   description?: string;
   inputSchema?: Record<string, unknown>;
   /** Return a string (text) or any JSON value; throwing produces an `isError` result. */
-  handler: (args: Record<string, unknown>) => unknown;
+  handler: (args: Record<string, unknown>, meta?: Record<string, unknown>) => unknown;
   delayMs?: number;
+  /** Adds this `_meta` to the tool result (tests of a server that answers with trace-context lookalikes). */
+  resultMeta?: Record<string, unknown>;
   /** MCP tool annotations advertised by `tools/list` (e.g. `{ readOnlyHint: true }`). */
   annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string };
   /** Advertised by `tools/list`; a call then returns no structured content, so do not call it. */
@@ -41,9 +43,10 @@ export function createMockMcpServer(name: string, tools: readonly MockTool[]): S
       };
     if (tool.delayMs) await new Promise((r) => setTimeout(r, tool.delayMs));
     try {
-      const out = await tool.handler(req.params.arguments ?? {});
+      const out = await tool.handler(req.params.arguments ?? {}, req.params._meta);
       return {
         content: [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }],
+        ...(tool.resultMeta ? { _meta: tool.resultMeta } : {}),
       };
     } catch (e) {
       return { content: [{ type: 'text', text: (e as Error).message }], isError: true };

@@ -21,6 +21,7 @@ import {
 import type { ConnectDeps, McpTool, ToolResult } from './connection.js';
 import { McpConnection } from './connection.js';
 import type { McpServerConfig } from './config.js';
+import { traceMetaFor } from './trace-context.js';
 
 /** Model-facing name for an MCP tool (`server__tool`, OpenAI/Anthropic compatible charset). */
 export function modelToolName(server: string, tool: string): string {
@@ -69,6 +70,17 @@ export interface ToolsChanged {
   server: string;
   liveDigest: string;
   tools: PinnedTool[] | null;
+}
+
+/**
+ * Trace context for one call (ADR 0015 S8). `traceparent` is the position of the run's own
+ * `execute_tool` span; the gateway sends it only when the platform and the connection both allow it,
+ * and drops a malformed value. `onPropagated` runs right before the request leaves, with closed
+ * values only, so the caller can label its span.
+ */
+export interface CallTrace {
+  traceparent?: string | undefined;
+  onPropagated?: ((info: { method: 'tools/call'; protocolVersion?: string }) => void) | undefined;
 }
 
 /** A failed tool call: the message is guarded, `guard` says what was removed (counts only). */
@@ -249,13 +261,13 @@ export class ToolGateway {
   async call(
     call: ToolCallRequest,
     gate: PolicyGate,
-    opts: { approved?: boolean; signal?: AbortSignal } = {},
+    opts: { approved?: boolean; signal?: AbortSignal; trace?: CallTrace } = {},
   ): Promise<GatewayCallResult> {
     const decision = await gate.decide(call);
     if (decision.effect === 'deny') return { status: 'denied', decision };
     if (decision.effect === 'require_approval' && !opts.approved)
       return { status: 'approval_required', decision };
-    return { status: 'ok', decision, ...(await this.execute(call, opts.signal)) };
+    return { status: 'ok', decision, ...(await this.execute(call, opts.signal, opts.trace)) };
   }
 
   /**
@@ -280,6 +292,7 @@ export class ToolGateway {
   async execute(
     call: ToolCallRequest,
     signal?: AbortSignal,
+    trace?: CallTrace,
   ): Promise<{ result: ToolResult; guard?: GuardReport }> {
     let raw: ToolResult;
     try {
@@ -292,7 +305,24 @@ export class ToolGateway {
           `tool "${call.server}/${call.tool}" is not part of the approved tool definitions of MCP server "${call.server}"`,
         );
       const conn = await this.connection(call.server);
-      raw = await conn.callTool(call.tool, call.args, signal);
+      // The single propagation point (ADR 0015 S8) for every path that makes a call: the inline
+      // executor (through `call`) and the control-node relay (which calls `execute` itself). Both
+      // switches, a validated traceparent, nothing else. A node's gateway (`deps.relay`) never adds
+      // anything: the relay decides on the control node.
+      const meta = this.deps.relay
+        ? undefined
+        : traceMetaFor(conn.config, this.deps.tracePropagation, trace?.traceparent);
+      if (meta) {
+        try {
+          trace?.onPropagated?.({
+            method: 'tools/call',
+            ...(conn.protocolVersion ? { protocolVersion: conn.protocolVersion } : {}),
+          });
+        } catch {
+          /* labelling a span must never fail a tool call */
+        }
+      }
+      raw = await conn.callTool(call.tool, call.args, signal, meta);
     } catch (e) {
       // The message of a failed call carries server text (a JSON-RPC error, a crash message) and
       // reaches the model like a result: the executor shows it, the harness gate returns it.

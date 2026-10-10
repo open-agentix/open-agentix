@@ -1,7 +1,7 @@
 # ADR 0015: Observability with OpenTelemetry GenAI semantic conventions
 
 - Status: Proposed. Slices S1 to S5 are implemented (see "Implementation notes S2/S3/S4/S5"
-  below and [`observability.md`](../observability.md)); S6 and S7 are implemented (notes below); S8 to S10 are open.
+  below and [`observability.md`](../observability.md)); S6 to S8 are implemented (notes below); S9 and S10 are open.
 - Date: 2026-10-10
 - Plan items: W3-5 (#37, "Observability completion: step, model and tool spans and the missing
   metrics"); RM-53 of the roadmap gap list; replaces the span list in the W3-5 acceptance
@@ -505,7 +505,7 @@ OTLP metric export is not added: metrics stay pull-based (`/metrics`, ServiceMon
 | `OAX_OTEL_EXPORT_TIMEOUT_MS` | `10000` | Export timeout. |
 | `OAX_OTEL_NODE_EVENTS_MAX` | `128` | Node-reported events per session. |
 | `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link` for inbound `traceparent`. |
-| `OAX_OTEL_MCP_PROPAGATION` | `deny` | `allow` lets MCP instances opt in. |
+| `OAX_OTEL_MCP_PROPAGATION` | `deny` | `allow` lets MCP instances opt in. In use since S8. |
 | `OAX_OTEL_EXCEPTION_DETAIL` | `off` | `guarded`: guarded, capped exception messages. |
 | `OAX_OTEL_CONTENT` | `off` | Only `off` until slice S10. |
 | `OAX_OTEL_GENAI_METRICS` | `false` | Expose GenAI metrics on `/metrics`. |
@@ -801,6 +801,53 @@ Decisions taken while implementing slice S7 (#212, with #220) where the text abo
 - **Errors** leaving the sender are fixed shapes (name and code); the original error, which can name
   the destination, is dropped. `gRPC` was not added (owner question 3 is open).
 - No migration.
+
+## Implementation notes S8
+
+Decisions taken while implementing slice S8 (#213) where the text above left room:
+
+- **One propagation point.** `traceMetaFor` (`packages/mcp/src/trace-context.ts`) decides, and
+  `ToolGateway.execute` is its only caller: platform `allow` AND `telemetry.propagate: true` AND a
+  well-formed caller-supplied traceparent, else nothing is added. `McpConnection.callTool` rebuilds
+  `_meta` as `{ traceparent }` from that one validated field, so nothing else (tracestate, baggage,
+  other keys) can reach the wire. The inline executor reaches `execute` through `ToolGateway.call`
+  (which only passes `trace` on); the control-node relay (ADR 0016 S4) calls `execute` directly and
+  passes its own trace, so both paths are covered by the same code. A node's gateway (relay mode)
+  never adds anything.
+- **Where the value comes from.** The executor asks its `execute_tool` span for `traceparent()`
+  (ids this process generated; flags are `00` or `01`, never anything else) and offers it in
+  `call(..., { trace })`. It is never read from an input, a node or a server response. A server's
+  `_meta` in `tools/list` and `tools/call` results is not read at all.
+- **Scope of the wire change.** `params._meta` of `tools/call` only (not `initialize`, `tools/list`,
+  connection tests or tool refresh), on every transport that carries `_meta` (streamable HTTP and
+  stdio). No HTTP header is added: the S1 forbidden header list (`traceparent`, `tracestate`,
+  `baggage`) stays. No environment variable (`TRACEPARENT`) is set for stdio servers.
+- **Who may switch it on.** `telemetry.propagate` is part of the connection config (strict object, no
+  other keys, no migration). Turning it on needs a tenant-wide `settings:write` binding (tenant
+  admin) for tenant, team and agent connections and platform operator access for platform
+  connections (403 otherwise); turning it off, or saving a connection that already has it on, needs
+  only `connections:write`.
+- **Attributes.** `mcp.method.name` (`tools/call`), `mcp.protocol.version` (closed list, only when the
+  transport reports a known version) and `oax.mcp.propagated` (`true`) are added to the `execute_tool`
+  span only for calls that carried a traceparent. `mcp.session.id` is not exported.
+- **Relay.** The relay opens an `execute_tool` span per relayed `tools/call` (`oax.mcp.relay=true`,
+  a child of the position stored for the node's session) and passes only that span's
+  `traceparent()`. It never uses the node's `traceparent` header, `params._meta` (accepted by the
+  relay's parameter check, then dropped: the call is rebuilt from name and arguments) or any value
+  of the node request. Its gateway gets `tracePropagation` from `OAX_OTEL_MCP_PROPAGATION`.
+- **Not covered.** Harness steps and run nodes that bypass the relay (stdio servers in a node) offer
+  no traceparent and send nothing.
+- **Flags.** The sampled flag of the span is passed on as it is: a not-sampled span (`-00`, kept
+  only for an always-keep class) is propagated with `00`, so a downstream sampler will not sample it.
+- **Trust.** Once a connection opts in, the server sees the run's trace id and can correlate calls.
+  If the server's own spans reach a shared collector, a hostile server can attach spans to your
+  trace id (trace poisoning), and set a tenant id attribute of its own (`oax.tenant.id`
+  spoofing); a shared collector must route by the resource it authenticated, not by span
+  attributes of foreign spans (section 7.2). Nothing the server returns is read here.
+- **Edits.** A running run keeps the connection config it started with. Turning `propagate` on needs
+  the admin again when the destination (transport, url, command, args) changes, and
+  `updateConnection` is a compare-and-swap on the stored config (409 when it changed meanwhile).
+- No new metric, no migration.
 
 ## Open questions (owner decisions needed)
 

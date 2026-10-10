@@ -9,12 +9,23 @@ const toolName = z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/, 'invalid tool name 
 const profileName = z.string().regex(/^[a-z][a-z0-9-]{0,62}$/, 'profile names are lowercase slugs');
 const MAX_TOOLS = 500;
 
+/**
+ * Telemetry settings of an MCP instance (ADR 0015 section 6.4). `propagate` is off unless set: the
+ * run's `traceparent` is then sent in `params._meta` of `tools/call`, and only if the platform allows
+ * it too (`OAX_OTEL_MCP_PROPAGATION=allow`). Strict: there is nothing else to configure, so no header
+ * name, `tracestate` or `baggage` can be supplied here.
+ */
+export const McpTelemetrySchema = z.strictObject({ propagate: z.boolean().default(false) });
+export type McpTelemetry = z.infer<typeof McpTelemetrySchema>;
+
 /** Declared tool classes and named profiles (ADR 0008); shared by every transport. */
 const accessFields = {
   /** Declared access class per tool (`{ get_issue: { access: read } }`). */
   tools: z.record(toolName, McpToolAccessSchema).default({}),
   /** Profile name -> tools; every member must be declared in `tools`. */
   profiles: z.record(profileName, z.array(toolName).min(1).max(MAX_TOOLS)).default({}),
+  /** Opt-in trace context propagation; absent means off. */
+  telemetry: McpTelemetrySchema.optional(),
 };
 
 /** An MCP server connection (stored as a "connection" in the control node). */

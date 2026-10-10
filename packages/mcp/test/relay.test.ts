@@ -251,3 +251,28 @@ describe('ToolGateway.execute and serverTools (what the relay is built on)', () 
     await gateway.close();
   });
 });
+
+describe('trace context on a node (ADR 0015 S8)', () => {
+  it('a gateway with a relay never adds a traceparent, even with platform allow and propagate on', async () => {
+    const seen: unknown[] = [];
+    const gateway = new ToolGateway([relayConfigFor(http({ telemetry: { propagate: true } }))], {
+      secrets: tripwire,
+      relay: fakeRelay(seen),
+      tracePropagation: 'allow',
+    });
+    const tp = `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`;
+    const r = await gateway.execute({ server: 'crm', tool: 'lookup', args: {} }, undefined, {
+      traceparent: tp,
+      onPropagated: () => {
+        throw new Error('must not be called');
+      },
+    });
+    expect(r.result.text).toBe('found');
+    const call = (seen as { message: { method: string; params: Record<string, unknown> } }[]).find(
+      (s) => s.message.method === 'tools/call',
+    )!;
+    expect(call.message.params).toEqual({ name: 'lookup', arguments: {} });
+    expect(JSON.stringify(seen)).not.toContain(tp);
+    await gateway.close();
+  });
+});

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
   getEgressPolicy,
+  hasPermission,
   hasTenantPrefix,
   pinnedToolsOf,
   resolveRoute,
@@ -44,7 +45,6 @@ import {
 import { legacyNetwork } from '@openagentix/providers';
 import { canonicalResource } from '../mcp-oauth/resource.js';
 import { processSecrets } from '../mcp-oauth/secret-registry.js';
-import { ownerKey } from '../mcp-oauth/token-store.js';
 import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
@@ -644,6 +644,7 @@ export class CatalogService {
     const scopeId = input.scopeId ?? null;
     await this.assertScope(actor, scope, scopeId);
     const config = await this.prepareConfig(actor, input.kind, input.name, scope, input.config);
+    this.assertPropagationAllowed(actor, input.kind, scope, config, undefined);
     const [exists] = await this.ctx.db
       .select({ id: connections.id })
       .from(connections)
@@ -689,6 +690,49 @@ export class CatalogService {
     return row;
   }
 
+  /**
+   * ADR 0015 S8: turning `telemetry.propagate` on sends the run's trace id to a server the platform
+   * does not control, so it is not part of the integrator's `connections:write`. A platform
+   * connection is operator-only already (`assertScope`, `getOwnConnection`); every other scope needs
+   * a tenant-wide admin binding (`settings:write`). Switching it off, or saving a connection that
+   * already had it on, needs nothing extra.
+   */
+  private assertPropagationAllowed(
+    actor: Principal,
+    kind: ConnectionKind,
+    scope: ConnectionScope,
+    next: Record<string, unknown>,
+    previous: unknown,
+  ): void {
+    if (kind !== 'mcp' || scope === 'platform') return;
+    const on = (c: unknown) =>
+      (c as { telemetry?: { propagate?: unknown } } | null)?.telemetry?.propagate === true;
+    if (!on(next)) return;
+    // Already on and still pointing at the same destination: nothing new is exposed. A changed
+    // transport, url, command, args, env, envSecrets or egress sends the trace id somewhere else (or
+    // lets the process reach more), which needs the admin again. Keys are sorted so that the order
+    // jsonb returns them in does not matter.
+    const stable = (v: unknown): unknown =>
+      Array.isArray(v)
+        ? v.map(stable)
+        : v && typeof v === 'object'
+          ? Object.fromEntries(
+              Object.entries(v as Record<string, unknown>)
+                .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+                .map(([k, x]) => [k, stable(x)]),
+            )
+          : v;
+    const target = (c: unknown) => {
+      const o = (c ?? {}) as Record<string, unknown>;
+      return JSON.stringify(
+        stable([o.transport, o.url, o.command, o.args, o.env, o.envSecrets, o.egress]),
+      );
+    };
+    if (on(previous) && target(previous) === target(next)) return;
+    if (!hasPermission(actor, 'settings:write', null))
+      throw forbidden('enabling telemetry.propagate needs a tenant admin');
+  }
+
   private async invalidateConnections(): Promise<void> {
     await this.ctx.cache.delPrefix('connections:');
   }
@@ -702,26 +746,53 @@ export class CatalogService {
       current.scope as ConnectionScope,
       config,
     );
+    this.assertPropagationAllowed(
+      actor,
+      current.kind as ConnectionKind,
+      current.scope as ConnectionScope,
+      parsed,
+      current.config,
+    );
     // A new server URL is a new OAuth resource (ADR 0016 section 7.4): bump the credential
-    // version and delete the stored tokens, which were issued for the old one.
+    // version and delete the stored tokens, which were issued for the old one, in one transaction
+    // (a token write racing the bump waits for the row lock and then sees the new version).
     const moved = resourceOf(current.config) !== resourceOf(parsed);
-    const [row] = await this.ctx.db
-      .update(connections)
-      .set({
-        config: parsed,
-        updatedAt: this.ctx.now(),
-        ...(moved ? { credentialVersion: sql`${connections.credentialVersion} + 1` } : {}),
-      })
-      .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)))
-      .returning();
-    if (moved) {
-      await this.ctx.db
-        .delete(mcpOauthTokens)
+    const row = await this.ctx.db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(connections)
+        .set({
+          config: parsed,
+          updatedAt: this.ctx.now(),
+          ...(moved ? { credentialVersion: sql`${connections.credentialVersion} + 1` } : {}),
+        })
         .where(
-          and(eq(mcpOauthTokens.connectionId, id), eq(mcpOauthTokens.tenantId, actor.tenantId)),
-        );
-      processSecrets.forgetOwner(ownerKey(id, current.credentialVersion));
+          and(
+            eq(connections.id, id),
+            eq(connections.tenantId, actor.tenantId),
+            // Compare and swap: the checks above were made against the config read at the start. If
+            // someone changed it meanwhile, nothing is written (409) instead of skipping the checks.
+            sql`${connections.config} = ${JSON.stringify(current.config)}::jsonb`,
+          ),
+        )
+        .returning();
+      if (updated && moved)
+        await tx
+          .delete(mcpOauthTokens)
+          .where(
+            and(eq(mcpOauthTokens.connectionId, id), eq(mcpOauthTokens.tenantId, actor.tenantId)),
+          );
+      return updated;
+    });
+    if (!row) {
+      // Gone (deleted meanwhile) is a 404; present but different is a 409.
+      const [still] = await this.ctx.db
+        .select({ id: connections.id })
+        .from(connections)
+        .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)));
+      if (!still) throw notFound('connection');
+      throw conflict(`connection "${current.name}" was changed meanwhile; reload and try again`);
     }
+    if (moved) processSecrets.forgetOwnerPrefix(`${id}:`);
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,
@@ -738,6 +809,8 @@ export class CatalogService {
     await this.ctx.db
       .delete(connections)
       .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)));
+    // The token rows went with the connection (foreign key); forget the values in memory too.
+    processSecrets.forgetOwnerPrefix(`${id}:`);
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,
