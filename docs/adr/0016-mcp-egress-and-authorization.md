@@ -426,7 +426,8 @@ the platform refuses to use the stored client and marks the connection `reauthor
   logs, audit payloads, responses and streams can be scrubbed; entries leave at expiry (plus 5
   minutes), on revocation or deletion, and, when a limit is hit, least recently used first (a tenant
   over its quota loses its own values first). Audit, responses and streams are scrubbed with the values
-  of the tenant only; logs with all of them.
+  of the tenant only; logs, stdout and span attributes with the values that also pass the stricter
+  tenant-less rule (long, high entropy, not UUID or digest shaped); see `docs/mcp.md`.
 - **Revocation**: deleting or disabling a connection, revoking a grant (ADR 0012), rotating the
   client secret, changing the URL or issuer, and an admin's "disconnect" delete the stored tokens
   and call the authorization server's revocation endpoint (RFC 7009) when advertised (best effort,

@@ -122,8 +122,9 @@ All notable changes to this project are documented here. The format follows
   included). `McpCredentials.accessToken()` reads the URL and credential version from the database,
   returns the token with the resource it may be sent to, and registers the value with the
   `ContextGuard` and a bounded, tenant-scoped per-process registry before returning it. The registry
-  scrubs logs (all values), audit payloads, responses, run and model streams (the tenant's values only)
-  and span attributes, in linear time. Stored token values must look like credentials (RFC 6750
+  scrubs audit payloads, responses and run and model streams with the tenant's values and logs, stdout
+  and span attributes with the values that pass a stricter tenant-less rule, in linear time; unchanged
+  tokens cost no rebuild and the rebuild at the caps takes about 15 ms. Stored token values must look like credentials (RFC 6750
   charset, entropy for their alphabet, not repetitive, not word-like, no identifiers). Changing a
   connection's URL bumps the credential version and deletes its tokens in one transaction.
   Crypto-shredding is partial while one platform KEK exists (see `docs/mcp.md`). Token leak canary
