@@ -42,6 +42,7 @@ import { registerBudgetRoutes } from './routes/budgets.js';
 import { registerTenantRoutes } from './routes/tenants.js';
 import { registerUserRoutes } from './routes/users.js';
 import { registerWorkerRoutes } from './routes/worker.js';
+import { registerHttpSpans } from './otel-hook.js';
 
 /** How a route authenticates: an RBAC permission, any signed-in principal, or a special scheme. */
 export type RouteAccess =
@@ -117,6 +118,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   registerErrorHandler(app);
+  registerHttpSpans(app, ctx.config.otel.inboundContext);
 
   const routes: RouteInfo[] = [];
   app.decorate('routeIndex', routes);

@@ -168,6 +168,22 @@ export const RunSchema = z.object({
   errorMessage: z.string().nullable(),
   outputs: Json,
 });
+/** `GET /v1/runs/{id}`: the run plus its trace identity (ADR 0015 section 11). */
+export const RunDetailSchema = RunSchema.extend({
+  traceId: z
+    .string()
+    .regex(/^[0-9a-f]{32}$/)
+    .nullable()
+    .describe(
+      'W3C trace id of the run (random, server-generated); null for runs created before the trace identity existed',
+    ),
+  traceUrl: z
+    .string()
+    .nullable()
+    .describe(
+      "Link to the trace in the operator's trace backend (OAX_OTEL_TRACE_URL_TEMPLATE); null when no template is configured or the run has no trace",
+    ),
+});
 export const RunListQuery = PageQuery.extend({
   agentId: Id.optional(),
   status: RunStatusSchema.optional(),
@@ -295,8 +311,21 @@ export const ConnectionSchema = z.object({
   name: z.string(),
   kind: z.enum(['mcp', 'model']),
   config: z.record(z.string(), z.unknown()),
+  warnings: z
+    .array(z.string())
+    .describe(
+      'why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine',
+    ),
   createdAt: Iso,
   updatedAt: Iso,
+});
+export const StdioViolationsSchema = z.object({
+  items: z.array(
+    z.object({
+      connection: ConnectionSchema,
+      issues: z.array(z.object({ code: z.string(), path: z.string(), message: z.string() })),
+    }),
+  ),
 });
 export const ConnectionCreateBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
@@ -808,6 +837,10 @@ export const StepHandoverSchema = z.object({
   mcp: z
     .array(z.record(z.string(), z.unknown()))
     .describe('MCP connections of the step with all secret references stripped'),
+  stdio: z
+    .object({ tenantServers: z.array(z.string()), allowlist: z.array(z.string()) })
+    .optional()
+    .describe('tenant-defined stdio servers of the step and the command allowlist (ADR 0016)'),
 });
 export const StepHandoverResultBody = z.object({
   agentId: z.string(),

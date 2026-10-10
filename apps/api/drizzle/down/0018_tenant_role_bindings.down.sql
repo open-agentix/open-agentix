@@ -4,7 +4,7 @@
 -- Safe because users.global_roles is mirrored (write-through) and still authoritative: the
 -- rollback loses only inheritance flags, expiries, pentest bindings and restrictions, none of
 -- which can be created before the next slices.
--- Run 0020_authz_epoch.down.sql and 0019_trb_home_move.down.sql first if they were applied (this also
+-- Run 0021_authz_epoch.down.sql and 0019_trb_home_move.down.sql first if they were applied (this also
 -- drops their objects: the epoch triggers read tenants.authz_epoch, which goes away here).
 DROP TRIGGER IF EXISTS "authz_epoch_trb_ins" ON "tenant_role_bindings";
 DROP TRIGGER IF EXISTS "authz_epoch_trb_del" ON "tenant_role_bindings";

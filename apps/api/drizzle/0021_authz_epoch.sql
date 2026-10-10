@@ -3,7 +3,7 @@
 -- what a cached principal may do changes, whatever code path made the change (the application, the
 -- reconcile, trb_users_home_move, an older application version, psql). The application compares the
 -- epoch on every request and rebuilds a cached principal built under an older one. Additive and
--- idempotent. Down path: drizzle/down/0020_authz_epoch.down.sql
+-- idempotent. Down path: drizzle/down/0021_authz_epoch.down.sql
 --
 -- Bumped (the epoch of the organisation root, in the same transaction as the change):
 --   tenant_role_bindings   insert, update, delete (statement level, once per statement and root)

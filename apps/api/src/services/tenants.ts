@@ -89,6 +89,11 @@ export class TenantsService {
     return slugPath;
   }
 
+  /** Id of the organisation (root tenant) a tenant belongs to; telemetry identifies it by id only. */
+  async rootIdOf(tenantId: string): Promise<string | undefined> {
+    return (await this.tree.node(tenantId))?.rootId;
+  }
+
   /** `acme/security/blue` for every row, one lookup for all ancestors. */
   slugPaths(rows: TenantRow[]): Promise<Map<string, string>> {
     return this.tree.slugPaths(rows);

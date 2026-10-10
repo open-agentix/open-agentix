@@ -5,7 +5,7 @@ import { costLinesToCsv } from '../../services/costs.js';
 import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
-import { approvalDto, runDto, stepDto } from '../dto.js';
+import { approvalDto, runDetailDto, runDto, stepDto } from '../dto.js';
 import {
   AllTenantsQuery,
   ApprovalQuery,
@@ -18,6 +18,7 @@ import {
   IdParams,
   PageQuery,
   RunListQuery,
+  RunDetailSchema,
   RunSchema,
   RunStatsQuery,
   RunStatsSchema,
@@ -96,10 +97,14 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
         summary: 'Get a run',
         security: sec,
         params: IdParams,
-        response: { 200: RunSchema, 404: ErrorSchema },
+        response: { 200: RunDetailSchema, 404: ErrorSchema },
       },
     },
-    async (req) => runDto(await runs.getVisible(principalOf(req), req.params.id)),
+    async (req) =>
+      runDetailDto(
+        await runs.getVisible(principalOf(req), req.params.id),
+        ctx.config.otel.traceUrlTemplate,
+      ),
   );
 
   app.get(

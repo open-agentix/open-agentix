@@ -3069,6 +3069,10 @@ export interface paths {
                             errorCode: string | null;
                             errorMessage: string | null;
                             outputs: unknown;
+                            /** @description W3C trace id of the run (random, server-generated); null for runs created before the trace identity existed */
+                            traceId: string | null;
+                            /** @description Link to the trace in the operator's trace backend (OAX_OTEL_TRACE_URL_TEMPLATE); null when no template is configured or the run has no trace */
+                            traceUrl: string | null;
                         };
                     };
                 };
@@ -3811,6 +3815,8 @@ export interface paths {
                                 config: {
                                     [key: string]: unknown;
                                 };
+                                /** @description why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine */
+                                warnings: string[];
                                 /** @description ISO 8601 timestamp */
                                 createdAt: string;
                                 /** @description ISO 8601 timestamp */
@@ -3893,6 +3899,8 @@ export interface paths {
                             config: {
                                 [key: string]: unknown;
                             };
+                            /** @description why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine */
+                            warnings: string[];
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                             /** @description ISO 8601 timestamp */
@@ -3933,6 +3941,89 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/stdio-violations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stored tenant stdio connections that break the stdio rules (ADR 0016); they fail closed at run time */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                connection: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    /** Format: uuid */
+                                    tenantId: string;
+                                    /** @enum {string} */
+                                    scope: "platform" | "tenant" | "team" | "agent";
+                                    scopeId: string | null;
+                                    name: string;
+                                    /** @enum {string} */
+                                    kind: "mcp" | "model";
+                                    config: {
+                                        [key: string]: unknown;
+                                    };
+                                    /** @description why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine */
+                                    warnings: string[];
+                                    /** @description ISO 8601 timestamp */
+                                    createdAt: string;
+                                    /** @description ISO 8601 timestamp */
+                                    updatedAt: string;
+                                };
+                                issues: {
+                                    code: string;
+                                    path: string;
+                                    message: string;
+                                }[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4147,6 +4238,8 @@ export interface paths {
                             config: {
                                 [key: string]: unknown;
                             };
+                            /** @description why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine */
+                            warnings: string[];
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                             /** @description ISO 8601 timestamp */
@@ -4223,6 +4316,8 @@ export interface paths {
                             config: {
                                 [key: string]: unknown;
                             };
+                            /** @description why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine */
+                            warnings: string[];
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                             /** @description ISO 8601 timestamp */
@@ -7666,6 +7761,11 @@ export interface paths {
                             mcp: {
                                 [key: string]: unknown;
                             }[];
+                            /** @description tenant-defined stdio servers of the step and the command allowlist (ADR 0016) */
+                            stdio?: {
+                                tenantServers: string[];
+                                allowlist: string[];
+                            };
                         };
                     };
                 };

@@ -45,6 +45,11 @@ const RESERVED_ENV = new Set([
 ]);
 const RESERVED_ENV_PREFIXES = ['OAX_', 'LD_', 'DYLD_'];
 
+/** `true` for environment variable names a step credential (or an MCP stdio server) must not set. */
+export function isReservedCredentialEnv(env: string): boolean {
+  return RESERVED_ENV.has(env) || RESERVED_ENV_PREFIXES.some((p) => env.startsWith(p));
+}
+
 export interface ValidationResult {
   valid: boolean;
   definition: AgentDefinition | null;
@@ -213,7 +218,7 @@ function checkCredentials(
     secrets.add(c.secret);
     if (envs.has(env)) errors.push({ path: `${path}.${i}`, message: `duplicate env "${env}"` });
     envs.add(env);
-    if (RESERVED_ENV.has(env) || RESERVED_ENV_PREFIXES.some((p) => env.startsWith(p)))
+    if (isReservedCredentialEnv(env))
       errors.push({ path: `${path}.${i}.env`, message: `env "${env}" is reserved` });
   });
 }

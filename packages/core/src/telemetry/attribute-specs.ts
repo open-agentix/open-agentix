@@ -58,6 +58,8 @@ export const ATTRIBUTE_SPECS = {
   'oax.tenant.id': uuid,
   'oax.tenant.root_id': uuid,
   'oax.redacted': bool,
+  // Reverse link to the audit entry that documents the span's fact (ADR 0015 section 11).
+  'oax.audit.seq': { t: 'int', min: 1, max: MAX_COUNT },
   // Errors (ADR 0015 3.5): the code, never the message.
   'error.type': { t: 'string', max: 64, pattern: ERROR_CODE_PATTERN },
   'exception.type': { t: 'string', max: 64, pattern: /^(?:_OTHER|[A-Za-z_$][A-Za-z0-9_$]{0,63})$/ },
@@ -177,7 +179,7 @@ const TOTALS: readonly AttributeKey[] = [
 
 const PER_KIND: Record<Exclude<SpanKind, 'unknown'>, readonly AttributeKey[]> = {
   run: ['oax.worker', 'oax.run.status'],
-  run_admit: ['oax.trigger.kind', 'oax.admission.result'],
+  run_admit: ['oax.trigger.kind', 'oax.admission.result', 'oax.audit.seq'],
   invoke_workflow: [
     'gen_ai.operation.name',
     'gen_ai.workflow.name',
@@ -186,6 +188,7 @@ const PER_KIND: Record<Exclude<SpanKind, 'unknown'>, readonly AttributeKey[]> = 
     'oax.run.status',
     'oax.classification',
     'oax.use_case',
+    'oax.audit.seq',
     ...TOTALS,
   ],
   handover: ['oax.step.id', 'oax.handover.explicit', 'oax.handover.result', 'oax.schema.digest'],

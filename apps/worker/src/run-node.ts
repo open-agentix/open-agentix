@@ -12,7 +12,13 @@ import {
   type StepCredentials,
 } from '@openagentix/core';
 import { unpackSeed, type UnpackLimits } from './seed-unpack.js';
-import { ToolGateway, type InMemoryTransportFactory, type McpServerConfig } from '@openagentix/mcp';
+import {
+  ToolGateway,
+  checkStdioConfig,
+  stdioError,
+  type InMemoryTransportFactory,
+  type McpServerConfig,
+} from '@openagentix/mcp';
 import { ProviderRegistry, type ModelProvider } from '@openagentix/providers';
 import {
   HttpControlPlane,
@@ -49,6 +55,10 @@ export interface RunNodeOptions {
   removeTokenFile?: (path: string) => Promise<void>;
   /** In-process MCP servers (demo/tests); without them `in-memory` connections cannot be reached. */
   inMemoryMcp?: InMemoryTransportFactory;
+  /** Injectable for tests: resolves the real path of a stdio command (`null` = missing). */
+  resolveStdioPath?: (path: string) => string | null;
+  /** Injectable for tests: whether this process could change a stdio binary or its directory. */
+  stdioWritable?: (path: string) => boolean;
   /** Providers usable without the control node (unit tests only); default none: all calls are proxied. */
   localProviders?: ModelProvider[];
   /** Replaces the harness adapter (tests use fakes; the node binary never sets it). */
@@ -180,6 +190,42 @@ export function mergeCredentials(
       return { ...cfg, headers: { ...cfg.headers, ...c?.headers }, headerSecrets: {} };
     return cfg;
   });
+}
+
+/**
+ * Second wall for tenant-defined stdio servers (ADR 0016 S0): the control node checked the
+ * command rules against the stored connection; only the node can resolve symlinks of its own
+ * image. Applies to the servers the handover names, on the configuration as stored (before the
+ * broker's variables are merged in), with the real path required to exist.
+ */
+export function stdioGuardFor(
+  handover: Pick<StepHandover, 'mcp' | 'stdio'>,
+  resolve?: (p: string) => string | null,
+  writable?: (p: string) => boolean,
+): (cfg: Extract<McpServerConfig, { transport: 'stdio' }>) => void {
+  const tenant = new Set(handover.stdio?.tenantServers ?? []);
+  const stored = new Map(handover.mcp.map((c) => [c.name, c]));
+  return (cfg) => {
+    if (!tenant.has(cfg.name)) return;
+    const orig = stored.get(cfg.name);
+    // The configuration that is about to start must be the one that was checked.
+    const same =
+      orig?.transport === 'stdio' &&
+      orig.command === cfg.command &&
+      JSON.stringify(orig.args) === JSON.stringify(cfg.args);
+    if (!orig || orig.transport !== 'stdio' || !same)
+      throw new OaxError(
+        'mcp_command_forbidden',
+        `MCP server "${cfg.name}" changed after it was checked`,
+      );
+    const issues = checkStdioConfig(orig, {
+      allowlist: handover.stdio?.allowlist ?? [],
+      realpath: 'require',
+      ...(resolve ? { resolve } : {}),
+      ...(writable ? { writable } : {}),
+    });
+    if (issues.length > 0) throw stdioError(cfg.name, issues);
+  };
 }
 
 /**
@@ -430,11 +476,15 @@ export async function runNode(opts: RunNodeOptions = {}): Promise<number> {
         ...Object.values(c.headers ?? {}),
       ]),
     ]);
+    const stdioGuard = stdioGuardFor(handover, opts.resolveStdioPath, opts.stdioWritable);
+    // Fail before any server starts, with the offending connection named.
+    for (const cfg of handover.mcp) if (cfg.transport === 'stdio') stdioGuard(cfg);
     tools = new ToolGateway(
       mergeCredentials(handover.mcp, creds, proxyEnv),
       {
         secrets: new StaticSecretResolver({}),
         env: proxyEnv,
+        stdioGuard,
         ...(opts.inMemoryMcp ? { inMemory: opts.inMemoryMcp } : {}),
       },
       guard,

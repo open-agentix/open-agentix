@@ -1,4 +1,9 @@
-import type { AuditCheckpoint, PublishedExpansion } from '@openagentix/core';
+import {
+  runTraceIdentity,
+  traceUrl,
+  type AuditCheckpoint,
+  type PublishedExpansion,
+} from '@openagentix/core';
 import type { AgentSummary } from '../services/agent-summaries.js';
 import type { AgentVersionRow, VersionSummary } from '../services/agents.js';
 import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
@@ -86,6 +91,16 @@ export const runDto = (r: RunRow, agentName: string | null = null) => ({
   outputs: r.outputs ?? null,
 });
 
+/** The run plus its trace id and, when the operator configured a template, the trace link. */
+export const runDetailDto = (r: RunRow, traceUrlTemplate: string | undefined) => {
+  const identity = runTraceIdentity(r);
+  return {
+    ...runDto(r),
+    traceId: identity?.traceId ?? null,
+    traceUrl: traceUrl(traceUrlTemplate, identity?.traceId ?? null),
+  };
+};
+
 export const stepDto = (s: StepRow) => ({
   seq: s.seq,
   kind: s.kind as never,
@@ -145,7 +160,7 @@ export const eventDto = (e: EventRow) => ({
   payload: e.payload,
 });
 
-export const connectionDto = (c: ConnectionRow) => ({
+export const connectionDto = (c: ConnectionRow, warnings: string[] = []) => ({
   id: c.id,
   tenantId: c.tenantId,
   scope: c.scope as 'platform' | 'tenant' | 'team' | 'agent',
@@ -153,6 +168,7 @@ export const connectionDto = (c: ConnectionRow) => ({
   name: c.name,
   kind: c.kind as 'mcp' | 'model',
   config: c.config as Record<string, unknown>,
+  warnings,
   createdAt: iso(c.createdAt),
   updatedAt: iso(c.updatedAt),
 });

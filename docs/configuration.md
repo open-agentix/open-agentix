@@ -335,11 +335,11 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 | `OAX_OTEL_KEEP` | `error,deny,approval,budget,guard` | Parsed only (slice S6). |
 | `OAX_OTEL_KEEP_BUFFER_SPANS` | `512` | Parsed only (slice S6). |
 | `OAX_OTEL_NODE_EVENTS_MAX` | `128` | Parsed only (slice S4). |
-| `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link`; parsed only (slice S2). |
+| `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link`: what happens to a well-formed inbound `traceparent` on an API request. It is never a parent and never the run's trace. `link` records it as a span link on the request span (needs an exporter; ids only, no `tracestate`/baggage); `ignore` drops it. Either way it is counted in `oax_otel_inbound_context_total{result}`. |
 | `OAX_OTEL_MCP_PROPAGATION` | `deny` | `deny` or `allow`; parsed only (slice S8). |
 | `OAX_OTEL_CONTENT` | `off` | Only `off` is accepted (content capture is a gated later slice). |
 | `OAX_OTEL_GENAI_METRICS` | `false` | Parsed only (slice S5). |
-| `OAX_OTEL_TRACE_URL_TEMPLATE` | – | Run-view link template; must contain `{traceId}`; parsed only (slice S2). |
+| `OAX_OTEL_TRACE_URL_TEMPLATE` | – | Link template for the trace of a run, e.g. `https://tempo.internal/trace/{traceId}` (http/https, no credentials, must contain `{traceId}`). `GET /v1/runs/{id}` returns the filled link as `traceUrl` next to `traceId`. |
 
 **Refused at start-up:** the standard `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`,
 `_CLIENT_CERTIFICATE`, `_CLIENT_KEY` (also with `_TRACES_`), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
@@ -347,6 +347,12 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 `OAX_OTEL_HEADERS_SECRET`, the network configuration and `OAX_OTEL_SAMPLE_RATIO` instead. With an
 endpoint set, `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER` other than `otlp` is refused too
 (they are not read; unset the endpoint to turn the export off). Details and the data that is never exported: [`observability.md`](observability.md).
+
+## Stdio MCP servers
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_MCP_STDIO_COMMANDS` | – (none) | Comma list of absolute paths (or `dir/*`, direct children only) that tenant, team and agent `stdio` MCP connections may start, in run nodes only. Empty means no tenant stdio command. Shells, installers and inline-code interpreters are refused even when listed; unsafe entries fail start-up. See [`mcp.md`](mcp.md#stdio-mcp-servers). |
 
 ## Air-gapped mode
 
@@ -359,6 +365,7 @@ on the vendored snapshot. `/readyz` reports `airgapped`. Details: [`airgapped.md
 | --- | --- | --- |
 | `OAX_AIRGAPPED` | `false` | Fail-closed air-gapped mode. |
 | `OAX_AIRGAPPED_ALLOW` | – | Internal hosts/suffixes/CIDRs that may be contacted (loopback, database and cache are implicit). |
+| `OAX_AIRGAPPED_STDIO` | – | `trusted` accepts platform stdio MCP connections in air-gapped mode (child processes are invisible to the network guard). Without it they are refused at start-up and on create; tenant stdio connections need an enabled isolating runner. |
 
 ## What the UI needs
 

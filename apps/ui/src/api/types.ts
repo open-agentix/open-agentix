@@ -30,7 +30,10 @@ export type PlanCheckResult = ResponseOf<'/v1/plans/check', 'post'>;
 export type PlanGenerateResult = ResponseOf<'/v1/plans/generate', 'post'>;
 export type ValidationResult = ResponseOf<'/v1/agents/validate', 'post'>;
 export type PublishResult = ResponseOf<'/v1/agents/{id}/publish', 'post'>;
-export type Run = ResponseOf<'/v1/runs/{id}', 'get'>;
+/** `GET /v1/runs/{id}`: the run plus its trace identity (`traceId`, `traceUrl`). */
+export type RunDetail = ResponseOf<'/v1/runs/{id}', 'get'>;
+/** A run as the list and the cancel endpoint return it (no trace identity). */
+export type Run = Omit<RunDetail, 'traceId' | 'traceUrl'>;
 export type RunStatus = Run['status'];
 export type RunStep = ResponseOf<'/v1/runs/{id}/steps', 'get'>['items'][number];
 export type Approval = ResponseOf<'/v1/approvals', 'get'>['items'][number];

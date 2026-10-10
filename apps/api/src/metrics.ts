@@ -25,6 +25,9 @@ export class Metrics {
   readonly otel: TelemetryStats;
   readonly roleBindingsShadow: Counter<'outcome' | 'authoritative'>;
   readonly authzEpochRejected: Counter<'reason'>;
+  /** Stored tenant stdio MCP connections that break the ADR 0016 S0 rules (no tenant labels). */
+  readonly mcpStdioViolations: Gauge<string>;
+  readonly mcpStdioRefused: Counter<'code'>;
   readonly roleBindingsReconcileFixes: Counter<'kind' | 'trigger'>;
   readonly roleBindingsReconcileRuns: Counter<'trigger' | 'outcome'>;
 
@@ -59,6 +62,17 @@ export class Metrics {
         'S2, #227): reason stale (the epoch changed since the entry was built) or invalid (the ' +
         'entry did not belong to the token, was malformed or its owner check failed)',
       labelNames: ['reason'],
+      registers: [this.registry],
+    });
+    this.mcpStdioViolations = new Gauge({
+      name: `${prefix}mcp_stdio_violations`,
+      help: 'Stored tenant stdio MCP connections that violate the stdio rules (ADR 0016 S0)',
+      registers: [this.registry],
+    });
+    this.mcpStdioRefused = new Counter({
+      name: `${prefix}mcp_stdio_refused_total`,
+      help: 'Stdio MCP servers refused at run time (code: error code)',
+      labelNames: ['code'],
       registers: [this.registry],
     });
     this.roleBindingsReconcileFixes = new Counter({
@@ -185,7 +199,14 @@ export class Metrics {
       labelNames: ['kind'],
       registers: [this.registry],
     });
+    const otelInboundContext = new Counter({
+      name: `${prefix}otel_inbound_context_total`,
+      help: 'Inbound traceparent headers on API requests by outcome (ignored, linked, invalid); never used as a parent',
+      labelNames: ['result'],
+      registers: [this.registry],
+    });
     this.otel = {
+      inboundContext: (result, n) => otelInboundContext.inc({ result }, n),
       attributesDropped: (keyClass: DropClass, n) =>
         otelAttributesDropped.inc({ key_class: keyClass }, n),
       redactions: (kind, n) => otelRedactions.inc({ kind }, n),

@@ -1,6 +1,6 @@
--- Reverts 0020_authz_epoch.sql (ADR 0014 slice S2, #227).
+-- Reverts 0021_authz_epoch.sql (ADR 0014 slice S2, #227).
 -- Not part of the drizzle journal: run it by hand (psql) after rolling the application back, then
--- delete the row of migration 0020 from drizzle.__drizzle_migrations. Loses no data: tenants.authz_epoch
+-- delete the row of migration 0021 from drizzle.__drizzle_migrations. Loses no data: tenants.authz_epoch
 -- stays (column of 0018) but nothing bumps it any more, so an application version that compares the
 -- epoch would no longer see revocations made outside it.
 DROP TRIGGER IF EXISTS "authz_epoch_trb_ins" ON "tenant_role_bindings";

@@ -4456,6 +4456,17 @@ paths:
                       - string
                       - "null"
                   outputs: {}
+                  traceId:
+                    anyOf:
+                      - type: string
+                        pattern: ^[0-9a-f]{32}$
+                      - type: "null"
+                    description: W3C trace id of the run (random, server-generated); null for runs created before the trace identity existed
+                  traceUrl:
+                    description: Link to the trace in the operator's trace backend (OAX_OTEL_TRACE_URL_TEMPLATE); null when no template is configured or the run has no trace
+                    type:
+                      - string
+                      - "null"
                 required:
                   - id
                   - agentId
@@ -4478,6 +4489,8 @@ paths:
                   - errorCode
                   - errorMessage
                   - outputs
+                  - traceId
+                  - traceUrl
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -5444,6 +5457,11 @@ paths:
                           propertyNames:
                             type: string
                           additionalProperties: {}
+                        warnings:
+                          type: array
+                          items:
+                            type: string
+                          description: why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine
                         createdAt:
                           type: string
                           description: ISO 8601 timestamp
@@ -5458,6 +5476,7 @@ paths:
                         - name
                         - kind
                         - config
+                        - warnings
                         - createdAt
                         - updatedAt
                       additionalProperties: false
@@ -5564,6 +5583,11 @@ paths:
                     propertyNames:
                       type: string
                     additionalProperties: {}
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+                    description: why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine
                   createdAt:
                     type: string
                     description: ISO 8601 timestamp
@@ -5578,6 +5602,7 @@ paths:
                   - name
                   - kind
                   - config
+                  - warnings
                   - createdAt
                   - updatedAt
                 additionalProperties: false
@@ -5609,6 +5634,120 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/connections/stdio-violations:
+    get:
+      summary: Stored tenant stdio connections that break the stdio rules (ADR 0016); they fail closed at run time
+      tags:
+        - connections
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        connection:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            tenantId:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            scope:
+                              type: string
+                              enum:
+                                - platform
+                                - tenant
+                                - team
+                                - agent
+                            scopeId:
+                              anyOf:
+                                - type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                - type: "null"
+                            name:
+                              type: string
+                            kind:
+                              type: string
+                              enum:
+                                - mcp
+                                - model
+                            config:
+                              type: object
+                              propertyNames:
+                                type: string
+                              additionalProperties: {}
+                            warnings:
+                              type: array
+                              items:
+                                type: string
+                              description: why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine
+                            createdAt:
+                              type: string
+                              description: ISO 8601 timestamp
+                            updatedAt:
+                              type: string
+                              description: ISO 8601 timestamp
+                          required:
+                            - id
+                            - tenantId
+                            - scope
+                            - scopeId
+                            - name
+                            - kind
+                            - config
+                            - warnings
+                            - createdAt
+                            - updatedAt
+                          additionalProperties: false
+                        issues:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              code:
+                                type: string
+                              path:
+                                type: string
+                              message:
+                                type: string
+                            required:
+                              - code
+                              - path
+                              - message
+                            additionalProperties: false
+                      required:
+                        - connection
+                        - issues
+                      additionalProperties: false
+                required:
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/models/proposals:
     post:
       summary: Propose limits and USD prices per model from the pinned model catalog (before creating a model connection; every value can be overridden)
@@ -5897,6 +6036,11 @@ paths:
                     propertyNames:
                       type: string
                     additionalProperties: {}
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+                    description: why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine
                   createdAt:
                     type: string
                     description: ISO 8601 timestamp
@@ -5911,6 +6055,7 @@ paths:
                   - name
                   - kind
                   - config
+                  - warnings
                   - createdAt
                   - updatedAt
                 additionalProperties: false
@@ -6001,6 +6146,11 @@ paths:
                     propertyNames:
                       type: string
                     additionalProperties: {}
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+                    description: why the connection is refused at run time although it is stored (tenant stdio connections that break the ADR 0016 command rules); empty when fine
                   createdAt:
                     type: string
                     description: ISO 8601 timestamp
@@ -6015,6 +6165,7 @@ paths:
                   - name
                   - kind
                   - config
+                  - warnings
                   - createdAt
                   - updatedAt
                 additionalProperties: false
@@ -10064,6 +10215,22 @@ paths:
                         type: string
                       additionalProperties: {}
                     description: MCP connections of the step with all secret references stripped
+                  stdio:
+                    description: tenant-defined stdio servers of the step and the command allowlist (ADR 0016)
+                    type: object
+                    properties:
+                      tenantServers:
+                        type: array
+                        items:
+                          type: string
+                      allowlist:
+                        type: array
+                        items:
+                          type: string
+                    required:
+                      - tenantServers
+                      - allowlist
+                    additionalProperties: false
                 required:
                   - agentId
                   - agent

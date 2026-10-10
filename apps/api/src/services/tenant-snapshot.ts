@@ -7,7 +7,7 @@ import { tenants } from '../db/schema.js';
  * Tree snapshot of one organisation (ADR 0014 section 3.6): the nodes of a root with the little the
  * acting-node logic needs (`id`, `parentId`, `path`, `depth`, `slug`), loaded with one query and
  * cached under `tree:<rootId>:<authz epoch>`, so a bumped epoch (node created, renamed, moved or
- * deleted; see migration 0020) is a different key and a stale snapshot is never read.
+ * deleted; see migration 0021) is a different key and a stale snapshot is never read.
  *
  * Why it exists: a caller who may act in more than its home node must be matched against the nodes
  * it can see **without** a lookup per slug segment and without a query whose count or timing

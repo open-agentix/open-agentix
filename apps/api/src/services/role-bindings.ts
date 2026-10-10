@@ -126,7 +126,7 @@ export async function mirrorGlobalRoles(
 
 /**
  * The authz epoch of the organisation a tenant belongs to (ADR 0014 section 6.1; bumped by the
- * database triggers of migration 0020 and the application). `undefined` when the tenant does not
+ * database triggers of migration 0021 and the application). `undefined` when the tenant does not
  * exist. Read **before** the grants it guards: an entry built from an epoch read first can only be
  * rejected too early, never accepted too late.
  */

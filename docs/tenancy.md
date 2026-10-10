@@ -183,7 +183,7 @@ authoritative, so upgrading changes nobody's access.
     `global_roles` is deleted, whatever its shape.
   Roles *added* through the column alone are not bound by the trigger (a missing row grants less,
   never more); the application, the shadow-driven and the periodic reconcile add them. The trigger
-  does not invalidate cached principals itself; since migration `0020` the epoch trigger on
+  does not invalidate cached principals itself; since migration `0021` the epoch trigger on
   `tenant_role_bindings` and `users` does (see "Authz epoch" below). Moving to another organisation is still
   refused while bindings of the old one exist, and the roles then follow the user to the new home,
   so the way back needs those bindings gone again.
@@ -225,7 +225,7 @@ missing means *less* access under `bindings` (fail closed); an inheriting bindin
 design. Going back is `legacy` and a restart; nothing is migrated. Cache entries remember the mode
 they were built for, so a switch needs no flush.
 
-**Authz epoch.** Migration `0020_authz_epoch` makes the database bump `tenants.authz_epoch` of the
+**Authz epoch.** Migration `0021_authz_epoch` makes the database bump `tenants.authz_epoch` of the
 organisation root, in the same transaction, on every change that can alter what a cached principal
 may do: insert, update or delete of `tenant_role_bindings`, `team_members` and `agent_role_bindings`;
 delete of a team or an agent (whose cascade removes memberships and agent bindings) and a change of
@@ -254,10 +254,10 @@ trigger, every writer is covered: the application, the `0019` home-move trigger,
 - The tree snapshot (`tree:<rootId>:<epoch>`, 10 minutes) is keyed by the epoch, so a created,
   renamed or deleted node is visible at once. Cross-organisation: an epoch bump in one organisation
   never touches another's entries, and a snapshot holds the nodes of exactly one organisation.
-- Moving a node (W13-11) must bump the epoch of the roots it touches; the `0020` trigger already
+- Moving a node (W13-11) must bump the epoch of the roots it touches; the `0021` trigger already
   does so for `parent_id`, `root_id` and `path` changes.
 
-Rollback of the migration: `apps/api/drizzle/down/0020_authz_epoch.down.sql` (the triggers; an
+Rollback of the migration: `apps/api/drizzle/down/0021_authz_epoch.down.sql` (the triggers; an
 application version that compares the epoch then no longer sees revocations made outside it, so roll
 the application back first), then `0019_trb_home_move.down.sql` (the trigger only), then
 `apps/api/drizzle/down/0018_tenant_role_bindings.down.sql` drops both tables, the triggers

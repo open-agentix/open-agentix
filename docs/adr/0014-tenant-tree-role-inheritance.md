@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | S1 | implemented (PR for #186) | Migration **`0018_tenant_role_bindings`**, not 0017: `0016_agent_disable` and `0017_approvals_tenant_status_idx` took the numbers after this ADR was written (follow-up of #198). Wherever this text says `0017_tenant_role_bindings`, read 0018; later slices continue from 0019. |
 | S1b | implemented (PR for #216, #217) | Prerequisites for S2, **without changing the read path**: reconcile of the `global_roles` mirror (start-up, periodic, mismatch-driven, CLI), the same-key rule, migration **`0019_trb_home_move`**, a serializable form for cached raw grants and a single-statement `loadRawGrants`. See below. |
-| S2 | implemented behind a flag (PR for #187, #227) | Acting node for every visible tenant, read-only inheritance, authz epoch and the resolver as read path **behind `OAX_ROLE_BINDINGS_READ=legacy|bindings`** (default `legacy`). Migration **`0020_authz_epoch`**. See "S2" below. |
+| S2 | implemented behind a flag (PR for #187, #227) | Acting node for every visible tenant, read-only inheritance, authz epoch and the resolver as read path **behind `OAX_ROLE_BINDINGS_READ=legacy|bindings`** (default `legacy`). Migration **`0021_authz_epoch`**. See "S2" below. |
 
 Differences between the plan below and what S1 shipped:
 
@@ -99,7 +99,7 @@ S2 (acting node, read-only inheritance, authz epoch; #187, #227):
 - **Epoch in the database, not in the cache.** Section 6.1 mirrors the epoch in the cache; S2 keeps
   `tenants.authz_epoch` as the only copy and compares it on **every** request with one primary-key
   read, because the trigger and `psql` paths can only reach the database. The bump is done by
-  triggers (migration 0020) on bindings, team members, agent bindings, `users` (home, roles,
+  triggers (migration 0021) on bindings, team members, agent bindings, `users` (home, roles,
   platform flag, disabled) and tree nodes, so there is no write path that can forget it. The
   Valkey-side copy of section 6.1 is therefore not needed and the multi-replica window without
   Valkey disappears for these paths (open question 8 is answered for revocations: effective on the
