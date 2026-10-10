@@ -116,7 +116,9 @@ export class CatalogService {
   oauth?: {
     prepareRevoke(
       row: Pick<ConnectionRow, 'id' | 'tenantId' | 'scope' | 'config' | 'kind'>,
-    ): Promise<{ run(reason: string, actor?: string, rows?: 'delete' | 'gone' | 'replaced'): Promise<void> } | null>;
+    ): Promise<{
+      run(reason: string, actor?: string, rows?: 'delete' | 'gone' | 'replaced'): Promise<void>;
+    } | null>;
   };
 
   constructor(

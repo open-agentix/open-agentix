@@ -9,6 +9,7 @@ import {
   relayConfigFor,
   requestedScopes,
   type McpServerConfig,
+  type McpTokenSource,
 } from '../src/index.js';
 
 type Http = Extract<McpServerConfig, { transport: 'streamable-http' }>;
@@ -39,8 +40,14 @@ describe('auth in the connection config', () => {
   it.each([
     ['unknown kind', { kind: 'basic' }],
     ['authorization_code grant (later slice)', { ...oauth, grant: 'authorization_code' }],
-    ['dynamic registration (later slice)', { ...oauth, client: { ...oauth.client, registration: 'dcr' } }],
-    ['no client auth secret', { ...oauth, client: { clientIdSecret: 'id', clientAuth: 'client_secret_basic' } }],
+    [
+      'dynamic registration (later slice)',
+      { ...oauth, client: { ...oauth.client, registration: 'dcr' } },
+    ],
+    [
+      'no client auth secret',
+      { ...oauth, client: { clientIdSecret: 'id', clientAuth: 'client_secret_basic' } },
+    ],
     ['both secrets', { ...oauth, client: { ...oauth.client, keySecret: 'k' } }],
     ['public client', { ...oauth, client: { clientIdSecret: 'id', clientAuth: 'none' } }],
     ['unknown member', { ...oauth, extra: 1 }],
@@ -59,9 +66,11 @@ describe('auth in the connection config', () => {
     ] as const)
       for (const kind of [oauth, { kind: 'none' }])
         expect(
-          checkHttpConfig({ url: 'https://x.example/mcp', auth: kind, [field]: { [name]: 'v' } }).map(
-            (i) => i.code,
-          ),
+          checkHttpConfig({
+            url: 'https://x.example/mcp',
+            auth: kind,
+            [field]: { [name]: 'v' },
+          }).map((i) => i.code),
         ).toContain('auth_conflict');
     expect(
       checkHttpConfig({
@@ -71,15 +80,21 @@ describe('auth in the connection config', () => {
       }),
     ).toEqual([]);
     expect(
-      checkHttpConfig({ url: 'https://x.example/mcp', auth: oauth, headerSecrets: { 'x-api-key': 'r' } }),
+      checkHttpConfig({
+        url: 'https://x.example/mcp',
+        auth: oauth,
+        headerSecrets: { 'x-api-key': 'r' },
+      }),
     ).toEqual([]);
   });
 
   it('an oauth url must be https without a query', () => {
-    expect(checkHttpConfig({ url: 'http://x.example/mcp', auth: oauth }).map((i) => i.path)).toEqual(['url']);
-    expect(checkHttpConfig({ url: 'https://x.example/mcp?k=v', auth: oauth }).map((i) => i.path)).toEqual([
-      'url',
-    ]);
+    expect(
+      checkHttpConfig({ url: 'http://x.example/mcp', auth: oauth }).map((i) => i.path),
+    ).toEqual(['url']);
+    expect(
+      checkHttpConfig({ url: 'https://x.example/mcp?k=v', auth: oauth }).map((i) => i.path),
+    ).toEqual(['url']);
   });
 
   it('strips the auth block from what a run node is given', () => {
@@ -101,9 +116,14 @@ describe('scopes from profiles', () => {
       'shared',
     ]);
     expect(
-      requestedScopes(parse({ auth: oauth, tools, profiles: { read: ['get'], all: ['get', 'put'] } })),
+      requestedScopes(
+        parse({ auth: oauth, tools, profiles: { read: ['get'], all: ['get', 'put'] } }),
+      ),
     ).toEqual(['r', 'shared', 'w']);
-    expect(requestedScopes(parse({ auth: { ...oauth, scopes: ['z', 'a'] }, tools }))).toEqual(['a', 'z']);
+    expect(requestedScopes(parse({ auth: { ...oauth, scopes: ['z', 'a'] }, tools }))).toEqual([
+      'a',
+      'z',
+    ]);
     expect(requestedScopes(parse({ auth: oauth, tools }))).toEqual([]);
     expect(requestedScopes(parse())).toEqual([]);
   });
@@ -138,13 +158,19 @@ describe('transport with a token source', () => {
       },
     };
   };
-  const fetcher = (o: OutboundDispatcher, src?: ReturnType<typeof source>['src'], cfg = parse({ auth: oauth })) =>
-    createMcpFetch(cfg, { outbound: o, originFor: () => 'tenant', ...(src ? { tokens: () => src } : {}) });
+  const fetcher = (o: OutboundDispatcher, src?: McpTokenSource, cfg = parse({ auth: oauth })) =>
+    createMcpFetch(cfg, {
+      outbound: o,
+      originFor: () => 'tenant',
+      ...(src ? { tokens: () => src } : {}),
+    });
 
   it('sets the bearer token itself and replaces any authorization header of the caller', async () => {
     calls.length = 0;
     const { src } = source();
-    await fetcher(outbound(), src)('https://mcp.example.org/mcp', { headers: { authorization: 'Bearer other' } });
+    await fetcher(outbound(), src)('https://mcp.example.org/mcp', {
+      headers: { authorization: 'Bearer other' },
+    });
     expect(calls[0]!.auth).toBe('Bearer TOKEN-VALUE-1');
   });
 
@@ -167,14 +193,17 @@ describe('transport with a token source', () => {
 
   it('a 401 marks the token rejected; insufficient_scope is its own error; other 403s pass', async () => {
     const a = source();
-    await expect(fetcher(outbound(401), a.src)('https://mcp.example.org/mcp')).rejects.toMatchObject({
+    await expect(
+      fetcher(outbound(401), a.src)('https://mcp.example.org/mcp'),
+    ).rejects.toMatchObject({
       code: 'mcp_auth_required',
     });
     expect(a.log.rejected).toBe(1);
     await expect(
-      fetcher(outbound(403, { 'www-authenticate': 'Bearer error="insufficient_scope", scope="w"' }), a.src)(
-        'https://mcp.example.org/mcp',
-      ),
+      fetcher(
+        outbound(403, { 'www-authenticate': 'Bearer error="insufficient_scope", scope="w"' }),
+        a.src,
+      )('https://mcp.example.org/mcp'),
     ).rejects.toMatchObject({ code: 'mcp_insufficient_scope' });
     const plain = await fetcher(outbound(403), a.src)('https://mcp.example.org/mcp');
     expect(plain.status).toBe(403);

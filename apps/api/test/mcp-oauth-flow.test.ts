@@ -49,7 +49,13 @@ beforeAll(async () => {
     'oa-client-key': rsa.pem,
   });
   n = await testNode(
-    { OAX_MCP_OAUTH_KEK: randomBytes(32).toString('base64') },
+    {
+      OAX_MCP_OAUTH_KEK: randomBytes(32).toString('base64'),
+      // OAX_TEST_FLOW_DATABASE_URL: a real PostgreSQL (empty database) instead of PGlite
+      ...(process.env.OAX_TEST_FLOW_DATABASE_URL
+        ? { OAX_DATABASE_URL: process.env.OAX_TEST_FLOW_DATABASE_URL }
+        : {}),
+    },
     { secrets, mcpOutbound: world.dispatcher, mcpProbeLimit: 10_000, now: () => clock },
   );
   const tenant = (await n.req({ method: 'GET', url: '/v1/tenants' })).json().items[0].id as string;

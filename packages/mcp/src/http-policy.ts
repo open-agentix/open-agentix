@@ -192,7 +192,8 @@ function authIssues(cfg: HttpFields, url: URL | undefined, out: HttpIssue[]): vo
     out.push({
       code: 'mcp_url_invalid',
       path: 'url',
-      message: 'an oauth connection url must not have a query (the resource identifier is the path)',
+      message:
+        'an oauth connection url must not have a query (the resource identifier is the path)',
     });
   if (kind === 'oauth' && url && url.protocol !== 'https:')
     out.push({
