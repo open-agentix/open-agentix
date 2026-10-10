@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: 2026-10-10
-- Plan items: new wave W14 (this ADR, slices S1 to S9, issues listed in section 17); updates W6-3
+- Plan items: new wave W14 (this ADR, slices S1 to S9, issues #244 to #252); updates W6-3
   (#51, version approval bound to digest, model, eval set and policy), W7-2 (#54, multi-step
   approval workflows), W9-2 (#93, review and publish flow of Git-managed agents), W5-3 (#45, secret
   managers), W6-5 (#52, lifecycle console)
@@ -595,7 +595,7 @@ control node.
   enables `runtimeSelfApproval: never`".
 - **W9-2 (#93)**: the review and publish flow of Git-managed agents uses the reviews of this ADR; host
   review as approval is slice S9.
-- **W5-3 (#45)**: implemented by S6 (Vault) and S7 (AWS SM); #45 becomes the umbrella and is closed
+- **W5-3 (#45)**: implemented by S6 (#249, Vault) and S7 (#250, AWS SM); #45 becomes the umbrella and is closed
   when both are merged.
 - **ADR 0016 S5 (#235)**: the key service is shared; whichever slice lands first builds it, the
   other reuses it.
@@ -655,21 +655,21 @@ adds its `[Unreleased]` changelog line.
 
 | # | Slice | Content | Depends on | Security review |
 | --- | --- | --- | --- | --- |
-| S1 | Lifecycle policy, revisions, reviews and approval records (API only, not enforced) | `agent_draft_revisions`, `agent_reviews`, `agent_review_decisions`; `tenants.settings` (or reuse W13-2) and the lifecycle policy resolver; rule module A1 to A8; permissions `agents:review`, `agents:approve`; endpoints to open, decide, withdraw; binding of digest, expansion digest and policy digest; publish reports "would be refused" in the response and audit (shadow mode) | – | yes: A1/A2 cannot be bypassed by role, token or platform admin; binding fields complete |
-| S2 | Comment threads and review UI | threads and comments API, outdated anchors, Review tab, decision bar, status badges, inbox `GET /v1/me/reviews`, i18n en/de | S1 | yes: rendering without HTML; comment content out of audit and model context |
-| S3 | Enforcement at publish, break-glass, deprecation, audit | publish with `reviewId` and `expectedDigest` under row lock, re-checks of section 4.3, break-glass with ratification and automatic disable, version deprecation, audit events of section 11 | S1 | yes: TOCTOU tests; no publish path without approval when required |
-| S4 | Secret scopes and encrypted store | key service (shared with ADR 0016 S5 #235), `secrets` table, scoped references in `agents.md`, secrets API without read, broker checks (scope, usage, destinations, revoked), rotation and revocation, leak canaries, migration helper for env pointers | – (coordinates with #235) | yes: no plaintext at rest, AAD binding, no value in any response |
-| S5 | Personal secrets and development runs | personal scope rules, draft runs of a revision (manual only, dev budget, `stage`), `allowDraftRuns`, `allowProductionSecretsInDraftRuns`, publish refusal and `with-approval` flag path | S3, S4 | yes: confused-deputy tests; personal secret never in a published version by default |
-| S6 | HashiCorp Vault backend | `vault` backend connection, KV v2 and dynamic secrets with leases, AppRole/Kubernetes/JWT auth, per-tenant path template, dispatcher purpose `secrets`, fakes | S4 | yes: tokens never to nodes; lease revocation; path scope |
-| S7 | AWS Secrets Manager backend | `aws-sm` backend connection, IRSA and per-tenant `AssumeRole` with `ExternalId`, ARN prefix enforcement, version stages, fakes | S4 | yes: cross-tenant ARN refusal; no credentials to nodes |
-| S8 | Notifications and path rules | `pathRules` (field-based CODEOWNERS), `approverScope: other-team`, notifications for review events through existing or W2-5/W3-1 channels | S3 | yes: rules evaluated on the semantic diff, not text lines |
-| S9 | Git-sync mapping | Git candidates as revisions, verified identity links to host accounts, host review as approval under section 12, optional version tag push | S3, W9-2-4 (#93) | yes: no approval from an unverified host account; attestation never counts |
+| S1 (#244) | Lifecycle policy, revisions, reviews and approval records (API only, not enforced) | `agent_draft_revisions`, `agent_reviews`, `agent_review_decisions`; `tenants.settings` (or reuse W13-2) and the lifecycle policy resolver; rule module A1 to A8; permissions `agents:review`, `agents:approve`; endpoints to open, decide, withdraw; binding of digest, expansion digest and policy digest; publish reports "would be refused" in the response and audit (shadow mode) | – | yes: A1/A2 cannot be bypassed by role, token or platform admin; binding fields complete |
+| S2 (#245) | Comment threads and review UI | threads and comments API, outdated anchors, Review tab, decision bar, status badges, inbox `GET /v1/me/reviews`, i18n en/de | S1 | yes: rendering without HTML; comment content out of audit and model context |
+| S3 (#246) | Enforcement at publish, break-glass, deprecation, audit | publish with `reviewId` and `expectedDigest` under row lock, re-checks of section 4.3, break-glass with ratification and automatic disable, version deprecation, audit events of section 11 | S1 | yes: TOCTOU tests; no publish path without approval when required |
+| S4 (#247) | Secret scopes and encrypted store | key service (shared with ADR 0016 S5 #235), `secrets` table, scoped references in `agents.md`, secrets API without read, broker checks (scope, usage, destinations, revoked), rotation and revocation, leak canaries, migration helper for env pointers | – (coordinates with #235) | yes: no plaintext at rest, AAD binding, no value in any response |
+| S5 (#248) | Personal secrets and development runs | personal scope rules, draft runs of a revision (manual only, dev budget, `stage`), `allowDraftRuns`, `allowProductionSecretsInDraftRuns`, publish refusal and `with-approval` flag path | S3, S4 | yes: confused-deputy tests; personal secret never in a published version by default |
+| S6 (#249) | HashiCorp Vault backend | `vault` backend connection, KV v2 and dynamic secrets with leases, AppRole/Kubernetes/JWT auth, per-tenant path template, dispatcher purpose `secrets`, fakes | S4 | yes: tokens never to nodes; lease revocation; path scope |
+| S7 (#250) | AWS Secrets Manager backend | `aws-sm` backend connection, IRSA and per-tenant `AssumeRole` with `ExternalId`, ARN prefix enforcement, version stages, fakes | S4 | yes: cross-tenant ARN refusal; no credentials to nodes |
+| S8 (#251) | Notifications and path rules | `pathRules` (field-based CODEOWNERS), `approverScope: other-team`, notifications for review events through existing or W2-5/W3-1 channels | S3 | yes: rules evaluated on the semantic diff, not text lines |
+| S9 (#252) | Git-sync mapping | Git candidates as revisions, verified identity links to host accounts, host review as approval under section 12, optional version tag push | S3, W9-2-4 (#93) | yes: no approval from an unverified host account; attestation never counts |
 
 ### 18. Roadmap mapping
 
 - Add to `ROADMAP.md` under v0.4 ("Agent lifecycle"): **W14 Agent lifecycle governance: four-eyes
   publish approval with review comments, development vs published, scoped and encrypted secrets
-  with Vault and AWS Secrets Manager** (design: this ADR, issues of S1 to S9).
+  with Vault and AWS Secrets Manager** (design: this ADR, issues #244 to #252).
 - W7-2 (#54): add "uses the shared approval rule module of ADR 0017; requester and contributors never
   approve when enabled".
 - W6-3 (#51): add "builds on ADR 0017 approval records (digest, expansion, policy)".
@@ -730,7 +730,7 @@ not claim more than the code does.
 **ROADMAP.md line** (v0.4): "- [ ] **Agent lifecycle governance: four-eyes publish approval with
 review comments, development vs published, scoped and encrypted secrets, Vault and AWS Secrets
 Manager backends** (W14, design: [ADR 0017](docs/adr/0017-agent-lifecycle-governance.md), issues
-S1 to S9) – *As a company with several departments, I want every agent version approved by another
+#244 to #252) – *As a company with several departments, I want every agent version approved by another
 person before it reaches production, and credentials kept per team or tenant, encrypted and never
 readable, so that agents follow the same four-eyes rules as our software.*"
 
