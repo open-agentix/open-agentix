@@ -27,6 +27,10 @@ export interface TokenWrite extends TokenBinding {
   refreshToken?: string | undefined;
   expiresAt?: Date | undefined;
   authorizedBy?: string | undefined;
+  /** Defaults to `client_credentials`. */
+  grantType?: 'client_credentials' | 'authorization_code' | undefined;
+  /** Authorization server endpoints pinned with the tokens (URLs only). */
+  endpoints?: Record<string, string> | undefined;
 }
 
 /** Everything about a stored token except its values (safe to show in an API response). */
@@ -36,6 +40,10 @@ export interface TokenMeta extends TokenBinding {
   expiresAt: Date | null;
   authorizedBy: string | null;
   authorizedAt: Date;
+  updatedAt: Date;
+  grantType: string;
+  endpoints: Record<string, string>;
+  lastError: string | null;
 }
 
 export interface StoredTokens {
@@ -97,14 +105,36 @@ export class McpOauthTokenStore {
   }
 
   async put(w: TokenWrite): Promise<void> {
+    await this.db.transaction(async (tx) => this.write(tx as unknown as Db, w));
+  }
+
+  /**
+   * Seals and writes the tokens inside the caller's transaction (the refresh holds an advisory
+   * lock across the network call and writes the rotated pair before it commits). The connection
+   * row is locked for the check and the write: a URL change (which bumps the credential version
+   * and deletes the tokens in one transaction) either happens before and fails this write, or
+   * after and deletes the row written here. No orphan survives a bump.
+   */
+  async write(tx: Db, w: TokenWrite): Promise<void> {
     assertTokenShape(w.accessToken, [w.tenantId, w.connectionId]);
     if (w.refreshToken !== undefined)
       assertTokenShape(w.refreshToken, [w.tenantId, w.connectionId]);
     assertHttpsUrl(w.issuer, 'the issuer');
     assertHttpsUrl(w.resource, 'the resource');
+    const conn = await this.connection(w.tenantId, w.connectionId, tx, true);
+    if (!conn) throw new OaxError('not_found', 'connection not found for this tenant');
+    if (w.resource !== conn.resource)
+      throw new OaxError(
+        'mcp_resource_mismatch',
+        'the resource is not the canonical URI of the connection',
+      );
+    if (w.credentialVersion !== conn.credentialVersion)
+      throw new OaxError('conflict', 'the credential version of the connection has changed');
+    // Both values are sealed in one call under the same key, so one version describes both.
     const sealed = await this.keys.sealAll(
       w.refreshToken ? [w.accessToken, w.refreshToken] : [w.accessToken],
       bindingOf(w),
+      tx,
     );
     const at = this.now();
     const values = {
@@ -112,47 +142,35 @@ export class McpOauthTokenStore {
       clientRef: w.clientRef,
       resource: w.resource,
       scopes: w.scopes.join(' '),
-      // Both values are sealed in one call under the same key, so one version describes both.
       keyVersion: sealed.keyVersion,
       accessTokenEnc: sealed.ciphertexts[0] as string,
       refreshTokenEnc: sealed.ciphertexts[1] ?? null,
       expiresAt: w.expiresAt ?? null,
       status: 'active',
+      grantType: w.grantType ?? 'client_credentials',
+      endpoints: w.endpoints ?? {},
+      lastError: null,
       authorizedBy: w.authorizedBy ?? null,
       authorizedAt: at,
       updatedAt: at,
     };
-    // The connection row is locked for the check and the write: a URL change (which bumps the
-    // credential version and deletes the tokens in one transaction) either happens before and
-    // fails this write, or after and deletes the row written here. No orphan survives a bump.
-    await this.db.transaction(async (tx) => {
-      const conn = await this.connection(w.tenantId, w.connectionId, tx as unknown as Db, true);
-      if (!conn) throw new OaxError('not_found', 'connection not found for this tenant');
-      if (w.resource !== conn.resource)
-        throw new OaxError(
-          'mcp_resource_mismatch',
-          'the resource is not the canonical URI of the connection',
-        );
-      if (w.credentialVersion !== conn.credentialVersion)
-        throw new OaxError('conflict', 'the credential version of the connection has changed');
-      const written = await tx
-        .insert(mcpOauthTokens)
-        .values({
-          id: randomUUID(),
-          tenantId: w.tenantId,
-          connectionId: w.connectionId,
-          credentialVersion: w.credentialVersion,
-          ...values,
-        })
-        .onConflictDoUpdate({
-          target: [mcpOauthTokens.connectionId, mcpOauthTokens.credentialVersion],
-          set: values,
-          setWhere: eq(mcpOauthTokens.tenantId, w.tenantId),
-        })
-        .returning({ id: mcpOauthTokens.id });
-      if (written.length === 0)
-        throw new OaxError('conflict', 'the stored tokens belong to another tenant');
-    });
+    const written = await tx
+      .insert(mcpOauthTokens)
+      .values({
+        id: randomUUID(),
+        tenantId: w.tenantId,
+        connectionId: w.connectionId,
+        credentialVersion: w.credentialVersion,
+        ...values,
+      })
+      .onConflictDoUpdate({
+        target: [mcpOauthTokens.connectionId, mcpOauthTokens.credentialVersion],
+        set: values,
+        setWhere: eq(mcpOauthTokens.tenantId, w.tenantId),
+      })
+      .returning({ id: mcpOauthTokens.id });
+    if (written.length === 0)
+      throw new OaxError('conflict', 'the stored tokens belong to another tenant');
   }
 
   /** Metadata only; never touches the ciphertext columns. */
@@ -160,8 +178,9 @@ export class McpOauthTokenStore {
     tenantId: string,
     connectionId: string,
     credentialVersion: number,
+    db: Db = this.db,
   ): Promise<TokenMeta | null> {
-    const row = await this.row(tenantId, connectionId, credentialVersion);
+    const row = await this.row(tenantId, connectionId, credentialVersion, db);
     return row ? metaOf(row) : null;
   }
 
@@ -173,16 +192,17 @@ export class McpOauthTokenStore {
     tenantId: string,
     connectionId: string,
     credentialVersion: number,
+    db: Db = this.db,
   ): Promise<StoredTokens | null> {
-    const row = await this.row(tenantId, connectionId, credentialVersion);
+    const row = await this.row(tenantId, connectionId, credentialVersion, db);
     if (!row) return null;
     const meta = metaOf(row);
     const binding = bindingOf(meta);
     return {
       meta,
-      accessToken: await this.keys.open(row.keyVersion, row.accessTokenEnc, binding),
+      accessToken: await this.keys.open(row.keyVersion, row.accessTokenEnc, binding, db),
       refreshToken: row.refreshTokenEnc
-        ? await this.keys.open(row.keyVersion, row.refreshTokenEnc, binding)
+        ? await this.keys.open(row.keyVersion, row.refreshTokenEnc, binding, db)
         : null,
     };
   }
@@ -198,6 +218,48 @@ export class McpOauthTokenStore {
       .set({ status, updatedAt: this.now() })
       .where(this.where(tenantId, connectionId, credentialVersion));
     if (status !== 'active') this.registry.forgetOwner(ownerKey(connectionId, credentialVersion));
+  }
+
+  /**
+   * Records a failed refresh by its closed code. `status` stays `active` while the stored access
+   * token can still be used; a token that is expired (or credentials rejected for good) changes it.
+   */
+  async recordFailure(
+    tenantId: string,
+    connectionId: string,
+    credentialVersion: number,
+    status: TokenStatus,
+    lastError: string,
+  ): Promise<void> {
+    await this.db
+      .update(mcpOauthTokens)
+      .set({ status, lastError, updatedAt: this.now() })
+      .where(this.where(tenantId, connectionId, credentialVersion));
+    if (status !== 'active') this.registry.forgetOwner(ownerKey(connectionId, credentialVersion));
+  }
+
+  /** The server rejected the access token: treat it as expired so that the next use refreshes it. */
+  async expireNow(
+    tenantId: string,
+    connectionId: string,
+    credentialVersion: number,
+  ): Promise<void> {
+    await this.db
+      .update(mcpOauthTokens)
+      .set({ expiresAt: this.now(), updatedAt: this.now() })
+      .where(this.where(tenantId, connectionId, credentialVersion));
+    // Not forgotten in the registry: the rejected value must stay scrubbed until its time is up.
+  }
+
+  /** Credential versions that have a stored row for the connection. */
+  async versions(tenantId: string, connectionId: string): Promise<number[]> {
+    const rows = await this.db
+      .select({ v: mcpOauthTokens.credentialVersion })
+      .from(mcpOauthTokens)
+      .where(
+        and(eq(mcpOauthTokens.tenantId, tenantId), eq(mcpOauthTokens.connectionId, connectionId)),
+      );
+    return rows.map((r) => r.v);
   }
 
   /** Deletes the tokens of a connection (disconnect, revocation, URL or issuer change). */
@@ -220,8 +282,13 @@ export class McpOauthTokenStore {
     );
   }
 
-  private async row(tenantId: string, connectionId: string, credentialVersion: number) {
-    const [row] = await this.db
+  private async row(
+    tenantId: string,
+    connectionId: string,
+    credentialVersion: number,
+    db: Db = this.db,
+  ) {
+    const [row] = await db
       .select()
       .from(mcpOauthTokens)
       .where(this.where(tenantId, connectionId, credentialVersion));
@@ -241,6 +308,10 @@ function metaOf(r: typeof mcpOauthTokens.$inferSelect): TokenMeta {
     expiresAt: r.expiresAt,
     authorizedBy: r.authorizedBy,
     authorizedAt: r.authorizedAt,
+    updatedAt: r.updatedAt,
+    grantType: r.grantType,
+    endpoints: (r.endpoints ?? {}) as Record<string, string>,
+    lastError: r.lastError,
   };
 }
 
