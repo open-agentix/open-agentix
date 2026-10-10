@@ -730,18 +730,27 @@ export interface paths {
                             /** @enum {string} */
                             kind: "user" | "token";
                             permissions: string[];
+                            /** @description the grants that apply at the acting node, anchored at the node they are bound on */
                             bindings: {
                                 role: string;
                                 teamId: string | null;
                                 /**
                                  * Format: uuid
-                                 * @description the node the role is bound on (the home tenant until per-node bindings)
+                                 * @description the node the role is bound on
                                  */
                                 tenantId: string;
                                 tenantSlugPath: string;
                                 /** @description use case restriction; null = the whole node */
                                 useCase: string | null;
+                                /** @description true: the binding also applies to every descendant of its node (opt-in) */
+                                inherit: boolean;
+                                /** @description end of the binding; null = does not expire */
                                 expiresAt: string | null;
+                                /**
+                                 * @description `direct`: bound on the acting node; `inherited`: bound on an ancestor with `inherit = true` (read permissions only until ADR 0014 S5); `team` / `agent`: a team membership or agent binding of the acting node
+                                 * @enum {string}
+                                 */
+                                source: "direct" | "inherited" | "attached" | "team" | "agent" | "platform";
                             }[];
                             /** @description number of tenants the caller can act in (`X-OAX-Tenant`), at least 1 */
                             visibleTenantCount: number;

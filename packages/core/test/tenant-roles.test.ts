@@ -7,6 +7,7 @@ import {
   ROLE_PERMISSIONS,
   bindingFingerprint,
   bindingPermissions,
+  appliedAt,
   effectiveAt,
   hasPermission,
   isGrantableRole,
@@ -733,5 +734,75 @@ describe('property: monotonicity, expiry, platform admin, clamp', () => {
           for (const p of b.permissions)
             expect(ROLE_PERMISSIONS[b.role], `seed ${seed}`).toContain(p);
     }
+  });
+});
+
+describe('S2: appliedAt is the one implementation behind effectiveAt', () => {
+  it('returns the same bindings plus a correct anchor for each (seeds 1..200)', () => {
+    for (const seed of SEEDS) {
+      const c = randomCase(seed);
+      for (const n of c.nodes) {
+        const opts = { now: NOW, restrictions: c.restrictions, clampInherited: c.clamp };
+        const plain = effectiveAt(c.raw, n, opts);
+        const applied = appliedAt(c.raw, n, opts);
+        expect(
+          applied.map((b) => [b.role, b.teamId, b.agentId ?? null, b.source, [...b.permissions]]),
+          `seed ${seed} node ${n.id}`,
+        ).toEqual(
+          plain.map((b) => [b.role, b.teamId, b.agentId ?? null, b.source, [...b.permissions!]]),
+        );
+        for (const b of applied) {
+          if (b.source === 'direct' || b.source === 'team' || b.source === 'agent')
+            expect(b.tenantId).toBe(n.id);
+          if (b.source === 'inherited') {
+            expect(b.inherit).toBe(true);
+            expect(b.tenantId).not.toBe(n.id);
+            expect(n.path.includes(`/${b.tenantId}/`), `seed ${seed}`).toBe(true);
+          }
+          if (b.expiresAt) expect(b.expiresAt.getTime()).toBeGreaterThan(NOW.getTime());
+        }
+      }
+    }
+  });
+});
+
+describe('S2: the visible set of a principal', () => {
+  it('is exactly the grant nodes, plus their subtrees for inheriting ones, in the home organisation (seeds 1..200)', () => {
+    for (const seed of SEEDS) {
+      const r = rng(seed * 7919);
+      const nodes = forest(r, 1 + r.int(3), 6 + r.int(40));
+      const home = r.pick(nodes);
+      const sameOrg = nodes.filter((n) => n.rootId === home.rootId);
+      const grants = Array.from({ length: r.int(6) }, () =>
+        grant(r.pick(sameOrg).id, r.pick(GRANTABLE_ROLES), { inherit: r.bool(0.5) }),
+      );
+      const raw = rawOf(home, { nodeBindings: grants });
+      const got = new Set(visibleNodeIds(raw, nodes, { now: NOW, implicitPlatformAdmin: false }));
+      const want = new Set<string>();
+      for (const g of grants)
+        for (const n of sameOrg)
+          if (
+            n.id === g.tenantId ||
+            (g.inherit && n.path.startsWith(sameOrg.find((x) => x.id === g.tenantId)!.path))
+          )
+            want.add(n.id);
+      expect([...got].sort(), `seed ${seed}`).toEqual([...want].sort());
+      // never a node of another organisation, never an ancestor the grants do not cover
+      for (const id of got) expect(nodes.find((n) => n.id === id)!.rootId).toBe(home.rootId);
+    }
+  });
+
+  it('shrinks to nothing when every grant expires, and an inherited grant stays read-only', () => {
+    const f = fixture();
+    const raw = rawOf(f.root, {
+      nodeBindings: [grant(f.root.id, 'admin', { inherit: true, expiresAt: ahead(1000) })],
+    });
+    const at = (ms: number) => ({ now: ahead(ms), implicitPlatformAdmin: false });
+    expect(visibleNodeIds(raw, f.all, at(999)).length).toBe(
+      f.all.filter((n) => n.rootId === f.root.rootId).length,
+    );
+    expect(visibleNodeIds(raw, f.all, at(1000))).toEqual([]);
+    for (const b of effectiveAt(raw, f.a, at(0))) expect(b.source).toBe('inherited');
+    for (const p of permsOf(effectiveAt(raw, f.a, at(0)))) expect(INHERITED_READ_ONLY).toContain(p);
   });
 });

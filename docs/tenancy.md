@@ -49,26 +49,42 @@ console can detect a mismatch between the tenant it believes it acts in and the 
 | Caller | May name (reach) |
 | --- | --- |
 | platform operator | every node of every organisation |
-| every other user, tenant admins included | the home node only |
+| every other user, read path `legacy` (default) | the home node only |
+| every other user, read path `bindings` | the home node and every node of the home organisation where the resolver gives them a permission: a binding on the node itself, an **inheriting** binding (`inherit = true`) on an ancestor, a team membership or an agent binding in that node |
 
-Any other node (a child, a sibling, an ancestor, a cousin, another organisation, a node that does
-not exist, a malformed value) answers the same `404 not_found`, so neither existence nor slugs can
-be probed. For a caller limited to its home node the value is compared with that node only (id,
-slug, slug path); no other node is looked up, so the response time does not depend on which other
-slugs exist.
+Any other node (a node without such a binding, a sibling, a cousin, an ancestor without one, another
+organisation, a node that does not exist, a malformed value) answers the same `404 not_found`, so
+neither existence nor slugs can be probed. The check never looks up a foreign node per slug segment:
+a caller limited to its home node is compared with that node only; a caller with a wider reach is
+matched, **in memory**, against the cached snapshot of its own organisation (`tree:<rootId>:<epoch>`:
+id, parent, path, slug of every node, at most `OAX_TENANT_MAX_NODES_PER_ROOT`, one query on a miss)
+and then against its visible set. An unknown reference, an invisible node and a node of another
+organisation therefore cost the same queries and give the same status and body (tests count them).
 
-Why a tenant admin does not reach its children yet: [ADR 0014](adr/0014-tenant-tree-role-inheritance.md)
-makes inheritance down the tree **opt-in per binding** (`inherit = true`, default `false`), and
-today's roles (`users.global_roles`, team and agent bindings) become non-inheriting bindings on the
-home node. Reaching below the home node therefore arrives with the bindings table and the acting
-node of ADR 0014 (slices S1 and S2, reads only until S5). A platform operator acting in another node
-keeps the roles of its home tenant there (`homeTenantId` on the principal).
+Permissions at the acting node are the **effective bindings there** (ADR 0014 section 3.2), not the
+roles of the home node: an `admin` binding on the home node does not make anybody an admin of the
+child, an inheriting binding on an ancestor does, but only for **read** permissions
+(`INHERITED_READ_ONLY`: `*:read` and `audit:verify`) until slice S5 lifts the clamp. API token
+scopes still intersect with the effective permissions. A platform operator acting in another node
+keeps the roles of its home tenant (`homeTenantId` on the principal), as before.
+
+Inheritance is opt-in per binding (`inherit = true`, default `false`; ADR 0014); today's roles
+(`users.global_roles`, team and agent bindings) are non-inheriting bindings on the home node. No API
+creates an inheriting binding before S4, so with `bindings` the extra reach comes from rows written by
+an operator in SQL. Two consequences of the mirror (#226, S4): an inheriting or expiring binding of a
+legacy role **on the user's own home node** shares the mirror's key and is removed by the reconcile
+(and by the `0019` trigger when the role leaves `global_roles`), so bind inheriting grants on an
+ancestor of the home node (an organisation admin may live in a child and be bound on the root).
 
 - `GET /v1/me` reports `actingTenant` (with the breadcrumb `path`, root first; ancestors by name and
-  slug only), `homeTenant`, the bindings anchored at their node, `visibleTenantCount` and
+  slug only), `homeTenant`, the bindings that apply at the acting node, each with the node it is bound
+  on (`tenantId`, `tenantSlugPath`), `inherit`, `expiresAt` and `source` (`direct`, `inherited`,
+  `team`, `agent`; `permissions` is the union at the acting node), `visibleTenantCount` and
   `installationMode` (`multi` when the caller can act in more than one tenant, else `single`; it is
   derived from the caller's reach, so it never reveals whether other organisations exist).
-- `GET /v1/tenants` lists exactly the nodes of the reach, with `parentId`, `depth` and `slugPath`.
+- `GET /v1/tenants` lists exactly the nodes of the reach, with `parentId`, `depth` and `slugPath`
+  (with read path `bindings`: the visible nodes, so an inheriting viewer of a division sees the
+  division and its descendants, never a sibling).
 - `GET /v1/tenants/tree?root=&depth=&include=counts&limit=` returns the visible tree, parents before
   children, siblings by slug, shallowest nodes first when `limit` (default 1000, at most 5000)
   truncates (`truncated: true`). The ancestors of the caller's node appear as path stubs
@@ -78,21 +94,23 @@ keeps the roles of its home tenant there (`homeTenantId` on the principal).
   approvals, spend of the month (own and subtree) and the node's monthly cap, each only when the
   caller holds the matching read permission on the whole node (`agents:read`, `runs:read`,
   `costs:read`; a team or agent scoped role does not count, an API token scope does restrict).
-  Subtree sums are sums over the nodes the caller can see: for everybody but a platform operator
-  `agentsSubtree` equals the own count and `hasChildren` is `false`.
+  Subtree sums are sums over the nodes the caller can see **and may read** (with read path
+  `bindings`: per node, from the roles held there on the whole node; a node the caller cannot read
+  is neither counted nor shown): on read path `legacy` `agentsSubtree` equals the own count for
+  everybody but a platform operator and `hasChildren` is `false`; with `bindings` `hasChildren` is
+  true only when a child is visible.
 - `GET /v1/tenants/search?q=` finds nodes of the reach by name or slug (at most 20).
 - Queries: one for the nodes, one aggregate per metric (grouped by tenant, rolled up along the
   materialised path in memory), no query per node. Migration `0017` adds
   `approvals(tenant_id, status)`.
 
-Not yet: roles are not authorised per node (nobody but a platform operator reaches below the home
-node), `status` is always `active` (blocking comes with budget caps, W13-4), and the display colour
+Not yet: `status` is always `active` (blocking comes with budget caps, W13-4), and the display colour
 and use case of a node need storage that arrives with W13-2 and W13-8.
 
 ## Role bindings (ADR 0014, slice S1)
 
 Migration `0018_tenant_role_bindings` adds the tables the next slices build on. **Nothing authorises
-from them yet**: the legacy sources (`users.global_roles`, team memberships, agent bindings) stay
+from them by default** (`OAX_ROLE_BINDINGS_READ=legacy`, see the S2 section below): the legacy sources (`users.global_roles`, team memberships, agent bindings) stay
 authoritative, so upgrading changes nobody's access.
 
 - `tenant_role_bindings (user, node, role, use_case, inherit, expires_at, granted_by)`:
@@ -165,8 +183,8 @@ authoritative, so upgrading changes nobody's access.
     `global_roles` is deleted, whatever its shape.
   Roles *added* through the column alone are not bound by the trigger (a missing row grants less,
   never more); the application, the shadow-driven and the periodic reconcile add them. The trigger
-  does not invalidate cached principals: a revocation through `psql` reaches requests after
-  `OAX_AUTH_CACHE_TTL_SECONDS` at the latest, as today. Moving to another organisation is still
+  does not invalidate cached principals itself; since migration `0021` the epoch trigger on
+  `tenant_role_bindings` and `users` does (see "Authz epoch" below). Moving to another organisation is still
   refused while bindings of the old one exist, and the roles then follow the user to the new home,
   so the way back needs those bindings gone again.
 - **Raw grants in a cache (#217)**: `serializeGrants` / `reviveGrants` in `@openagentix/core`
@@ -179,16 +197,69 @@ authoritative, so upgrading changes nobody's access.
   expiring binding, `pentest` included. An entry must also be consistent (home node, root and path
   agree) and, with `reviveGrants(value, { userId, homeTenantId })`, belong to the user it is read
   for; the S2 cache passes the owner, so an entry under a wrong key is a miss, never another
-  user's grants. Neither the codec nor the cache shortens the revocation window: a cached entry
-  lives at most `min(OAX_AUTH_CACHE_TTL_SECONDS, token lifetime)` unless it is deleted
-  (`invalidateUserTokens`); revocations by the trigger or the reconcile do not delete it yet (S2
-  adds the authz epoch, ADR 0014 section 6.1; #227).
+  user's grants. S2 uses it exactly so (see "Authz epoch" below).
 - **`loadRawGrants` uses one connection (#217)**: the node row and the three grant lists come from a
   single statement, so a principal build holds at most one pool connection and reads the home node
   and the grants from the same snapshot. Expiries are read as epoch milliseconds, rounded down: a
   binding can only end early, never late.
 
-Rollback: `apps/api/drizzle/down/0019_trb_home_move.down.sql` (the trigger only), then
+## Read path and authz epoch (ADR 0014, slice S2)
+
+`OAX_ROLE_BINDINGS_READ=legacy|bindings` (default `legacy`; any other value, an empty one included,
+refuses to start) chooses what authorises. **The default changes nothing for anybody.**
+
+- `legacy`: `users.global_roles`, team memberships and agent bindings of the home node decide, the
+  resolver only shadows (`oax_role_bindings_shadow_total{authoritative="legacy"}`).
+- `bindings`: the principal's raw grants of its home organisation are loaded (one statement) and the
+  resolver (`effectiveAt`, ADR 0014 3.2) decides at the **acting node**, with the read-only clamp for
+  inherited bindings; the legacy sources are compared (`authoritative="bindings"`), so a mirror that
+  drifted (a role in `global_roles` without its binding, or a binding the legacy model does not
+  know) shows up as a `mismatch`. Platform operators are unchanged: every node, the roles of the
+  home tenant (the implicit "admin everywhere" of ADR 0013 7.1 is a later decision).
+
+**Switching production.** Run one reconcile
+(`pnpm --filter @openagentix/api db:reconcile-bindings`, also run at start-up), watch
+`oax_role_bindings_shadow_total{outcome="mismatch"}` stay at zero over a full login cycle
+(including rolling-deploy and LDAP/OIDC users), then set `bindings` and restart. A mirror row that is
+missing means *less* access under `bindings` (fail closed); an inheriting binding means *more*, by
+design. Going back is `legacy` and a restart; nothing is migrated. Cache entries remember the mode
+they were built for, so a switch needs no flush.
+
+**Authz epoch.** Migration `0021_authz_epoch` makes the database bump `tenants.authz_epoch` of the
+organisation root, in the same transaction, on every change that can alter what a cached principal
+may do: insert, update or delete of `tenant_role_bindings`, `team_members` and `agent_role_bindings`;
+delete of a team or an agent (whose cascade removes memberships and agent bindings) and a change of
+its node (or, for an agent, its team);
+update of `users.tenant_id`, `global_roles`, `platform_admin` or `disabled` and delete of a user;
+creation or deletion of a child node and a change of a node's slug or placement. Because it is a
+trigger, every writer is covered: the application, the `0019` home-move trigger, the reconcile
+(startup, periodic, mismatch, CLI), an older application version, a directory sync and `psql`.
+
+- A cached principal (`auth:<tokenId>`) stores the epoch it was built under and the root it belongs
+  to. **Every request** reads the current epoch of that root (one primary-key read) and rebuilds the
+  principal when it differs (`oax_authz_epoch_rejected_total{reason="stale"}`). The epoch is read
+  *before* the grants it guards, so a racing change can only make an entry be rejected too early,
+  never accepted too late.
+- **Revocation window**: a revocation is effective on the next request after its transaction
+  committed, on every replica, with or without Valkey (the epoch lives in the database). The residual
+  is one request that was already past the epoch check when the revocation committed, and the
+  `OAX_AUTH_CACHE_TTL_SECONDS` bound for anything that is *not* epoch-tracked (a role change that
+  bypasses the tables above, which does not exist). Expiry is evaluated against `now` on every
+  request, never at cache time, so an expiring binding stops at its second.
+- The cache entry of the `bindings` path holds the raw grants as `serializeGrants` writes them and
+  reads them back with `reviveGrants(value, { userId, homeTenantId })`; the entry must also carry the
+  token's own id and secret hash. An entry under a wrong key, with another user's grants, with a
+  malformed shape or built for the other read path is a miss (`reason="invalid"` or ignored) and the
+  principal is rebuilt from the database.
+- The tree snapshot (`tree:<rootId>:<epoch>`, 10 minutes) is keyed by the epoch, so a created,
+  renamed or deleted node is visible at once. Cross-organisation: an epoch bump in one organisation
+  never touches another's entries, and a snapshot holds the nodes of exactly one organisation.
+- Moving a node (W13-11) must bump the epoch of the roots it touches; the `0021` trigger already
+  does so for `parent_id`, `root_id` and `path` changes.
+
+Rollback of the migration: `apps/api/drizzle/down/0021_authz_epoch.down.sql` (the triggers; an
+application version that compares the epoch then no longer sees revocations made outside it, so roll
+the application back first), then `0019_trb_home_move.down.sql` (the trigger only), then
 `apps/api/drizzle/down/0018_tenant_role_bindings.down.sql` drops both tables, the triggers
 and the epoch column; `global_roles` is intact, so nothing is lost but the new tables.
 

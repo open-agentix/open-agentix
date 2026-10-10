@@ -62,7 +62,7 @@ Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
 | --- | --- | --- |
 | `OAX_CACHE_URL` | – | `redis://` / `rediss://` URL of Valkey/Redis (shared cache + invalidation across replicas). Empty = in-memory LRU per process. |
 | `OAX_CACHE_MAX_ENTRIES` | `10000` | LRU size. |
-| `OAX_AUTH_CACHE_TTL_SECONDS` | `30` | Max time a resolved token/principal is cached (never longer than the token lifetime). |
+| `OAX_AUTH_CACHE_TTL_SECONDS` | `30` | Max time a resolved token/principal is cached (never longer than the token lifetime). A cached principal is also rejected as soon as the authz epoch of its organisation moved (one primary-key read per request, ADR 0014 section 6.1), so a revocation is effective on the next request, not after this TTL. |
 
 ## Authentication
 
@@ -70,7 +70,8 @@ Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
 | --- | --- | --- |
 | `OAX_BOOTSTRAP_ADMIN_EMAIL` | – | Creates a local admin when the user table is empty. |
 | `OAX_BOOTSTRAP_ADMIN_PASSWORD` | – (*secret*, >= 12 chars) | Password of the bootstrap admin. |
-| `OAX_ROLE_BINDINGS_SHADOW` | `true` | Compare the tenant role resolver with the legacy role bindings after each principal build and count the result in `oax_role_bindings_shadow_total` (ADR 0014 S1; at most two checks at once, the rest count as `skipped`). The legacy result always decides; set `false` to skip the extra reads. |
+| `OAX_ROLE_BINDINGS_READ` | `legacy` | Which source authorises (ADR 0014 S2, #187): `legacy` = `users.global_roles`, team memberships and agent bindings at the home node (today's behaviour); `bindings` = the tenant role resolver over `tenant_role_bindings` **at the acting node** (inheriting bindings, read-only until S5, and `X-OAX-Tenant` for every visible node). Any other value, including an empty one, **refuses to start**. **Before switching production run one reconcile (`pnpm --filter @openagentix/api db:reconcile-bindings`) and check that `oax_role_bindings_shadow_total{outcome="mismatch"}` has stayed at zero**; the switch is a restart and is reversible by setting `legacy` again. |
+| `OAX_ROLE_BINDINGS_SHADOW` | `true` | Compare the tenant role resolver with the legacy role bindings after each principal build and count the result in `oax_role_bindings_shadow_total{outcome,authoritative}` (ADR 0014 S1, S2; at most two checks at once, the rest count as `skipped`). `authoritative` names the source that decides; the other one is compared. Set `false` to skip the extra reads. |
 | `OAX_ROLE_BINDINGS_RECONCILE` | `true` | Repair the mirror `tenant_role_bindings` from `users.global_roles` at start-up and every `OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS`, and for a user the shadow check found different (ADR 0014 S1, #216). Repairs only the rows the mirror manages; counted in `oax_role_bindings_reconcile_fixes_total{kind,trigger}`. |
 | `OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS` | `3600` | Seconds between periodic reconcile passes; `0` = at start-up only. A pass is one cheap probe query when nothing drifted. |
 | `OAX_SESSION_TTL_SECONDS` | `28800` | Lifetime of session tokens from login. |

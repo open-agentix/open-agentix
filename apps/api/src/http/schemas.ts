@@ -660,18 +660,28 @@ export const MeSchema = z.object({
   platformAdmin: z.boolean(),
   kind: z.enum(['user', 'token']),
   permissions: z.array(z.string()),
-  bindings: z.array(
-    z.object({
-      role: z.string(),
-      teamId: Id.nullable(),
-      tenantId: Id.describe(
-        'the node the role is bound on (the home tenant until per-node bindings)',
-      ),
-      tenantSlugPath: z.string(),
-      useCase: z.string().nullable().describe('use case restriction; null = the whole node'),
-      expiresAt: Iso.nullable(),
-    }),
-  ),
+  bindings: z
+    .array(
+      z.object({
+        role: z.string(),
+        teamId: Id.nullable(),
+        tenantId: Id.describe('the node the role is bound on'),
+        tenantSlugPath: z.string(),
+        useCase: z.string().nullable().describe('use case restriction; null = the whole node'),
+        inherit: z
+          .boolean()
+          .describe('true: the binding also applies to every descendant of its node (opt-in)'),
+        expiresAt: Iso.nullable().describe('end of the binding; null = does not expire'),
+        source: z
+          .enum(['direct', 'inherited', 'attached', 'team', 'agent', 'platform'])
+          .describe(
+            '`direct`: bound on the acting node; `inherited`: bound on an ancestor with ' +
+              '`inherit = true` (read permissions only until ADR 0014 S5); `team` / `agent`: a ' +
+              'team membership or agent binding of the acting node',
+          ),
+      }),
+    )
+    .describe('the grants that apply at the acting node, anchored at the node they are bound on'),
   visibleTenantCount: z
     .number()
     .int()

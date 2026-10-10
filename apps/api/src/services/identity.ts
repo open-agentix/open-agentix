@@ -6,12 +6,16 @@ import {
   effectivePermissions,
   homeTenantOf,
   isGrantableRole,
+  reviveGrants,
   sameBindings,
+  serializeGrants,
+  type GrantsAndHome,
   type Permission,
   type Principal,
   type Role,
   type RoleBinding,
   type TenantActor,
+  type WireGrants,
 } from '@openagentix/core';
 import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { hashPassword, verifyPassword } from '../auth/passwords.js';
@@ -36,7 +40,12 @@ import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { Db } from '../db/client.js';
 import type { AuditService } from './audit.js';
 import { BindingReconciler } from './binding-reconciler.js';
-import { loadRawGrants, mirrorGlobalRoles } from './role-bindings.js';
+import {
+  currentAuthzEpoch,
+  loadAuthzEpoch,
+  loadRawGrants,
+  mirrorGlobalRoles,
+} from './role-bindings.js';
 import { TenantAccess } from './tenant-access.js';
 
 export type UserRow = typeof users.$inferSelect;
@@ -71,10 +80,40 @@ export interface IssuedToken extends TokenInfo {
   token: string;
 }
 
+/**
+ * The cache entry of a principal (`auth:<tokenId>`, ADR 0014 section 6). It is written only by
+ * {@link IdentityService.authenticate} and read back only after every check below: the token id and
+ * the secret, the read path it was built for, the authz epoch of the organisation (compared with
+ * the database on **every** request) and, for raw grants, `reviveGrants(value, owner)`.
+ */
 interface CachedPrincipal {
-  principal: Principal;
+  v: 2;
+  tokenId: string;
+  /** The read path (`OAX_ROLE_BINDINGS_READ`) the entry was built for; another one is a miss. */
+  mode: 'legacy' | 'bindings';
   /** Epoch ms when the underlying token expires. */
   exp: number;
+  secretHash: string;
+  /** Root of the home organisation and its authz epoch at build time. */
+  rootId: string;
+  epoch: number;
+  /**
+   * The principal as built, `bindings` included, in the shape of the entries before ADR 0014 S2, so
+   * that a replica still on the previous version reads it correctly during a rolling deploy.
+   * `legacy`: the bindings are used as they are (they cannot expire). `bindings`: they are only
+   * what the resolver returned at build time and are recomputed from `grants` on every request.
+   */
+  principal: {
+    kind: Principal['kind'];
+    userId: string;
+    tenantId: string;
+    platformAdmin: boolean;
+    displayName: string;
+    bindings: RoleBinding[];
+    scopes?: Permission[];
+  };
+  /** `bindings`: the raw grants; the resolver runs on every request (expiry is never cached). */
+  grants?: WireGrants;
 }
 
 /** Audit target of a failed demo sign-in for a name that is no account (the input is not stored). */
@@ -132,7 +171,12 @@ export class IdentityService {
 
   // ---------- principals ----------
 
-  async bindingsFor(user: UserRow): Promise<RoleBinding[]> {
+  /**
+   * The legacy bindings of a user at its home node: `users.global_roles`, team memberships and
+   * agent bindings (ADR 0014: the source of truth while `OAX_ROLE_BINDINGS_READ=legacy`, and the
+   * other side of the shadow comparison afterwards).
+   */
+  async legacyBindingsFor(user: UserRow): Promise<RoleBinding[]> {
     // Memberships and agent bindings only count inside the user's own tenant.
     const memberships = await this.ctx.db
       .select({ teamId: teamMembers.teamId, role: teamMembers.role })
@@ -157,9 +201,58 @@ export class IdentityService {
     for (const b of agentBindings)
       if (isGrantableRole(b.role))
         bindings.push({ role: b.role, teamId: b.teamId, agentId: b.agentId });
+    return bindings;
+  }
+
+  /**
+   * Builds the principal of a user at its home node under the configured read path
+   * (`OAX_ROLE_BINDINGS_READ`, ADR 0014 S2):
+   *
+   * - `legacy`: the bindings come from `users.global_roles`, teams and agent bindings; the
+   *   resolver only shadows (S1).
+   * - `bindings`: the raw grants of the home organisation are loaded and the **resolver** decides,
+   *   at the home node here and at any visible node in {@link actingIn}; the legacy sources are
+   *   only compared (shadow in the other direction).
+   *
+   * The authz epoch of the organisation is read first and returned for the cache entry.
+   */
+  private async buildPrincipal(
+    user: UserRow,
+    kind: Principal['kind'],
+    scopes: Permission[] | undefined,
+  ): Promise<{ principal: Principal; rootId: string; epoch: number; loaded?: GrantsAndHome }> {
+    const head = await loadAuthzEpoch(this.ctx.db, user.tenantId);
+    // A user whose home tenant is gone has no organisation to be authorised in (fail closed).
+    if (!head) throw unauthenticated('user home tenant not found');
+    const base = {
+      kind,
+      userId: user.id,
+      tenantId: user.tenantId,
+      platformAdmin: user.platformAdmin,
+      displayName: user.displayName,
+      scopes,
+    };
+    if (this.ctx.config.auth.roleBindingsRead === 'bindings') {
+      const loaded = await loadRawGrants(this.ctx.db, user);
+      if (!loaded || loaded.home.rootId !== head.rootId)
+        throw unauthenticated('user home tenant not found');
+      const bindings = effectiveAt(loaded.raw, loaded.home, {
+        now: this.ctx.now(),
+        // Today a platform operator acts with the roles of its home tenant (also elsewhere).
+        implicitPlatformAdmin: false,
+      });
+      if (this.ctx.config.auth.roleBindingsShadow) await this.shadowCheckLegacy(user, bindings);
+      return {
+        principal: { ...base, bindings, grants: loaded, authzEpoch: head.epoch },
+        rootId: head.rootId,
+        epoch: head.epoch,
+        loaded,
+      };
+    }
+    const bindings = await this.legacyBindingsFor(user);
     // ADR 0014 S1: the legacy bindings above stay authoritative; the new resolver only shadows.
     if (this.ctx.config.auth.roleBindingsShadow) await this.shadowCheck(user, bindings);
-    return bindings;
+    return { principal: { ...base, bindings }, rootId: head.rootId, epoch: head.epoch };
   }
 
   private readonly shadowLogged = new Map<string, number>();
@@ -186,15 +279,16 @@ export class IdentityService {
    */
   private async shadowCheck(user: UserRow, legacy: RoleBinding[]): Promise<void> {
     const counter = this.ctx.metrics.roleBindingsShadow;
+    const authoritative = 'legacy';
     if (this.shadowInFlight >= IdentityService.SHADOW_MAX_IN_FLIGHT) {
-      counter.inc({ outcome: 'skipped' });
+      counter.inc({ outcome: 'skipped', authoritative });
       return;
     }
     this.shadowInFlight++;
     try {
       const loaded = await loadRawGrants(this.ctx.db, user);
       if (!loaded) {
-        counter.inc({ outcome: 'error' });
+        counter.inc({ outcome: 'error', authoritative });
         return;
       }
       // Today a platform operator acts with the roles of its home tenant: no implicit admin yet.
@@ -202,35 +296,71 @@ export class IdentityService {
         now: this.ctx.now(),
         implicitPlatformAdmin: false,
       });
-      if (sameBindings(legacy, resolved)) {
-        counter.inc({ outcome: 'match' });
-        return;
-      }
-      counter.inc({ outcome: 'mismatch' });
-      // Repair the mirror of exactly this user (rate-limited, one at a time, never awaited): a
-      // mismatch caused by drift disappears, one caused by a non-mirror row is left as it is.
-      if (this.ctx.config.auth.roleBindingsReconcile) this.reconciler.requestUser(user.id);
-      const now = this.ctx.now().getTime();
-      if (now - (this.shadowLogged.get(user.id) ?? 0) < 600_000) return;
-      this.shadowLogged.set(user.id, now);
-      if (this.shadowLogged.size > 1000) this.shadowLogged.clear();
-      const a = bindingFingerprint(legacy);
-      const b = bindingFingerprint(resolved);
-      this.ctx.logger.warn(
-        {
-          userId: user.id,
-          tenantId: user.tenantId,
-          onlyLegacy: a.filter((l) => !b.includes(l)),
-          onlyResolver: b.filter((l) => !a.includes(l)),
-        },
-        'role binding shadow mismatch: legacy and resolver disagree (legacy stays authoritative)',
-      );
+      this.compare(user, legacy, resolved, authoritative);
     } catch (e) {
-      counter.inc({ outcome: 'error' });
+      counter.inc({ outcome: 'error', authoritative });
       this.ctx.logger.warn({ err: e, userId: user.id }, 'role binding shadow check failed');
     } finally {
       this.shadowInFlight--;
     }
+  }
+
+  /**
+   * The shadow check in the other direction (ADR 0014 S2): the resolver result (`resolved`, already
+   * authoritative) is compared with what the legacy sources would have granted. Same bounds as
+   * {@link shadowCheck}. A mismatch means the mirror drifted, or a binding exists that the legacy
+   * path does not know (an inheriting or expiring grant); the resolver still decides.
+   */
+  private async shadowCheckLegacy(user: UserRow, resolved: RoleBinding[]): Promise<void> {
+    const counter = this.ctx.metrics.roleBindingsShadow;
+    const authoritative = 'bindings';
+    if (this.shadowInFlight >= IdentityService.SHADOW_MAX_IN_FLIGHT) {
+      counter.inc({ outcome: 'skipped', authoritative });
+      return;
+    }
+    this.shadowInFlight++;
+    try {
+      const legacy = await this.legacyBindingsFor(user);
+      this.compare(user, legacy, resolved, authoritative);
+    } catch (e) {
+      counter.inc({ outcome: 'error', authoritative });
+      this.ctx.logger.warn({ err: e, userId: user.id }, 'role binding shadow check failed');
+    } finally {
+      this.shadowInFlight--;
+    }
+  }
+
+  private compare(
+    user: UserRow,
+    legacy: RoleBinding[],
+    resolved: RoleBinding[],
+    authoritative: 'legacy' | 'bindings',
+  ): void {
+    const counter = this.ctx.metrics.roleBindingsShadow;
+    if (sameBindings(legacy, resolved)) {
+      counter.inc({ outcome: 'match', authoritative });
+      return;
+    }
+    counter.inc({ outcome: 'mismatch', authoritative });
+    // Repair the mirror of exactly this user (rate-limited, one at a time, never awaited): a
+    // mismatch caused by drift disappears, one caused by a non-mirror row is left as it is.
+    if (this.ctx.config.auth.roleBindingsReconcile) this.reconciler.requestUser(user.id);
+    const now = this.ctx.now().getTime();
+    if (now - (this.shadowLogged.get(user.id) ?? 0) < 600_000) return;
+    this.shadowLogged.set(user.id, now);
+    if (this.shadowLogged.size > 1000) this.shadowLogged.clear();
+    const a = bindingFingerprint(legacy);
+    const b = bindingFingerprint(resolved);
+    this.ctx.logger.warn(
+      {
+        userId: user.id,
+        tenantId: user.tenantId,
+        authoritative,
+        onlyLegacy: a.filter((l) => !b.includes(l)),
+        onlyResolver: b.filter((l) => !a.includes(l)),
+      },
+      `role binding shadow mismatch: legacy and resolver disagree (${authoritative} stays authoritative)`,
+    );
   }
 
   /** Users with a role on exactly one agent (resource-scoped bindings). */
@@ -311,42 +441,56 @@ export class IdentityService {
   async principalForUser(userId: string, scopes?: Permission[]): Promise<Principal> {
     const [user] = await this.ctx.db.select().from(users).where(eq(users.id, userId));
     if (!user || user.disabled) throw unauthenticated('user not found or disabled');
-    return {
-      kind: 'user',
-      userId: user.id,
-      tenantId: user.tenantId,
-      platformAdmin: user.platformAdmin,
-      displayName: user.displayName,
-      bindings: await this.bindingsFor(user),
-      scopes,
-    };
+    return (await this.buildPrincipal(user, 'user', scopes)).principal;
   }
 
   /**
    * Acting inside another node of the tenant tree (`X-OAX-Tenant: <id | slug | slug path>`,
-   * ADR 0013 7.4 with ADR 0014): platform operators may act in every node, everybody else (tenant
-   * admins included) only in their own node until bindings can inherit (ADR 0014 S2). A node
-   * outside that reach (child, sibling, ancestor, another organisation) answers 404,
-   * indistinguishable from an unknown one.
-   * The roles stay those of the home tenant; the principal remembers it as `homeTenantId`.
+   * ADR 0013 7.4 with ADR 0014 3.4). The reach decides ({@link TenantAccess}): platform operators
+   * may act in every node; with the read path `legacy` everybody else (tenant admins included)
+   * only in their own node; with `bindings` in every node where the resolver gives them a
+   * permission (an own binding there, an inheriting binding on an ancestor, a team or agent
+   * binding). Any other node (child without an inheriting binding, sibling, cousin, ancestor,
+   * another organisation, unknown) answers the same 404, indistinguishable from an unknown one.
+   *
+   * Platform operators keep the roles of their home tenant (`homeTenantId` on the principal), as
+   * before. For everybody else on the `bindings` path the permissions of the request are the
+   * effective bindings **at the acting node** (inherited ones clamped to read permissions until
+   * ADR 0014 S5); the principal's scopes (API token) still intersect with them.
    */
   async actingIn(principal: Principal, tenant: string): Promise<Principal> {
-    const row = await this.access.resolveVisible(principal, tenant);
-    if (!row) throw notFound('tenant');
-    if (row.id === principal.tenantId) return principal;
-    return { ...principal, tenantId: row.id, homeTenantId: homeTenantOf(principal) };
+    const node = await this.access.resolveActing(principal, tenant);
+    if (!node) throw notFound('tenant');
+    if (node.id === principal.tenantId) return principal;
+    const grants = principal.grants;
+    if (!grants || principal.platformAdmin)
+      return { ...principal, tenantId: node.id, homeTenantId: homeTenantOf(principal) };
+    // Evaluated again for this exact node from the raw grants, not taken from the reach check.
+    const bindings = effectiveAt(
+      grants.raw,
+      { id: node.id, rootId: node.rootId, path: node.path },
+      { now: this.ctx.now(), implicitPlatformAdmin: false },
+    );
+    return { ...principal, tenantId: node.id, homeTenantId: homeTenantOf(principal), bindings };
   }
 
-  /** Resolves a bearer token to a principal; cached for min(auth cache TTL, token lifetime). */
+  /**
+   * Resolves a bearer token to a principal; cached for min(auth cache TTL, token lifetime). A
+   * cache hit is used only when it belongs to this token, was built for the configured read path,
+   * and the authz epoch of the user's organisation in the database still equals the one it was
+   * built under (one primary-key read per request; ADR 0014 section 6.1, #227), so a revocation
+   * through the application, the `0019` trigger, the reconcile or `psql` is refused on the next
+   * request even when the cached entry is still within its TTL.
+   */
   async authenticate(bearer: string): Promise<Principal> {
     const parsed = parseToken(bearer);
     if (!parsed) throw unauthenticated('invalid token');
     const key = `auth:${parsed.id}`;
     const now = this.ctx.now().getTime();
-    const hit = await this.ctx.cache.get<CachedPrincipal & { secretHash: string }>(key);
+    const hit = await this.ctx.cache.get<CachedPrincipal>(key);
     if (hit && hit.exp > now) {
-      if (!secretMatches(parsed.secret, hit.secretHash)) throw unauthenticated('invalid token');
-      return hit.principal;
+      const principal = await this.fromCache(hit, parsed);
+      if (principal) return principal;
     }
     const [row] = await this.ctx.db
       .select({ token: apiTokens, user: users })
@@ -356,30 +500,108 @@ export class IdentityService {
     if (!row || row.token.revokedAt || row.token.expiresAt.getTime() <= now || row.user.disabled)
       throw unauthenticated('invalid token');
     if (!secretMatches(parsed.secret, row.token.secretHash)) throw unauthenticated('invalid token');
-    const principal: Principal = {
-      kind: row.token.kind === 'session' ? 'user' : 'token',
-      userId: row.user.id,
-      tenantId: row.user.tenantId,
-      platformAdmin: row.user.platformAdmin,
-      displayName: row.user.displayName,
-      bindings: await this.bindingsFor(row.user),
-      scopes: (row.token.scopes as Permission[] | null) ?? undefined,
-    };
+    const scopes = (row.token.scopes as Permission[] | null) ?? undefined;
+    const built = await this.buildPrincipal(
+      row.user,
+      row.token.kind === 'session' ? 'user' : 'token',
+      scopes,
+    );
+    const { principal } = built;
     const ttl = Math.min(
       this.ctx.config.auth.cacheTtlSeconds * 1000,
       row.token.expiresAt.getTime() - now,
     );
-    await this.ctx.cache.set(
-      key,
-      { principal, exp: row.token.expiresAt.getTime(), secretHash: row.token.secretHash },
-      ttl,
-    );
+    const entry: CachedPrincipal = {
+      v: 2,
+      tokenId: parsed.id,
+      mode: this.ctx.config.auth.roleBindingsRead,
+      exp: row.token.expiresAt.getTime(),
+      secretHash: row.token.secretHash,
+      rootId: built.rootId,
+      epoch: built.epoch,
+      principal: {
+        kind: principal.kind,
+        userId: principal.userId,
+        tenantId: principal.tenantId,
+        platformAdmin: principal.platformAdmin,
+        displayName: principal.displayName,
+        bindings: principal.bindings,
+        ...(scopes ? { scopes } : {}),
+      },
+      ...(built.loaded ? { grants: serializeGrants(built.loaded) } : {}),
+    };
+    await this.ctx.cache.set(key, entry, ttl);
     void this.ctx.db
       .update(apiTokens)
       .set({ lastUsedAt: this.ctx.now() })
       .where(eq(apiTokens.id, parsed.id))
       .catch(() => undefined);
     return principal;
+  }
+
+  /**
+   * The principal of a cache hit, or `undefined` (a miss: rebuild from the database). Throws 401
+   * for a hit of this token with a wrong secret, as before. Every check fails closed.
+   */
+  private async fromCache(
+    hit: CachedPrincipal,
+    parsed: { id: string; secret: string },
+  ): Promise<Principal | undefined> {
+    const rejected = this.ctx.metrics.authzEpochRejected;
+    // Shape and key: an entry under the wrong key (or an old format) is a miss, never a principal.
+    if (
+      hit.v !== 2 ||
+      hit.tokenId !== parsed.id ||
+      typeof hit.secretHash !== 'string' ||
+      typeof hit.principal !== 'object' ||
+      hit.principal === null ||
+      typeof hit.principal.userId !== 'string' ||
+      typeof hit.principal.tenantId !== 'string' ||
+      typeof hit.rootId !== 'string' ||
+      typeof hit.epoch !== 'number'
+    ) {
+      rejected.inc({ reason: 'invalid' });
+      return undefined;
+    }
+    if (!secretMatches(parsed.secret, hit.secretHash)) throw unauthenticated('invalid token');
+    // The read path was switched since the entry was written: rebuild under the new one.
+    if (hit.mode !== this.ctx.config.auth.roleBindingsRead) return undefined;
+    // The epoch check: a moved epoch means a grant, revocation, move or user change happened.
+    const current = await currentAuthzEpoch(this.ctx.db, hit.rootId);
+    if (current === undefined || current !== hit.epoch) {
+      rejected.inc({ reason: 'stale' });
+      return undefined;
+    }
+    const base = {
+      kind: hit.principal.kind,
+      userId: hit.principal.userId,
+      tenantId: hit.principal.tenantId,
+      platformAdmin: hit.principal.platformAdmin === true,
+      displayName: hit.principal.displayName,
+      scopes: hit.principal.scopes,
+    };
+    if (hit.mode === 'legacy') {
+      if (!Array.isArray(hit.principal.bindings)) {
+        rejected.inc({ reason: 'invalid' });
+        return undefined;
+      }
+      return { ...base, bindings: hit.principal.bindings };
+    }
+    // Raw grants: parsed strictly and checked against the owner; an entry that is not exactly
+    // this user's is a miss. The resolver runs now, so an expiry is evaluated at this request.
+    const grants = reviveGrants(hit.grants, {
+      userId: hit.principal.userId,
+      homeTenantId: hit.principal.tenantId,
+    });
+    if (!grants || grants.home.rootId !== hit.rootId) {
+      rejected.inc({ reason: 'invalid' });
+      return undefined;
+    }
+    const bindings = effectiveAt(grants.raw, grants.home, {
+      now: this.ctx.now(),
+      implicitPlatformAdmin: false,
+    });
+    return { ...base, bindings, grants, authzEpoch: hit.epoch };
   }
 
   async issueToken(

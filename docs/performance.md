@@ -23,7 +23,10 @@ current baseline.
   (`OAX_CACHE_URL`) shared across replicas with explicit invalidation. Cached: immutable agent
   versions, latest version per agent, event sources, enabled policy bundles, teams, cost
   summaries (invalidated when runs finish), token -> principal for at most
-  `min(OAX_AUTH_CACHE_TTL_SECONDS, token lifetime)`.
+  `min(OAX_AUTH_CACHE_TTL_SECONDS, token lifetime)`; every cache hit costs one primary-key read
+  (`tenants.authz_epoch` of the organisation) so that a revocation takes effect on the next request
+  (ADR 0014 S2). With `OAX_ROLE_BINDINGS_READ=bindings` a request that names another node also reads
+  the cached per-organisation tree snapshot (`tree:<root>:<epoch>`, one query on a miss).
 - **HTTP**: compression (br/gzip above 1 KB), weak ETags with `If-None-Match` -> `304`,
   SSE streaming of run steps instead of client polling.
 - **Worker**: configurable concurrency (`OAX_WORKER_CONCURRENCY`), `SKIP LOCKED` claims without

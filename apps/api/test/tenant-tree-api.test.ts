@@ -475,7 +475,9 @@ describe.each(targets)('tenant tree API ($name)', (target) => {
         tenantId: id['div-1'],
         tenantSlugPath: 'org-a/div-1',
         useCase: null,
+        inherit: false,
         expiresAt: null,
+        source: 'direct',
       });
       expect(headers['x-oax-acting-tenant']).toBe('org-a/div-1');
       // never a sibling or a foreign name

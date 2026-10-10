@@ -1,4 +1,4 @@
-import { effectivePermissions } from '@openagentix/core';
+import { appliedAt, effectivePermissions } from '@openagentix/core';
 import type { Deps } from '../app.js';
 import { bearerOf, principalOf } from '../app.js';
 import { userDto } from '../dto.js';
@@ -132,15 +132,41 @@ export function registerAuthRoutes(app: ZApp, { ctx, services }: Deps): void {
         platformAdmin: p.platformAdmin,
         kind: p.kind,
         permissions: effectivePermissions(p),
-        // Roles are bound on the home tenant until per-node bindings (ADR 0013 W13-6).
-        bindings: p.bindings.map((b) => ({
-          role: b.role,
-          teamId: b.teamId,
-          tenantId: ctxt.home.id,
-          tenantSlugPath: ctxt.homeSlugPath,
-          useCase: null,
-          expiresAt: null,
-        })),
+        // Read path `bindings` (ADR 0014 S2): the grants that apply at the acting node, each with
+        // the node it is bound on, whether it inherits, its expiry and where it comes from.
+        // A platform operator keeps the roles of its home tenant wherever it acts. Read path
+        // `legacy`: roles of the home tenant, none inheriting, none expiring.
+        bindings: p.grants
+          ? appliedAt(
+              p.grants.raw,
+              p.platformAdmin
+                ? p.grants.home
+                : { id: ctxt.acting.id, rootId: ctxt.acting.rootId, path: ctxt.acting.path },
+              { now: ctx.now(), implicitPlatformAdmin: false },
+            ).map((b) => ({
+              role: b.role,
+              teamId: b.teamId,
+              tenantId: b.tenantId,
+              tenantSlugPath: ctxt.slugPaths.get(b.tenantId) ?? ctxt.homeSlugPath,
+              useCase: b.useCase,
+              inherit: b.inherit,
+              expiresAt: b.expiresAt ? b.expiresAt.toISOString() : null,
+              source: b.source,
+            }))
+          : p.bindings.map((b) => ({
+              role: b.role,
+              teamId: b.teamId,
+              tenantId: ctxt.home.id,
+              tenantSlugPath: ctxt.homeSlugPath,
+              useCase: null,
+              inherit: false,
+              expiresAt: null,
+              source: b.agentId
+                ? ('agent' as const)
+                : b.teamId
+                  ? ('team' as const)
+                  : ('direct' as const),
+            })),
         visibleTenantCount,
         installationMode: visibleTenantCount > 1 ? ('multi' as const) : ('single' as const),
       };

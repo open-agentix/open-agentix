@@ -66,6 +66,24 @@ describe('loadConfig', () => {
   });
 });
 
+describe('OAX_ROLE_BINDINGS_READ (ADR 0014 S2)', () => {
+  it("defaults to the legacy read path, so the upgrade changes nobody's access", () => {
+    expect(loadConfig(base).auth.roleBindingsRead).toBe('legacy');
+  });
+
+  it('accepts exactly legacy and bindings', () => {
+    for (const v of ['legacy', 'bindings'] as const)
+      expect(loadConfig({ ...base, OAX_ROLE_BINDINGS_READ: v }).auth.roleBindingsRead).toBe(v);
+  });
+
+  it('refuses to start with any other value', () => {
+    for (const v of ['', 'Bindings', 'both', 'true', 'resolver', ' legacy', 'legacy ', '1', 'off'])
+      expect(() => loadConfig({ ...base, OAX_ROLE_BINDINGS_READ: v }), JSON.stringify(v)).toThrow(
+        /OAX_ROLE_BINDINGS_READ/,
+      );
+  });
+});
+
 describe('mapGroupsToBindings', () => {
   it('maps groups to global and team roles, ignoring unknown roles', () => {
     expect(

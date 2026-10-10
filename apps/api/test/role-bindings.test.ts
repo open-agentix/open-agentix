@@ -90,7 +90,9 @@ describe.each(sqlTargets)(
 
     beforeAll(async () => {
       target = await open();
-      n = await testNode({ OAX_DATABASE_URL: target.url });
+      // These tests are about the legacy-authoritative shadow mode (ADR 0014 S1); the resolver as the
+      // read path is covered by acting-node.test.ts.
+      n = await testNode({ OAX_DATABASE_URL: target.url, OAX_ROLE_BINDINGS_READ: 'legacy' });
       const child = await n.services.tenants.createChild(op(), DEFAULT_TENANT_ID, {
         slug: 'sub',
         name: 'Sub',

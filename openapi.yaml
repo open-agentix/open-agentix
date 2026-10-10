@@ -877,7 +877,7 @@ paths:
                           type: string
                           format: uuid
                           pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
-                          description: the node the role is bound on (the home tenant until per-node bindings)
+                          description: the node the role is bound on
                         tenantSlugPath:
                           type: string
                         useCase:
@@ -885,19 +885,36 @@ paths:
                           type:
                             - string
                             - "null"
+                        inherit:
+                          type: boolean
+                          description: "true: the binding also applies to every descendant of its node (opt-in)"
                         expiresAt:
                           anyOf:
                             - type: string
                               description: ISO 8601 timestamp
                             - type: "null"
+                          description: end of the binding; null = does not expire
+                        source:
+                          type: string
+                          enum:
+                            - direct
+                            - inherited
+                            - attached
+                            - team
+                            - agent
+                            - platform
+                          description: "`direct`: bound on the acting node; `inherited`: bound on an ancestor with `inherit = true` (read permissions only until ADR 0014 S5); `team` / `agent`: a team membership or agent binding of the acting node"
                       required:
                         - role
                         - teamId
                         - tenantId
                         - tenantSlugPath
                         - useCase
+                        - inherit
                         - expiresAt
+                        - source
                       additionalProperties: false
+                    description: the grants that apply at the acting node, anchored at the node they are bound on
                   visibleTenantCount:
                     type: integer
                     minimum: -9007199254740991

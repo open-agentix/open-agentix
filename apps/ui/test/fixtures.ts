@@ -66,7 +66,9 @@ const binding = (role: string) => ({
   tenantId,
   tenantSlugPath: 'acme',
   useCase: null,
+  inherit: false,
   expiresAt: null,
+  source: 'direct' as const,
 });
 
 export const tenantRow = {

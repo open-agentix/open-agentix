@@ -186,6 +186,29 @@ Full notes:
   `oax_otel_redactions_total{kind}`, `trace_id` and `span_id` in log lines written inside a span,
   parsing and validation of all OpenTelemetry keys of ADR 0015 section 14 (the later-slice keys have
   no effect yet), and `docs/observability.md`.
+- **API and core: acting node for every visible tenant, authz epoch and a flagged resolver read
+  path (ADR 0014 slice S2, #187, #227)**: new switch `OAX_ROLE_BINDINGS_READ=legacy|bindings`
+  (default `legacy`, so upgrading changes nobody's access; any other value refuses to start). With
+  `bindings` the tenant role resolver decides: the principal's permissions are the effective
+  bindings **at the acting node**, `X-OAX-Tenant` (id, slug or slug path) works for every node where
+  the caller holds a binding, an inheriting (opt-in `inherit = true`) binding on an ancestor, or a
+  team or agent binding, and inherited bindings stay read-only (`INHERITED_READ_ONLY`) until S5.
+  Unknown nodes, nodes of other organisations and nodes the caller cannot see answer the same `404`
+  from the same code path (an epoch-keyed per-organisation tree snapshot, no per-segment lookup, no
+  query-count difference). `GET /v1/me` bindings now carry `inherit`, `expiresAt` and `source` and
+  the node each is bound on, `visibleTenantCount` counts the nodes of the reach, and
+  `GET /v1/tenants` and `/v1/tenants/tree` list exactly the visible nodes (`myRoles`,
+  `inheritedRoles`, counts per node). The shadow comparison now runs in the other direction when
+  the resolver decides (`oax_role_bindings_shadow_total{outcome,authoritative}`). **Authz epoch
+  (#227)**: migration `0021_authz_epoch` (down script and snapshot included) bumps
+  `tenants.authz_epoch` of the organisation root in the same transaction as every change to
+  bindings, team memberships, agent bindings, user home/roles/platform flag/disabled flag and tree
+  nodes, whatever wrote it (application, the `0019` trigger, the reconcile, `psql`); a cached
+  principal stores the epoch and is rebuilt when the database value differs (checked on every
+  request; `oax_authz_epoch_rejected_total{reason}`), and its raw grants are stored with
+  `serializeGrants` and read with `reviveGrants(value, owner)` plus a token-id check, so an entry
+  under a wrong key is a miss. Operators: run one reconcile and see zero mismatches before setting
+  `OAX_ROLE_BINDINGS_READ=bindings` (`docs/tenancy.md`, `docs/configuration.md`).
 - **API and core: tenant role bindings table, pure role resolver and shadow check (ADR 0014
   slice S1, #186)**: migration `0018_tenant_role_bindings` (additive, down script and snapshot
   included; ADR 0014 planned 0017, which `0017_approvals_tenant_status_idx` took) adds

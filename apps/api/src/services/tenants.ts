@@ -4,10 +4,9 @@ import {
   parseSecretRefPatterns,
   placeNode,
   slugsCollide,
-  subtreePrefix,
   type Principal,
 } from '@openagentix/core';
-import { count, eq, like, sql } from 'drizzle-orm';
+import { count, eq, inArray, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { tenants } from '../db/schema.js';
@@ -52,7 +51,8 @@ export class TenantsService {
 
   /**
    * The tenants the principal may see and act in ({@link TenantAccess.reach}): platform operators
-   * every tenant, everybody else only their own until bindings can inherit (ADR 0014).
+   * every tenant, everybody else their own node, plus (read path `bindings`, ADR 0014 S2) every
+   * node where the resolver gives them a permission.
    */
   async list(p: Principal): Promise<TenantRow[]> {
     const reach = await this.access.reach(p);
@@ -60,8 +60,8 @@ export class TenantsService {
     const scope =
       reach.kind === 'all'
         ? undefined
-        : reach.kind === 'subtree'
-          ? like(tenants.path, subtreePrefix(reach.home.path))
+        : reach.kind === 'nodes'
+          ? inArray(tenants.id, [...reach.ids])
           : eq(tenants.id, reach.home.id);
     return this.ctx.db.select().from(tenants).where(scope).orderBy(tenants.slug);
   }
