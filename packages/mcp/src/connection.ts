@@ -10,7 +10,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerConfig } from './config.js';
-import { authKindOf } from './config.js';
+import { OAUTH_SCOPE, authKindOf } from './config.js';
 import { assertHttpConfig } from './http-policy.js';
 import { canonicalResource } from './resource.js';
 import type { McpTokenSource } from './oauth.js';
@@ -180,6 +180,8 @@ export function createMcpFetch(
       /error\s*=\s*"?insufficient_scope/i.test(res.headers.get('www-authenticate') ?? '')
     ) {
       await res.body?.cancel().catch(() => undefined);
+      if (sent)
+        source?.insufficientScope?.(sent, scopesOfChallenge(res.headers.get('www-authenticate')));
       throw new OaxError(
         'mcp_insufficient_scope',
         `MCP server "${cfg.name}" needs more scopes than the connection was authorized for`,
@@ -187,6 +189,15 @@ export function createMcpFetch(
     }
     return res;
   };
+}
+
+/** The `scope` parameter of a Bearer challenge, as a list of well-formed scope tokens. */
+export function scopesOfChallenge(header: string | null): string[] {
+  const m = /(?:^|[\s,])scope\s*=\s*(?:"([^"]{0,2048})"|([^\s,"]{1,2048}))/i.exec(header ?? '');
+  return (m?.[1] ?? m?.[2] ?? '')
+    .split(' ')
+    .filter((x) => OAUTH_SCOPE.test(x))
+    .slice(0, 32);
 }
 
 export async function createTransport(cfg: McpServerConfig, deps: ConnectDeps): Promise<Transport> {
