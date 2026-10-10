@@ -25,6 +25,8 @@ import {
 
 const MAX_EVENTS = 128;
 const EVENT_NAME = /^[a-z][a-z0-9_.]{0,63}$/;
+/** Longest status description that can still be an error code; longer ones are never guarded. */
+const MAX_STATUS_MESSAGE = 64;
 
 function sanitizeStatus(
   status: ReadableSpan['status'],
@@ -32,6 +34,9 @@ function sanitizeStatus(
 ): ReadableSpan['status'] {
   if (status.message === undefined) return status;
   // The description is the error code (3.5); anything that is not shaped like one is removed.
+  // Checked before the guard runs, so a raw span's megabyte-long description costs nothing.
+  if (typeof status.message !== 'string' || status.message.length > MAX_STATUS_MESSAGE)
+    return { code: status.code };
   const guarded = rt.guard.text(status.message).text;
   return ERROR_CODE_PATTERN.test(guarded) && guarded.length <= 64
     ? { ...status, message: guarded }

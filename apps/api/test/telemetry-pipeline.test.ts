@@ -271,6 +271,22 @@ describe('withSpan (in-memory export)', () => {
     );
   });
 
+  it('drops an over-long raw status description without scanning it', async () => {
+    const m = setup(true);
+    const guard = telemetryRuntime().guard;
+    const scanned: number[] = [];
+    const text = guard.text.bind(guard);
+    guard.text = (input: string) => {
+      scanned.push(input.length);
+      return text(input);
+    };
+    const span = tracer().startSpan('oax.run');
+    span.setStatus({ code: 2, message: `provider_failed${' '.repeat(1 << 20)}` });
+    span.end();
+    expect(m.getFinishedSpans()[0]!.status).toEqual({ code: 2 });
+    expect(Math.max(0, ...scanned)).toBeLessThanOrEqual(4096);
+  });
+
   it('keeps tenant identity to UUIDs and never the tenant name', async () => {
     const m = setup(false);
     await withSpan(
