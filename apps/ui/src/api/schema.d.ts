@@ -4436,6 +4436,344 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/connections/{id}/oauth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** OAuth state of an HTTP MCP connection: status, pinned issuer, scopes, expiry (never a token) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "not_authorized" | "active" | "refresh_failed" | "reauthorization_required" | "revoked";
+                            grant: string;
+                            /** @description Authorization server pinned for this connection */
+                            issuer: string | null;
+                            /** @description `auth.issuer` of the configuration, if set */
+                            pinnedIssuer: string | null;
+                            scopes: string[];
+                            expiresAt: string | null;
+                            authorizedAt: string | null;
+                            authorizedBy: string | null;
+                            /** @description Closed code of the last failed renewal */
+                            lastError: string | null;
+                            /** @description Authorization server hosts the connection contacts (purpose identity) */
+                            endpointHosts: string[];
+                            /** @description The granted scopes exceed what the profiles need */
+                            scopesWider: boolean;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/oauth/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Authorize an OAuth connection (client_credentials): discover the authorization server, pin its issuer and endpoints, obtain a token (audited, rate limited)
+         * @description Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. The answer carries the state only, never a token.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uri
+                         * @description Authorization server to use when the resource names several
+                         */
+                        issuer?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "not_authorized" | "active" | "refresh_failed" | "reauthorization_required" | "revoked";
+                            grant: string;
+                            /** @description Authorization server pinned for this connection */
+                            issuer: string | null;
+                            /** @description `auth.issuer` of the configuration, if set */
+                            pinnedIssuer: string | null;
+                            scopes: string[];
+                            expiresAt: string | null;
+                            authorizedAt: string | null;
+                            authorizedBy: string | null;
+                            /** @description Closed code of the last failed renewal */
+                            lastError: string | null;
+                            /** @description Authorization server hosts the connection contacts (purpose identity) */
+                            endpointHosts: string[];
+                            /** @description The granted scopes exceed what the profiles need */
+                            scopesWider: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/oauth/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect an OAuth connection: delete the stored tokens and revoke them at the authorization server (RFC 7009, best effort, audited) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "not_authorized" | "active" | "refresh_failed" | "reauthorization_required" | "revoked";
+                            grant: string;
+                            /** @description Authorization server pinned for this connection */
+                            issuer: string | null;
+                            /** @description `auth.issuer` of the configuration, if set */
+                            pinnedIssuer: string | null;
+                            scopes: string[];
+                            expiresAt: string | null;
+                            authorizedAt: string | null;
+                            authorizedBy: string | null;
+                            /** @description Closed code of the last failed renewal */
+                            lastError: string | null;
+                            /** @description Authorization server hosts the connection contacts (purpose identity) */
+                            endpointHosts: string[];
+                            /** @description The granted scopes exceed what the profiles need */
+                            scopesWider: boolean;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/connections/{id}/tools/refresh": {
         parameters: {
             query?: never;
