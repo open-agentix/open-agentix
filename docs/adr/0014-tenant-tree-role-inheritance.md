@@ -1,6 +1,6 @@
 # ADR 0014: Role inheritance over the tenant tree
 
-- Status: Proposed. Slice S1 is implemented (see "Implementation status" below); S2 to S10 are open.
+- Status: Proposed. Slices S1, S1b and S2 are implemented (see "Implementation status" below); S3 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
   resolver pattern); wave 13 of the [implementation plan](../IMPLEMENTATION-PLAN.md)
@@ -21,6 +21,7 @@
 | --- | --- | --- |
 | S1 | implemented (PR for #186) | Migration **`0018_tenant_role_bindings`**, not 0017: `0016_agent_disable` and `0017_approvals_tenant_status_idx` took the numbers after this ADR was written (follow-up of #198). Wherever this text says `0017_tenant_role_bindings`, read 0018; later slices continue from 0019. |
 | S1b | implemented (PR for #216, #217) | Prerequisites for S2, **without changing the read path**: reconcile of the `global_roles` mirror (start-up, periodic, mismatch-driven, CLI), the same-key rule, migration **`0019_trb_home_move`**, a serializable form for cached raw grants and a single-statement `loadRawGrants`. See below. |
+| S2 | implemented behind a flag (PR for #187, #227) | Acting node for every visible tenant, read-only inheritance, authz epoch and the resolver as read path **behind `OAX_ROLE_BINDINGS_READ=legacy|bindings`** (default `legacy`). Migration **`0020_authz_epoch`**. See "S2" below. |
 
 Differences between the plan below and what S1 shipped:
 
@@ -78,6 +79,42 @@ S1b (prerequisites for S2, #216, #217; the legacy path still decides):
 - **One connection.** `loadRawGrants` is one statement (one connection, one snapshot). S2 should
   still measure it under load against `OAX_DB_POOL_MAX` (#217), and consider caching for the
   uncached stream-token path.
+
+S2 (acting node, read-only inheritance, authz epoch; #187, #227):
+
+- **Flag first.** `OAX_ROLE_BINDINGS_READ=legacy|bindings` (default `legacy`, unknown values refuse
+  to start). With `bindings` the resolver decides at the acting node; the shadow check compares the
+  legacy sources in the other direction (`oax_role_bindings_shadow_total{authoritative}`). Switching
+  production needs one reconcile and zero `mismatch` first (`docs/tenancy.md`). The legacy path is
+  removed in a later slice, not here.
+- **Reach.** `TenantAccess` has a third kind, `nodes` (replaces the unused `subtree`): the home node
+  plus every node of the home organisation where `appliedAt` yields at least one permission. The
+  visible set and the lookup of `X-OAX-Tenant` run on the epoch-keyed tree snapshot
+  (`tree:<rootId>:<epoch>`, section 3.6; 10 min), in memory: no query per slug segment (the
+  #198 follow-up), and unknown, invisible and foreign-organisation references are the same `404`
+  after the same queries. Platform operators keep reach `all` and the roles of their home tenant.
+- **Clamp stays on.** Inherited bindings give `*:read` and `audit:verify` only; the route-table
+  test walks every permission route as an inherited-only admin. Team and agent bindings are
+  node-local and make their node visible.
+- **Epoch in the database, not in the cache.** Section 6.1 mirrors the epoch in the cache; S2 keeps
+  `tenants.authz_epoch` as the only copy and compares it on **every** request with one primary-key
+  read, because the trigger and `psql` paths can only reach the database. The bump is done by
+  triggers (migration 0020) on bindings, team members, agent bindings, `users` (home, roles,
+  platform flag, disabled) and tree nodes, so there is no write path that can forget it. The
+  Valkey-side copy of section 6.1 is therefore not needed and the multi-replica window without
+  Valkey disappears for these paths (open question 8 is answered for revocations: effective on the
+  next request).
+- **Cache entry** `auth:<tokenId>` v2: token id, secret hash, read-path mode, root and epoch, the
+  principal fields, and either the legacy bindings or `serializeGrants` output read back with
+  `reviveGrants(value, owner)`. The resolver runs per request, so expiry is never cached.
+- `GET /v1/me` bindings carry `inherit`, `expiresAt`, `source` and the anchor node;
+  `GET /v1/tenants` and the tree list the visible nodes (S3 still owns `scope=subtree` on the data
+  routes).
+- Known limit until S4 (#226): a binding of a legacy role in the legacy key on the user's own home
+  node is removed by the reconcile unless it is the plain mirror shape, so inheriting grants are
+  bound on an ancestor of the home node until the grant API gives mirror rows their own key.
+- Not in S2: implicit "admin everywhere" for platform operators, restrictions, use-case bindings,
+  the reaper, the grant API.
 
 ## Context
 
