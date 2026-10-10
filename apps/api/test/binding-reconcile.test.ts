@@ -53,6 +53,19 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
       .sort();
   const setRoles = (userId: string, globalRoles: Role[]) =>
     db().update(usersTable).set({ globalRoles }).where(eq(usersTable.id, userId));
+  /**
+   * Runs `fn` as on a database without the 0019 trigger (after its down script, or before the
+   * migration ran): revocations through the column alone then leave the binding behind, which only
+   * the reconcile repairs.
+   */
+  const withoutTrigger = async <T>(fn: () => Promise<T>): Promise<T> => {
+    await db().execute(sql`alter table users disable trigger trb_users_home_move_trg`);
+    try {
+      return await fn();
+    } finally {
+      await db().execute(sql`alter table users enable trigger trb_users_home_move_trg`);
+    }
+  };
   const homeRoles = async (userId: string) =>
     (await rows(userId))
       .filter((b) => !b.inherit && !b.expiresAt && !b.useCase && b.tenantId === DEFAULT_TENANT_ID)
@@ -129,14 +142,49 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
       expect(await homeRoles(u)).toEqual(['admin', 'viewer']);
     });
 
+    it('a role revoked through the column alone loses its binding in the same statement (trigger)', async () => {
+      // old application version, SCIM/LDAP sync or an emergency `psql` revocation: no mirror code
+      const u = await createUser('old-del-trg@example.org', ['admin', 'viewer']);
+      await setRoles(u, ['viewer']);
+      expect(await homeRoles(u)).toEqual(['viewer']); // nothing waits for the hourly reconcile
+      expect(
+        await findDriftedUsers(db(), '00000000-0000-0000-0000-000000000000', 1000),
+      ).not.toContain(u);
+      await setRoles(u, []);
+      expect(await rows(u)).toEqual([]);
+      // a batch revocation over many users is handled row by row
+      const many = [] as string[];
+      for (let i = 0; i < 3; i++)
+        many.push(await createUser(`batch-del-${i}@example.org`, ['admin', 'operator']));
+      await db().execute(
+        sql`update users set global_roles = array_remove(global_roles, 'admin') where email like 'batch-del-%'`,
+      );
+      for (const m of many) expect(await homeRoles(m)).toEqual(['operator']);
+    });
+
+    it('updates of other columns, or of global_roles to the same value, do not touch bindings', async () => {
+      const u = await createUser('noop-trg@example.org', ['viewer']);
+      const before = await rows(u);
+      await db()
+        .update(usersTable)
+        .set({ displayName: 'x', disabled: false })
+        .where(eq(usersTable.id, u));
+      await setRoles(u, ['viewer']);
+      await db()
+        .update(usersTable)
+        .set({ tenantId: DEFAULT_TENANT_ID })
+        .where(eq(usersTable.id, u));
+      expect(await rows(u)).toEqual(before); // same row ids: nothing deleted and re-created
+    });
+
     it('removes the binding of a role revoked without the mirror (the retained-privilege case)', async () => {
       const u = await createUser('old-del@example.org', ['admin', 'viewer']);
-      await setRoles(u, ['viewer']); // old version revokes admin: column only
+      await withoutTrigger(() => setRoles(u, ['viewer'])); // old version revokes admin: column only
       expect(await homeRoles(u)).toEqual(['admin', 'viewer']); // admin binding is stale
       const r = await reconcileUserBindings(db(), u);
       expect(r).toMatchObject({ added: 0, removed: 1 });
       expect(await homeRoles(u)).toEqual(['viewer']);
-      await setRoles(u, []);
+      await withoutTrigger(() => setRoles(u, []));
       await reconcileUserBindings(db(), u);
       expect(await rows(u)).toEqual([]);
     });
@@ -144,9 +192,11 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
     it('rolling deploy: users created and changed by old replicas, then one reconcile', async () => {
       const a = await oldVersionUser('roll-a@example.org', ['admin', 'viewer']); // no bindings at all
       const b = await createUser('roll-b@example.org', ['operator']);
-      await setRoles(b, ['auditor']); // swapped by an old replica
       const c = await createUser('roll-c@example.org', ['viewer']);
-      await setRoles(c, []); // revoked by an old replica
+      await withoutTrigger(async () => {
+        await setRoles(b, ['auditor']); // swapped by an old replica
+        await setRoles(c, []); // revoked by an old replica
+      });
       const before = {
         added: await fixes('added', 'startup'),
         removed: await fixes('removed', 'startup'),
@@ -217,7 +267,7 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
           },
         ]);
       const before = await shape(u);
-      await setRoles(u, []); // drift: viewer revoked by an old version
+      await withoutTrigger(() => setRoles(u, [])); // drift: viewer revoked by an old version
       const r = await reconcileUserBindings(db(), u);
       expect(r).toMatchObject({ added: 0, removed: 1, blocked: 0 });
       expect(await shape(u)).toEqual(before.filter((s) => !s.startsWith('root|viewer')));
@@ -318,9 +368,10 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
           },
         ]);
       await db().update(usersTable).set({ tenantId: id.sub! }).where(eq(usersTable.id, u));
-      // old home: mirror rows gone, the others kept; new home: the roles of global_roles
+      // old home: every row of the legacy key gone (the inheriting auditor row was stale by
+      // definition: not in global_roles), the use-case row kept; new home: global_roles
       expect(await shape(u)).toEqual(
-        ['root|auditor|inh', 'root|integrator|own|uc:uc', 'sub|admin|own', 'sub|viewer|own'].sort(),
+        ['root|integrator|own|uc:uc', 'sub|admin|own', 'sub|viewer|own'].sort(),
       );
       // and the mirror is consistent: no drift to repair
       const drift = await findDriftedUsers(db(), '00000000-0000-0000-0000-000000000000', 1000);
@@ -332,6 +383,39 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
         .where(eq(usersTable.id, u));
       expect((await shape(u)).filter((s) => s.startsWith('sub|'))).toEqual([]);
       expect(await homeRoles(u)).toEqual(['admin', 'viewer']);
+      await db().delete(tenantRoleBindings).where(eq(tenantRoleBindings.userId, u));
+    });
+
+    it('a same-key row of another shape does not stay behind on the old home node', async () => {
+      // Before the fix only plain mirror rows were removed: an inheriting admin row in the slot of
+      // the legacy admin role stayed on the old home and would keep granting there (and below).
+      const u = await createUser('mover-inh@example.org', ['admin']);
+      await db()
+        .update(tenantRoleBindings)
+        .set({ inherit: true })
+        .where(eq(tenantRoleBindings.userId, u));
+      await db()
+        .insert(tenantRoleBindings)
+        .values({
+          id: randomUUID(),
+          userId: u,
+          tenantId: DEFAULT_TENANT_ID,
+          role: 'pentest',
+          expiresAt: new Date(Date.now() + 3_600_000),
+        });
+      await db().update(usersTable).set({ tenantId: id.sub! }).where(eq(usersTable.id, u));
+      expect(await shape(u)).toEqual(['root|pentest|own|exp', 'sub|admin|own']);
+      await db().delete(tenantRoleBindings).where(eq(tenantRoleBindings.userId, u));
+    });
+
+    it('a stale same-key row on the new home node is revoked by the move (fail closed)', async () => {
+      const u = await createUser('mover-new@example.org', ['viewer']);
+      // a leftover on the target node from before (e.g. a period without the trigger)
+      await db()
+        .insert(tenantRoleBindings)
+        .values({ id: randomUUID(), userId: u, tenantId: id.sub!, role: 'admin', inherit: true });
+      await db().update(usersTable).set({ tenantId: id.sub! }).where(eq(usersTable.id, u));
+      expect(await shape(u)).toEqual(['sub|viewer|own']);
       await db().delete(tenantRoleBindings).where(eq(tenantRoleBindings.userId, u));
     });
 
@@ -518,7 +602,8 @@ describe.each(sqlTargets)('role binding mirror reconcile (%s)', (_kind, enabled,
         expect(done).toBe(false); // blocked on the user row
         await s.query('commit');
         const r = await rc;
-        expect(r).toMatchObject({ added: 1, removed: 1 });
+        // the old version's revocation of viewer was already applied by the trigger
+        expect(r).toMatchObject({ added: 1, removed: 0 });
         expect(await homeRoles(u)).toEqual(['admin']);
       } finally {
         s.release();

@@ -152,13 +152,23 @@ authoritative, so upgrading changes nobody's access.
   Until S4 only mirror rows can be created through the application; a test asserts that every write
   path leaves the plain shape. S4's grant API must keep this rule (or give mirrored roles a key of
   their own) and test it.
-- **Home tenant change inside the organisation (#216)**: migration `0019_trb_home_move` adds the
-  trigger `trb_users_home_move_trg`: when `users.tenant_id` changes, in the same statement the
-  mirror rows of the old home node are deleted and the roles of `global_roles` are bound on the new
-  home node, whatever code path (or older application version, or `psql`) made the change. Other
-  bindings of the user (inheriting, expiring, use case, other nodes) are kept. Moving to another
-  organisation is still refused while bindings of the old one exist, and the roles then follow the
-  user to the new home, so the way back needs those bindings gone again.
+- **The database enforces revocation (#216)**: migration `0019_trb_home_move` adds the trigger
+  `trb_users_home_move_trg` (`AFTER UPDATE OF tenant_id, global_roles` on `users`; it returns at
+  once when neither value changed, so logins and other updates cost nothing). Whatever code path
+  changed the row (the API, an older application version, an LDAP/SCIM sync, an emergency
+  `update users set global_roles = ...` in `psql`), in the same statement:
+  - when `users.tenant_id` changes inside the organisation, every binding of the legacy key on the
+    old home node (no use case, one of the six roles, any shape) is deleted and the roles of
+    `global_roles` are bound on the new home node; use-case and `pentest` rows and other nodes are
+    kept;
+  - on the (new) home node the same-key rule is applied: a legacy-key binding whose role is not in
+    `global_roles` is deleted, whatever its shape.
+  Roles *added* through the column alone are not bound by the trigger (a missing row grants less,
+  never more); the application, the shadow-driven and the periodic reconcile add them. The trigger
+  does not invalidate cached principals: a revocation through `psql` reaches requests after
+  `OAX_AUTH_CACHE_TTL_SECONDS` at the latest, as today. Moving to another organisation is still
+  refused while bindings of the old one exist, and the roles then follow the user to the new home,
+  so the way back needs those bindings gone again.
 - **Raw grants in a cache (#217)**: `serializeGrants` / `reviveGrants` in `@openagentix/core`
   (`packages/core/src/tenancy/grants-codec.ts`) are the JSON form for the cache entry that carries
   raw grants (ADR 0014 section 6.2). Expiries are canonical ISO-8601 UTC strings and are parsed

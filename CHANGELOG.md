@@ -36,8 +36,10 @@ All notable changes to this project are documented here. The format follows
   [-- --dry-run]`; counted in `oax_role_bindings_reconcile_fixes_total` and
   `oax_role_bindings_reconcile_runs_total`. Same-key rule (fail closed): removing a role from
   `global_roles` now revokes a binding of the same user, home node and role in any shape; adding
-  never hides or overwrites one. Migration `0019_trb_home_move` (additive, down script) moves the
-  mirror rows with a user whose home tenant changes inside the organisation. `serializeGrants` /
+  never hides or overwrites one. Migration `0019_trb_home_move` (additive, down script) applies the
+  same-key rule in the database for every writer of `users` (older versions, directory syncs,
+  `psql`): a role removed from `global_roles` loses its binding in the same statement, and a home
+  change inside the organisation moves the legacy-key rows with the user. `serializeGrants` /
   `reviveGrants` give raw grants a JSON-safe cache form (ISO expiries, strict parsing, invalid is a
   cache miss) and `loadRawGrants` is now one statement, so one principal build holds one
   connection. See `docs/tenancy.md` and ADR 0014 "Implementation status".

@@ -33,30 +33,6 @@ Differences between the plan below and what S1 shipped:
   on). Switching the read path is the first step of S2, once the mismatch counter has stayed at
   zero and the mirror has been reconciled once (rows written by an older application version during
   a rolling deploy or after an application-only rollback are not mirrored; #216, #217).
-S1b (prerequisites for S2, #216, #217; the legacy path still decides):
-
-- **Reconcile.** `users.global_roles` stays the source of truth until S2. The mirror rows (non-inheriting,
-  non-expiring, no use case, home node, six grantable roles) are recomputed from it in both
-  directions, one transaction per user, user row locked first (`FOR NO KEY UPDATE`): at start-up,
-  periodically (`OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS`), for the user of a shadow
-  `mismatch` (rate-limited, one at a time) and by hand (`db:reconcile-bindings [--dry-run]`).
-  Counted in `oax_role_bindings_reconcile_fixes_total` / `..._runs_total`. **S2 starts when one
-  reconcile has run and `mismatch` stays at zero.** This replaces the "startup task under the
-  migration advisory lock" of the issue: per-user row locks make concurrent replicas safe without
-  a global lock.
-- **Same-key rule (fail closed).** `trb_uq` ignores `inherit` and `expires_at` and was kept: a
-  legacy role has exactly one slot. Adding a role never overwrites or hides a row of another shape
-  there (reported as `blocked`); *removing* a role through `global_roles` revokes every binding of
-  that `(user, home node, role, no use case)` key, whatever its shape. S4's grant API has to keep
-  the rule or key mirror rows separately.
-- **Home change.** Migration `0019_trb_home_move` (trigger on `users`) moves the mirror rows with the
-  user inside the organisation, for every code path including older application versions.
-- **Cache form.** `serializeGrants` / `reviveGrants` (`@openagentix/core`): ISO strings, strict
-  parsing, any irregularity makes the entry a miss (fail closed). The S2 cache must use them.
-- **One connection.** `loadRawGrants` is one statement (one connection, one snapshot). S2 should
-  still measure it under load against `OAX_DB_POOL_MAX` (#217), and consider caching for the
-  uncached stream-token path.
-
 - `RoleBinding` gained the optional `permissions`, `useCase` and `source`; the checks read the
   narrowed `permissions` (never wider than the role, `bindingPermissions`).
 - The resolver takes the acting node's placement (`id`, `rootId`, `path`) instead of a tree
@@ -73,6 +49,34 @@ S1b (prerequisites for S2, #216, #217; the legacy path still decides):
   concurrent binding insert and home change cannot both succeed.
 - The backfill audit summary (`tenant.role_bound` with `source: migration`) is not written by S1: the
   audit chain is appended by the application, not by SQL. It arrives with the audit events of S4.
+
+S1b (prerequisites for S2, #216, #217; the legacy path still decides):
+
+- **Reconcile.** `users.global_roles` stays the source of truth until S2. The mirror rows (non-inheriting,
+  non-expiring, no use case, home node, six grantable roles) are recomputed from it in both
+  directions, one transaction per user, user row locked first (`FOR NO KEY UPDATE`): at start-up,
+  periodically (`OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS`), for the user of a shadow
+  `mismatch` (rate-limited, one at a time) and by hand (`db:reconcile-bindings [--dry-run]`).
+  Counted in `oax_role_bindings_reconcile_fixes_total` / `..._runs_total`. **S2 starts when one
+  reconcile has run and `mismatch` stays at zero.** This replaces the "startup task under the
+  migration advisory lock" of the issue: per-user row locks make concurrent replicas safe without
+  a global lock.
+- **Same-key rule (fail closed).** `trb_uq` ignores `inherit` and `expires_at` and was kept: a
+  legacy role has exactly one slot. Adding a role never overwrites or hides a row of another shape
+  there (reported as `blocked`); *removing* a role through `global_roles` revokes every binding of
+  that `(user, home node, role, no use case)` key, whatever its shape. S4's grant API has to keep
+  the rule or key mirror rows separately.
+- **Revocation in the database.** Migration `0019_trb_home_move` (trigger on `users`, `AFTER UPDATE
+  OF tenant_id, global_roles`) applies the same-key rule in the same statement for every code path
+  (older application versions, directory syncs, `psql`): a role removed from `global_roles` loses
+  its binding at once, and a home change inside the organisation removes the legacy-key rows of the
+  old home node and binds `global_roles` on the new one. Additions through the column alone are left
+  to the reconcile (fail closed).
+- **Cache form.** `serializeGrants` / `reviveGrants` (`@openagentix/core`): ISO strings, strict
+  parsing, any irregularity makes the entry a miss (fail closed). The S2 cache must use them.
+- **One connection.** `loadRawGrants` is one statement (one connection, one snapshot). S2 should
+  still measure it under load against `OAX_DB_POOL_MAX` (#217), and consider caching for the
+  uncached stream-token path.
 
 ## Context
 
