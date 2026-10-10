@@ -258,9 +258,20 @@ describe.each(sqlTargets)('role-binding API (%s)', (_kind, enabled, open) => {
       ).toBe(201);
     });
 
-    it('rule 7: pentest cannot be granted before S6', async () => {
-      const r = await post(null, 'org-a', grant('m1', 'pentest' as Role));
-      expect(r.statusCode).toBe(400);
+    it('rule 7: pentest needs an expiry and the resolver read path (the full matrix is in pentest-role.test.ts)', async () => {
+      // without expiresAt: 422 expiry_required on the resolver path, 409 on the legacy path
+      const r = await post(null, 'org-a', grant('m1', 'pentest'));
+      expect([409, 422]).toContain(r.statusCode);
+      expect(await bound('m1', 'org-a', 'pentest')).toHaveLength(0);
+      // a viewer cannot grant it
+      const v = await post(
+        'viewer-a',
+        'org-a',
+        grant('m1', 'pentest', false, {
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        }),
+      );
+      expect(v.statusCode).toBe(403);
       expect(await bound('m1', 'org-a', 'pentest')).toHaveLength(0);
     });
 
