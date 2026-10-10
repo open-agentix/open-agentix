@@ -100,7 +100,10 @@ export function refuseStandardOtlpVariables(env: NodeJS.ProcessEnv): void {
  * by the SDK's auto-configuration only, which this platform does not use. Together with an endpoint
  * they would look like "export off" while spans are exported, so that combination is refused.
  */
-export function refuseDisablingVariables(env: NodeJS.ProcessEnv, endpoint: string | undefined): void {
+export function refuseDisablingVariables(
+  env: NodeJS.ProcessEnv,
+  endpoint: string | undefined,
+): void {
   if (!endpoint) return;
   const disabled = (env.OTEL_SDK_DISABLED ?? '').trim().toLowerCase() === 'true';
   const exporter = (env.OTEL_TRACES_EXPORTER ?? '').trim().toLowerCase();

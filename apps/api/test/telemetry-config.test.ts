@@ -142,9 +142,7 @@ describe('variables that look like "export off" but are not read', () => {
     ['OTEL_TRACES_EXPORTER', 'none'],
     ['OTEL_TRACES_EXPORTER', 'console'],
   ])('%s=%s together with an endpoint fails start-up', (name, value) => {
-    expect(() => otel({ ...endpoint, [name]: value })).toThrow(
-      /unset OTEL_EXPORTER_OTLP_ENDPOINT/,
-    );
+    expect(() => otel({ ...endpoint, [name]: value })).toThrow(/unset OTEL_EXPORTER_OTLP_ENDPOINT/);
   });
 
   it('is harmless without an endpoint or when it agrees with the export', () => {
