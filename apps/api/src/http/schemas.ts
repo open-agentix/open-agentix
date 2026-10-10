@@ -395,7 +395,7 @@ export const ConnectionSchema = z.object({
   scope: ConnectionScopeSchema,
   scopeId: Id.nullable(),
   name: z.string(),
-  kind: z.enum(['mcp', 'model']),
+  kind: z.enum(['mcp', 'model', 'telemetry']),
   config: z.record(z.string(), z.unknown()),
   warnings: z
     .array(z.string())
@@ -416,7 +416,7 @@ export const StdioViolationsSchema = z.object({
 });
 export const ConnectionCreateBody = z.object({
   name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/),
-  kind: z.enum(['mcp', 'model']).default('mcp'),
+  kind: z.enum(['mcp', 'model', 'telemetry']).default('mcp'),
   scope: ConnectionScopeSchema.default('tenant').describe(
     'who may use it: platform (operators only), tenant, one team or one agent',
   ),
@@ -427,7 +427,11 @@ export const ConnectionCreateBody = z.object({
       'kind mcp: MCP server config (secrets only as references: envSecrets/headerSecrets). ' +
         'kind model: provider settings (`kind`: anthropic, openai, azure-openai, openrouter, vllm, ' +
         'lmstudio, ollama, openai-compatible, bedrock, simulated; keys as `*Secret` references; ' +
-        'optional `models` with price overrides - missing prices are proposed from the model catalog)',
+        'optional `models` with price overrides - missing prices are proposed from the model catalog). ' +
+        'kind telemetry: a tenant-owned OTLP exporter (tenant scope only, tenant admin only, needs ' +
+        'OAX_OTEL_TENANT_EXPORTERS=allow): `endpoint` (https), `protocol`, `headersSecret` (secret ' +
+        'reference, never a value), `region`, `clearance`, `content` (`off` or `redacted`, needs ' +
+        'OAX_OTEL_CONTENT=redacted), `enabled`',
     ),
 });
 export const ModelProposalQuery = z.object({

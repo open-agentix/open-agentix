@@ -710,7 +710,11 @@
     "secretsNotice": "Secrets werden nur per Name referenziert (envSecrets, headerSecrets, apiKeySecret) und hier nie angezeigt oder gespeichert.",
     "empty": "Noch keine Verbindungen",
     "emptyText": "Füge einen MCP-Server hinzu, damit Agenten seine Tools nutzen können.",
-    "kinds": { "mcp": "MCP-Server", "model": "Modell-Provider" },
+    "kinds": {
+      "mcp": "MCP-Server",
+      "model": "Modell-Provider",
+      "telemetry": "Telemetrie-Exporter"
+    },
     "secretRefs": "Referenzen auf Secrets",
     "config": "Konfiguration",
     "configHint": "JSON. Verwende envSecrets / headerSecrets mit Namen statt Werten.",

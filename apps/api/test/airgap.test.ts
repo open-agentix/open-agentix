@@ -155,6 +155,12 @@ describe('air-gapped start-up self-check', () => {
           model('aws', { kind: 'bedrock', region: 'eu-west-1' }),
           model('sim', { kind: 'simulated' }),
           { name: 'other', kind: 'something-else', config: {} },
+          { name: 'tel-ok', kind: 'telemetry', config: { endpoint: 'https://mcp.internal' } },
+          {
+            name: 'tel-bad',
+            kind: 'telemetry',
+            config: { endpoint: 'https://otel.vendor.example' },
+          },
         ],
         p,
       ),
@@ -167,6 +173,7 @@ describe('air-gapped start-up self-check', () => {
       'model connection "claude" proxy: px.example:3128 is not on OAX_AIRGAPPED_ALLOW',
       'model connection "azure": res.openai.azure.com is not on OAX_AIRGAPPED_ALLOW',
       'model connection "aws": bedrock-runtime.eu-west-1.amazonaws.com is not on OAX_AIRGAPPED_ALLOW',
+      'telemetry connection "tel-bad": otel.vendor.example is not on OAX_AIRGAPPED_ALLOW',
     ]);
     expect(
       checkStoredConnections(

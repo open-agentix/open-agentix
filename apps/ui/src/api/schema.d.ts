@@ -3981,7 +3981,7 @@ export interface paths {
                                 scopeId: string | null;
                                 name: string;
                                 /** @enum {string} */
-                                kind: "mcp" | "model";
+                                kind: "mcp" | "model" | "telemetry";
                                 config: {
                                     [key: string]: unknown;
                                 };
@@ -4042,7 +4042,7 @@ export interface paths {
                          * @default mcp
                          * @enum {string}
                          */
-                        kind?: "mcp" | "model";
+                        kind?: "mcp" | "model" | "telemetry";
                         /**
                          * @description who may use it: platform (operators only), tenant, one team or one agent
                          * @default tenant
@@ -4051,7 +4051,7 @@ export interface paths {
                         scope?: "platform" | "tenant" | "team" | "agent";
                         /** @description team or agent id for team/agent scope */
                         scopeId?: string | null;
-                        /** @description kind mcp: MCP server config (secrets only as references: envSecrets/headerSecrets). kind model: provider settings (`kind`: anthropic, openai, azure-openai, openrouter, vllm, lmstudio, ollama, openai-compatible, bedrock, simulated; keys as `*Secret` references; optional `models` with price overrides - missing prices are proposed from the model catalog) */
+                        /** @description kind mcp: MCP server config (secrets only as references: envSecrets/headerSecrets). kind model: provider settings (`kind`: anthropic, openai, azure-openai, openrouter, vllm, lmstudio, ollama, openai-compatible, bedrock, simulated; keys as `*Secret` references; optional `models` with price overrides - missing prices are proposed from the model catalog). kind telemetry: a tenant-owned OTLP exporter (tenant scope only, tenant admin only, needs OAX_OTEL_TENANT_EXPORTERS=allow): `endpoint` (https), `protocol`, `headersSecret` (secret reference, never a value), `region`, `clearance`, `content` (`off` or `redacted`, needs OAX_OTEL_CONTENT=redacted), `enabled` */
                         config: {
                             [key: string]: unknown;
                         };
@@ -4075,7 +4075,7 @@ export interface paths {
                             scopeId: string | null;
                             name: string;
                             /** @enum {string} */
-                            kind: "mcp" | "model";
+                            kind: "mcp" | "model" | "telemetry";
                             config: {
                                 [key: string]: unknown;
                             };
@@ -4171,7 +4171,7 @@ export interface paths {
                                     scopeId: string | null;
                                     name: string;
                                     /** @enum {string} */
-                                    kind: "mcp" | "model";
+                                    kind: "mcp" | "model" | "telemetry";
                                     config: {
                                         [key: string]: unknown;
                                     };
@@ -5058,7 +5058,7 @@ export interface paths {
                             scopeId: string | null;
                             name: string;
                             /** @enum {string} */
-                            kind: "mcp" | "model";
+                            kind: "mcp" | "model" | "telemetry";
                             config: {
                                 [key: string]: unknown;
                             };
@@ -5145,7 +5145,7 @@ export interface paths {
                             scopeId: string | null;
                             name: string;
                             /** @enum {string} */
-                            kind: "mcp" | "model";
+                            kind: "mcp" | "model" | "telemetry";
                             config: {
                                 [key: string]: unknown;
                             };

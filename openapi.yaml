@@ -5912,6 +5912,7 @@ paths:
                           enum:
                             - mcp
                             - model
+                            - telemetry
                         config:
                           type: object
                           propertyNames:
@@ -6000,6 +6001,7 @@ paths:
                   enum:
                     - mcp
                     - model
+                    - telemetry
                 scope:
                   default: tenant
                   description: "who may use it: platform (operators only), tenant, one team or one agent"
@@ -6021,7 +6023,7 @@ paths:
                   propertyNames:
                     type: string
                   additionalProperties: {}
-                  description: "kind mcp: MCP server config (secrets only as references: envSecrets/headerSecrets). kind model: provider settings (`kind`: anthropic, openai, azure-openai, openrouter, vllm, lmstudio, ollama, openai-compatible, bedrock, simulated; keys as `*Secret` references; optional `models` with price overrides - missing prices are proposed from the model catalog)"
+                  description: "kind mcp: MCP server config (secrets only as references: envSecrets/headerSecrets). kind model: provider settings (`kind`: anthropic, openai, azure-openai, openrouter, vllm, lmstudio, ollama, openai-compatible, bedrock, simulated; keys as `*Secret` references; optional `models` with price overrides - missing prices are proposed from the model catalog). kind telemetry: a tenant-owned OTLP exporter (tenant scope only, tenant admin only, needs OAX_OTEL_TENANT_EXPORTERS=allow): `endpoint` (https), `protocol`, `headersSecret` (secret reference, never a value), `region`, `clearance`, `content` (`off` or `redacted`, needs OAX_OTEL_CONTENT=redacted), `enabled`"
               required:
                 - name
                 - config
@@ -6063,6 +6065,7 @@ paths:
                     enum:
                       - mcp
                       - model
+                      - telemetry
                   config:
                     type: object
                     propertyNames:
@@ -6191,6 +6194,7 @@ paths:
                               enum:
                                 - mcp
                                 - model
+                                - telemetry
                             config:
                               type: object
                               propertyNames:
@@ -7478,6 +7482,7 @@ paths:
                     enum:
                       - mcp
                       - model
+                      - telemetry
                   config:
                     type: object
                     propertyNames:
@@ -7609,6 +7614,7 @@ paths:
                     enum:
                       - mcp
                       - model
+                      - telemetry
                   config:
                     type: object
                     propertyNames:

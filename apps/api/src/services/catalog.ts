@@ -46,6 +46,14 @@ import { legacyNetwork } from '@openagentix/providers';
 import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
+import type { Db } from '../db/client.js';
+import {
+  TelemetryConnectionConfigSchema,
+  notifyTelemetryConnectionChanged,
+  telemetryEndpointProblem,
+  telemetryTracesUrl,
+  type TelemetryConnectionConfig,
+} from '../telemetry-connection.js';
 import {
   DEFAULT_TENANT_ID,
   agents,
@@ -85,7 +93,7 @@ export interface RunScope {
 }
 
 export type ConnectionScope = 'platform' | 'tenant' | 'team' | 'agent';
-export type ConnectionKind = 'mcp' | 'model';
+export type ConnectionKind = 'mcp' | 'model' | 'telemetry';
 const SCOPE_RANK: Record<string, number> = { platform: 0, tenant: 1, team: 2, agent: 3 };
 
 /** Picks, per name, the most specific connection that applies to the run scope. */
@@ -335,7 +343,11 @@ export class CatalogService {
   ): Promise<Record<string, unknown>> {
     let stored: Record<string, unknown>;
     let refs: string[];
-    if (kind === 'mcp') {
+    if (kind === 'telemetry') {
+      const parsed = this.prepareTelemetryConfig(actor, name, scope, config);
+      stored = parsed;
+      refs = parsed.headersSecret ? [parsed.headersSecret] : [];
+    } else if (kind === 'mcp') {
       const parsed = McpServerConfigSchema.parse({ ...(config as object), name });
       stored = parsed;
       refs = [
@@ -390,6 +402,144 @@ export class CatalogService {
       this.assertHttpAllowed(name, scope, stored);
     }
     return stored;
+  }
+
+  /**
+   * ADR 0015 S10: a `telemetry` connection is a tenant-owned OTLP exporter. Only the tenant scope
+   * exists (the platform exporter is operator configuration, a team or agent has no span stream of
+   * its own), the operator must allow tenant exporters at all, content needs the operator allow
+   * too, the endpoint passes the ADR 0011 tenant destination rules (https only, no local, private
+   * or metadata address in any spelling, the operator's deny routes and the air-gapped allowlist;
+   * pure checks, DNS is resolved and pinned by the dispatcher at connect time, so saving is never a
+   * name-resolution oracle) and the region must be one the operator allows.
+   */
+  private prepareTelemetryConfig(
+    actor: Principal,
+    name: string,
+    scope: ConnectionScope,
+    config: unknown,
+  ): TelemetryConnectionConfig {
+    if (scope !== 'tenant')
+      throw new HttpError(
+        400,
+        'validation_failed',
+        'telemetry connections exist at tenant scope only',
+      );
+    const otel = this.ctx.config.otel;
+    if (otel.tenantExporters !== 'allow')
+      throw new HttpError(
+        422,
+        'telemetry_exporters_disabled',
+        'tenant-owned telemetry exporters are not enabled on this platform (OAX_OTEL_TENANT_EXPORTERS)',
+      );
+    const parsed = TelemetryConnectionConfigSchema.parse(config);
+    const problem = telemetryEndpointProblem(parsed.endpoint);
+    if (problem)
+      throw new HttpError(400, 'validation_failed', `telemetry connection "${name}": ${problem}`);
+    if (parsed.content === 'redacted' && otel.content !== 'redacted')
+      throw new HttpError(
+        422,
+        'telemetry_content_disabled',
+        'content capture is not enabled on this platform (OAX_OTEL_CONTENT)',
+      );
+    if (
+      otel.allowedRegions.length > 0 &&
+      (!parsed.region || !otel.allowedRegions.includes(parsed.region))
+    )
+      throw new HttpError(
+        422,
+        'region_not_allowed',
+        `telemetry connection "${name}": region must be one of ${otel.allowedRegions.join(', ')}`,
+      );
+    const net = getNetworkSettings()?.net ?? legacyNetwork(process.env);
+    const route = resolveRoute(
+      telemetryTracesUrl(parsed.endpoint),
+      'telemetry',
+      { origin: 'tenant', tenantId: actor.tenantId },
+      net,
+    );
+    if (route.decision === 'deny')
+      throw new HttpError(
+        422,
+        'egress_denied',
+        `telemetry connection "${name}": the destination is not allowed (${route.code ?? 'egress_denied'})`,
+        { code: route.code },
+      );
+    return parsed;
+  }
+
+  /**
+   * Telemetry connections send spans (and, with the content opt-in, model text) to a destination
+   * the tenant names, so they are tenant-admin business (`settings:write`), not part of the
+   * integrator's `connections:write`. Applies to create, change and delete.
+   */
+  private assertTelemetryAdmin(actor: Principal, kind: string): void {
+    if (kind !== 'telemetry') return;
+    if (!hasPermission(actor, 'settings:write', null))
+      throw forbidden('telemetry connections need a tenant admin (settings:write)');
+  }
+
+  /** The content opt-in as it is in effect: stored `redacted` on an enabled connection. */
+  private static contentOn(config: unknown): boolean {
+    const c = TelemetryConnectionConfigSchema.safeParse(config);
+    return c.success && c.data.enabled && c.data.content === 'redacted';
+  }
+
+  /** What a content opt-in covers: a change of any of these is a new opt-in (audited again). */
+  private static optInTarget(config: unknown): string {
+    const c = TelemetryConnectionConfigSchema.safeParse(config);
+    if (!c.success) return '';
+    const d = c.data;
+    return JSON.stringify([
+      d.endpoint,
+      d.protocol,
+      d.headersSecret ?? null,
+      d.region ?? null,
+      d.clearance,
+    ]);
+  }
+
+  private async auditContentChange(
+    actor: Principal,
+    tx: Db,
+    row: { id: string; name: string },
+    before: unknown,
+    after: unknown,
+  ): Promise<void> {
+    const was = before !== undefined && CatalogService.contentOn(before);
+    const now = after !== undefined && CatalogService.contentOn(after);
+    const changedTarget =
+      was && now && CatalogService.optInTarget(before) !== CatalogService.optInTarget(after);
+    if (now && (!was || changedTarget)) {
+      const c = TelemetryConnectionConfigSchema.parse(after);
+      await this.audit.append(
+        {
+          actor: actor.userId,
+          tenantId: actor.tenantId,
+          action: 'telemetry.content_enabled',
+          target: row.id,
+          // Names and classes only: no URL path, no secret reference, no header.
+          payload: {
+            connection: row.name,
+            clearance: c.clearance,
+            ...(c.region ? { region: c.region } : {}),
+            host: new URL(c.endpoint).host,
+          },
+        },
+        tx,
+      );
+    } else if (was && !now) {
+      await this.audit.append(
+        {
+          actor: actor.userId,
+          tenantId: actor.tenantId,
+          action: 'telemetry.content_disabled',
+          target: row.id,
+          payload: { connection: row.name },
+        },
+        tx,
+      );
+    }
   }
 
   /**
@@ -640,6 +790,7 @@ export class CatalogService {
     const scope = input.scope ?? 'tenant';
     const scopeId = input.scopeId ?? null;
     await this.assertScope(actor, scope, scopeId);
+    this.assertTelemetryAdmin(actor, input.kind);
     const config = await this.prepareConfig(actor, input.kind, input.name, scope, input.config);
     this.assertPropagationAllowed(actor, input.kind, scope, config, undefined);
     const [exists] = await this.ctx.db
@@ -647,6 +798,40 @@ export class CatalogService {
       .from(connections)
       .where(and(eq(connections.name, input.name), eq(connections.tenantId, actor.tenantId)));
     if (exists) throw conflict(`connection "${input.name}" already exists`);
+    if (input.kind === 'telemetry') {
+      // The row and its audit entries (including the content opt-in) commit together.
+      const created = await this.ctx.db.transaction(async (t) => {
+        const tx = t as unknown as Db;
+        const [r] = await tx
+          .insert(connections)
+          .values({
+            id: randomUUID(),
+            tenantId: actor.tenantId,
+            scope,
+            scopeId,
+            name: input.name,
+            kind: input.kind,
+            config,
+            createdBy: actor.userId,
+          })
+          .returning();
+        await this.audit.append(
+          {
+            actor: actor.userId,
+            tenantId: actor.tenantId,
+            action: 'connection.created',
+            target: r!.id,
+            payload: { name: input.name, kind: input.kind, scope, scopeId, config },
+          },
+          tx,
+        );
+        await this.auditContentChange(actor, tx, r!, undefined, config);
+        return r!;
+      });
+      await this.invalidateConnections();
+      notifyTelemetryConnectionChanged(actor.tenantId);
+      return created;
+    }
     const [row] = await this.ctx.db
       .insert(connections)
       .values({
@@ -736,6 +921,7 @@ export class CatalogService {
 
   async updateConnection(actor: Principal, id: string, config: unknown): Promise<ConnectionRow> {
     const current = await this.getOwnConnection(actor, id);
+    this.assertTelemetryAdmin(actor, current.kind);
     const parsed = await this.prepareConfig(
       actor,
       current.kind as ConnectionKind,
@@ -750,19 +936,44 @@ export class CatalogService {
       parsed,
       current.config,
     );
-    const [row] = await this.ctx.db
-      .update(connections)
-      .set({ config: parsed, updatedAt: this.ctx.now() })
-      .where(
-        and(
-          eq(connections.id, id),
-          eq(connections.tenantId, actor.tenantId),
-          // Compare and swap: the checks above were made against the config read at the start. If
-          // someone changed it meanwhile, nothing is written (409) instead of skipping the checks.
-          sql`${connections.config} = ${JSON.stringify(current.config)}::jsonb`,
-        ),
-      )
-      .returning();
+    const write = async (db: Db) => {
+      const [r] = await db
+        .update(connections)
+        .set({ config: parsed, updatedAt: this.ctx.now() })
+        .where(
+          and(
+            eq(connections.id, id),
+            eq(connections.tenantId, actor.tenantId),
+            // Compare and swap: the checks above were made against the config read at the start. If
+            // someone changed it meanwhile, nothing is written (409) instead of skipping the checks.
+            sql`${connections.config} = ${JSON.stringify(current.config)}::jsonb`,
+          ),
+        )
+        .returning();
+      return r;
+    };
+    // A telemetry connection and its audit entries commit together (the content opt-in is audited).
+    const row =
+      current.kind === 'telemetry'
+        ? await this.ctx.db.transaction(async (t) => {
+            const tx = t as unknown as Db;
+            const r = await write(tx);
+            if (r) {
+              await this.audit.append(
+                {
+                  actor: actor.userId,
+                  tenantId: actor.tenantId,
+                  action: 'connection.updated',
+                  target: id,
+                  payload: { config: parsed },
+                },
+                tx,
+              );
+              await this.auditContentChange(actor, tx, r, current.config, parsed);
+            }
+            return r;
+          })
+        : await write(this.ctx.db);
     if (!row) {
       // Gone (deleted meanwhile) is a 404; present but different is a 409.
       const [still] = await this.ctx.db
@@ -773,6 +984,10 @@ export class CatalogService {
       throw conflict(`connection "${current.name}" was changed meanwhile; reload and try again`);
     }
     await this.invalidateConnections();
+    if (current.kind === 'telemetry') {
+      notifyTelemetryConnectionChanged(actor.tenantId);
+      return row;
+    }
     await this.audit.append({
       actor: actor.userId,
       tenantId: actor.tenantId,
@@ -784,7 +999,29 @@ export class CatalogService {
   }
 
   async deleteConnection(actor: Principal, id: string): Promise<void> {
-    await this.getOwnConnection(actor, id);
+    const current = await this.getOwnConnection(actor, id);
+    this.assertTelemetryAdmin(actor, current.kind);
+    if (current.kind === 'telemetry') {
+      await this.ctx.db.transaction(async (t) => {
+        const tx = t as unknown as Db;
+        await tx
+          .delete(connections)
+          .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)));
+        await this.audit.append(
+          {
+            actor: actor.userId,
+            tenantId: actor.tenantId,
+            action: 'connection.deleted',
+            target: id,
+          },
+          tx,
+        );
+        await this.auditContentChange(actor, tx, current, current.config, undefined);
+      });
+      await this.invalidateConnections();
+      notifyTelemetryConnectionChanged(actor.tenantId);
+      return;
+    }
     await this.ctx.db
       .delete(connections)
       .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)));
