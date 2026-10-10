@@ -408,11 +408,13 @@ export async function initTelemetry(
     { AlwaysOnSampler, BatchSpanProcessor, ParentBasedSampler },
     { resourceFromAttributes },
     { GuardedSpanExporter, dropCountingMeterProvider },
+    { OaxKeepProcessor, OaxRatioSampler, keepStatsFromRuntime },
   ] = await Promise.all([
     import('@opentelemetry/sdk-trace-node'),
     import('@opentelemetry/sdk-trace-base'),
     import('@opentelemetry/resources'),
     import('./telemetry-export.js'),
+    import('./telemetry-sampling.js'),
   ]);
   const url = `${config.endpoint.replace(/\/$/, '')}/v1/traces`;
   const exporterConfig = {
@@ -443,23 +445,41 @@ export async function initTelemetry(
     new GuardedSpanExporter(exporter, config.exportTimeoutMs),
     bufferConfig,
   );
+  // Sampling (slice S6). Ratio 1 keeps the former sampler and pipeline untouched. Below 1 the
+  // decision is a function of the trace id alone; the keep processor sits in front of the batch
+  // processor and only ever hands it extra spans (it never changes or exports anything itself).
+  const sampling = config.sampleRatio < 1;
+  const keepEnabled = sampling && config.keep.length > 0;
+  const spanProcessors = keepEnabled
+    ? [
+        new OaxKeepProcessor({
+          classes: config.keep,
+          bufferSpans: config.keepBufferSpans,
+          downstream: batch,
+          stats: keepStatsFromRuntime(),
+        }),
+        batch,
+      ]
+    : [batch];
   // Static resource only: no detectors, so nothing calls a cloud metadata endpoint or reads host
   // details (ADR 0015 section 8). `resourceFromAttributes` does not read OTEL_RESOURCE_ATTRIBUTES.
   // Sampler and limits are explicit too: the SDK would otherwise build them from OTEL_TRACES_SAMPLER
-  // and OTEL_SPAN_* / OTEL_ATTRIBUTE_* (sampling by ratio is slice S6, OAX_OTEL_SAMPLE_RATIO).
+  // and OTEL_SPAN_* / OTEL_ATTRIBUTE_* (OAX_OTEL_SAMPLE_RATIO is the only sampling switch).
   const provider = new NodeTracerProvider({
     resource: resourceFromAttributes({
       ...config.resourceAttributes,
       'service.name': init.serviceName ?? config.serviceName,
     }),
-    sampler: new ParentBasedSampler({ root: new AlwaysOnSampler() }),
+    sampler: sampling
+      ? new OaxRatioSampler(config.sampleRatio, keepEnabled)
+      : new ParentBasedSampler({ root: new AlwaysOnSampler() }),
     idGenerator: new RunIdGenerator(),
     spanLimits: SPAN_LIMITS,
     generalLimits: {
       attributeValueLengthLimit: SPAN_LIMITS.attributeValueLengthLimit,
       attributeCountLimit: SPAN_LIMITS.attributeCountLimit,
     },
-    spanProcessors: [batch],
+    spanProcessors,
   });
   // No global propagator: nothing injects or extracts `traceparent`/`baggage` until a slice names
   // the place deliberately (ADR 0015 sections 2, 6.1 and 6.4).

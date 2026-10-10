@@ -137,6 +137,8 @@ const ALLOWED: Record<string, Record<string, Set<string> | RegExp>> = {
   otel_inbound_context_total: { result: oneOf('ignored', 'linked', 'invalid') },
   otel_node_events_dropped_total: {},
   otel_node_context_mismatch_total: {},
+  otel_keep_kept_total: { class: oneOf('error', 'deny', 'approval', 'budget', 'guard') },
+  otel_keep_evicted_total: { reason: oneOf('run_buffer', 'process_cap') },
   role_bindings_shadow_total: { outcome: slug, authoritative: oneOf('legacy', 'bindings') },
   authz_epoch_rejected_total: { reason: oneOf('stale', 'invalid') },
   mcp_stdio_violations: {},

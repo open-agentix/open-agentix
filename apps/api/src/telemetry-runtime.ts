@@ -19,6 +19,10 @@ export interface TelemetryStats {
   nodeEventsDropped(n: number): void;
   /** A run node sent a `traceparent` that is not the one stored for its session (ADR 0015 6.1). */
   nodeContextMismatch(n: number): void;
+  /** A not-sampled trace was exported because of an always-keep class (ADR 0015 section 9). */
+  keepKept(keepClass: 'error' | 'deny' | 'approval' | 'budget' | 'guard'): void;
+  /** Spans of not-sampled traces discarded because a keep-buffer bound was hit. */
+  keepEvicted(reason: 'run_buffer' | 'process_cap', n: number): void;
 }
 
 export type InboundContextResult = 'ignored' | 'linked' | 'invalid';
@@ -33,6 +37,8 @@ export const NOOP_STATS: TelemetryStats = {
   inboundContext: () => undefined,
   nodeEventsDropped: () => undefined,
   nodeContextMismatch: () => undefined,
+  keepKept: () => undefined,
+  keepEvicted: () => undefined,
 };
 
 export interface TelemetryRuntime {
@@ -78,6 +84,10 @@ function safeStats(stats: TelemetryStats): TelemetryStats {
     inboundContext: call((r: InboundContextResult, n: number) => stats.inboundContext(r, n)),
     nodeEventsDropped: call((n: number) => stats.nodeEventsDropped(n)),
     nodeContextMismatch: call((n: number) => stats.nodeContextMismatch(n)),
+    keepKept: call((c: Parameters<TelemetryStats['keepKept']>[0]) => stats.keepKept(c)),
+    keepEvicted: call((r: Parameters<TelemetryStats['keepEvicted']>[0], n: number) =>
+      stats.keepEvicted(r, n),
+    ),
   };
 }
 

@@ -342,7 +342,21 @@ export class Metrics {
       help: 'Run node requests whose traceparent header is not the stored context of the session (ignored)',
       registers: [this.registry],
     });
+    const otelKeepKept = new Counter({
+      name: `${prefix}otel_keep_kept_total`,
+      help: 'Not-sampled traces exported because of an always-keep class (error, deny, approval, budget, guard)',
+      labelNames: ['class'],
+      registers: [this.registry],
+    });
+    const otelKeepEvicted = new Counter({
+      name: `${prefix}otel_keep_evicted_total`,
+      help: 'Spans of not-sampled traces discarded by the keep buffer, by reason (run_buffer, process_cap)',
+      labelNames: ['reason'],
+      registers: [this.registry],
+    });
     this.otel = {
+      keepKept: (keepClass) => otelKeepKept.inc({ class: keepClass }),
+      keepEvicted: (reason, n) => otelKeepEvicted.inc({ reason }, n),
       nodeEventsDropped: (n) => otelNodeEventsDropped.inc(n),
       nodeContextMismatch: (n) => otelNodeContextMismatch.inc(n),
       inboundContext: (result, n) => otelInboundContext.inc({ result }, n),

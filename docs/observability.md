@@ -88,8 +88,8 @@ registered and no socket is opened.
   path. Values are never echoed. `OTEL_SDK_DISABLED=true` or an `OTEL_TRACES_EXPORTER` other than
   `otlp` next to an endpoint also fails start-up: they are not read here, so they cannot turn the
   export off; unset `OTEL_EXPORTER_OTLP_ENDPOINT` instead.
-- **Fixed in code, not read from the environment:** the sampler (parent-based, always on until
-  slice S6 brings `OAX_OTEL_SAMPLE_RATIO`), the span limits (`OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*`), the
+- **Fixed in code, not read from the environment:** the sampler (always on, or the ratio sampler of
+  `OAX_OTEL_SAMPLE_RATIO`, see [Sampling](#sampling)), the span limits (`OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*`), the
   batch settings (`OTEL_BSP_*`) and the export timeout. No global propagator is registered
   (`OTEL_PROPAGATORS` is not read): nothing injects `traceparent` or `baggage` into outbound
   requests. `OTEL_EXPORTER_OTLP_COMPRESSION` is still applied by the exporter (it changes only
@@ -324,6 +324,100 @@ changing `otel` in a stored entry breaks the chain like any other payload change
 principals that may read the run (same tenant and permission as the rest of the run); the run
 list, the trigger response and the other run endpoints do not contain them.
 
+## Sampling
+
+Volume is driven by the number of runs, so the default is `OAX_OTEL_SAMPLE_RATIO=1` (every run
+is exported, complete). Below 1:
+
+- **Head sampling by trace id.** The decision is a deterministic function of the run's trace id
+  (the SDK's `TraceIdRatioBased` rule) and ignores any parent. The api and the worker see
+  the same stored id, so they decide the same way without talking to each other. The HTTP request
+  traces (every request starts its own trace) are sampled the same way.
+- **Always keep** (`OAX_OTEL_KEEP`, default `error,deny,approval,budget,guard`): a run that was
+  not sampled is still recorded (cheaply, in memory) but not exported. The `OaxKeepProcessor`
+  buffers its finished spans per trace and releases the buffer, and every later span of that
+  trace, when one span shows:
+
+  | Class | Condition on a span |
+  | --- | --- |
+  | `error` | status `ERROR` |
+  | `deny` | `oax.policy.effect=deny` |
+  | `approval` | `oax.approval.outcome` is anything but `approved` |
+  | `budget` | event `oax.budget.breach` |
+  | `guard` | event `oax.guard.report` or `oax.node.guard` (emitted only for a non-empty report) |
+
+  An empty `OAX_OTEL_KEEP` turns the path off (non-sampled runs are not recorded at all).
+- **Nothing changes in what is exported.** The keep processor only decides *whether* spans reach
+  the export queue; released spans pass the same allowlist and context guard at the export
+  boundary as sampled ones. It reads fixed attribute values for classification and copies
+  nothing.
+- **A kept trace can be partial.** Each process decides on what it saw. A buffer is dropped when
+  the attempt (`invoke_workflow`) or a request span ends without a match; a kept error trace from
+  the worker does not contain the api's spans. Complete error traces at a low ratio are a job
+  for tail sampling in the collector (below).
+
+**Bounds.** Per trace, at most `OAX_OTEL_KEEP_BUFFER_SPANS` (default 512) finished spans are
+buffered; further spans are dropped and counted. Per process the estimated size of all buffers is
+capped at 4 MiB (an estimate: two bytes per character plus fixed per-span, per-attribute and per-event
+costs; the measured heap for a full buffer is about 1.4 times the estimate, so the real worst case is
+roughly 6 MiB per process); when the cap is exceeded the
+oldest traces are evicted, whole. Memory does not grow with the number of runs or tenants, and a
+kept trace leaves only a 128 byte marker in the same budget.
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `oax_otel_keep_kept_total` | `class` (`error`, `deny`, `approval`, `budget`, `guard`) | Not-sampled traces exported because of that class (the first matching class). |
+| `oax_otel_keep_evicted_total` | `reason` (`run_buffer`, `process_cap`) | Spans discarded unexported: per-trace buffer full, or evicted by the process cap. |
+
+Both are process-wide counters with closed labels; no run, tenant or span name reaches them.
+
+### Collector tail sampling
+
+Head sampling cannot know that a run will fail later. For complete traces of failed or denied runs
+at a low ratio, export everything (`OAX_OTEL_SAMPLE_RATIO=1`) to a collector and let it decide once
+the trace is complete. Example for the OpenTelemetry Collector (contrib distribution, `tail_sampling`
+processor); adjust the wait and the percentage to your run length and volume:
+
+```yaml
+processors:
+  tail_sampling:
+    decision_wait: 60s          # longer than a typical run attempt
+    num_traces: 50000           # bounds the collector's memory
+    policies:
+      - name: errors
+        type: status_code
+        status_code: { status_codes: [ERROR] }
+      - name: policy-denied
+        type: string_attribute
+        string_attribute: { key: oax.policy.effect, values: [deny] }
+      - name: approval-not-approved
+        type: string_attribute
+        string_attribute:
+          key: oax.approval.outcome
+          values: [rejected, timeout, cancelled]
+      - name: budget-or-guard-events
+        type: ottl_condition
+        ottl_condition:
+          error_mode: ignore
+          span_event:
+            - 'IsMatch(name, "^oax\\.(budget\\.breach|guard\\.report|node\\.guard)$")'
+      - name: baseline
+        type: probabilistic
+        probabilistic: { sampling_percentage: 5 }
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [tail_sampling, batch]
+      exporters: [otlp/backend]
+```
+
+`tail_sampling` keeps the policies as an OR: a trace is kept when any policy matches. Verify the
+policy keys against the collector version you run. Use either head sampling in the platform or
+tail sampling in the collector as the volume control, not both on the same traffic, or the two
+ratios multiply.
+
 ## Log correlation
 
 Every log line written inside a span carries `trace_id` and `span_id` (hex, ids only).
@@ -331,8 +425,8 @@ Every log line written inside a span carries `trace_id` and `span_id` (hex, ids 
 ## Configuration
 
 See [`configuration.md`](configuration.md#observability) for the table of variables. Keys whose
-feature lands in a later slice (sampling, keep classes, MCP propagation) are parsed and validated
-now and have no effect yet; `OAX_OTEL_NODE_EVENTS_MAX` is in use since slice S4 and
+feature lands in a later slice (MCP propagation) are parsed and validated now and have no effect
+yet; the sampling keys are in use since slice S6; `OAX_OTEL_NODE_EVENTS_MAX` is in use since slice S4 and
 `OAX_OTEL_GENAI_METRICS` since slice S5.
 
 ## Metrics
