@@ -43,6 +43,14 @@ export interface TokenRefresher {
 
 /** Tokens are renewed this long before they expire (ADR 0016 section 7.5). */
 export const REFRESH_SKEW_MS = 60_000;
+
+/**
+ * How long before expiry a token is renewed: a minute, but never more than half of its lifetime
+ * (a 30 s token would otherwise be renewed on every use).
+ */
+export function refreshSkewMs(issuedAt: Date, expiresAt: Date): number {
+  return Math.min(REFRESH_SKEW_MS, Math.max(0, expiresAt.getTime() - issuedAt.getTime()) / 2);
+}
 /** After a failed refresh the next attempt waits this long (the failure is recorded, not hammered). */
 export const REFRESH_RETRY_MS = 30_000;
 
@@ -99,7 +107,9 @@ export class McpCredentials {
       const nowMs = this.now().getTime();
       const expiresAt = stored.meta.expiresAt?.getTime();
       const usable = status === 'active' && (expiresAt === undefined || expiresAt > nowMs);
-      const stale = expiresAt !== undefined && expiresAt - nowMs <= REFRESH_SKEW_MS;
+      const stale =
+        expiresAt !== undefined &&
+        expiresAt - nowMs <= refreshSkewMs(stored.meta.updatedAt, new Date(expiresAt));
       const retryAfter = stored.meta.lastError
         ? stored.meta.updatedAt.getTime() + REFRESH_RETRY_MS
         : 0;

@@ -140,6 +140,7 @@ export function createMcpFetch(
         `MCP server "${cfg.name}": requests are limited to the origin of the connection url`,
       );
     let request = init;
+    let sent: string | undefined;
     if (oauth) {
       if (!source)
         throw new OaxError(
@@ -156,6 +157,7 @@ export function createMcpFetch(
         );
       const headers = new Headers(init?.headers);
       headers.set('authorization', `Bearer ${token}`);
+      sent = token;
       request = { ...init, headers };
     }
     const res = await outbound.fetch(target, request, {
@@ -166,7 +168,7 @@ export function createMcpFetch(
     });
     if (oauth && res.status === 401) {
       await res.body?.cancel().catch(() => undefined);
-      source?.rejected?.();
+      if (sent) source?.rejected?.(sent);
       throw new OaxError(
         'mcp_auth_required',
         `MCP server "${cfg.name}" rejected the access token; the connection needs to be authorized again`,

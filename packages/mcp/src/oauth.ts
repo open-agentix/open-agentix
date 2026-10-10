@@ -15,7 +15,7 @@ type HttpConfig = Extract<McpServerConfig, { transport: 'streamable-http' }>;
 export interface McpTokenSource {
   accessToken(): Promise<{ token: string; resource: string }>;
   /** The server answered 401 to the token it was just given: the next call must not reuse it. */
-  rejected?(): void;
+  rejected?(token: string): void;
 }
 
 /**

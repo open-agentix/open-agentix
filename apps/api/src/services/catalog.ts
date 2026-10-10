@@ -44,6 +44,7 @@ import {
 } from '@openagentix/providers';
 import { legacyNetwork } from '@openagentix/providers';
 import { canonicalResource } from '../mcp-oauth/resource.js';
+import { lockCredential } from '../mcp-oauth/token-store.js';
 import { processSecrets } from '../mcp-oauth/secret-registry.js';
 import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
@@ -987,6 +988,8 @@ export class CatalogService {
     // authorization server is told after the change has been committed.
     const revocation = moved ? await this.oauth?.prepareRevoke(current) : null;
     const write = async (db: Db) => {
+      // A renewal in flight finishes first; it can not write after the tokens are deleted.
+      if (moved) await lockCredential(db, id, current.credentialVersion);
       const [updated] = await db
         .update(connections)
         .set({

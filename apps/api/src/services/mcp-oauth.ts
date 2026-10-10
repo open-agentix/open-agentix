@@ -21,7 +21,7 @@ import type { Db } from '../db/client.js';
 import { connections, mcpOauthTokens } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
 import type { ClientCredentials } from '../mcp-oauth/client-auth.js';
-import { REFRESH_SKEW_MS, type ConnectionRef } from '../mcp-oauth/credentials.js';
+import { refreshSkewMs, type ConnectionRef } from '../mcp-oauth/credentials.js';
 import {
   discoverAuthorizationServer,
   discoverProtectedResource,
@@ -30,9 +30,10 @@ import {
   samePin,
   type AuthServerMetadata,
 } from '../mcp-oauth/discovery.js';
+import { assertTokenShape } from '../mcp-oauth/token-shape.js';
 import { OauthFetch, hostOf, type OauthOrigin } from '../mcp-oauth/oauth-fetch.js';
 import type { McpOauthStores } from '../mcp-oauth/index.js';
-import { ownerKey, type TokenStatus } from '../mcp-oauth/token-store.js';
+import { lockCredential, ownerKey, type TokenStatus } from '../mcp-oauth/token-store.js';
 import { TokenRequestError, requestToken, revokeToken } from '../mcp-oauth/token-client.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService, ConnectionRow } from './catalog.js';
@@ -47,8 +48,6 @@ const AUTHORIZE_LIMIT = 10;
 const WINDOW_MS = 60_000;
 /** Discovery results are trusted for at most an hour (ADR 0016 section 7.3). */
 const DISCOVERY_TTL_MS = 60 * 60_000;
-/** Lock namespace of the refresh single flight (`pg_advisory_xact_lock(int, int)`). */
-const REFRESH_LOCK_NS = 0x6f617831;
 /** Renewals of one connection closer together than this are refused (a server that keeps saying 401). */
 const MIN_REFRESH_GAP_MS = 5_000;
 const SYSTEM_ACTOR = 'system:mcp-oauth';
@@ -160,9 +159,9 @@ export class McpOauthService {
     const scopes = requestedScopes(cfg);
     return {
       accessToken: () => this.stores.credentials.accessToken(ref, scopes, { guard }),
-      rejected: () => {
+      rejected: (rejected) => {
         void this.stores.tokens
-          .expireNow(row.tenantId, row.id, row.credentialVersion)
+          .expireIfCurrent(row.tenantId, row.id, row.credentialVersion, rejected)
           .catch(() => undefined);
       },
     };
@@ -207,8 +206,16 @@ export class McpOauthService {
   ): Promise<ClientCredentials> {
     const c = cfg.auth.client;
     const owner = `${row.id}:client`;
-    const reg = (v: string) =>
+    // Only values with the shape of a credential become redaction targets (a weak secret such as
+    // a short word would blank ordinary text); the run's guard still covers weak secrets.
+    const reg = (v: string) => {
+      try {
+        assertTokenShape(v);
+      } catch {
+        return;
+      }
       this.stores.registry.register(v, { owner, tenant: row.tenantId, ttlMs: 10 * 60_000 });
+    };
     try {
       const clientId = await resolver.resolve(c.clientIdSecret);
       if (c.clientAuth === 'client_secret_basic') {
@@ -302,9 +309,26 @@ export class McpOauthService {
     let scopes: string[];
     try {
       const prm = await discoverProtectedResource(this.http(), cfg.url, origin);
-      const wanted = body.issuer ?? cfg.auth.issuer;
+      // The issuer pinned in the configuration, else the one pinned by an earlier authorization:
+      // a new authorization may move to another server only when the administrator names it.
+      const earlier = (await this.stores.tokens.meta(row.tenantId, row.id, row.credentialVersion))
+        ?.issuer;
+      const pinned = cfg.auth.issuer ?? earlier;
+      const wanted = body.issuer ?? pinned;
       if (cfg.auth.issuer && body.issuer && body.issuer !== cfg.auth.issuer)
         throw new OaxError('mcp_issuer_mismatch', 'the issuer differs from the one pinned');
+      if (
+        !body.issuer &&
+        !cfg.auth.issuer &&
+        earlier &&
+        !prm.authorizationServers.includes(earlier)
+      )
+        throw new HttpError(
+          409,
+          'mcp_oauth_issuer_required',
+          'the resource no longer names the authorization server of the earlier authorization: confirm the new one',
+          { issuers: prm.authorizationServers },
+        );
       if (wanted) {
         if (!prm.authorizationServers.includes(wanted))
           throw new OaxError('mcp_issuer_mismatch', 'the resource does not name that issuer');
@@ -351,6 +375,7 @@ export class McpOauthService {
       origin,
       now: this.ctx.now(),
       algsSupported: as.signingAlgs,
+      ids: [row.tenantId, row.id],
     }).catch(async (e: unknown) => {
       await this.audit.append({
         actor: `user:${by}`,
@@ -366,7 +391,7 @@ export class McpOauthService {
       throw e;
     });
     this.register(row, issued.accessToken, issued.refreshToken, issued.expiresIn);
-    for (const v of issued.sensitive) this.stores.registry.register(v, { tenant: row.tenantId });
+    for (const v of issued.sensitive) this.registerIfShaped(row, v);
     // Tokens held for another issuer or other endpoints are revoked there once the new ones are in.
     const previous = await this.prepareRevoke(row);
     const expiresAt = issued.expiresIn
@@ -404,6 +429,15 @@ export class McpOauthService {
     // The previous tokens (if any) were overwritten; tell their issuer.
     await previous?.run('reauthorized', `user:${by}`, 'replaced');
     return this.status(actor, id);
+  }
+
+  private registerIfShaped(row: ConnectionRow, v: string): void {
+    try {
+      assertTokenShape(v);
+    } catch {
+      return;
+    }
+    this.stores.registry.register(v, { tenant: row.tenantId, ttlMs: 10 * 60_000 });
   }
 
   private register(row: ConnectionRow, access: string, refresh?: string, ttl?: number): void {
@@ -572,9 +606,7 @@ export class McpOauthService {
   ): Promise<void> {
     await this.ctx.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as Db;
-      await tx.execute(
-        sql`select pg_advisory_xact_lock(${REFRESH_LOCK_NS}::int, hashtext(${`${row.id}:${row.credentialVersion}`}))`,
-      );
+      await lockCredential(tx, row.id, row.credentialVersion);
       const stored = await this.stores.tokens.open(row.tenantId, row.id, row.credentialVersion, tx);
       if (!stored) throw new OaxError('mcp_auth_required', 'the connection needs to be authorized');
       const nowMs = this.ctx.now().getTime();
@@ -583,12 +615,15 @@ export class McpOauthService {
       if (
         stored.meta.status === 'active' &&
         exp !== undefined &&
-        exp - nowMs > REFRESH_SKEW_MS &&
+        exp - nowMs > refreshSkewMs(stored.meta.updatedAt, new Date(exp)) &&
         stored.accessToken
       )
         return;
       const resource = canonicalResource(cfg.url);
-      const useRefresh = stored.refreshToken !== null;
+      // A client-credentials grant has no refresh token to rotate (RFC 6749 section 4.4.3): it is
+      // always renewed with a new grant, so a lost rotated token can never lock the connection out.
+      const useRefresh =
+        stored.meta.grantType === 'authorization_code' && stored.refreshToken !== null;
       const issued = await requestToken(this.http(), {
         tokenEndpoint: as.tokenEndpoint,
         grant: useRefresh ? 'refresh_token' : 'client_credentials',
@@ -599,26 +634,32 @@ export class McpOauthService {
         origin,
         now: this.ctx.now(),
         algsSupported: as.signingAlgs,
+        ids: [row.tenantId, row.id],
       });
       this.register(row, issued.accessToken, issued.refreshToken, issued.expiresIn);
-      for (const v of issued.sensitive) this.stores.registry.register(v, { tenant: row.tenantId });
+      for (const v of issued.sensitive) this.registerIfShaped(row, v);
       // The rotated pair (or the new access token with the old refresh token) is one row update in
       // this transaction: a failure before the commit leaves the previous pair untouched.
-      await this.stores.tokens.write(tx, {
-        tenantId: row.tenantId,
-        connectionId: row.id,
-        credentialVersion: row.credentialVersion,
-        issuer: stored.meta.issuer,
-        resource,
-        clientRef: cfg.auth.client.clientIdSecret,
-        scopes: issued.scope ?? stored.meta.scopes,
-        accessToken: issued.accessToken,
-        refreshToken: issued.refreshToken ?? stored.refreshToken ?? undefined,
-        expiresAt: issued.expiresIn ? new Date(nowMs + issued.expiresIn * 1000) : undefined,
-        authorizedBy: stored.meta.authorizedBy ?? undefined,
-        grantType: 'client_credentials',
-        endpoints: stored.meta.endpoints,
-      });
+      await this.stores.tokens.write(
+        tx,
+        {
+          tenantId: row.tenantId,
+          connectionId: row.id,
+          credentialVersion: row.credentialVersion,
+          issuer: stored.meta.issuer,
+          resource,
+          clientRef: cfg.auth.client.clientIdSecret,
+          scopes: issued.scope ?? stored.meta.scopes,
+          accessToken: issued.accessToken,
+          refreshToken:
+            issued.refreshToken ?? (useRefresh ? (stored.refreshToken ?? undefined) : undefined),
+          expiresAt: issued.expiresIn ? new Date(nowMs + issued.expiresIn * 1000) : undefined,
+          authorizedBy: stored.meta.authorizedBy ?? undefined,
+          grantType: stored.meta.grantType as 'client_credentials' | 'authorization_code',
+          endpoints: stored.meta.endpoints,
+        },
+        { updatedAt: stored.meta.updatedAt },
+      );
     });
   }
 

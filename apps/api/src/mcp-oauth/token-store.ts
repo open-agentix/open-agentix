@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { OaxError } from '@openagentix/core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { connections, mcpOauthClients, mcpOauthTokens } from '../db/schema.js';
 import type { BindingContext } from './envelope.js';
@@ -59,6 +59,24 @@ export interface McpConnectionInfo {
   resource: string;
 }
 
+/** Lock namespace of the per-credential advisory lock (renewal, disconnect, configuration change). */
+export const CREDENTIAL_LOCK_NS = 0x6f617831;
+
+/**
+ * Takes the transaction-scoped advisory lock of one credential (connection and credential version).
+ * A renewal holds it across the network call; anything that deletes the tokens takes the same lock,
+ * so a renewal can neither overlap a deletion nor bring the token back afterwards.
+ */
+export async function lockCredential(
+  tx: Db,
+  connectionId: string,
+  credentialVersion: number,
+): Promise<void> {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(${CREDENTIAL_LOCK_NS}::int, hashtext(${`${connectionId}:${credentialVersion}`}))`,
+  );
+}
+
 export const ownerKey = (connectionId: string, credentialVersion: number) =>
   `${connectionId}:${credentialVersion}`;
 
@@ -115,7 +133,7 @@ export class McpOauthTokenStore {
    * and deletes the tokens in one transaction) either happens before and fails this write, or
    * after and deletes the row written here. No orphan survives a bump.
    */
-  async write(tx: Db, w: TokenWrite): Promise<void> {
+  async write(tx: Db, w: TokenWrite, replace?: { updatedAt: Date }): Promise<void> {
     assertTokenShape(w.accessToken, [w.tenantId, w.connectionId]);
     if (w.refreshToken !== undefined)
       assertTokenShape(w.refreshToken, [w.tenantId, w.connectionId]);
@@ -154,6 +172,23 @@ export class McpOauthTokenStore {
       authorizedAt: at,
       updatedAt: at,
     };
+    if (replace) {
+      // A renewal only ever replaces the row it read under the lock; it never inserts. A row that
+      // was deleted (disconnect, configuration change) or rewritten meanwhile stays as it is.
+      const updated = await tx
+        .update(mcpOauthTokens)
+        .set(values)
+        .where(
+          and(
+            this.where(w.tenantId, w.connectionId, w.credentialVersion),
+            eq(mcpOauthTokens.updatedAt, replace.updatedAt),
+          ),
+        )
+        .returning({ id: mcpOauthTokens.id });
+      if (updated.length === 0)
+        throw new OaxError('mcp_auth_required', 'the stored tokens changed during the renewal');
+      return;
+    }
     const written = await tx
       .insert(mcpOauthTokens)
       .values({
@@ -238,16 +273,27 @@ export class McpOauthTokenStore {
     if (status !== 'active') this.registry.forgetOwner(ownerKey(connectionId, credentialVersion));
   }
 
-  /** The server rejected the access token: treat it as expired so that the next use refreshes it. */
-  async expireNow(
+  /**
+   * The server rejected `token`: treat it as expired so that the next use renews it. Only if it is
+   * still the stored token: another replica may have renewed it meanwhile.
+   */
+  async expireIfCurrent(
     tenantId: string,
     connectionId: string,
     credentialVersion: number,
+    token: string,
   ): Promise<void> {
+    const stored = await this.open(tenantId, connectionId, credentialVersion).catch(() => null);
+    if (!stored || stored.accessToken !== token) return;
     await this.db
       .update(mcpOauthTokens)
-      .set({ expiresAt: this.now(), updatedAt: this.now() })
-      .where(this.where(tenantId, connectionId, credentialVersion));
+      .set({ expiresAt: this.now() })
+      .where(
+        and(
+          this.where(tenantId, connectionId, credentialVersion),
+          eq(mcpOauthTokens.updatedAt, stored.meta.updatedAt),
+        ),
+      );
     // Not forgotten in the registry: the rejected value must stay scrubbed until its time is up.
   }
 
@@ -262,14 +308,22 @@ export class McpOauthTokenStore {
     return rows.map((r) => r.v);
   }
 
-  /** Deletes the tokens of a connection (disconnect, revocation, URL or issuer change). */
+  /**
+   * Deletes the tokens of a connection (disconnect, revocation, URL or issuer change) under the
+   * credential locks, so a renewal in flight finishes first and cannot write afterwards.
+   */
   async delete(tenantId: string, connectionId: string): Promise<number> {
-    const rows = await this.db
-      .delete(mcpOauthTokens)
-      .where(
-        and(eq(mcpOauthTokens.tenantId, tenantId), eq(mcpOauthTokens.connectionId, connectionId)),
-      )
-      .returning({ v: mcpOauthTokens.credentialVersion });
+    const versions = (await this.versions(tenantId, connectionId)).sort((a, b) => a - b);
+    const rows = await this.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      for (const v of versions) await lockCredential(tx, connectionId, v);
+      return tx
+        .delete(mcpOauthTokens)
+        .where(
+          and(eq(mcpOauthTokens.tenantId, tenantId), eq(mcpOauthTokens.connectionId, connectionId)),
+        )
+        .returning({ v: mcpOauthTokens.credentialVersion });
+    });
     for (const r of rows) this.registry.forgetOwner(ownerKey(connectionId, r.v));
     return rows.length;
   }

@@ -89,6 +89,14 @@ export const McpOauthAuthSchema = z
         path: ['client', forbid],
         message: `${c.clientAuth} does not use ${forbid}`,
       });
+    // A shared secret goes to whatever token endpoint the MCP server's metadata names; only an
+    // operator-pinned issuer keeps a hostile or hijacked server from collecting it.
+    if (c.clientAuth === 'client_secret_basic' && !a.issuer)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['issuer'],
+        message: 'client_secret_basic needs auth.issuer (the secret is sent to the token endpoint)',
+      });
     if (c.keyId && c.clientAuth !== 'private_key_jwt')
       ctx.addIssue({
         code: 'custom',

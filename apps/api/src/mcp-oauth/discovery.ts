@@ -264,10 +264,13 @@ export function pinOf(m: AuthServerMetadata): PinnedEndpoints {
   };
 }
 
+/**
+ * Whether two pins agree on the endpoints the platform calls (token, revocation). The others are
+ * stored for display and the air-gapped check, but a server that rotates its JWKS or moves the
+ * authorization endpoint must not lock out a client-credentials connection.
+ */
 export function samePin(a: Record<string, string>, b: Record<string, string>): boolean {
-  const ka = Object.keys(a).sort();
-  const kb = Object.keys(b).sort();
-  return ka.length === kb.length && ka.every((k, i) => k === kb[i] && a[k] === b[k]);
+  return a.tokenEndpoint === b.tokenEndpoint && a.revocationEndpoint === b.revocationEndpoint;
 }
 
 /** Host names of the pinned endpoints (they join the connection's effective egress, purpose identity). */

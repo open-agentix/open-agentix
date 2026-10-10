@@ -1,6 +1,8 @@
 import { OaxError } from '@openagentix/core';
+import { OAUTH_SCOPE } from '@openagentix/mcp';
 import { authenticateClient, type ClientCredentials } from './client-auth.js';
 import type { OauthFetch, OauthOrigin } from './oauth-fetch.js';
+import { assertTokenShape } from './token-shape.js';
 
 /** Error codes of RFC 6749 section 5.2 and RFC 8707 that the platform tells apart (closed set). */
 export const OAUTH_ERRORS = [
@@ -64,6 +66,8 @@ export interface TokenRequest {
   origin: OauthOrigin;
   now: Date;
   algsSupported?: readonly string[] | undefined;
+  /** Ids (tenant, connection) that a token must not contain (token shape rules). */
+  ids?: readonly string[] | undefined;
 }
 
 const MAX_LIFETIME_S = 366 * 24 * 3600;
@@ -116,11 +120,25 @@ export async function requestToken(
   }
   if (doc.refresh_token !== undefined && typeof doc.refresh_token !== 'string') throw bad();
   if (doc.scope !== undefined && typeof doc.scope !== 'string') throw bad();
+  const scope = typeof doc.scope === 'string' ? doc.scope.split(' ').filter(Boolean) : undefined;
+  if (scope && (scope.length > 64 || !scope.every((x) => OAUTH_SCOPE.test(x)))) throw bad();
+  // The value is chosen by the server and, once accepted, is registered with the redactors: it
+  // must have the shape of a credential BEFORE anything registers it, or a hostile server could
+  // make the redactors blank ordinary text (a host name, an error code) of the tenant.
+  try {
+    assertTokenShape(doc.access_token, r.ids ?? []);
+    if (doc.refresh_token) assertTokenShape(doc.refresh_token, r.ids ?? []);
+  } catch {
+    throw new OaxError(
+      'mcp_oauth_token_rejected',
+      'the token does not have the shape of a credential',
+    );
+  }
   return {
     accessToken: doc.access_token,
     ...(doc.refresh_token ? { refreshToken: doc.refresh_token } : {}),
     ...(expiresIn !== undefined ? { expiresIn } : {}),
-    ...(typeof doc.scope === 'string' ? { scope: doc.scope.split(' ').filter(Boolean) } : {}),
+    ...(scope ? { scope } : {}),
     sensitive: auth.sensitive,
   };
 }
