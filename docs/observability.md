@@ -79,6 +79,12 @@ registered and no socket is opened.
   path. Values are never echoed. `OTEL_SDK_DISABLED=true` or an `OTEL_TRACES_EXPORTER` other than
   `otlp` next to an endpoint also fails start-up: they are not read here, so they cannot turn the
   export off; unset `OTEL_EXPORTER_OTLP_ENDPOINT` instead.
+- **Fixed in code, not read from the environment:** the sampler (parent-based, always on until
+  slice S6 brings `OAX_OTEL_SAMPLE_RATIO`), the span limits (`OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*`), the
+  batch settings (`OTEL_BSP_*`) and the export timeout. No global propagator is registered
+  (`OTEL_PROPAGATORS` is not read): nothing injects `traceparent` or `baggage` into outbound
+  requests. `OTEL_EXPORTER_OTLP_COMPRESSION` is still applied by the exporter (it changes only
+  the encoding of the payload).
 - **No resource detectors.** The resource is static: `service.name` (`OTEL_SERVICE_NAME`) and the
   validated `OAX_OTEL_RESOURCE_ATTRIBUTES`. Nothing calls a cloud metadata endpoint or reads host
   details, and `OTEL_RESOURCE_ATTRIBUTES` is not read.

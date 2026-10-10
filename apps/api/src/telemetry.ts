@@ -11,6 +11,7 @@ import {
   DefaultSecretResolver,
   type SecretResolver,
   describeError,
+  MAX_INPUT_CHARS,
   type SpanKind,
 } from '@openagentix/core';
 import type { OtelConfig } from './telemetry-config.js';
@@ -137,6 +138,16 @@ export interface TelemetryInit {
 
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const BATCH_TIMEOUT_MARGIN_MS = 1000;
+const SCHEDULE_DELAY_MS = 5000;
+/** Bounds for spans created with the raw tracer (the allowlist bounds everything else further). */
+const SPAN_LIMITS = {
+  attributeValueLengthLimit: MAX_INPUT_CHARS,
+  attributeCountLimit: 128,
+  linkCountLimit: 128,
+  eventCountLimit: 128,
+  attributePerEventCountLimit: 128,
+  attributePerLinkCountLimit: 128,
+};
 
 /** Resolves the exporter headers from the secret reference and registers them with the guard. */
 async function resolveHeaders(
@@ -175,7 +186,7 @@ export async function initTelemetry(
   const headers = await resolveHeaders(config, init.secrets ?? new DefaultSecretResolver());
   const [
     { NodeTracerProvider },
-    { BatchSpanProcessor },
+    { AlwaysOnSampler, BatchSpanProcessor, ParentBasedSampler },
     { resourceFromAttributes },
     { GuardedSpanExporter, DropCountingProcessor },
   ] = await Promise.all([
@@ -198,22 +209,34 @@ export async function initTelemetry(
       : new (await import('@opentelemetry/exporter-trace-otlp-proto')).OTLPTraceExporter(
           exporterConfig,
         );
+  // Every option is passed explicitly, so none of the SDK's OTEL_BSP_* fallbacks applies.
   const batch = new BatchSpanProcessor(new GuardedSpanExporter(exporter, config.exportTimeoutMs), {
     maxQueueSize: config.maxQueue,
     maxExportBatchSize: Math.min(512, config.maxQueue),
+    scheduledDelayMillis: SCHEDULE_DELAY_MS,
     // A backstop behind the exporter's own timeout and the counting wrapper's (both exportTimeoutMs).
     exportTimeoutMillis: config.exportTimeoutMs + BATCH_TIMEOUT_MARGIN_MS,
   });
   // Static resource only: no detectors, so nothing calls a cloud metadata endpoint or reads host
   // details (ADR 0015 section 8). `resourceFromAttributes` does not read OTEL_RESOURCE_ATTRIBUTES.
+  // Sampler and limits are explicit too: the SDK would otherwise build them from OTEL_TRACES_SAMPLER
+  // and OTEL_SPAN_* / OTEL_ATTRIBUTE_* (sampling by ratio is slice S6, OAX_OTEL_SAMPLE_RATIO).
   const provider = new NodeTracerProvider({
     resource: resourceFromAttributes({
       ...config.resourceAttributes,
       'service.name': init.serviceName ?? config.serviceName,
     }),
+    sampler: new ParentBasedSampler({ root: new AlwaysOnSampler() }),
+    spanLimits: SPAN_LIMITS,
+    generalLimits: {
+      attributeValueLengthLimit: SPAN_LIMITS.attributeValueLengthLimit,
+      attributeCountLimit: SPAN_LIMITS.attributeCountLimit,
+    },
     spanProcessors: [new DropCountingProcessor(batch, config.maxQueue)],
   });
-  provider.register();
+  // No global propagator: nothing injects or extracts `traceparent`/`baggage` until a slice names
+  // the place deliberately (ADR 0015 sections 2, 6.1 and 6.4).
+  provider.register({ propagator: null });
   return {
     enabled: true,
     attachStats,

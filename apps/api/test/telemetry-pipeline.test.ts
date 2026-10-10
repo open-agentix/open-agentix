@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ExportResultCode } from '@opentelemetry/core';
-import { context, createTraceState, trace } from '@opentelemetry/api';
+import { context, createTraceState, propagation, trace } from '@opentelemetry/api';
 import {
   BatchSpanProcessor,
   InMemorySpanExporter,
@@ -490,6 +490,53 @@ describe('no resource detectors', () => {
       stringValue: 'oax-test',
     });
     await c.close();
+  });
+});
+
+describe('the SDK takes nothing from OTEL_* fallbacks and propagates nothing', () => {
+  const fallbacks = {
+    OTEL_TRACES_SAMPLER: 'always_off',
+    OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT: '0',
+    OTEL_ATTRIBUTE_COUNT_LIMIT: '0',
+  };
+
+  it('exports with the pinned sampler and limits whatever the environment says', async () => {
+    const c = await collector();
+    // Set after the configuration was built: only the SDK itself could still read them.
+    Object.assign(process.env, fallbacks);
+    try {
+      const t = await initTelemetry(
+        otel({ OTEL_EXPORTER_OTLP_ENDPOINT: c.url, OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json' }),
+      );
+      await withSpan({ name: 'oax.run', kind: 'run' }, { 'oax.worker': 'w-1' }, async () => 1);
+      await t.shutdown();
+    } finally {
+      for (const k of Object.keys(fallbacks)) delete process.env[k];
+    }
+    const wire = c.requests.map((r) => r.body.toString()).join('');
+    expect(wire).toContain('oax.worker');
+    await c.close();
+  });
+
+  it('registers no global propagator: no traceparent or baggage is ever injected', async () => {
+    propagation.disable(); // other tests in this file register SDK providers with the default one
+    const c = await collector();
+    const t = await initTelemetry(otel({ OTEL_EXPORTER_OTLP_ENDPOINT: c.url }));
+    try {
+      const carrier: Record<string, string> = {};
+      await withSpan({ name: 'oax.run', kind: 'run' }, {}, async () => {
+        const ctx = propagation.setBaggage(
+          context.active(),
+          propagation.createBaggage({ tenant: { value: 'Acme Corp' } }),
+        );
+        propagation.inject(ctx, carrier);
+      });
+      expect(carrier).toEqual({});
+    } finally {
+      await t.shutdown();
+      await c.close();
+      propagation.disable();
+    }
   });
 });
 
