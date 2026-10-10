@@ -36,6 +36,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **User lifecycle across the tree (ADR 0014 S5 review)**: with `OAX_ROLE_BINDINGS_READ=bindings`, disabling a
+  user, changing their global roles and revoking or listing their API tokens now require `users:write`
+  (and subtree coverage for inheriting bindings) on every node the target is bound on, so a subordinate
+  administrator can no longer lock out or demote a superior admin who lives below it; operator accounts are
+  managed by operators only; the last inheriting admin of a root cannot be disabled or demoted (`409`).
+  Tenant admins cannot create sub-tenants below a node with a monthly budget (`403 budget_capped`) or claim
+  reserved slugs or slugs with staged secrets. Unauthorised callers no longer take the creation lock, limits
+  answer before slug conflicts, and the access endpoint no longer names the home node of a platform operator.
+  Re-enabling and renaming another account, and users bound through teams or agents above the manager, are
+  covered by the same guard; the last-admin count handles a user holding two admin rows. **Rolling deploy:**
+  old pods use the single-key tree lock, new pods the two-key form; drain old pods before switching
+  `OAX_ROLE_BINDINGS_READ=bindings`.
+- **Write inheritance (ADR 0014 slice S5, #190)**: the read-only clamp on inherited bindings is removed. An
+  inheriting binding (`inherit = true`, opt-in per binding, default off) now gives its whole role at every node
+  below it, so an inheriting tenant admin administers its subtree. Clamp rules that stay, documented in
+  `docs/tenancy.md` and tested: the role is the ceiling, down-only and opt-in, no grant above one's own role
+  or outside one's coverage, no self-grant, the last inheriting admin of a root stays, operations naming a node
+  are decided on that node and never on the acting node, token scopes intersect. Nothing changes for installations
+  that do not use inheritance (no binding reaches below its node; `OAX_ROLE_BINDINGS_READ=legacy` is untouched).
+  **Before setting `OAX_ROLE_BINDINGS_READ=bindings` with inheriting bindings in place, review who holds them:
+  they now carry write authority below their node.**
 - Tenant-controlled egress channel and content export are new trust boundaries, reviewed in
   ADR 0015 "Implementation notes S10": both are off by default and need the operator and the tenant.
 - **The OTLP trace exporter now sends through the outbound dispatcher** (ADR 0015 S7, #212): purpose
@@ -73,7 +94,11 @@ All notable changes to this project are documented here. The format follows
   and `oax_mcp_relay_sessions`; audit `mcp.relay.call`, `mcp.relay.denied`, `mcp.relay.refused`. Migration
   `0025_approvals_consumed_at` (down script included; approvals decided before the upgrade count as used).
   Approvals whose arguments were redacted are flagged (`argsRedacted`) in the API, the audit entry and the approval card. Decides ADR 0012 open question 2.
-
+- Tenant creation and the role-binding API take the organisation's tree lock and binding lock in the two-key
+  advisory form `(namespace, hashtext(rootId))` (#288 item 4); old and new replicas do not exclude each other
+  during a rolling deploy, so do not create nodes or grants while deploying.
+- `PATCH /v1/tenants/{id}` and `POST /v1/tenants` are no longer guarded by the route-level `settings:write` check
+  but by the service, on the node the request names (operators with `settings:write` as before).
 - **Publishing against an HTTP MCP connection needs an approved tool snapshot** (ADR 0016 S3): refresh
   and approve the connection's tools once, then publish. Existing published versions are not
   affected. `stdio` and `in-memory` connections publish as before.
@@ -106,6 +131,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **`OAX_TENANT_RESERVED_SLUGS`** (default empty): slugs a tenant admin cannot claim when creating a sub-tenant;
+  slugs whose secret prefix already holds env or file secrets are refused alike (ADR 0014 S5 review).
+- **Sub-tenants by tenant admins and access explanation (ADR 0014 slice S5, #190)**:
+  `POST /v1/tenants { parentId }` for an inheriting `admin` on the parent or an ancestor (`403 inheritance_required`
+  for a direct admin; depth, node and slug limits as for operators; `tenant.created` audited in the new node's
+  partition; budget, first admin and organisations stay operator-only), `PATCH /v1/tenants/{id}` (name) by an
+  inheriting `admin` on the node in the path or an ancestor, `GET /v1/me/access?tenant=` and `GET /v1/tenants/{id}/access?userId=`
+  (effective permissions with the bindings that give them; the basis for the `actions` block of #160). Both tenant
+  routes stay operator-only unless `OAX_ROLE_BINDINGS_READ=bindings`. OpenAPI and UI schema types regenerated.
+  No migration.
 - **Opt-in MCP trace context propagation** (ADR 0015 S8, #213): with `OAX_OTEL_MCP_PROPAGATION=allow` on
   the platform and `telemetry.propagate: true` on an MCP connection (tenant admin, or platform operator
   for platform connections), each `tools/call` carries `params._meta.traceparent` of the run's

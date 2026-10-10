@@ -747,7 +747,7 @@ export interface paths {
                                 /** @description end of the binding; null = does not expire */
                                 expiresAt: string | null;
                                 /**
-                                 * @description `direct`: bound on the acting node; `inherited`: bound on an ancestor with `inherit = true` (read permissions only until ADR 0014 S5); `team` / `agent`: a team membership or agent binding of the acting node
+                                 * @description `direct`: bound on the node; `inherited`: bound on an ancestor with `inherit = true`; `team` / `agent`: a team membership or agent binding of the node
                                  * @enum {string}
                                  */
                                 source: "direct" | "inherited" | "attached" | "team" | "agent" | "platform";
@@ -7186,7 +7186,10 @@ export interface paths {
             };
         };
         put?: never;
-        /** Create a tenant (platform operators only) */
+        /**
+         * Create a tenant: an organisation (platform operators) or a sub-tenant
+         * @description Platform operators with `settings:write` create organisations (no `parentId`) and sub-tenants anywhere. With `OAX_ROLE_BINDINGS_READ=bindings` a tenant admin creates a sub-tenant by naming `parentId`: the caller needs an **inheriting** `admin` binding on the parent or an ancestor (403 `inheritance_required` if they are only a direct admin there), evaluated on the parent and never on the acting tenant. A parent the caller cannot see is 404. `admin` and `monthlyBudgetUsd` are for platform operators only (403). The depth, node and slug limits are the same for everybody; a slug that is taken is 409 without naming the other tenant. Audited as `tenant.created` in the partition of the new tenant.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -7197,10 +7200,16 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description create a sub-tenant below this tenant. Needed for everybody but platform operators (who create organisations without it): the caller must hold an inheriting `admin` binding on the parent or an ancestor (403 `inheritance_required` otherwise)
+                         */
+                        parentId?: string;
                         slug: string;
                         name: string;
+                        /** @description platform operators only */
                         monthlyBudgetUsd?: number;
-                        /** @description first local administrator of the new tenant */
+                        /** @description first local administrator of the new tenant (platform operators only) */
                         admin?: {
                             /** Format: email */
                             email: string;
@@ -7259,7 +7268,33 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -7288,7 +7323,7 @@ export interface paths {
         };
         /**
          * The tenant tree the caller may see, with the caller's roles and optional counts per node
-         * @description Platform operators see every organisation; everybody else, tenant admins included, their own node until role bindings can inherit down the tree (ADR 0014). The ancestors of the caller's node appear as path stubs (`visible: false`: name and slug only). Siblings, cousins and other organisations never appear. A `root` outside the caller's reach is 404. Counts are included only for nodes and metrics the caller may read. Parents come before their children; siblings are ordered by slug. At most `limit` nodes are returned, shallowest first (`truncated`).
+         * @description Platform operators see every organisation; everybody else the nodes where their role bindings reach (their own node, plus descendants of inheriting bindings, ADR 0014). The ancestors of the caller's node appear as path stubs (`visible: false`: name and slug only). Siblings, cousins and other organisations never appear. A `root` outside the caller's reach is 404. Counts are included only for nodes and metrics the caller may read. Parents come before their children; siblings are ordered by slug. At most `limit` nodes are returned, shallowest first (`truncated`).
          */
         get: {
             parameters: {
@@ -7532,7 +7567,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Rename a tenant or change its monthly budget (platform operators only) */
+        /**
+         * Rename a tenant; budget and secret references are platform operators only
+         * @description Platform operators with `settings:write` change any field. With `OAX_ROLE_BINDINGS_READ=bindings` a tenant admin renames (`name` only) a tenant where they hold an inheriting `admin` binding on it or an ancestor (403 `inheritance_required` for a direct admin); this is evaluated on the tenant in the path, never on the acting tenant. A tenant the caller cannot see is 404.
+         */
         patch: {
             parameters: {
                 query?: never;
@@ -7600,13 +7638,17 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Not found */
+                /** @description Default Response */
                 404: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Error"];
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
                     };
                 };
             };
@@ -8197,6 +8239,245 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Own effective permissions at a tenant, with the bindings that give them
+         * @description Answers for the tenant in `tenant` (id or slug path) or, without it, the acting tenant. A tenant the caller cannot see is 404, the same as an unknown one. Computed with the resolver the request path uses; API token scopes are applied and reported as `limitedByToken`.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description tenant id or slug path; the acting tenant when omitted */
+                    tenant?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            tenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
+                            /** @description the user the answer is about; null for `/v1/me/access` (the caller) */
+                            user: {
+                                /** Format: uuid */
+                                id: string;
+                                email: string;
+                                displayName: string;
+                            } | null;
+                            platformAdmin: boolean;
+                            /** @description true when the scopes of the API token removed permissions the bindings give */
+                            limitedByToken: boolean;
+                            /** @description the grants that apply at the tenant, with the node each one is bound on */
+                            bindings: {
+                                role: string;
+                                teamId: string | null;
+                                agentId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description the node the role is bound on
+                                 */
+                                tenantId: string;
+                                tenantSlugPath: string;
+                                inherit: boolean;
+                                expiresAt: string | null;
+                                /**
+                                 * @description `direct`: bound on the node; `inherited`: bound on an ancestor with `inherit = true`; `team` / `agent`: a team membership or agent binding of the node
+                                 * @enum {string}
+                                 */
+                                source: "direct" | "inherited" | "attached" | "team" | "agent" | "platform";
+                            }[];
+                            /** @description effective permissions at the tenant (token scopes applied), with their sources */
+                            permissions: {
+                                permission: string;
+                                /** @description the kinds of binding that give it */
+                                sources: ("direct" | "inherited" | "attached" | "team" | "agent" | "platform")[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{id}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A user's effective permissions at a tenant, with the bindings that give them
+         * @description Needs `users:read` on the tenant in the path (directly or through an inheriting binding above it), never on the acting tenant. A tenant or a user the caller cannot see is 404 (the grantee visibility of the role-binding API).
+         */
+        get: {
+            parameters: {
+                query: {
+                    userId: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            tenant: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
+                            /** @description the user the answer is about; null for `/v1/me/access` (the caller) */
+                            user: {
+                                /** Format: uuid */
+                                id: string;
+                                email: string;
+                                displayName: string;
+                            } | null;
+                            platformAdmin: boolean;
+                            /** @description true when the scopes of the API token removed permissions the bindings give */
+                            limitedByToken: boolean;
+                            /** @description the grants that apply at the tenant, with the node each one is bound on */
+                            bindings: {
+                                role: string;
+                                teamId: string | null;
+                                agentId: string | null;
+                                /**
+                                 * Format: uuid
+                                 * @description the node the role is bound on
+                                 */
+                                tenantId: string;
+                                tenantSlugPath: string;
+                                inherit: boolean;
+                                expiresAt: string | null;
+                                /**
+                                 * @description `direct`: bound on the node; `inherited`: bound on an ancestor with `inherit = true`; `team` / `agent`: a team membership or agent binding of the node
+                                 * @enum {string}
+                                 */
+                                source: "direct" | "inherited" | "attached" | "team" | "agent" | "platform";
+                            }[];
+                            /** @description effective permissions at the tenant (token scopes applied), with their sources */
+                            permissions: {
+                                permission: string;
+                                /** @description the kinds of binding that give it */
+                                sources: ("direct" | "inherited" | "attached" | "team" | "agent" | "platform")[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
