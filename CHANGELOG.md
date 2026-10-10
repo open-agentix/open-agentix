@@ -37,6 +37,24 @@ All notable changes to this project are documented here. The format follows
   the API only compares them with the resolver in shadow mode
   (`oax_role_bindings_shadow_total{outcome}`, `OAX_ROLE_BINDINGS_SHADOW`, default on). See
   `docs/tenancy.md` and ADR 0014 "Implementation status".
+- **API and core: reconcile the role binding mirror and prepare the cache of raw grants (ADR 0014
+  slice S1b, #216, #217)**: prerequisites for S2, **no change to what authorises** (the legacy
+  bindings still decide). `tenant_role_bindings` is recomputed from `users.global_roles` in both
+  directions, one transaction per user with the user row locked first, so rows written by an older
+  application version during a rolling deploy or after an application-only rollback are repaired:
+  at start-up, every hour (`OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS`, `0` = start-up only;
+  `OAX_ROLE_BINDINGS_RECONCILE=false` turns it off), for the user of a shadow `mismatch`
+  (rate-limited) and on demand with `pnpm --filter @openagentix/api db:reconcile-bindings
+  [-- --dry-run]`; counted in `oax_role_bindings_reconcile_fixes_total` and
+  `oax_role_bindings_reconcile_runs_total`. Same-key rule (fail closed): removing a role from
+  `global_roles` now revokes a binding of the same user, home node and role in any shape; adding
+  never hides or overwrites one. Migration `0019_trb_home_move` (additive, down script) applies the
+  same-key rule in the database for every writer of `users` (older versions, directory syncs,
+  `psql`): a role removed from `global_roles` loses its binding in the same statement, and a home
+  change inside the organisation moves the legacy-key rows with the user. `serializeGrants` /
+  `reviveGrants` give raw grants a JSON-safe cache form (ISO expiries, strict parsing, invalid is a
+  cache miss) and `loadRawGrants` is now one statement, so one principal build holds one
+  connection. See `docs/tenancy.md` and ADR 0014 "Implementation status".
 - **UI: tenants overview page (UX slice U5)**: a lazy `Tenants` page (`/tenants`, nav entry only in
   `multi` mode, with `visibleTenantCount > 1` or below other tenants) over `GET /v1/tenants/tree`:
   accessible treegrid (arrows, Home/End, `*`, `+`/`-`, Enter switches; roving tabindex), two levels

@@ -19,6 +19,7 @@
     "openapi": "node dist/openapi-cli.js ../../openapi.yaml",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node dist/migrate-cli.js",
+    "db:reconcile-bindings": "node dist/reconcile-bindings-cli.js",
     "seed:demo": "node dist/seed-demo-cli.js"
   },
   "dependencies": {

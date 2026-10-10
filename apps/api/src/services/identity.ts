@@ -35,6 +35,7 @@ import type { tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { Db } from '../db/client.js';
 import type { AuditService } from './audit.js';
+import { BindingReconciler } from './binding-reconciler.js';
 import { loadRawGrants, mirrorGlobalRoles } from './role-bindings.js';
 import { TenantAccess } from './tenant-access.js';
 
@@ -92,6 +93,7 @@ export class IdentityService {
     private readonly audit: AuditService,
   ) {
     this.access = new TenantAccess(ctx);
+    this.reconciler = new BindingReconciler(ctx);
     this.oidc =
       ctx.oidcClient ?? (ctx.config.auth.oidc ? openidClient(ctx.config.auth.oidc) : null);
   }
@@ -162,6 +164,9 @@ export class IdentityService {
 
   private readonly shadowLogged = new Map<string, number>();
 
+  /** Repairs the bindings mirror (start-up, periodic, mismatch-driven, CLI). */
+  readonly reconciler: BindingReconciler;
+
   /**
    * At most this many shadow checks run at once. The check costs four extra reads per principal
    * build; under load (many cache misses, stream tokens) further checks are skipped and counted as
@@ -202,6 +207,9 @@ export class IdentityService {
         return;
       }
       counter.inc({ outcome: 'mismatch' });
+      // Repair the mirror of exactly this user (rate-limited, one at a time, never awaited): a
+      // mismatch caused by drift disappears, one caused by a non-mirror row is left as it is.
+      if (this.ctx.config.auth.roleBindingsReconcile) this.reconciler.requestUser(user.id);
       const now = this.ctx.now().getTime();
       if (now - (this.shadowLogged.get(user.id) ?? 0) < 600_000) return;
       this.shadowLogged.set(user.id, now);
