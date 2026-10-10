@@ -162,6 +162,8 @@ interface Rotation {
   write: TokenWrite;
   /** `updated_at` of the row it replaces: the pair is written only over exactly that row. */
   replace: Date;
+  /** The refresh token the stored row held when the server rotated it (identifies the row later). */
+  previousRefresh: string | null;
 }
 
 /** Errors that retrying the commit cannot cure: the stored row changed or the connection did. */
@@ -1239,8 +1241,9 @@ export class McpOauthService {
         // A pair this process obtained earlier and could not store goes first, with no request.
         const held = this.unpersisted.get(key);
         if (held) {
-          if (held.replace.getTime() === stored.meta.updatedAt.getTime()) {
-            await this.stores.tokens.write(tx, held.write, { updatedAt: held.replace });
+          // The row is still the one that was rotated (a failed attempt only touches its status).
+          if (stored.refreshToken === held.previousRefresh) {
+            await this.stores.tokens.write(tx, held.write, { updatedAt: stored.meta.updatedAt });
             this.unpersisted.delete(key);
             return;
           }
@@ -1272,6 +1275,7 @@ export class McpOauthService {
         // this transaction: a failure before the commit leaves the previous pair untouched.
         box.rotation = {
           replace: stored.meta.updatedAt,
+          previousRefresh: stored.refreshToken,
           write: {
             tenantId: row.tenantId,
             connectionId: row.id,
