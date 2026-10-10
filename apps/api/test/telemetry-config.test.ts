@@ -184,6 +184,26 @@ describe('endpoint rules', () => {
       expect(() => endpoint(url)).toThrow(/OAX_OTEL_HEADERS_SECRET/);
   });
 
+  it('applies the loopback rule to the address the URL parser normalises to', () => {
+    for (const url of [
+      'http://2130706433:4318', // decimal 127.0.0.1
+      'http://0x7f.1:4318', // hex/short form
+      'http://127.1.2.3:4318',
+      'http://[::ffff:127.0.0.1]:4318',
+      'http://LOCALHOST:4318',
+    ])
+      expect(() => endpoint(url)).not.toThrow();
+    for (const url of [
+      'http://127.0.0.1.nip.io:4318',
+      'http://localhost.example.org:4318',
+      'http://0.0.0.0:4318',
+      'http://169.254.169.254',
+      'http://[::]:4318',
+      'http://[fe80::1]:4318',
+    ])
+      expect(() => endpoint(url)).toThrow(/OAX_OTEL_INSECURE/);
+  });
+
   it('refuses non-http schemes and garbage', () => {
     expect(() => endpoint('file:///etc/passwd')).toThrow(/http\(s\)/);
     expect(() => endpoint('not a url')).toThrow(/valid URL/);
