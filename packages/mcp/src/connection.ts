@@ -13,10 +13,16 @@ import { assertHttpConfig } from './http-policy.js';
 
 export interface McpTool {
   name: string;
+  title?: string | undefined;
   description?: string | undefined;
   inputSchema: Record<string, unknown>;
-  /** MCP tool annotations (`readOnlyHint`, `destructiveHint`, ...), advisory hints from the server. */
-  annotations?: { readOnlyHint?: unknown; destructiveHint?: unknown } | undefined;
+  outputSchema?: Record<string, unknown> | undefined;
+  /**
+   * MCP tool annotations (`readOnlyHint`, `destructiveHint`, `title`, ...), advisory hints from the
+   * server. All of them are model-visible and part of the pinned definition (ADR 0016 section 5).
+   */
+  annotations?:
+    ({ readOnlyHint?: unknown; destructiveHint?: unknown } & Record<string, unknown>) | undefined;
 }
 
 export interface ToolResult {
@@ -221,8 +227,10 @@ export class McpConnection {
       for (const t of page.tools)
         out.push({
           name: t.name,
+          title: t.title,
           description: t.description,
           inputSchema: t.inputSchema as Record<string, unknown>,
+          outputSchema: t.outputSchema as Record<string, unknown> | undefined,
           annotations: t.annotations,
         });
       cursor = page.nextCursor;

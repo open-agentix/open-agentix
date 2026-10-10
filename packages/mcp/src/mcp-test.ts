@@ -1,6 +1,6 @@
 import { OaxError } from '@openagentix/core';
 import type { McpServerConfig } from './config.js';
-import { McpConnection, type ConnectDeps } from './connection.js';
+import { McpConnection, type ConnectDeps, type McpTool } from './connection.js';
 
 /**
  * Connectivity test of an HTTP MCP connection (ADR 0016 section 4.3, ADR 0011 section 8).
@@ -138,6 +138,22 @@ export async function testMcpServer(
   now: () => number = Date.now,
   totalMs: number = MCP_TEST_TOTAL_MS,
 ): Promise<McpTestResult> {
+  const { tools: _tools, ...result } = await probeMcpServer(cfg, deps, now, totalMs);
+  void _tools;
+  return result;
+}
+
+/**
+ * Like {@link testMcpServer}, and also hands the tool definitions to the caller (ADR 0016 section
+ * 5: the snapshot refresh). The definitions are untrusted server text: the caller bounds, checks
+ * and stores them, and must not put them in a response or an audit entry.
+ */
+export async function probeMcpServer(
+  cfg: Extract<McpServerConfig, { transport: 'streamable-http' }>,
+  deps: ConnectDeps,
+  now: () => number = Date.now,
+  totalMs: number = MCP_TEST_TOTAL_MS,
+): Promise<McpTestResult & { tools?: McpTool[] }> {
   const started = now();
   let timer: NodeJS.Timeout | undefined;
   let timedOut = false;
@@ -155,7 +171,13 @@ export async function testMcpServer(
       }, totalMs);
     });
     const tools = await Promise.race([work, deadline]);
-    return { ok: true, category: 'ok', latency: bucket(now() - started), toolCount: tools.length };
+    return {
+      ok: true,
+      category: 'ok',
+      latency: bucket(now() - started),
+      toolCount: tools.length,
+      tools,
+    };
   } catch (e) {
     const failed = categorizeMcpError(e);
     // A tenant must not learn from the category which internal names exist (split-horizon DNS):

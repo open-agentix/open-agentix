@@ -7,13 +7,16 @@ import type { InMemoryTransportFactory } from './connection.js';
 
 export interface MockTool {
   name: string;
+  title?: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
   /** Return a string (text) or any JSON value; throwing produces an `isError` result. */
   handler: (args: Record<string, unknown>) => unknown;
   delayMs?: number;
   /** MCP tool annotations advertised by `tools/list` (e.g. `{ readOnlyHint: true }`). */
-  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string };
+  /** Advertised by `tools/list`; a call then returns no structured content, so do not call it. */
+  outputSchema?: Record<string, unknown>;
 }
 
 /** A small in-process MCP server (tests, the demo and the local CLI). */
@@ -22,8 +25,10 @@ export function createMockMcpServer(name: string, tools: readonly MockTool[]): S
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({
       name: t.name,
+      ...(t.title !== undefined ? { title: t.title } : {}),
       description: t.description ?? '',
       inputSchema: (t.inputSchema ?? { type: 'object' }) as { type: 'object' },
+      ...(t.outputSchema ? { outputSchema: t.outputSchema as { type: 'object' } } : {}),
       ...(t.annotations ? { annotations: t.annotations } : {}),
     })),
   }));

@@ -2,10 +2,15 @@ import {
   ContextGuard,
   OaxError,
   classifyTool,
+  digestMatchesAny,
   evaluateToolCall,
   findGrant,
+  grantedTools,
   isGuardReportEmpty,
   mergeGuardReports,
+  pinnedToolsOf,
+  toolsDigest,
+  type PinnedTool,
   type SecretResolver,
   type GuardReport,
   type PolicyContext,
@@ -44,6 +49,28 @@ export interface ExposedTool {
   access?: ToolAccess | undefined;
 }
 
+/**
+ * What a published version pinned for one MCP server (ADR 0016 section 5), resolved by the control
+ * node for the run: the grants of the version on the server and every digest of the granted tools
+ * that the run may accept (the pinned one, plus those of snapshots an admin accepted for existing
+ * versions).
+ */
+export interface ToolPinCheck {
+  granted: readonly string[];
+  accepted: readonly string[];
+}
+
+/**
+ * Reported when the granted tools a server offers differ from what was pinned. `tools` is the whole
+ * reduced list when it is within the bounds of a snapshot, else `null` (the audit entry then has
+ * the digest only). Called once per server and gateway.
+ */
+export interface ToolsChanged {
+  server: string;
+  liveDigest: string;
+  tools: PinnedTool[] | null;
+}
+
 /** A failed tool call: the message is guarded, `guard` says what was removed (counts only). */
 export type GuardedToolError = OaxError & { guard?: GuardReport };
 
@@ -64,6 +91,10 @@ export type GatewayCallResult =
  */
 export class ToolGateway {
   private readonly connections = new Map<string, McpConnection>();
+  private pins: Readonly<Record<string, ToolPinCheck>> = {};
+  private onToolsChanged: ((e: ToolsChanged) => Promise<void> | void) | undefined;
+  /** One verdict per pinned server: the first `tools/list` decides for the whole session. */
+  private readonly verdicts = new Map<string, Promise<void>>();
 
   constructor(
     private readonly configs: readonly McpServerConfig[],
@@ -103,11 +134,70 @@ export class ToolGateway {
     return conn;
   }
 
+  /**
+   * Pins the tool definitions of MCP servers (ADR 0016 section 5). A pinned server whose granted
+   * tools do not match any accepted digest exposes none of its tools and fails every use with
+   * `mcp_tools_changed`; the list is read once per session, later `list_changed` notices are not
+   * followed. Servers without a pin behave as before.
+   */
+  pinTools(
+    pins: Readonly<Record<string, ToolPinCheck>>,
+    onChanged?: (e: ToolsChanged) => Promise<void> | void,
+  ): void {
+    this.pins = pins;
+    this.onToolsChanged = onChanged;
+    this.verdicts.clear();
+  }
+
+  private verify(server: string): Promise<void> {
+    const pin = this.pins[server];
+    if (!pin) return Promise.resolve();
+    let verdict = this.verdicts.get(server);
+    if (!verdict) {
+      verdict = this.check(server, pin);
+      // A verdict that is a rejection must not surface as unhandled before the first caller awaits.
+      verdict.catch(() => undefined);
+      this.verdicts.set(server, verdict);
+    }
+    return verdict;
+  }
+
+  private async check(server: string, pin: ToolPinCheck): Promise<void> {
+    const tools = await (await this.connection(server)).listTools();
+    let live: string;
+    try {
+      // Only the granted tools count: a change to any other tool of the server does not matter.
+      live = toolsDigest(pinnedToolsOf(grantedTools(tools as PinnedTool[], pin.granted)));
+    } catch {
+      // Unreadable or oversized definitions can never match a pin.
+      live = 'invalid';
+    }
+    if (digestMatchesAny(live, pin.accepted)) return;
+    let all: PinnedTool[] | null;
+    try {
+      all = pinnedToolsOf(tools);
+    } catch {
+      all = null;
+    }
+    // Reporting must not decide the outcome: a failing report still fails the step closed.
+    try {
+      await this.onToolsChanged?.({ server, liveDigest: live, tools: all });
+    } catch {
+      /* the caller logs; the step fails below */
+    }
+    throw new OaxError(
+      'mcp_tools_changed',
+      `the tool definitions of MCP server "${server}" changed since they were approved; none of its tools is available until an admin approves them again`,
+    );
+  }
+
   /** Lists the granted tools of an agent (intersection of grants and what the servers offer). */
   async exposedTools(agent: PolicyContext['agent']): Promise<ExposedTool[]> {
     const servers = [...new Set(agent.tools.map((t) => t.server))];
     const out: ExposedTool[] = [];
     for (const server of servers) {
+      // Fail closed before a single definition of this server can reach the model.
+      await this.verify(server);
       const tools: McpTool[] = await (await this.connection(server)).listTools();
       const declared = this.configs.find((c) => c.name === server)?.tools ?? {};
       for (const t of tools) {
@@ -144,6 +234,8 @@ export class ToolGateway {
     if (decision.effect === 'require_approval' && !opts.approved)
       return { status: 'approval_required', decision };
     let raw: ToolResult;
+    // A call never reaches a pinned server whose definitions changed, whatever the caller did before.
+    await this.verify(call.server);
     try {
       const conn = await this.connection(call.server);
       raw = await conn.callTool(call.tool, call.args, opts.signal);
