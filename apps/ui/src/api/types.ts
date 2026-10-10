@@ -51,6 +51,7 @@ export type ToolSnapshotSummary = ResponseOf<
   '/v1/connections/{id}/tool-snapshots',
   'get'
 >['items'][number];
+export type OauthStatus = ResponseOf<'/v1/connections/{id}/oauth', 'get'>;
 export type ToolSnapshotDetail = ResponseOf<'/v1/connections/{id}/tool-snapshots/{digest}', 'get'>;
 export type ModelProposal = ResponseOf<'/v1/models/proposals', 'post'>['items'][number];
 export type Policy = ResponseOf<'/v1/policies', 'get'>['items'][number];

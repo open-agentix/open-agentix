@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, call } from '../../api/client';
 import { connectionsQuery } from '../../api/queries';
 import type { Connection, ModelProposal } from '../../api/types';
@@ -28,6 +28,7 @@ import { useDocumentTitle } from '../../lib/hooks';
 import { redact } from '../../lib/redact';
 import { findInlineSecrets, secretReferences } from './secrets';
 import { ToolAccessSummary, ToolProfilesEditor } from './ToolProfiles';
+import { AuthorizationDialog, isCallbackResult, usesOauth } from './Authorization';
 import { ToolsDialog } from './ToolSnapshots';
 
 /** A tenant-owned OTLP exporter (ADR 0015 S10); secrets only as references, content off by default. */
@@ -91,6 +92,29 @@ export function ConnectionsPage() {
   const [editing, setEditing] = useState<Connection | 'new' | null>(null);
   const [deleting, setDeleting] = useState<Connection | null>(null);
   const [toolsOf, setToolsOf] = useState<Connection | null>(null);
+  const [authOf, setAuthOf] = useState<Connection | null>(null);
+  // The callback of the authorization server brings the browser back here with a closed result.
+  const items = connections.data?.items;
+  useEffect(() => {
+    if (!items) return;
+    const q = new URLSearchParams(window.location.search);
+    const result = q.get('mcp_oauth');
+    if (result === null) return;
+    const wanted = q.get('connection');
+    q.delete('mcp_oauth');
+    q.delete('connection');
+    const rest = q.toString();
+    window.history.replaceState(
+      window.history.state,
+      '',
+      window.location.pathname + (rest ? `?${rest}` : '') + window.location.hash,
+    );
+    const known = isCallbackResult(result) ? result : 'error';
+    if (known === 'ok') toast.success(t('connections.authorization.results.ok'));
+    else toast.error(t(`connections.authorization.results.${known}`));
+    const c = items.find((x) => x.id === wanted);
+    if (c && usesOauth(c)) setAuthOf(c);
+  }, [items]);
   const remove = async (c: Connection) => {
     await call(api.DELETE('/v1/connections/{id}', { params: { path: { id: c.id } } }));
     await queryClient.invalidateQueries({ queryKey: connectionsQuery.queryKey });
@@ -167,6 +191,11 @@ export function ConnectionsPage() {
                 </p>
                 {c.kind === 'mcp' && c.config.transport === 'streamable-http' ? (
                   <div className="actions">
+                    {usesOauth(c) ? (
+                      <Button size="sm" icon="lock" onClick={() => setAuthOf(c)}>
+                        {t('connections.authorization.open')}
+                      </Button>
+                    ) : null}
                     <Button size="sm" icon="lock" onClick={() => setToolsOf(c)}>
                       {t('connections.tools.open')}
                     </Button>
@@ -189,6 +218,7 @@ export function ConnectionsPage() {
       )}
       <ConnectionDialog editing={editing} onClose={() => setEditing(null)} />
       <ToolsDialog connection={toolsOf} onClose={() => setToolsOf(null)} />
+      <AuthorizationDialog connection={authOf} onClose={() => setAuthOf(null)} />
       <ConfirmTenantAction
         open={!!deleting}
         onClose={() => setDeleting(null)}
