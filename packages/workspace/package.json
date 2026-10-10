@@ -1,6 +1,6 @@
 {
   "name": "@openagentix/workspace",
-  "version": "0.1.0",
+  "version": "0.2.0-alpha.1",
   "description": "oax-workspace: confined workspace tools (read, search, edit, run tests, diff) as an MCP server for harness steps in a run node, with a node-computed patch",
   "license": "Apache-2.0",
   "type": "module",

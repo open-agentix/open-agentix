@@ -85,7 +85,7 @@ export const handlers = [
     }),
   ),
   http.get(api('/v1/version'), () =>
-    json<ResponseOf<'/v1/version', 'get'>>({ name: 'openagentix', version: '0.1.0' }),
+    json<ResponseOf<'/v1/version', 'get'>>({ name: 'openagentix', version: '0.2.0-alpha.1' }),
   ),
   http.get(api('/v1/me'), () => json(f.meAdmin)),
   http.get(api('/v1/tenants'), () =>
