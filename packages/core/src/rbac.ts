@@ -1,3 +1,5 @@
+import type { GrantsAndHome } from './tenancy/grants-codec.js';
+
 /**
  * Roles that may be granted today (user create/patch, team and agent members, group mapping).
  * `pentest` needs an expiry and its own grant rules (ADR 0014 sections 7 and 8, slice S6), so it is
@@ -159,6 +161,15 @@ export interface Principal extends TenantActor {
    * when the principal acts in its home tenant. Bindings are always anchored at the home tenant.
    */
   homeTenantId?: string | undefined;
+  /**
+   * Raw grants of the user's home organisation (ADR 0014 section 3.1). Set only while the read
+   * path is `bindings` (`OAX_ROLE_BINDINGS_READ`); `bindings` above is then the resolver's result
+   * at the acting node, and the grants let the API evaluate another node without a second load.
+   * Never serialised, never sent to a client.
+   */
+  grants?: GrantsAndHome | undefined;
+  /** The authz epoch of the home organisation the principal was built under (with `grants`). */
+  authzEpoch?: number | undefined;
   /** API tokens may be restricted to a subset of permissions; `undefined` = no restriction. */
   scopes?: readonly Permission[] | undefined;
 }

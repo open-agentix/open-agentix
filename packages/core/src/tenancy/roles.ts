@@ -110,6 +110,18 @@ export interface EffectiveBinding extends RoleBinding {
   source: BindingSource;
 }
 
+/**
+ * A binding that applies at a node, with where it comes from: the {@link EffectiveBinding} the
+ * services consume plus the anchor of the grant. `GET /v1/me` shows it; nothing authorises from
+ * the extra fields.
+ */
+export interface AppliedBinding extends EffectiveBinding {
+  /** The node the grant is bound on (the acting node itself for `direct`, `team` and `agent`). */
+  tenantId: string;
+  inherit: boolean;
+  expiresAt: Date | null;
+}
+
 /** The ids of a node's chain, root first, or `undefined` when the placement is not coherent. */
 function chainOf(node: RoleNode): string[] | undefined {
   if (!isValidPath(node.path)) return undefined;
@@ -130,6 +142,21 @@ export function effectiveAt(
   node: RoleNode,
   opts: ResolveOptions,
 ): EffectiveBinding[] {
+  return appliedAt(raw, node, opts).map((b) => ({
+    role: b.role,
+    teamId: b.teamId,
+    ...(b.agentId ? { agentId: b.agentId } : {}),
+    permissions: b.permissions,
+    useCase: b.useCase,
+    source: b.source,
+  }));
+}
+
+/**
+ * {@link effectiveAt} with the anchor of every grant (node, `inherit`, expiry). The single
+ * implementation of the rules; `effectiveAt` only drops the extra fields.
+ */
+export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions): AppliedBinding[] {
   const chain = chainOf(node);
   if (!chain) return [];
   if (raw.platformAdmin && opts.implicitPlatformAdmin !== false) {
@@ -140,6 +167,9 @@ export function effectiveAt(
         permissions: ROLE_PERMISSIONS.admin,
         useCase: null,
         source: 'platform',
+        tenantId: node.id,
+        inherit: false,
+        expiresAt: null,
       },
     ];
   }
@@ -165,7 +195,7 @@ export function effectiveAt(
     return base.filter((p) => !removed.has(p));
   };
 
-  const out: EffectiveBinding[] = [];
+  const out: AppliedBinding[] = [];
 
   for (const b of raw.nodeBindings) {
     if (!isRole(b.role)) continue;
@@ -189,7 +219,16 @@ export function effectiveAt(
     let permissions = permissionsFor(b.role, at);
     if (source === 'inherited' && clamp)
       permissions = permissions.filter((p) => INHERITED_READ_ONLY.includes(p));
-    out.push({ role: b.role, teamId: null, permissions, useCase: null, source });
+    out.push({
+      role: b.role,
+      teamId: null,
+      permissions,
+      useCase: null,
+      source,
+      tenantId: b.tenantId,
+      inherit: b.inherit,
+      expiresAt: b.expiresAt,
+    });
   }
 
   const here = chain.length - 1;
@@ -201,6 +240,9 @@ export function effectiveAt(
       permissions: permissionsFor(t.role, here),
       useCase: null,
       source: 'team',
+      tenantId: node.id,
+      inherit: false,
+      expiresAt: null,
     });
   }
   for (const a of raw.agentBindings) {
@@ -212,6 +254,9 @@ export function effectiveAt(
       permissions: permissionsFor(a.role, here),
       useCase: null,
       source: 'agent',
+      tenantId: node.id,
+      inherit: false,
+      expiresAt: null,
     });
   }
   return out;
