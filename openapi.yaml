@@ -6657,6 +6657,38 @@ paths:
                   scopesWider:
                     type: boolean
                     description: The granted scopes exceed what the profiles need
+                  registration:
+                    anyOf:
+                      - type: string
+                        enum:
+                          - preregistered
+                          - cimd
+                          - dcr
+                      - type: "null"
+                    description: Client registration of an authorization_code connection; null for client_credentials
+                  redirectUri:
+                    description: The exact redirect URI of the authorization-code flow (derived from OAX_PUBLIC_URL)
+                    type:
+                      - string
+                      - "null"
+                  scopesMissing:
+                    type: array
+                    items:
+                      type: string
+                    description: Scopes the connection asks for that the grant lacks (authorization_code)
+                  requiredScopes:
+                    type: array
+                    items:
+                      type: string
+                    description: Scopes a server asked for with insufficient_scope (step-up)
+                  reauthorizationNeeded:
+                    type: boolean
+                    description: A new consent is due; runs fail closed until an administrator gives it
+                  pendingExpiresAt:
+                    description: Expiry of the consent request the caller has started and not completed
+                    type:
+                      - string
+                      - "null"
                 required:
                   - status
                   - grant
@@ -6669,6 +6701,12 @@ paths:
                   - lastError
                   - endpointHosts
                   - scopesWider
+                  - registration
+                  - redirectUri
+                  - scopesMissing
+                  - requiredScopes
+                  - reauthorizationNeeded
+                  - pendingExpiresAt
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -6710,10 +6748,10 @@ paths:
                 additionalProperties: false
   /v1/connections/{id}/oauth/authorize:
     post:
-      summary: "Authorize an OAuth connection (client_credentials): discover the authorization server, pin its issuer and endpoints, obtain a token (audited, rate limited)"
+      summary: "Authorize an OAuth connection: client_credentials obtains a token now; authorization_code returns the authorization URL for the consent (audited, rate limited)"
       tags:
         - connections
-      description: Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. The answer carries the state only, never a token.
+      description: "Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. authorization_code: PKCE S256 always, a single-use state (10 minutes) bound to the caller, the connection and the tenant, and the exact redirect URI `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback`; refused on central (platform) instances (`central_user_delegation`). Authorizing again after `insufficient_scope` asks for the union of the granted, required and configured scopes (step-up). The answer carries the state and, for authorization_code, the authorization URL; never a token."
       requestBody:
         required: true
         content:
@@ -6792,6 +6830,43 @@ paths:
                   scopesWider:
                     type: boolean
                     description: The granted scopes exceed what the profiles need
+                  registration:
+                    anyOf:
+                      - type: string
+                        enum:
+                          - preregistered
+                          - cimd
+                          - dcr
+                      - type: "null"
+                    description: Client registration of an authorization_code connection; null for client_credentials
+                  redirectUri:
+                    description: The exact redirect URI of the authorization-code flow (derived from OAX_PUBLIC_URL)
+                    type:
+                      - string
+                      - "null"
+                  scopesMissing:
+                    type: array
+                    items:
+                      type: string
+                    description: Scopes the connection asks for that the grant lacks (authorization_code)
+                  requiredScopes:
+                    type: array
+                    items:
+                      type: string
+                    description: Scopes a server asked for with insufficient_scope (step-up)
+                  reauthorizationNeeded:
+                    type: boolean
+                    description: A new consent is due; runs fail closed until an administrator gives it
+                  pendingExpiresAt:
+                    description: Expiry of the consent request the caller has started and not completed
+                    type:
+                      - string
+                      - "null"
+                  authorizationUrl:
+                    description: "authorization_code: the URL to open in the browser (single use, 10 minutes); null for client_credentials, which is authorized by this call"
+                    type:
+                      - string
+                      - "null"
                 required:
                   - status
                   - grant
@@ -6804,6 +6879,13 @@ paths:
                   - lastError
                   - endpointHosts
                   - scopesWider
+                  - registration
+                  - redirectUri
+                  - scopesMissing
+                  - requiredScopes
+                  - reauthorizationNeeded
+                  - pendingExpiresAt
+                  - authorizationUrl
                 additionalProperties: false
         "400":
           description: Default Response
@@ -6979,6 +7061,38 @@ paths:
                   scopesWider:
                     type: boolean
                     description: The granted scopes exceed what the profiles need
+                  registration:
+                    anyOf:
+                      - type: string
+                        enum:
+                          - preregistered
+                          - cimd
+                          - dcr
+                      - type: "null"
+                    description: Client registration of an authorization_code connection; null for client_credentials
+                  redirectUri:
+                    description: The exact redirect URI of the authorization-code flow (derived from OAX_PUBLIC_URL)
+                    type:
+                      - string
+                      - "null"
+                  scopesMissing:
+                    type: array
+                    items:
+                      type: string
+                    description: Scopes the connection asks for that the grant lacks (authorization_code)
+                  requiredScopes:
+                    type: array
+                    items:
+                      type: string
+                    description: Scopes a server asked for with insufficient_scope (step-up)
+                  reauthorizationNeeded:
+                    type: boolean
+                    description: A new consent is due; runs fail closed until an administrator gives it
+                  pendingExpiresAt:
+                    description: Expiry of the consent request the caller has started and not completed
+                    type:
+                      - string
+                      - "null"
                 required:
                   - status
                   - grant
@@ -6991,6 +7105,12 @@ paths:
                   - lastError
                   - endpointHosts
                   - scopesWider
+                  - registration
+                  - redirectUri
+                  - scopesMissing
+                  - requiredScopes
+                  - reauthorizationNeeded
+                  - pendingExpiresAt
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -7014,6 +7134,61 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/oauth/mcp/callback:
+    get:
+      summary: Redirect target of the MCP OAuth authorization-code flow (browser)
+      tags:
+        - connections
+      description: Consumes the state, checks the RFC 9207 `iss` parameter, redeems the code with the PKCE verifier and stores the tokens on the connection instance. Redirects to the console with `mcp_oauth=<result>` (a closed set) or answers a small page of fixed text.
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: string
+        "302":
+          description: Default Response
+          content:
+            application/json:
+              schema: {}
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: string
+  /oauth/mcp-client.json:
+    get:
+      summary: Client ID Metadata Document of the MCP OAuth client (OAX_MCP_OAUTH_CIMD)
+      tags:
+        - connections
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                propertyNames:
+                  type: string
+                additionalProperties: {}
         "404":
           description: Default Response
           content:

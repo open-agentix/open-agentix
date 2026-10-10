@@ -4479,6 +4479,18 @@ export interface paths {
                             endpointHosts: string[];
                             /** @description The granted scopes exceed what the profiles need */
                             scopesWider: boolean;
+                            /** @description Client registration of an authorization_code connection; null for client_credentials */
+                            registration: ("preregistered" | "cimd" | "dcr") | null;
+                            /** @description The exact redirect URI of the authorization-code flow (derived from OAX_PUBLIC_URL) */
+                            redirectUri: string | null;
+                            /** @description Scopes the connection asks for that the grant lacks (authorization_code) */
+                            scopesMissing: string[];
+                            /** @description Scopes a server asked for with insufficient_scope (step-up) */
+                            requiredScopes: string[];
+                            /** @description A new consent is due; runs fail closed until an administrator gives it */
+                            reauthorizationNeeded: boolean;
+                            /** @description Expiry of the consent request the caller has started and not completed */
+                            pendingExpiresAt: string | null;
                         };
                     };
                 };
@@ -4537,8 +4549,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Authorize an OAuth connection (client_credentials): discover the authorization server, pin its issuer and endpoints, obtain a token (audited, rate limited)
-         * @description Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. The answer carries the state only, never a token.
+         * Authorize an OAuth connection: client_credentials obtains a token now; authorization_code returns the authorization URL for the consent (audited, rate limited)
+         * @description Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. authorization_code: PKCE S256 always, a single-use state (10 minutes) bound to the caller, the connection and the tenant, and the exact redirect URI `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback`; refused on central (platform) instances (`central_user_delegation`). Authorizing again after `insufficient_scope` asks for the union of the granted, required and configured scopes (step-up). The answer carries the state and, for authorization_code, the authorization URL; never a token.
          */
         post: {
             parameters: {
@@ -4585,6 +4597,20 @@ export interface paths {
                             endpointHosts: string[];
                             /** @description The granted scopes exceed what the profiles need */
                             scopesWider: boolean;
+                            /** @description Client registration of an authorization_code connection; null for client_credentials */
+                            registration: ("preregistered" | "cimd" | "dcr") | null;
+                            /** @description The exact redirect URI of the authorization-code flow (derived from OAX_PUBLIC_URL) */
+                            redirectUri: string | null;
+                            /** @description Scopes the connection asks for that the grant lacks (authorization_code) */
+                            scopesMissing: string[];
+                            /** @description Scopes a server asked for with insufficient_scope (step-up) */
+                            requiredScopes: string[];
+                            /** @description A new consent is due; runs fail closed until an administrator gives it */
+                            reauthorizationNeeded: boolean;
+                            /** @description Expiry of the consent request the caller has started and not completed */
+                            pendingExpiresAt: string | null;
+                            /** @description authorization_code: the URL to open in the browser (single use, 10 minutes); null for client_credentials, which is authorized by this call */
+                            authorizationUrl: string | null;
                         };
                     };
                 };
@@ -4728,6 +4754,18 @@ export interface paths {
                             endpointHosts: string[];
                             /** @description The granted scopes exceed what the profiles need */
                             scopesWider: boolean;
+                            /** @description Client registration of an authorization_code connection; null for client_credentials */
+                            registration: ("preregistered" | "cimd" | "dcr") | null;
+                            /** @description The exact redirect URI of the authorization-code flow (derived from OAX_PUBLIC_URL) */
+                            redirectUri: string | null;
+                            /** @description Scopes the connection asks for that the grant lacks (authorization_code) */
+                            scopesMissing: string[];
+                            /** @description Scopes a server asked for with insufficient_scope (step-up) */
+                            requiredScopes: string[];
+                            /** @description A new consent is due; runs fail closed until an administrator gives it */
+                            reauthorizationNeeded: boolean;
+                            /** @description Expiry of the consent request the caller has started and not completed */
+                            pendingExpiresAt: string | null;
                         };
                     };
                 };
@@ -4768,6 +4806,114 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/oauth/mcp/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Redirect target of the MCP OAuth authorization-code flow (browser)
+         * @description Consumes the state, checks the RFC 9207 `iss` parameter, redeems the code with the PKCE verifier and stores the tokens on the connection instance. Redirects to the console with `mcp_oauth=<result>` (a closed set) or answers a small page of fixed text.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": string;
+                    };
+                };
+                /** @description Default Response */
+                302: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": unknown;
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": string;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oauth/mcp-client.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Client ID Metadata Document of the MCP OAuth client (OAX_MCP_OAUTH_CIMD) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
