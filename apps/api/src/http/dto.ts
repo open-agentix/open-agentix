@@ -175,7 +175,7 @@ export const connectionDto = (c: ConnectionRow, warnings: string[] = []) => ({
   scope: c.scope as 'platform' | 'tenant' | 'team' | 'agent',
   scopeId: c.scopeId,
   name: c.name,
-  kind: c.kind as 'mcp' | 'model',
+  kind: c.kind as 'mcp' | 'model' | 'telemetry',
   config: c.config as Record<string, unknown>,
   warnings,
   createdAt: iso(c.createdAt),

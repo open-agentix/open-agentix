@@ -24,10 +24,10 @@ import {
 } from '@openagentix/runners';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
-import { connections, eventSources, runNodeSessions, runs, tenants } from '../db/schema.js';
-import { secretRefsOf } from '@openagentix/providers';
+import { runNodeSessions, runs, tenants } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
+import { platformSecretRefs } from './platform-secrets.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import {
@@ -155,33 +155,7 @@ export class RunNodesService {
    * Canonical form (see `canonicalSecretRef`).
    */
   async platformSecretRefs(): Promise<Set<string>> {
-    const out = new Set<string>();
-    const walk = (v: unknown, secretish: boolean): void => {
-      if (typeof v === 'string') {
-        if (secretish && v) out.add(canonicalSecretRef(v));
-      } else if (Array.isArray(v)) v.forEach((x) => walk(x, secretish));
-      else if (v && typeof v === 'object')
-        for (const [k, x] of Object.entries(v)) walk(x, secretish || /secret/i.test(k));
-    };
-    for (const p of this.ctx.config.providers) {
-      walk(p, false);
-      try {
-        for (const r of secretRefsOf(p as never)) out.add(canonicalSecretRef(r));
-      } catch {
-        // unusual provider shape: the walk above already covered the *Secret fields
-      }
-    }
-    for (const c of await this.ctx.db
-      .select({ kind: connections.kind, scope: connections.scope, config: connections.config })
-      .from(connections))
-      if (c.kind === 'model' || c.scope === 'platform') walk(c.config, false);
-    for (const e of await this.ctx.db
-      .select({ refs: eventSources.secretRefs, config: eventSources.config })
-      .from(eventSources)) {
-      e.refs.forEach((r) => out.add(canonicalSecretRef(r)));
-      walk(e.config, false);
-    }
-    return out;
+    return platformSecretRefs(this.ctx);
   }
 
   /**

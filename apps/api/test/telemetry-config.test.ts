@@ -25,6 +25,10 @@ describe('OpenTelemetry configuration (ADR 0015 section 14)', () => {
       mcpPropagation: 'deny',
       exceptionDetail: 'off',
       genaiMetrics: false,
+      content: 'off',
+      tenantExporters: 'deny',
+      tenantExportersMax: 32,
+      allowedRegions: [],
       traceUrlTemplate: undefined,
     });
   });
@@ -81,9 +85,36 @@ describe('OpenTelemetry configuration (ADR 0015 section 14)', () => {
     expect(() => otel({ [key]: value })).toThrow(new RegExp(key));
   });
 
-  it('accepts OAX_OTEL_CONTENT=off only (content capture is slice S10)', () => {
+  it('content capture and tenant exporters are off by default', () => {
+    expect(otel({})).toMatchObject({
+      content: 'off',
+      tenantExporters: 'deny',
+      tenantExportersMax: 32,
+      allowedRegions: [],
+    });
+  });
+
+  it('OAX_OTEL_CONTENT=redacted needs the tenant exporters (content has no other destination)', () => {
     expect(() => otel({ OAX_OTEL_CONTENT: 'off' })).not.toThrow();
-    expect(() => otel({ OAX_OTEL_CONTENT: 'redacted' })).toThrow(/OAX_OTEL_CONTENT/);
+    expect(() => otel({ OAX_OTEL_CONTENT: 'redacted' })).toThrow(/OAX_OTEL_TENANT_EXPORTERS=allow/);
+    expect(() => otel({ OAX_OTEL_CONTENT: 'redacted', OAX_OTEL_TENANT_EXPORTERS: 'deny' })).toThrow(
+      /OAX_OTEL_CONTENT/,
+    );
+    expect(
+      otel({ OAX_OTEL_CONTENT: 'redacted', OAX_OTEL_TENANT_EXPORTERS: 'allow' }),
+    ).toMatchObject({ content: 'redacted', tenantExporters: 'allow' });
+    expect(() => otel({ OAX_OTEL_CONTENT: 'full' })).toThrow(/OAX_OTEL_CONTENT/);
+    expect(() => otel({ OAX_OTEL_TENANT_EXPORTERS: 'yes' })).toThrow(/OAX_OTEL_TENANT_EXPORTERS/);
+  });
+
+  it('parses OAX_OTEL_ALLOWED_REGIONS and bounds OAX_OTEL_TENANT_EXPORTERS_MAX', () => {
+    expect(otel({ OAX_OTEL_ALLOWED_REGIONS: 'eu, on-prem,eu' }).allowedRegions).toEqual([
+      'eu',
+      'on-prem',
+    ]);
+    expect(() => otel({ OAX_OTEL_ALLOWED_REGIONS: 'EU' })).toThrow(/OAX_OTEL_ALLOWED_REGIONS/);
+    expect(() => otel({ OAX_OTEL_TENANT_EXPORTERS_MAX: '0' })).toThrow();
+    expect(() => otel({ OAX_OTEL_TENANT_EXPORTERS_MAX: '1000' })).toThrow();
   });
 });
 

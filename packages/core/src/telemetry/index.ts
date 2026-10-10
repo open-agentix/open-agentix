@@ -4,3 +4,4 @@ export * from './attributes.js';
 export * from './error-info.js';
 export * from './trace-ids.js';
 export * from './provider-name.js';
+export * from './content.js';

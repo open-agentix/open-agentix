@@ -176,6 +176,8 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
       const actor = principalOf(req);
       const row = await catalog.getConnection(actor, req.params.id);
       if (row.kind === 'mcp') return services.mcpTest.test(actor, req.params.id);
+      if (row.kind === 'telemetry')
+        throw new HttpError(400, 'validation_failed', 'telemetry connections have no test');
       if (!req.body.model)
         throw new HttpError(400, 'validation_failed', 'a model connection test needs "model"');
       return services.models.test(actor, req.params.id, req.body.model);

@@ -1,7 +1,7 @@
 # ADR 0015: Observability with OpenTelemetry GenAI semantic conventions
 
 - Status: Proposed. Slices S1 to S5 are implemented (see "Implementation notes S2/S3/S4/S5"
-  below and [`observability.md`](../observability.md)); S6 to S8 are implemented (notes below); S9 and S10 are open.
+  below and [`observability.md`](../observability.md)); S6 to S10 are implemented (notes below).
 - Date: 2026-10-10
 - Plan items: W3-5 (#37, "Observability completion: step, model and tool spans and the missing
   metrics"); RM-53 of the roadmap gap list; replaces the span list in the W3-5 acceptance
@@ -264,7 +264,7 @@ collector as a platform sub-processor when an exporter is configured.
 Content capture is a separate, owner-gated slice (S10). Its proposed shape, for the owner
 decision only:
 
-- `OAX_OTEL_CONTENT=off` (only accepted value until S10; anything else refuses to start).
+- `OAX_OTEL_CONTENT=off` (default). `redacted` is accepted since S10 (see "Implementation notes S10").
 - S10 adds `redacted`: model input and output messages (not tool arguments or results), through
   the `ContextGuard` and the ADR 0012 PII redactor, 8 KiB per attribute, only for runs whose
   classification is at most the exporter's declared `clearance` (default `internal`), only when
@@ -507,7 +507,10 @@ OTLP metric export is not added: metrics stay pull-based (`/metrics`, ServiceMon
 | `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link` for inbound `traceparent`. |
 | `OAX_OTEL_MCP_PROPAGATION` | `deny` | `allow` lets MCP instances opt in. In use since S8. |
 | `OAX_OTEL_EXCEPTION_DETAIL` | `off` | `guarded`: guarded, capped exception messages. |
-| `OAX_OTEL_CONTENT` | `off` | Only `off` until slice S10. |
+| `OAX_OTEL_CONTENT` | `off` | `off` or `redacted` (operator allow; since S10). |
+| `OAX_OTEL_TENANT_EXPORTERS` | `deny` | `allow`: tenants may define `telemetry` connections (since S10). |
+| `OAX_OTEL_TENANT_EXPORTERS_MAX` | `32` | Tenant exporters per process. |
+| `OAX_OTEL_ALLOWED_REGIONS` | – | Regions a `telemetry` connection may declare. |
 | `OAX_OTEL_GENAI_METRICS` | `false` | Expose GenAI metrics on `/metrics`. |
 | `OAX_OTEL_TRACE_URL_TEMPLATE` | – | Link template for the run view (`{traceId}`). |
 
@@ -565,7 +568,7 @@ drift check green, and adds its `[Unreleased]` changelog line.
 | S7 | Exporter through the outbound dispatcher | transport via `nodeAgents`/`fetch` for purpose `telemetry` (routes, trust bundles, mTLS); air-gap zero-egress and egress tests; `grpc` only if the owner decides so | S1 | yes: TLS always verified; air-gap zero egress proven |
 | S8 | MCP context propagation (opt-in) | `telemetry.propagate` on MCP instances, `OAX_OTEL_MCP_PROPAGATION`; `params._meta.traceparent` only; MCP attributes on `execute_tool`; tests | S3 | yes: default off; no baggage/tracestate; platform deny wins |
 | S9 | Docs, collector configs, compatibility | full `docs/observability.md` (span reference, attribute table, what is never exported, sampling, multi-tenant collector configs with `groupbyattrs` + `routing`, tail sampling), examples for Grafana Tempo, Jaeger, Langfuse and Arize Phoenix (docs only), `docs/configuration.md` and `docs/airgapped.md` updates, Helm mirror issue | S5, S7 | no |
-| S10 | Content capture and tenant-owned exporters (gated) | only after the owner decides the questions below: `OAX_OTEL_CONTENT=redacted`, tenant opt-in, connection type `telemetry`, clearance/region checks, audited opt-ins | S9 + owner decision | yes: full review, new egress channel |
+| S10 | Content capture and tenant-owned exporters (gated) | owner decisions of 2026-10-10 (questions 1 and 2 below): `OAX_OTEL_CONTENT=redacted`, tenant opt-in, connection type `telemetry`, clearance/region checks, audited opt-ins | S9 + owner decision | yes: full review, new egress channel |
 
 ### 17. Compatibility with tools (documentation only)
 
@@ -849,11 +852,85 @@ Decisions taken while implementing slice S8 (#213) where the text above left roo
   `updateConnection` is a compare-and-swap on the stored config (409 when it changed meanwhile).
 - No new metric, no migration.
 
+## Implementation notes S10
+
+Gated content capture and tenant-owned exporters. Both are off by default
+(`OAX_OTEL_CONTENT=off`, `OAX_OTEL_TENANT_EXPORTERS=deny`), the operator opts in first, then the
+tenant. No migration: the existing `connections` table takes the new `kind = 'telemetry'`.
+
+- **Second pipeline, not a changed one.** `TenantExportRouter` (`apps/api/src/telemetry-tenant.ts`)
+  is a span processor next to the operator's batch processor. It routes a finished span by its
+  `oax.tenant.id` to the exporters of exactly that tenant (no hierarchy walk), each with its own
+  bounded batch processor and the S7 transport (`DispatcherSpanExporter`) with
+  `scope: { origin: 'tenant', tenantId }`. Each copy is rebuilt from the attribute allowlist with a
+  guard that also knows that exporter's header values. The operator's pipeline is untouched; with
+  only the tenant switch set there is no operator exporter and no operator endpoint is needed.
+- **The tenant origin is the S7/ADR 0011 rule set**, not a new one: `resolveRoute` for purpose
+  `telemetry` with `origin: 'tenant'` now also requires TLS (like tenant MCP servers), public names
+  and literal addresses in every spelling, the operator's deny routes and the air-gapped allowlist;
+  the dispatcher pins DNS at connect time (all addresses must be public), refuses redirects and
+  bounds time and response size. A connection is checked when it is saved (pure checks, no DNS, so
+  saving is not a resolution oracle) and its route is planned again when the exporter is built.
+  `connectionEndpoints` knows the type, so a stored connection outside the air-gapped allowlist
+  stops start-up like any other.
+- **Authorisation.** `connections:write` is not enough: create, change and delete of a `telemetry`
+  connection need `settings:write` (the S8 pattern for `telemetry.propagate`). Tenant scope only
+  (400 otherwise); a tenant can neither see nor change another tenant's connection (existing
+  visibility rules). The header secret is stricter than for other connection types, because the
+  value is sent to a destination the tenant chose: it must not be a platform secret
+  (`platformSecretRefs`, extended with the operator's `OAX_OTEL_HEADERS_SECRET` and the network
+  file's secrets), must be in the tenant's namespace and must be opened by `tenants.secret_refs`;
+  there is no exemption for the default tenant. Checked on save and on every refresh of the
+  exporters.
+- **Review hardening (security review of #308).** Tenant copies are sanitised with the process
+  guard first, never carry exception text, and carry `service.name` only as resource; content is
+  scanned within a character budget and the opt-in lookup is time limited; content captured under
+  one set of terms is sent only to an exporter with the same terms (fingerprint); content held for
+  queued spans is capped per process; PII detection normalises Unicode; pass-through reasoning
+  blocks are never captured.
+- **Content never rides on the span.** The model proxy builds the two attributes after a successful
+  call (`captureModelContent`, native and pass-through surfaces, JSON and stream) and parks them
+  in a bounded in-process channel keyed by the `chat` span (one minute, taken once). Only
+  `TenantExportRouter` takes them, only when the span's tenant equals the parked tenant, and the
+  exporter attaches them to its own copy after the sanitiser. The operator's pipeline has no code
+  path that reads the channel, and the allowlist drops the keys anyway (`key_class="content"`).
+- **Gates, each checked where it matters.** Operator allow (capture and again at export); the
+  tenant opt-in is read fresh from the database for every call and again from the exporter state at
+  export (an in-process opt-out withdraws content from spans that are already queued, other
+  processes see a change within 15 s); classification of the run at most the exporter `clearance`
+  (default `internal`); the operator's region list; the exporter must be the one that had opted in
+  when the content was captured.
+- **Redaction.** `buildContentAttributes` (`packages/core/src/telemetry/content.ts`): text of
+  system, user and assistant messages and of the response only; the role `tool`, `toolCalls`
+  and non-string content are never read. ContextGuard, then the new built-in `redactPii`
+  (`packages/core/src/pii.ts`: e-mail, IBAN, card with Luhn, IP, phone, linear-time patterns, the
+  first implementation of the ADR 0012 7.3 chain, not yet wired anywhere else), then a hard cap of
+  8 KiB per attribute (newest messages first). At export the same guard and redactor run once more
+  and a value that is over the cap or not valid JSON is dropped.
+- **Audit.** `telemetry.content_enabled` (content switched on, or the destination, secret
+  reference, protocol, region or clearance of an enabled opt-in changed) and
+  `telemetry.content_disabled` (off, disabled, deleted), written in the same transaction as the
+  change; the payload holds the connection name, clearance, region and endpoint host only.
+- **Metrics.** `oax_otel_tenant_export_failures_total{reason}`,
+  `oax_otel_tenant_spans_dropped_total{reason}`, `oax_otel_content_total{result}`; all closed sets,
+  covered by the cardinality test.
+- **Deviations from the proposal.** (1) "In single-tenant setup mode" is not built: the setup modes
+  of ADR 0013 are not implemented, and a single-tenant install uses a tenant-owned exporter. (2)
+  Region: tenants have no `allowedRegions` yet (ADR 0012 8), so the check is the operator's
+  `OAX_OTEL_ALLOWED_REGIONS`; the connection declares its `region`. (3) Metadata spans go to a
+  tenant exporter whatever its clearance (they are the same metadata the operator's collector
+  gets); only content is bounded by it.
+- **Residual risks.** A tenant admin chooses a destination: they can send their own tenant's
+  metadata, and with the opt-in redacted text, to any public https host the operator's network
+  rules allow. Pattern based redaction does not find every personal datum. A `user` message that a
+  harness filled with tool output is captured like any user text. The 15 s refresh window for
+  changes made in another process. Header secrets of tenant exporters are read into process memory
+  and registered with the exporter's guard.
+
 ## Open questions (owner decisions needed)
 
-1. **Content capture**: never in v1, or the gated `redacted` mode of 5.4 (input/output messages,
-   tenant opt-in, tenant-owned exporter or single-tenant mode only)?
-2. **Tenant-owned exporters** (connection type `telemetry`, 7.3): wanted, and in which release?
+1. **Content capture** (decided 2026-10-10: the gated `redacted` mode of 5.4 is wanted; built in S10).
+2. **Tenant-owned exporters** (decided 2026-10-10: connection type `telemetry`, 7.3, as proposed; built in S10).
 3. **gRPC exporter**: needed (adds `@grpc/grpc-js`), or HTTP/protobuf only?
 4. **Breaking metric label changes** of 10.1 (`provider` family on cost, `kind` instead of the
    event source name): accept for the next 0.x minor?

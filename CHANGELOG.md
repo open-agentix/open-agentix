@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Tenant-owned telemetry exporters** (ADR 0015 S10, #215): the new connection type `telemetry`
+  (ADR 0012) lets a tenant admin (`settings:write`) send a copy of its own tenant's spans to its own
+  OTLP collector. Off unless the operator sets `OAX_OTEL_TENANT_EXPORTERS=allow`. Tenant scope only;
+  https only, public destinations, DNS pinned at connect time, no redirects, the operator's deny
+  routes and the air-gapped allowlist apply; the header credential is a secret reference in the
+  tenant's namespace; per-exporter bounded queues (`OAX_OTEL_TENANT_EXPORTERS_MAX`);
+  `OAX_OTEL_ALLOWED_REGIONS` restricts the declared region. New metrics
+  `oax_otel_tenant_export_failures_total`, `oax_otel_tenant_spans_dropped_total`.
+- **Gated content capture** (ADR 0015 S10, #215): `OAX_OTEL_CONTENT=redacted` (default `off`) with a
+  tenant opt-in (`content: "redacted"` on its exporter) sends the redacted text of model input and
+  output messages (never tool arguments or results; ContextGuard and the new built-in PII redactor;
+  8 KiB per attribute; only when the run's classification is at most the exporter `clearance`) to
+  that tenant's exporter only, never to the operator's collector. Opt-ins are audited as
+  `telemetry.content_enabled` and `telemetry.content_disabled`. New metric
+  `oax_otel_content_total`. Documented in `docs/observability.md`.
+- **PII redactor** (`redactPii` in `@openagentix/core`): e-mail, IBAN, payment card, IP address and
+  phone number detectors, the first part of the ADR 0012 7.3 redactor chain.
+
+### Changed
+
+- Telemetry connection header secrets must not be platform secrets, must be in the tenant's
+  namespace and opened by its `secret_refs`, for every tenant including the default one.
+- `OAX_OTEL_CONTENT` accepts `redacted` besides `off`; `redacted` without
+  `OAX_OTEL_TENANT_EXPORTERS=allow` refuses start-up. The tenant destination rules for purpose
+  `telemetry` require TLS (no effect on the operator's own exporter).
+
 ### Security
 
 - **User lifecycle across the tree (ADR 0014 S5 review)**: with `OAX_ROLE_BINDINGS_READ=bindings`, disabling a
@@ -29,7 +57,8 @@ All notable changes to this project are documented here. The format follows
   that do not use inheritance (no binding reaches below its node; `OAX_ROLE_BINDINGS_READ=legacy` is untouched).
   **Before setting `OAX_ROLE_BINDINGS_READ=bindings` with inheriting bindings in place, review who holds them:
   they now carry write authority below their node.**
-
+- Tenant-controlled egress channel and content export are new trust boundaries, reviewed in
+  ADR 0015 "Implementation notes S10": both are off by default and need the operator and the tenant.
 - **The OTLP trace exporter now sends through the outbound dispatcher** (ADR 0015 S7, #212): purpose
   `telemetry`, so routes, proxies, trust bundles, client certificates (mTLS), the air-gapped allowlist and
   the cloud metadata veto apply; redirects are never followed and request time and response size are

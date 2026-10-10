@@ -2,6 +2,7 @@ import { loadConfig } from './config.js';
 import { createControlNode } from './bootstrap.js';
 import { activateAirgap } from './airgap.js';
 import { initTelemetry } from './telemetry.js';
+import { createTenantExporterSource } from './services/telemetry-exporters.js';
 import { processSecrets, scrubStdio } from './mcp-oauth/index.js';
 
 const config = loadConfig();
@@ -17,6 +18,7 @@ const telemetry = await initTelemetry(config.otel, {
 });
 const node = await createControlNode(config);
 telemetry.attachStats(node.ctx.metrics.otel);
+telemetry.attachTenantExporters(createTenantExporterSource(node.ctx));
 await node.app.listen({ host: config.host, port: config.port });
 
 const shutdown = async (signal: string) => {

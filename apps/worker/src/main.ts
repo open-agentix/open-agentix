@@ -2,6 +2,7 @@ import {
   activateAirgap,
   createContext,
   createLogger,
+  createTenantExporterSource,
   initTelemetry,
   loadConfig,
   processSecrets,
@@ -31,6 +32,7 @@ const telemetry = await initTelemetry(config.otel, {
 });
 const ctx = await createContext(config, { logger });
 telemetry.attachStats(ctx.metrics.otel);
+telemetry.attachTenantExporters(createTenantExporterSource(ctx));
 // Opt-in container runner: one hardened container per isolated step (docs/runners.md).
 const container = config.runners.container;
 // The egress proxy is NOT part of this process: it is its own service (egress-proxy-cli.js), so that
