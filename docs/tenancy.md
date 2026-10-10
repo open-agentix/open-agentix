@@ -108,7 +108,8 @@ authoritative, so upgrading changes nobody's access.
 - **Write-through**: user create (also the first admin of a new tenant and the bootstrap admin),
   `PATCH /v1/users/{id}` with `globalRoles`, and the LDAP/OIDC group mapping write `global_roles` and
   the matching non-inheriting, non-expiring bindings on the home tenant in one transaction. Rows of
-  any other shape (inheriting, expiring, other nodes) are never touched by the mirror. The mirror
+  any other shape (inheriting, expiring, use case, other nodes) are left alone, except that
+  removing a role revokes a same-key row of any shape (see "same-key rule" below). The mirror
   and the column go away together one release later.
 - **Pure resolver** `effectiveAt` in `packages/core/src/tenancy/roles.ts`: raw grants, the acting
   node and `now` in, `RoleBinding[]` (with `permissions`, `useCase`, `source`) out. No database,
@@ -124,7 +125,55 @@ authoritative, so upgrading changes nobody's access.
 - `pentest` exists in the role set (read-only, ADR 0014 section 8) but cannot be granted before S6:
   the API, group mappings and the console reject it.
 
-Rollback: `apps/api/drizzle/down/0018_tenant_role_bindings.down.sql` drops both tables, the triggers
+- **Reconcile (#216)**: `users.global_roles` is the source of truth until the resolver decides, and
+  an application version that does not know the mirror (a rolling deploy with old replicas still
+  running, or an application-only rollback) changes it without the bindings. The control node
+  therefore repairs the mirror in both directions: at start-up, every
+  `OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS` (default one hour) and, rate-limited, for the user
+  of every shadow `mismatch`. Each user is repaired in one transaction that first locks the user
+  row (`FOR NO KEY UPDATE`), the same order every writer of `global_roles` uses, so a concurrent
+  `PATCH` waits instead of racing. Operators can run it by hand, also against a live system:
+  `pnpm --filter @openagentix/api db:reconcile-bindings [-- --dry-run]`
+  (`node dist/reconcile-bindings-cli.js`, database variables only). Metrics:
+  `oax_role_bindings_reconcile_fixes_total{kind="added|removed|blocked",trigger="startup|periodic|mismatch|cli"}`
+  and `oax_role_bindings_reconcile_runs_total{trigger,outcome="ok|error|skipped"}`; a non-zero rate
+  outside a deploy means something writes `global_roles` without the mirror.
+- **What the mirror manages, and the same-key rule**: a mirror row is non-inheriting, non-expiring,
+  without a use case, on the user's home node, for one of the six grantable roles. `trb_uq` makes
+  `(user, node, role, use case)` unique whatever the other columns say, so a legacy role has
+  exactly one possible slot. If a row of another shape sits in that slot (an inheriting or expiring
+  binding of the same role on the home node; no API creates one before S4):
+  - *adding* the role leaves that row as it is and reports it (`kind="blocked"`): nothing is
+    overwritten and nothing is hidden;
+  - *removing* the role from `global_roles` **revokes every binding of that key, whatever its
+    shape** (fail closed), so a legacy role that was taken away can never stay effective through a
+    row the mirror could not represent. Rows with a use case, on other nodes, and `pentest` are
+    never touched by the mirror or the reconcile.
+  Until S4 only mirror rows can be created through the application; a test asserts that every write
+  path leaves the plain shape. S4's grant API must keep this rule (or give mirrored roles a key of
+  their own) and test it.
+- **Home tenant change inside the organisation (#216)**: migration `0019_trb_home_move` adds the
+  trigger `trb_users_home_move_trg`: when `users.tenant_id` changes, in the same statement the
+  mirror rows of the old home node are deleted and the roles of `global_roles` are bound on the new
+  home node, whatever code path (or older application version, or `psql`) made the change. Other
+  bindings of the user (inheriting, expiring, use case, other nodes) are kept. Moving to another
+  organisation is still refused while bindings of the old one exist, and the roles then follow the
+  user to the new home, so the way back needs those bindings gone again.
+- **Raw grants in a cache (#217)**: `serializeGrants` / `reviveGrants` in `@openagentix/core`
+  (`packages/core/src/tenancy/grants-codec.ts`) are the JSON form for the cache entry that carries
+  raw grants (ADR 0014 section 6.2). Expiries are canonical ISO-8601 UTC strings and are parsed
+  back strictly into `Date`s; anything that is not exactly what `serializeGrants` writes (version,
+  shape, role, date) makes the whole entry a cache miss, never a partial grant list. A binding with
+  an expiry therefore still applies until it expires after a round trip through Valkey. Without
+  this the resolver (which treats a non-`Date` expiry as expired) would silently drop every
+  expiring binding, `pentest` included.
+- **`loadRawGrants` uses one connection (#217)**: the node row and the three grant lists come from a
+  single statement, so a principal build holds at most one pool connection and reads the home node
+  and the grants from the same snapshot. Expiries are read as epoch milliseconds, rounded down: a
+  binding can only end early, never late.
+
+Rollback: `apps/api/drizzle/down/0019_trb_home_move.down.sql` (the trigger only), then
+`apps/api/drizzle/down/0018_tenant_role_bindings.down.sql` drops both tables, the triggers
 and the epoch column; `global_roles` is intact, so nothing is lost but the new tables.
 
 ## Audit
