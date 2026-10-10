@@ -470,10 +470,9 @@ export class TenantRoleBindingsService {
         // both must be within the grantor's authority, so a PATCH is never a way around rules 1 to 6.
         this.assertMayHold(actor, perms, node, row.role as Role, row.inherit);
         this.assertMayHold(actor, perms, node, next.role, next.inherit);
-        // Rule 7 for every change that touches a pentest binding, in its old or new state. An
-        // expiry may be moved within the maximum from now (audited, noticed again); going beyond
-        // it is a new grant.
-        if (next.role === 'pentest') {
+        // Rule 7 for every change that touches a pentest binding, in its old or new state.
+        if (next.role === 'pentest' && row.role !== 'pentest') {
+          // becoming pentest is a grant: authority, required and bounded expiry
           this.assertPentestReadable();
           assertPentestGrant(
             actor,
@@ -482,7 +481,22 @@ export class TenantRoleBindingsService {
             this.ctx.now(),
             this.ctx.config.tenancy.pentestMaxDays,
           );
-        } else if (row.role === 'pentest') this.assertPentestAuthority(actor, node);
+        } else if (row.role === 'pentest') {
+          this.assertPentestAuthority(actor, node);
+          const moved = changes.some((c) => c.field === 'expiresAt');
+          if (next.role === 'pentest' && moved) {
+            // Only shortening: extending means a new grant (delete and grant again, which is a
+            // fresh `tenant.role_bound`). The maximum is checked only when the expiry changes.
+            if (next.expiresAt === null)
+              throw new HttpError(422, 'expiry_required', 'a pentest binding needs an expiry');
+            if (row.expiresAt !== null && next.expiresAt.getTime() > row.expiresAt.getTime())
+              throw new HttpError(
+                422,
+                'expiry_extension_requires_new_grant',
+                'a pentest binding cannot be extended; remove it and grant it again',
+              );
+          }
+        }
         if (changes.some((c) => c.field === 'expiresAt')) this.checkExpiry(next.expiresAt);
         await assertNotLastAdmin(tx, actor, node, row, next);
         const expiryChanged = changes.some((c) => c.field === 'expiresAt' || c.field === 'role');
