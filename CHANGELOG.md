@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Docs: the README, `GOVERNANCE.md` and `CONTRIBUTING.md` now describe how changes are really
+  reviewed (agent-authored pull requests, independent review agent, no guarantee of a human read
+  before merge) and add a "How changes are reviewed" section.
+
 ### Added
 
 - **Run trace identity and audit links (ADR 0015 slice S2, #207)**: migration
@@ -25,6 +31,10 @@ All notable changes to this project are documented here. The format follows
   outcome is counted in `oax_otel_inbound_context_total{result}`. All span ids now come from the
   CSPRNG. New allowlist key `oax.audit.seq` (admission and workflow span). See
   `docs/observability.md`.
+- **Roadmap**: new planned wave W14 (agent lifecycle governance: four-eyes publish approval with review
+  comments, development vs published agents, scoped and encrypted secrets, Vault and AWS Secrets Manager
+  backends; design in ADR 0017, issues #244 to #252) in v0.4, with notes on W5-3, W6-3, W7-2 and W9-2.
+  Nothing of it is built yet.
 
 ## [0.2.0-alpha.1] - 2026-10-10
 
