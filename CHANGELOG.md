@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **CI: manual workflow runs (`ci`)**: `ci.yml` gets a `workflow_dispatch` trigger; `release.yml` can be
+  started manually for an existing tag (`-f tag=vX.Y.Z`) after a `verify` job checks the tag format,
+  that it exists on `main`, that no release exists and that `CHANGELOG.md` has its section. Tags are
+  never created by the workflow. See `docs/releasing.md`.
 - **Telemetry core hardening (ADR 0015 slice S1)**: a closed attribute allowlist for spans
   (`packages/core/src/telemetry`: key, type, length cap and value set per span kind; every string
   passes the `ContextGuard`; unknown keys are dropped and counted), a single `withSpan` wrapper
