@@ -240,6 +240,10 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
           'same role on the tenant or above, no grant to oneself (platform operators excepted), ' +
           'the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown ' +
           'id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. ' +
+          '`pentest` (rule 7): only tenant admins of the tenant or above and platform operators ' +
+          '(403 `pentest_grant_forbidden`); `expiresAt` is required (422 `expiry_required`) and at ' +
+          'most `OAX_PENTEST_MAX_DAYS` ahead (422 `expiry_too_long`); the resolver read path only ' +
+          '(409 `pentest_requires_bindings_read`). ' +
           'Audited as `tenant.role_bound` in the partition of the tenant.',
         security: sec,
         params: IdParams,

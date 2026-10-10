@@ -1,9 +1,9 @@
 import type { GrantsAndHome } from './tenancy/grants-codec.js';
 
 /**
- * Roles that may be granted today (user create/patch, team and agent members, group mapping).
- * `pentest` needs an expiry and its own grant rules (ADR 0014 sections 7 and 8, slice S6), so it is
- * refused everywhere a role is accepted until then.
+ * Roles that user create/patch, team and agent members and group mappings accept. `pentest` needs
+ * an expiry and its own grant rules (ADR 0014 sections 7 and 8, slice S6), so only the
+ * role-binding API accepts it ({@link BINDING_ROLES}); everywhere else it stays refused.
  */
 export const GRANTABLE_ROLES = [
   'admin',
@@ -16,10 +16,14 @@ export const GRANTABLE_ROLES = [
 
 /**
  * Roles from the product spec; permissions are granted per role, optionally scoped to a team.
- * `pentest` (ADR 0014 section 8: time-boxed read-only access for penetration tests) exists in the
- * role set so the resolver and the database know it, but nothing can grant it before slice S6.
+ * `pentest` (ADR 0014 section 8: time-boxed read-only access for penetration tests) is granted
+ * through the role-binding API only, with a mandatory expiry (slice S6).
  */
 export const ROLES = [...GRANTABLE_ROLES, 'pentest'] as const;
+/** Roles the role-binding API accepts: the legacy six plus the time-boxed `pentest`. */
+export const BINDING_ROLES = ROLES;
+/** Upper bound of `OAX_PENTEST_MAX_DAYS` (ADR 0014 section 7, rule 7). */
+export const PENTEST_MAX_DAYS_LIMIT = 30;
 export type Role = (typeof ROLES)[number];
 export type GrantableRole = (typeof GRANTABLE_ROLES)[number];
 

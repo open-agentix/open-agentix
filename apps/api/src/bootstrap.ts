@@ -38,5 +38,12 @@ export async function createControlNode(
     services.identity.reconciler.start(config.auth.roleBindingsReconcileIntervalSeconds * 1000);
   }
 
+  // ADR 0014 S6: delete expired bindings, 24 h and expiry notices. Expiry itself is evaluated on
+  // every request; the reaper only tidies up and tells people. Stopped with the app.
+  await services.pentest.runOnce().catch((e: unknown) => {
+    ctx.logger.error({ err: e }, 'binding reaper failed');
+  });
+  services.pentest.start(config.tenancy.bindingReaperIntervalSeconds);
+
   return { ctx, services, app };
 }

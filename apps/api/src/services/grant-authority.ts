@@ -101,6 +101,51 @@ export function isInheritingAdminAt(actor: Actor, node: RoleNode, now: Date): bo
 }
 
 /**
+ * A "tenant admin" at `node` in the sense of ADR 0014 section 7, rule 7: an unexpired `admin`
+ * binding without use case that applies at the node (bound there, or on an ancestor with
+ * `inherit`), or a platform admin. Team and agent bindings and use-case admins never count, and
+ * neither does a token whose scopes lack `users:write`.
+ */
+export function isTenantAdminAt(actor: Actor, node: RoleNode, now: Date): boolean {
+  if (actor.scopes && !actor.scopes.includes('users:write')) return false;
+  if (actor.platformAdmin) return true;
+  return appliedAt(actor.raw, node, { now, implicitPlatformAdmin: false }).some(
+    (b) => b.role === 'admin' && (b.source === 'direct' || b.source === 'inherited'),
+  );
+}
+
+/**
+ * Rule 7 of ADR 0014 section 7: who may grant `pentest`, and for how long. Only a tenant admin of
+ * the node (no use case) or above, or a platform admin (`403 pentest_grant_forbidden`); `expiresAt`
+ * is required (`422 expiry_required`) and at most `maxDays` from now (`422 expiry_too_long`, the
+ * boundary itself is allowed). A longer period is a new grant, never a longer update.
+ */
+export function assertPentestGrant(
+  actor: Actor,
+  node: RoleNode,
+  expiresAt: Date | null | undefined,
+  now: Date,
+  maxDays: number,
+): void {
+  if (!isTenantAdminAt(actor, node, now))
+    throw new HttpError(
+      403,
+      'pentest_grant_forbidden',
+      'only a tenant administrator of this tenant or above, or a platform operator, may grant pentest',
+    );
+  if (expiresAt === null || expiresAt === undefined)
+    throw new HttpError(422, 'expiry_required', 'a pentest binding needs an expiry (expiresAt)');
+  if (!(expiresAt.getTime() > now.getTime()))
+    throw new HttpError(422, 'validation_failed', 'expiresAt must be in the future');
+  if (expiresAt.getTime() > now.getTime() + maxDays * 86_400_000)
+    throw new HttpError(
+      422,
+      'expiry_too_long',
+      `a pentest binding may last at most ${maxDays} days`,
+    );
+}
+
+/**
  * Rule 4 of ADR 0014 section 7: the user must be visible to the actor, otherwise `404 user`, the
  * same answer and the same queries as for an id that does not exist. Visible = the user's home
  * node is in the actor's `users:read` coverage, or the user already holds a binding (node, team

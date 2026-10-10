@@ -4436,6 +4436,344 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/connections/{id}/oauth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** OAuth state of an HTTP MCP connection: status, pinned issuer, scopes, expiry (never a token) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "not_authorized" | "active" | "refresh_failed" | "reauthorization_required" | "revoked";
+                            grant: string;
+                            /** @description Authorization server pinned for this connection */
+                            issuer: string | null;
+                            /** @description `auth.issuer` of the configuration, if set */
+                            pinnedIssuer: string | null;
+                            scopes: string[];
+                            expiresAt: string | null;
+                            authorizedAt: string | null;
+                            authorizedBy: string | null;
+                            /** @description Closed code of the last failed renewal */
+                            lastError: string | null;
+                            /** @description Authorization server hosts the connection contacts (purpose identity) */
+                            endpointHosts: string[];
+                            /** @description The granted scopes exceed what the profiles need */
+                            scopesWider: boolean;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/oauth/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Authorize an OAuth connection (client_credentials): discover the authorization server, pin its issuer and endpoints, obtain a token (audited, rate limited)
+         * @description Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. The answer carries the state only, never a token.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uri
+                         * @description Authorization server to use when the resource names several
+                         */
+                        issuer?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "not_authorized" | "active" | "refresh_failed" | "reauthorization_required" | "revoked";
+                            grant: string;
+                            /** @description Authorization server pinned for this connection */
+                            issuer: string | null;
+                            /** @description `auth.issuer` of the configuration, if set */
+                            pinnedIssuer: string | null;
+                            scopes: string[];
+                            expiresAt: string | null;
+                            authorizedAt: string | null;
+                            authorizedBy: string | null;
+                            /** @description Closed code of the last failed renewal */
+                            lastError: string | null;
+                            /** @description Authorization server hosts the connection contacts (purpose identity) */
+                            endpointHosts: string[];
+                            /** @description The granted scopes exceed what the profiles need */
+                            scopesWider: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}/oauth/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect an OAuth connection: delete the stored tokens and revoke them at the authorization server (RFC 7009, best effort, audited) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            status: "not_authorized" | "active" | "refresh_failed" | "reauthorization_required" | "revoked";
+                            grant: string;
+                            /** @description Authorization server pinned for this connection */
+                            issuer: string | null;
+                            /** @description `auth.issuer` of the configuration, if set */
+                            pinnedIssuer: string | null;
+                            scopes: string[];
+                            expiresAt: string | null;
+                            authorizedAt: string | null;
+                            authorizedBy: string | null;
+                            /** @description Closed code of the last failed renewal */
+                            lastError: string | null;
+                            /** @description Authorization server hosts the connection contacts (purpose identity) */
+                            endpointHosts: string[];
+                            /** @description The granted scopes exceed what the profiles need */
+                            scopesWider: boolean;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/connections/{id}/tools/refresh": {
         parameters: {
             query?: never;
@@ -7761,7 +8099,7 @@ export interface paths {
         put?: never;
         /**
          * Bind a role to a user on a tenant
-         * @description The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. Audited as `tenant.role_bound` in the partition of the tenant.
+         * @description The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. `pentest` (rule 7): only tenant admins of the tenant or above and platform operators (403 `pentest_grant_forbidden`); `expiresAt` is required (422 `expiry_required`) and at most `OAX_PENTEST_MAX_DAYS` ahead (422 `expiry_too_long`); the resolver read path only (409 `pentest_requires_bindings_read`). Audited as `tenant.role_bound` in the partition of the tenant.
          */
         post: {
             parameters: {
@@ -7778,9 +8116,10 @@ export interface paths {
                         /** Format: uuid */
                         userId: string;
                         /** @enum {string} */
-                        role: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer";
+                        role: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer" | "pentest";
                         /** @description required: `false` = this tenant only, `true` = this tenant and all sub-tenants */
                         inherit: boolean;
+                        /** @description required for `pentest` (at most `OAX_PENTEST_MAX_DAYS` ahead, default 30); optional otherwise */
                         expiresAt?: string | null;
                         /** @description refused with 422 `use_case_bindings_unsupported` until ADR 0014 S8 */
                         useCase?: string | null;
@@ -7997,7 +8336,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        role?: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer";
+                        role?: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer" | "pentest";
                         inherit?: boolean;
                         expiresAt?: string | null;
                     };
@@ -8239,6 +8578,83 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Own in-app notices (newest first)
+         * @description The only notification channel there is: tenant administrators and the grantor get a notice when a `pentest` role is granted, 24 hours before it ends and when it has expired (ADR 0014 section 8). Kept 30 days; there is no mail or webhook delivery.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                kind: "pentest_granted" | "pentest_expiring" | "pentest_expired";
+                                /**
+                                 * Format: uuid
+                                 * @description the tenant the notice is about (the node the binding is bound on)
+                                 */
+                                tenantId: string;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                                /** @description ids, role, inherit and expiry of the binding; never secrets */
+                                payload: {
+                                    [key: string]: unknown;
+                                };
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;

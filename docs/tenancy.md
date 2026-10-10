@@ -138,8 +138,9 @@ authoritative, so upgrading changes nobody's access.
   database reads to authentication. A non-zero `mismatch` means the
   mirror drifted or a binding exists that the legacy path does not know. The legacy result is always
   what authorises; the check never fails a request. Turn it off with `OAX_ROLE_BINDINGS_SHADOW=false`.
-- `pentest` exists in the role set (read-only, ADR 0014 section 8) but cannot be granted before S6:
-  the API, group mappings and the console reject it.
+- `pentest` exists in the role set (read-only, ADR 0014 section 8). Since S6 only the role-binding API grants
+  it (see "The `pentest` role" below); user create/patch, team and agent members and group mappings keep
+  rejecting it (`400 validation_failed`).
 
 - **Reconcile (#216)**: `users.global_roles` is the source of truth until the resolver decides, and
   an application version that does not know the mirror (a rolling deploy with old replicas still
@@ -323,7 +324,7 @@ Team and agent scoped bindings never give the right to grant.
 | 4 the grantee must be visible: home node in the grantor's `users:read` coverage, or already holding a (node, team or agent) binding inside it | `404 user`, the same body and the same queries as for an unknown id |
 | 5 the grantee's home organisation is the node's organisation | `404 user` for organisation members; platform operators get `422 cross_organisation_grant` (the `trb_same_org` trigger is the backstop) |
 | 6 no self-grant, also not by changing one's own binding | `403 self_grant` (platform operators excepted) |
-| 7 `pentest` | not accepted before S6 (`400 validation_failed`); its expiry rules arrive with it |
+| 7 `pentest` | only a tenant admin of the node or above (an `admin` binding without use case that applies at the node) or a platform operator: `403 pentest_grant_forbidden`; `expiresAt` required (`422 expiry_required`) and at most `OAX_PENTEST_MAX_DAYS` ahead (`422 expiry_too_long`); needs `OAX_ROLE_BINDINGS_READ=bindings` (`409 pentest_requires_bindings_read`). See "The `pentest` role" |
 | 8 the last inheriting `admin` of an organisation root | `409 last_admin` on DELETE or on a PATCH that narrows, re-roles or time-boxes it (platform operators excepted; disabled users and expiring bindings do not count) |
 | 9 who may grant may revoke; a user may always remove their own binding | PATCH checks the old and the new tuple; DELETE of a foreign binding needs rules 1 and 2, of an own binding only rule 8 |
 
@@ -455,6 +456,61 @@ non-operator creation beyond the global one; the node limit per organisation is 
 
 Renaming does not bump the authz epoch (the name is not part of any decision); the tree snapshot carries slugs
 only. `tenant.updated` records `authority`.
+
+## The `pentest` role (ADR 0014, slice S6)
+
+`pentest` is time-boxed read-only access for a penetration test: `agents:read, runs:read, events:read,
+costs:read, sources:read, connections:read, policies:read, audit:read, audit:verify, users:read,
+tokens:read, settings:read`. It has no write, execute, approve, cancel or publish permission, **no token
+creation** (`tokens:write`) and **no `audit:export`**; secret values are unreadable for every role.
+
+**Granting** (`POST /v1/tenants/{id}/role-bindings`, `role: "pentest"`; rule 7 of the grant rules):
+
+- only a tenant admin of the node or above (an unexpired `admin` binding without use case that applies at the
+  node, directly or by inheritance) or a platform operator; integrator, viewer, team admin and token scopes
+  without `users:write` are refused (`403`); the other rules (1 to 6, 8, 9) apply unchanged;
+- `expiresAt` is required (`422 expiry_required`) and at most `OAX_PENTEST_MAX_DAYS` (1 to 30, default 30) from
+  now (`422 expiry_too_long`; exactly the maximum is allowed). `PATCH` can only shorten the expiry,
+  change `inherit` or the role: a later `expiresAt` is `422 expiry_extension_requires_new_grant` (remove the
+  binding and grant again, which is a fresh `tenant.role_bound`), clearing it is `422 expiry_required`; the
+  maximum is checked only when the expiry changes, so narrowing `inherit` still works after the maximum was
+  lowered. A `PATCH` that turns a binding into `pentest` needs the same expiry; changing or deleting a pentest
+  binding of somebody else needs the same authority as granting it (a user can still delete their own);
+- `inherit: true` is allowed (a test of a whole organisation is bound on the root) and needs inheriting
+  coverage like any inheriting grant; the role then reads the subtree and nothing else. The database also
+  refuses a `pentest` row without expiry (`trb_pentest_expiry`);
+- the grant needs the resolver read path: with `OAX_ROLE_BINDINGS_READ=legacy` the role would have no effect,
+  so it is refused (`409 pentest_requires_bindings_read`).
+
+**Expiry** is evaluated by the resolver on every request (`appliedAt`: a binding contributes at `t - 1 ms` and
+not at `t`), from the grants of a cached principal as well; it does not wait for the reaper or for a cache
+entry to age out. A session token that outlives the binding simply has no pentest permissions any more.
+
+**Audit** (partition of the binding's node): `tenant.role_bound { role: pentest, expiresAt, inherit, grantedBy }`
+on grant, `pentest.session_started { tenant, actingTenant, expiresAt, inherited, session }` on the first
+request of a token in which a pentest binding is in effect (also if that request is refused; one entry per
+token, binding node and expiry, kept in `pentest_sessions` so replicas and restarts do not repeat it; single
+reads are not audited, denied requests are audited as `access.denied` as before), `pentest.expiry_warning`
+24 hours before the end, and `tenant.role_expired { bindingId, userId, role, expiresAt }` when the reaper
+deletes the binding after its expiry.
+
+**Reaper** (`OAX_BINDING_REAPER_INTERVAL_SECONDS`, default 60 s, once at start-up): deletes expired bindings of
+any role, writes the notices below, purges notices after 30 days. Each binding is handled in its own transaction
+under `for update skip locked`, so several replicas can run it. It only tidies up; access never depends on it.
+
+**Notices.** There is no mail, webhook or push mechanism in the platform, so the only channel is an in-app notice
+(`GET /v1/me/notices`, table `user_notices`, kept 30 days): the tenant admins of the node (direct and
+inheriting, enabled users) and the grantor get `pentest_granted` (also when the expiry is moved),
+`pentest_expiring` 24 hours before the end (once; a grant that ends within 24 hours is its own notice) and
+`pentest_expired`. **Gap:** nobody is actively told; an administrator sees the notices only when the console
+or a client reads that endpoint. Delivery by mail or webhook needs a notification channel that does not exist
+yet; operators who need it can forward the `tenant.role_bound`, `pentest.expiry_warning` and
+`tenant.role_expired` audit entries (audit export) to their own channel.
+
+**Tests**: `apps/api/test/pentest-role.test.ts` (grant matrix, expiry rules, boundary at `t - 1 ms` / `t` with
+a cached principal, session event, reaper and notices, route-table walk over every route: each permission
+route that pentest does not hold and each write on the tenant tree answers `403`, each read route does not;
+token creation, audit export, bindings and connections; last-admin rule unaffected).
 
 ## Audit
 

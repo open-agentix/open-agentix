@@ -292,6 +292,9 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     }
     if (!token) throw new HttpError(401, 'unauthenticated', 'authentication required');
     req.principal = await actingIn(req, reply, await deps.services.identity.authenticate(token));
+    // ADR 0014 section 8: the first request of a session with a pentest binding in effect is
+    // audited, also when the request itself is refused below.
+    await deps.services.pentest.noteSession(req.principal, token);
     if (access !== 'authenticated' && !hasPermission(req.principal, access))
       throw forbidden(`missing permission ${access}`);
   });
@@ -340,6 +343,10 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   // Stops the role binding reconcile (timer and running targeted runs) before the database closes.
   app.addHook('onClose', async () => {
     await deps.services.identity.reconciler.stop();
+  });
+  // Stops the expiry reaper (ADR 0014 S6) before the database closes.
+  app.addHook('onClose', async () => {
+    await deps.services.pentest.stop();
   });
   await app.ready();
   return app;

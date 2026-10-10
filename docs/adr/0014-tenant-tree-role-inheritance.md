@@ -1,6 +1,6 @@
 # ADR 0014: Role inheritance over the tenant tree
 
-- Status: Proposed. Slices S1, S1b, S2, S3, S4 and S5 are implemented (see "Implementation status" below); S6 to S10 are open.
+- Status: Proposed. Slices S1, S1b, S2, S3, S4, S5 and S6 are implemented (see "Implementation status" below); S7 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
   resolver pattern); wave 13 of the [implementation plan](../IMPLEMENTATION-PLAN.md)
@@ -24,6 +24,7 @@
 | S2 | implemented behind a flag (PR for #187, #227) | Acting node for every visible tenant, read-only inheritance, authz epoch and the resolver as read path **behind `OAX_ROLE_BINDINGS_READ=legacy|bindings`** (default `legacy`). Migration **`0021_authz_epoch`**. See "S2" below. |
 | S3 | implemented (PR for #188) | `?scope=node` or `subtree` and `?tenantId=` on the list routes, `tenant` on their rows. No migration. See "S3" below. |
 | S4 | implemented (PR for #189, #226) | Role-binding API, grant rules 1 to 9, audit, bulk opt-in; migration **`0023_trb_source`** (mirror rows get their own key). See "S4" below. |
+| S6 | implemented (PR for #191) | `pentest` grantable with mandatory expiry, notices, `pentest.session_started`, expiry reaper. Migration **`0028_pentest_role`**. See "S6" below. |
 | S5 | implemented (PR for #190) | Write inheritance (clamp removed), `POST /v1/tenants { parentId }` and `PATCH /v1/tenants/{id}` for tenant admins, `GET /v1/me/access` and `GET /v1/tenants/{id}/access`. No migration. See "S5" below. |
 
 Differences between the plan below and what S1 shipped:
@@ -243,6 +244,30 @@ S5 (write inheritance and sub-tenant creation; #190):
   only; the old single-key and new two-key advisory locks do not exclude each other during a rolling deploy.
 - Not in S5: the `parent_admins_do_not_inherit` warning for operators, `actions` on detail responses (A6 #160
   builds on the access endpoints), node deletion and moves (S10).
+
+S6 (`pentest`; #191), details in `docs/tenancy.md` ("The `pentest` role"):
+
+- **Migration `0028_pentest_role`** (additive): `tenant_role_bindings.expiry_warned_at` (the 24 h notice was sent),
+  `pentest_sessions (token_id, tenant_id, expires_at)` (a session start was audited) and `user_notices`
+  (in-app notices). The `trb_pentest_expiry` check and the resolver rule "no expiry, no effect" already
+  existed since S1. Down script: `apps/api/drizzle/down/0028_pentest_role.down.sql`.
+- **Grant (rule 7)** in `grant-authority.ts` (`isTenantAdminAt`, `assertPentestGrant`), used by create, PATCH
+  and DELETE of the role-binding service. `OAX_PENTEST_MAX_DAYS` (1 to 30, default 30). PATCH may only shorten
+  the expiry (`tenant.role_binding_changed`, noticed again), change `inherit` or the role; extending means a new
+  grant (`422 expiry_extension_requires_new_grant`), as in section 7 rule 7. The maximum is checked only when
+  the expiry changes.
+- **Notifications.** The platform has no notification mechanism (no mail, webhook or push), so the ADR's
+  "notified" is implemented as an in-app notice per recipient (`GET /v1/me/notices`) plus the audit entries;
+  the gap is documented, no mail system was built. Recipients: tenant admins of the node (direct and
+  inheriting) and the grantor.
+- **`pentest.session_started`** is written from the authentication hook, per (token, binding node, expiry),
+  before the permission check, so a refused first request is audited too. A failure to record it fails the
+  request (no unaudited pentest session).
+- **Reaper** (`PentestService.runOnce`, `OAX_BINDING_REAPER_INTERVAL_SECONDS`) deletes expired bindings of any
+  role with `tenant.role_expired`; it is cleanup only, expiry is per request.
+- Not changed: `pentest` stays out of `GRANTABLE_ROLES` (users, teams, agent members, group mappings);
+  `GET /v1/roles` still lists the six legacy roles. The console badge (U8) and the demo user (#162) build
+  on `/v1/me` (`bindings[].expiresAt`, `role: pentest`) and `/v1/me/notices`.
 
 ## Context
 

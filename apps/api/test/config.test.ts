@@ -437,3 +437,32 @@ describe('OAX_MCP_RELAY_* (ADR 0016 section 6)', () => {
     expect(() => loadConfig({ ...base, [key]: value })).toThrow();
   });
 });
+
+describe('pentest role settings (ADR 0014 S6)', () => {
+  it('defaults to 30 days and a 60 s reaper', () => {
+    const c = loadConfig(base);
+    expect(c.tenancy.pentestMaxDays).toBe(30);
+    expect(c.tenancy.bindingReaperIntervalSeconds).toBe(60);
+  });
+  it.each([1, 7, 30])('accepts OAX_PENTEST_MAX_DAYS=%i', (days) => {
+    expect(loadConfig({ ...base, OAX_PENTEST_MAX_DAYS: String(days) }).tenancy.pentestMaxDays).toBe(
+      days,
+    );
+  });
+  it.each([
+    ['OAX_PENTEST_MAX_DAYS', '0'],
+    ['OAX_PENTEST_MAX_DAYS', '31'],
+    ['OAX_PENTEST_MAX_DAYS', '1.5'],
+    ['OAX_PENTEST_MAX_DAYS', 'many'],
+    ['OAX_BINDING_REAPER_INTERVAL_SECONDS', '-1'],
+    ['OAX_BINDING_REAPER_INTERVAL_SECONDS', 'soon'],
+  ])('refuses %s=%s', (key, value) => {
+    expect(() => loadConfig({ ...base, [key]: value })).toThrow();
+  });
+  it('allows switching the reaper timer off', () => {
+    expect(
+      loadConfig({ ...base, OAX_BINDING_REAPER_INTERVAL_SECONDS: '0' }).tenancy
+        .bindingReaperIntervalSeconds,
+    ).toBe(0);
+  });
+});
