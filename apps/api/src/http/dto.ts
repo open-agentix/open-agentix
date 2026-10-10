@@ -1,4 +1,9 @@
-import type { AuditCheckpoint, PublishedExpansion } from '@openagentix/core';
+import {
+  runTraceIdentity,
+  traceUrl,
+  type AuditCheckpoint,
+  type PublishedExpansion,
+} from '@openagentix/core';
 import type { AgentSummary } from '../services/agent-summaries.js';
 import type { AgentVersionRow, VersionSummary } from '../services/agents.js';
 import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
@@ -85,6 +90,16 @@ export const runDto = (r: RunRow, agentName: string | null = null) => ({
   errorMessage: r.errorMessage,
   outputs: r.outputs ?? null,
 });
+
+/** The run plus its trace id and, when the operator configured a template, the trace link. */
+export const runDetailDto = (r: RunRow, traceUrlTemplate: string | undefined) => {
+  const identity = runTraceIdentity(r);
+  return {
+    ...runDto(r),
+    traceId: identity?.traceId ?? null,
+    traceUrl: traceUrl(traceUrlTemplate, identity?.traceId ?? null),
+  };
+};
 
 export const stepDto = (s: StepRow) => ({
   seq: s.seq,

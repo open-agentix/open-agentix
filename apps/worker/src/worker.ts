@@ -8,7 +8,12 @@ import {
   type RunResult,
   type Runner,
 } from '@openagentix/runners';
-import { contextGuardFromEnv, type HarnessKind, type RunnerKind } from '@openagentix/core';
+import {
+  contextGuardFromEnv,
+  runTraceIdentity,
+  type HarnessKind,
+  type RunnerKind,
+} from '@openagentix/core';
 import type { PullRequestDelivery } from './git/delivery.js';
 import { NodeDispatcher } from './node-dispatcher.js';
 import { RunQueue } from './queue.js';
@@ -103,18 +108,31 @@ export class Worker {
       contextGuardFromEnv(process.env),
     );
     try {
-      const span = { name: 'oax.run', kind: 'run' } as const;
+      const prepared = await this.services.control.prepare(runId);
+      log.info(
+        { agent: prepared.definition.name, version: prepared.definition.version },
+        'run started',
+      );
+      // One span per attempt (lease), a child of the run's stored root context: a run that a crashed
+      // worker lost and another worker retries stays one trace with several attempt spans. Runs
+      // created before the trace identity existed have none and start their own trace.
+      const identity = runTraceIdentity(run);
+      const span = {
+        name: `invoke_workflow ${prepared.definition.name}`,
+        kind: 'invoke_workflow',
+        ...(identity ? { parent: { traceId: identity.traceId, spanId: identity.rootSpanId } } : {}),
+      } as const;
+      const rootId = await this.services.tenants.rootIdOf(run.tenantId).catch(() => undefined);
       const attributes = {
+        'gen_ai.operation.name': 'invoke_workflow',
+        'gen_ai.workflow.name': prepared.definition.name,
+        'oax.agent.version': prepared.definition.version,
+        'oax.run.attempt': run.attempts,
         'oax.run.id': runId,
         'oax.tenant.id': run.tenantId,
-        'oax.worker': this.id,
+        ...(rootId ? { 'oax.tenant.root_id': rootId } : {}),
       };
-      return await withSpan(span, attributes, async () => {
-        const prepared = await this.services.control.prepare(runId);
-        log.info(
-          { agent: prepared.definition.name, version: prepared.definition.version },
-          'run started',
-        );
+      return await withSpan(span, attributes, async (attempt) => {
         const scope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
         const result = await this.runner.execute(prepared, {
           // Providers resolve per run: platform providers plus the run tenant's BYOK connections.
@@ -147,6 +165,12 @@ export class Worker {
           { status: result.status, usage: result.usage, error: result.error },
           'run finished',
         );
+        attempt.setAttributes({
+          'oax.run.status': result.status,
+          'gen_ai.usage.input_tokens': result.usage.tokensIn,
+          'gen_ai.usage.output_tokens': result.usage.tokensOut,
+          'oax.cost.micro_usd': result.usage.costMicros,
+        });
         return result;
       });
     } catch (e) {

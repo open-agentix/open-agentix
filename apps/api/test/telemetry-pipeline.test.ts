@@ -348,6 +348,9 @@ describe('a failing telemetry pipeline never breaks the run', () => {
     exportFailed: () => {
       throw new Error('stats failure');
     },
+    inboundContext: () => {
+      throw new Error('stats failure');
+    },
   };
 
   it('a throwing guard drops attributes and names, the run completes', async () => {

@@ -334,11 +334,11 @@ Event sources reference signing secrets by name (`secretRefs`, two during rotati
 | `OAX_OTEL_KEEP` | `error,deny,approval,budget,guard` | Parsed only (slice S6). |
 | `OAX_OTEL_KEEP_BUFFER_SPANS` | `512` | Parsed only (slice S6). |
 | `OAX_OTEL_NODE_EVENTS_MAX` | `128` | Parsed only (slice S4). |
-| `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link`; parsed only (slice S2). |
+| `OAX_OTEL_INBOUND_CONTEXT` | `ignore` | `ignore` or `link`: what happens to a well-formed inbound `traceparent` on an API request. It is never a parent and never the run's trace. `link` records it as a span link on the request span (needs an exporter; ids only, no `tracestate`/baggage); `ignore` drops it. Either way it is counted in `oax_otel_inbound_context_total{result}`. |
 | `OAX_OTEL_MCP_PROPAGATION` | `deny` | `deny` or `allow`; parsed only (slice S8). |
 | `OAX_OTEL_CONTENT` | `off` | Only `off` is accepted (content capture is a gated later slice). |
 | `OAX_OTEL_GENAI_METRICS` | `false` | Parsed only (slice S5). |
-| `OAX_OTEL_TRACE_URL_TEMPLATE` | – | Run-view link template; must contain `{traceId}`; parsed only (slice S2). |
+| `OAX_OTEL_TRACE_URL_TEMPLATE` | – | Link template for the trace of a run, e.g. `https://tempo.internal/trace/{traceId}` (http/https, no credentials, must contain `{traceId}`). `GET /v1/runs/{id}` returns the filled link as `traceUrl` next to `traceId`. |
 
 **Refused at start-up:** the standard `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`,
 `_CLIENT_CERTIFICATE`, `_CLIENT_KEY` (also with `_TRACES_`), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,

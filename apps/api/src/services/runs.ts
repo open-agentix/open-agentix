@@ -3,6 +3,7 @@ import {
   bindingPermissions,
   hasPermission,
   isTerminal,
+  newRunTraceIdentity,
   visibleAgents,
   visibleTeams,
   type AgentDefinition,
@@ -15,6 +16,7 @@ import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { agents, approvals, events, runSteps, runs } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
+import { startGuardedSpan } from '../telemetry.js';
 import {
   decodeSeqCursor,
   decodeTimeCursor,
@@ -31,6 +33,12 @@ interface AdmissionPlan {
   latest: Awaited<ReturnType<AgentsService['latestVersionId']>>;
   versionId: string | null;
   definition: AgentDefinition | null;
+}
+
+/** Trigger family for the admission span (`api`, `cron`, `webhook`, ...); a closed slug or `other`. */
+function triggerKind(triggeredBy: string): string {
+  const kind = triggeredBy.split(':')[0] ?? '';
+  return /^[a-z][a-z0-9_-]{0,31}$/.test(kind) ? kind : 'other';
 }
 
 /** The 409 every trigger path gets for a disabled agent. */
@@ -123,14 +131,43 @@ export class RunsService {
       ? await this.admit(input.tx, input, plan)
       : await this.ctx.db.transaction((tx) => this.admit(tx as unknown as Db, input, plan));
     if (outcome.refused) throw agentDisabled();
+    this.emitAdmitSpan(outcome.run, input.triggeredBy, outcome.auditSeq);
     return outcome.run;
+  }
+
+  /**
+   * The admission span `oax.run.admit` (ADR 0015 section 2): root span of the run's trace, created
+   * with exactly the ids stored on the run row, so the audit entry `run.queued` / `run.blocked`
+   * (`payload.otel.spanId`) and the exported span name the same span. The request span that is
+   * active here (API, webhook) is linked, never the parent. Emitting is best effort and must never
+   * fail an admission that is already stored.
+   */
+  private emitAdmitSpan(run: RunRow, triggeredBy: string, auditSeq: number): void {
+    const traceId = run.traceId;
+    const spanId = run.traceRootSpanId;
+    if (!traceId || !spanId) return;
+    try {
+      const open = startGuardedSpan(
+        { name: 'oax.run.admit', kind: 'run_admit', root: { traceId, spanId }, linkActive: true },
+        {
+          'oax.run.id': run.id,
+          'oax.tenant.id': run.tenantId,
+          'oax.trigger.kind': triggerKind(triggeredBy),
+          'oax.admission.result': run.status === 'queued' ? 'queued' : 'blocked',
+          'oax.audit.seq': auditSeq,
+        },
+      );
+      open.end();
+    } catch {
+      // Telemetry never decides whether a run exists.
+    }
   }
 
   private async admit(
     db: Db,
     input: Parameters<RunsService['enqueue']>[0],
     { latest, versionId, definition }: AdmissionPlan,
-  ): Promise<{ refused: false; run: RunRow } | { refused: true }> {
+  ): Promise<{ refused: false; run: RunRow; auditSeq: number } | { refused: true }> {
     // Share lock on the agent row: serialises with disable/enable until this transaction ends.
     const lockedRes = (await db.execute(
       sql`select disabled_at from agents where id = ${input.agentId} for share`,
@@ -186,10 +223,15 @@ export class RunsService {
     const budget = breach ? breach.message : null;
     const id = input.id ?? randomUUID();
     const now = this.ctx.now();
+    // Trace identity from the CSPRNG, written once with the row. Never derived from the run id and
+    // never read from the event, a header or any other input (ADR 0015 section 2).
+    const trace = newRunTraceIdentity();
     const [row] = await db
       .insert(runs)
       .values({
         id,
+        traceId: trace.traceId,
+        traceRootSpanId: trace.rootSpanId,
         tenantId: latest.tenantId,
         agentId: input.agentId,
         agentVersionId: versionId!,
@@ -205,7 +247,7 @@ export class RunsService {
       })
       .returning();
     this.ctx.metrics.runsCreated.inc({ trigger: input.triggeredBy.split(':')[0] ?? 'unknown' });
-    await this.audit.append(
+    const queued = await this.audit.append(
       {
         actor: input.triggeredBy,
         tenantId: latest.tenantId,
@@ -221,7 +263,7 @@ export class RunsService {
       },
       db,
     );
-    return { refused: false, run: row! };
+    return { refused: false, run: row!, auditSeq: queued.seq };
   }
 
   async get(id: string): Promise<RunRow> {

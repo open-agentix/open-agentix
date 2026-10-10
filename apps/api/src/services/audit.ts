@@ -8,6 +8,9 @@ import {
   type AuditEntry,
   type AuditEntryInput,
   type VerifyResult,
+  isSpanId,
+  isTraceId,
+  runTraceIdentity,
 } from '@openagentix/core';
 import type { KeyObject } from 'node:crypto';
 import { and, asc, desc, eq, gte, lt, lte, sql } from 'drizzle-orm';
@@ -15,6 +18,7 @@ import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { auditCheckpoints, auditLog, runs } from '../db/schema.js';
 import { decodeSeqCursor, encodeSeqCursor, page } from '../pagination.js';
+import { activeGuardedSpan, activeSpanIdIn } from '../telemetry.js';
 
 const AUDIT_LOCK = 734_201;
 
@@ -36,7 +40,48 @@ export function rowToEntry(r: Row): AuditEntry {
 }
 
 /** What services append; `tenantId` is the partition key (resolved from the run when omitted). */
-export type AuditAppend = AuditEntryInput & { tenantId?: string | null };
+export type AuditAppend = AuditEntryInput & {
+  tenantId?: string | null;
+  /**
+   * The entry documents the span that is active now (ADR 0015 section 11): `payload.otel.spanId` is
+   * that span, and, once the entry is committed, the span gets `oax.audit.seq`. Without it (or when
+   * the active span is not part of the run's trace) `spanId` is the root span of the run's trace.
+   */
+  linkSpan?: boolean;
+};
+
+/** What an audit entry of a run records about the run's trace (ids only, set by the server). */
+export interface AuditOtel {
+  traceId: string;
+  spanId: string;
+}
+
+/** Immutable per run: the tenant and the trace identity written at creation. */
+interface RunIdentity {
+  tenantId: string;
+  traceId: string | null;
+  rootSpanId: string | null;
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' &&
+  v !== null &&
+  !Array.isArray(v) &&
+  Object.getPrototypeOf(v) === Object.prototype;
+
+/**
+ * Sets the reserved `otel` key of a payload. A caller-supplied `otel` is always removed (the field
+ * is only ever written here, from the run row), so neither a node report nor a service can forge a
+ * link. A payload that is not a plain object (an array, a string) cannot carry the field and stays
+ * as it is.
+ */
+export function withOtel(payload: unknown, otel: AuditOtel | null): unknown {
+  if (payload === undefined || payload === null) return otel ? { otel } : (payload ?? null);
+  if (!isPlainObject(payload)) return payload;
+  const { otel: _forged, ...rest } = payload;
+  void _forged;
+  return otel ? { ...rest, otel } : rest;
+}
 
 export interface AuditListFilter {
   /** Restricts the view to one tenant; `'all'` is for platform operators only. */
@@ -66,24 +111,47 @@ export class AuditService {
       this.publicKeys[ctx.config.audit.signingKeyId] ??= publicKeyFrom(this.signingKey);
   }
 
-  /** Tenant of a run (immutable, so cached for a long time). */
-  private async tenantOfRun(runId: string, db: Db = this.ctx.db): Promise<string | null> {
-    const key = `run-tenant:${runId}`;
-    const hit = await this.ctx.cache.get<string>(key);
+  /** Tenant and trace identity of a run (immutable, so cached for a long time). */
+  private async identityOfRun(runId: string, db: Db = this.ctx.db): Promise<RunIdentity | null> {
+    const key = `run-ident:${runId}`;
+    const hit = await this.ctx.cache.get<RunIdentity>(key);
     if (hit) return hit;
     const [r] = await db
-      .select({ t: runs.tenantId })
+      .select({ t: runs.tenantId, traceId: runs.traceId, root: runs.traceRootSpanId })
       .from(runs)
       .where(sql`${runs.id} = ${runId}`);
-    if (r) await this.ctx.cache.set(key, r.t, 3_600_000);
-    return r?.t ?? null;
+    if (!r) return null;
+    const trace = runTraceIdentity({ traceId: r.traceId, traceRootSpanId: r.root });
+    const identity: RunIdentity = {
+      tenantId: r.t,
+      traceId: trace?.traceId ?? null,
+      rootSpanId: trace?.rootSpanId ?? null,
+    };
+    await this.ctx.cache.set(key, identity, 3_600_000);
+    return identity;
   }
 
   /** Appends one entry; pass `tx` to make it part of a surrounding transaction. */
   async append(input: AuditAppend, tx?: Db): Promise<AuditEntry> {
-    const { tenantId: explicit, ...entryInput } = input;
-    const tenantId =
-      explicit ?? (input.runId ? await this.tenantOfRun(input.runId, tx ?? this.ctx.db) : null);
+    const { tenantId: explicit, linkSpan, ...entryInput } = input;
+    const identity = input.runId ? await this.identityOfRun(input.runId, tx ?? this.ctx.db) : null;
+    const tenantId = explicit ?? identity?.tenantId ?? null;
+    // payload.otel = { traceId, spanId } from the run row (ADR 0015 section 11). Part of the hashed
+    // payload, present with or without an exporter; absent for runs created before the trace
+    // identity existed (their entries and hashes are untouched).
+    let otel: AuditOtel | null = null;
+    // Only when the entry belongs to the run's own tenant: an `access.denied` entry that a principal
+    // of another tenant causes for a foreign run id lands in the caller's audit view and must not
+    // carry the foreign run's trace id.
+    const ownTenant =
+      identity !== null &&
+      (explicit === undefined || explicit === null || explicit === identity.tenantId);
+    if (ownTenant && identity.traceId && identity.rootSpanId) {
+      const active = linkSpan ? activeSpanIdIn(identity.traceId) : undefined;
+      const spanId = active ?? identity.rootSpanId;
+      if (isTraceId(identity.traceId) && isSpanId(spanId))
+        otel = { traceId: identity.traceId, spanId };
+    }
     const run = async (db: Db) => {
       await db.execute(sql`select pg_advisory_xact_lock(${AUDIT_LOCK})`);
       const [prev] = await db
@@ -93,6 +161,7 @@ export class AuditService {
         .limit(1);
       const entry = createAuditEntry(prev ?? null, {
         ...entryInput,
+        payload: withOtel(entryInput.payload, otel),
         ts: input.ts ?? this.ctx.now(),
       });
       await db.insert(auditLog).values({
@@ -113,7 +182,14 @@ export class AuditService {
       }
       return entry;
     };
-    return tx ? run(tx) : this.ctx.db.transaction((t) => run(t as unknown as Db));
+    const entry = tx
+      ? await run(tx)
+      : await this.ctx.db.transaction((t) => run(t as unknown as Db));
+    // Reverse link, only once the entry is committed (inside a caller's transaction it may still
+    // roll back, so the caller links after its own commit).
+    if (linkSpan && !tx && otel)
+      activeGuardedSpan(otel.traceId)?.setAttributes({ 'oax.audit.seq': entry.seq });
+    return entry;
   }
 
   private async insertCheckpoint(

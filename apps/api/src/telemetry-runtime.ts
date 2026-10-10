@@ -13,7 +13,11 @@ export interface TelemetryStats {
   redactions(kind: string, n: number): void;
   spansDropped(n: number): void;
   exportFailed(reason: ExportFailureReason): void;
+  /** An inbound `traceparent` was seen (ADR 0015 section 2); it is never a parent. */
+  inboundContext(result: InboundContextResult, n: number): void;
 }
+
+export type InboundContextResult = 'ignored' | 'linked' | 'invalid';
 
 export type ExportFailureReason = 'timeout' | 'network' | 'http' | 'other';
 
@@ -22,6 +26,7 @@ export const NOOP_STATS: TelemetryStats = {
   redactions: () => undefined,
   spansDropped: () => undefined,
   exportFailed: () => undefined,
+  inboundContext: () => undefined,
 };
 
 export interface TelemetryRuntime {
@@ -64,6 +69,7 @@ function safeStats(stats: TelemetryStats): TelemetryStats {
     redactions: call((k: string, n: number) => stats.redactions(k, n)),
     spansDropped: call((n: number) => stats.spansDropped(n)),
     exportFailed: call((r: ExportFailureReason) => stats.exportFailed(r)),
+    inboundContext: call((r: InboundContextResult, n: number) => stats.inboundContext(r, n)),
   };
 }
 
