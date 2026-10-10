@@ -108,19 +108,22 @@ All notable changes to this project are documented here. The format follows
   The Console gets a Tools view per HTTP connection with a diff against the approved list (EN/DE).
   OpenAPI and the UI schema types are updated; see `docs/mcp.md`.
 - **Key service and encrypted token store for MCP OAuth (ADR 0016 slice S5, #235)**: platform
-  key-encryption key from `OAX_MCP_OAUTH_KEK_FILE` (or `OAX_MCP_OAUTH_KEK`, removed from the
-  environment after reading; `OAX_MCP_OAUTH_KEK_ID`), one data key per tenant, AES-256-GCM with the
-  tenant, connection, issuer, resource and credential version as additional authenticated data.
-  Migration `0026_mcp_oauth_tokens` (tables `mcp_oauth_tokens`, `mcp_oauth_clients`,
-  `tenant_data_keys`; `connections.credential_version`; down script and snapshot included).
-  `McpCredentials.accessToken()` is limited to the api and the trusted worker, reads the URL and
-  credential version from the database and registers the value with the `ContextGuard`, the telemetry
-  guard and a bounded redactor for logs, audit payloads, responses and streams before returning it.
-  Stored token values must look like credentials (RFC 6750 charset, random enough, no identifiers).
-  Changing a connection's URL bumps the credential version and deletes its tokens. Crypto-shredding is
-  partial while one platform KEK exists (see `docs/mcp.md`). Token leak canary tests cover logs,
-  errors, audit, API responses, step records, model requests, the node and child environment,
-  container create options and spans. No new endpoint; nothing changes without a configured key.
+  key-encryption key from `OAX_MCP_OAUTH_KEK_FILE` (or `OAX_MCP_OAUTH_KEK`, removed from `process.env`
+  after reading; `OAX_MCP_OAUTH_KEK_ID`; the key file must not be inside `OAX_SECRETS_DIR`), one data key
+  per tenant, AES-256-GCM with the tenant, connection, issuer, resource and credential version as
+  additional authenticated data. Migration `0026_mcp_oauth_tokens` (tables `mcp_oauth_tokens`,
+  `mcp_oauth_clients`, `tenant_data_keys`; `connections.credential_version`; down script and snapshot
+  included). `McpCredentials.accessToken()` reads the URL and credential version from the database,
+  returns the token with the resource it may be sent to, and registers the value with the
+  `ContextGuard` and a bounded, tenant-scoped per-process registry before returning it. The registry
+  scrubs logs (all values), audit payloads, responses, run and model streams (the tenant's values only)
+  and span attributes, in linear time. Stored token values must look like credentials (RFC 6750
+  charset, entropy for their alphabet, not repetitive, not word-like, no identifiers). Changing a
+  connection's URL bumps the credential version and deletes its tokens in one transaction.
+  Crypto-shredding is partial while one platform KEK exists (see `docs/mcp.md`). Token leak canary
+  tests cover logs, errors, audit, API responses, step records, model requests, the node and child
+  environment, container create options and spans. No new endpoint; nothing changes without a
+  configured key.
 - **Role-binding API (ADR 0014 slice S4, #189, #226)**: `GET/POST /v1/tenants/{id}/role-bindings`,
   `PATCH/DELETE .../{bindingId}` (`inherit` required on POST) and the platform-operator bulk opt-in
   `POST /v1/tenants/{rootId}/role-bindings/enable-inheritance { roles, dryRun }` with a dry run that lists the

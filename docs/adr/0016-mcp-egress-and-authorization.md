@@ -424,7 +424,9 @@ the platform refuses to use the stored client and marks the connection `reauthor
   process memory beyond one call and never across tenants. **Deviation recorded in S5:** the redactor
   registry keeps the value of every token handed out in a bounded, per-process in-memory set so that
   logs, audit payloads, responses and streams can be scrubbed; entries leave at expiry (plus 5
-  minutes), on revocation or deletion, and least recently used first when the set is full.
+  minutes), on revocation or deletion, and, when a limit is hit, least recently used first (a tenant
+  over its quota loses its own values first). Audit, responses and streams are scrubbed with the values
+  of the tenant only; logs with all of them.
 - **Revocation**: deleting or disabling a connection, revoking a grant (ADR 0012), rotating the
   client secret, changing the URL or issuer, and an admin's "disconnect" delete the stored tokens
   and call the authorization server's revocation endpoint (RFC 7009) when advertised (best effort,
