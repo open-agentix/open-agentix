@@ -8,7 +8,7 @@ import {
   type Role,
   type RoleNode,
 } from '@openagentix/core';
-import { and, asc, count, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { tenantRoleBindings, tenants, users } from '../db/schema.js';
@@ -18,6 +18,7 @@ import type { AuditService } from './audit.js';
 import type { IdentityService, TenantRow } from './identity.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 import {
+  assertNotLastAdmin,
   coversSubtree,
   loadActor,
   permissionsAt,
@@ -183,43 +184,6 @@ export class TenantRoleBindingsService {
     if (u.disabled)
       throw new HttpError(422, 'grantee_disabled', 'a role cannot be bound to a disabled user');
     return u;
-  }
-
-  /** Rule 8: would this change leave the organisation root without an inheriting admin? */
-  private async assertNotLastAdmin(
-    tx: Db,
-    actor: Actor,
-    node: TenantRow,
-    before: Row,
-    after: { role: string; inherit: boolean; expiresAt: Date | null } | null,
-  ): Promise<void> {
-    if (actor.platformAdmin || node.parentId !== null) return;
-    const counts = (b: { role: string; inherit: boolean; expiresAt: Date | null }) =>
-      b.role === 'admin' && b.inherit && b.expiresAt === null;
-    if (before.useCase !== null || !counts(before) || (after && counts(after))) return;
-    const [others] = await tx
-      .select({ n: count() })
-      .from(tenantRoleBindings)
-      .innerJoin(users, eq(users.id, tenantRoleBindings.userId))
-      .where(
-        and(
-          eq(tenantRoleBindings.tenantId, node.id),
-          eq(tenantRoleBindings.role, 'admin'),
-          isNull(tenantRoleBindings.useCase),
-          eq(tenantRoleBindings.inherit, true),
-          // Same shape as `counts`: a co-admin whose binding expires does not keep the organisation
-          // administered (it would be left without one at that second).
-          isNull(tenantRoleBindings.expiresAt),
-          eq(users.disabled, false),
-          ne(tenantRoleBindings.id, before.id),
-        ),
-      );
-    if (Number(others?.n ?? 0) === 0)
-      throw new HttpError(
-        409,
-        'last_admin',
-        'this is the last inheriting administrator of the organisation',
-      );
   }
 
   private async viewOf(tx: Db, id: string): Promise<BindingView> {
@@ -432,7 +396,7 @@ export class TenantRoleBindingsService {
         this.assertMayHold(actor, perms, node, row.role as Role, row.inherit);
         this.assertMayHold(actor, perms, node, next.role, next.inherit);
         if (changes.some((c) => c.field === 'expiresAt')) this.checkExpiry(next.expiresAt);
-        await this.assertNotLastAdmin(tx, actor, node, row, next);
+        await assertNotLastAdmin(tx, actor, node, row, next);
         await tx
           .update(tenantRoleBindings)
           .set({ role: next.role, inherit: next.inherit, expiresAt: next.expiresAt })
@@ -482,7 +446,7 @@ export class TenantRoleBindingsService {
           'this binding mirrors the global roles of the user; change the global roles instead',
         );
       if (!own) this.assertMayHold(actor, perms, node, found.role as Role, found.inherit);
-      await this.assertNotLastAdmin(tx, actor, node, found, null);
+      await assertNotLastAdmin(tx, actor, node, found, null);
       await tx.delete(tenantRoleBindings).where(eq(tenantRoleBindings.id, found.id));
       await this.audit.append(
         {

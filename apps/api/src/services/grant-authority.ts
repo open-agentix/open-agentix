@@ -9,7 +9,7 @@ import {
   type Role,
   type RoleNode,
 } from '@openagentix/core';
-import { and, count, eq, inArray } from 'drizzle-orm';
+import { and, count, eq, inArray, isNull, ne } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agentRoleBindings,
@@ -20,7 +20,7 @@ import {
   tenants,
   users,
 } from '../db/schema.js';
-import { forbidden, notFound } from '../errors.js';
+import { HttpError, forbidden, notFound } from '../errors.js';
 import { loadRawGrants } from './role-bindings.js';
 
 /**
@@ -160,4 +160,114 @@ export async function visibleUser(
     ));
   if (!u || none || !visible) throw notFound('user');
   return u;
+}
+
+type BindingRow = typeof tenantRoleBindings.$inferSelect;
+
+/**
+ * Rule 8 of ADR 0014 section 7: would this change leave the organisation root without an
+ * inheriting, unexpiring `admin`? `after` is the state of the binding afterwards (`null`: gone).
+ * Platform operators are exempt; only roots are protected. Callers hold the binding lock.
+ */
+export async function assertNotLastAdmin(
+  tx: Db,
+  actor: Actor,
+  node: { id: string; parentId: string | null },
+  before: BindingRow,
+  after: { role: string; inherit: boolean; expiresAt: Date | null } | null,
+): Promise<void> {
+  if (actor.platformAdmin || node.parentId !== null) return;
+  const counts = (b: { role: string; inherit: boolean; expiresAt: Date | null }) =>
+    b.role === 'admin' && b.inherit && b.expiresAt === null;
+  if (before.useCase !== null || !counts(before) || (after && counts(after))) return;
+  const [others] = await tx
+    .select({ n: count() })
+    .from(tenantRoleBindings)
+    .innerJoin(users, eq(users.id, tenantRoleBindings.userId))
+    .where(
+      and(
+        eq(tenantRoleBindings.tenantId, node.id),
+        eq(tenantRoleBindings.role, 'admin'),
+        isNull(tenantRoleBindings.useCase),
+        eq(tenantRoleBindings.inherit, true),
+        // Same shape as `counts`: a co-admin whose binding expires does not keep the organisation
+        // administered (it would be left without one at that second).
+        isNull(tenantRoleBindings.expiresAt),
+        eq(users.disabled, false),
+        ne(tenantRoleBindings.id, before.id),
+      ),
+    );
+  if (Number(others?.n ?? 0) === 0)
+    throw new HttpError(
+      409,
+      'last_admin',
+      'this is the last inheriting administrator of the organisation',
+    );
+}
+
+/** What is being done to another user's account (ADR 0014 S5, user lifecycle across the tree). */
+export type UserChange =
+  { kind: 'disable' } | { kind: 'roles'; wanted: readonly Role[] } | { kind: 'tokens' };
+
+/**
+ * Why `actor` may not manage `targetId`'s account, or `null`. A user is managed through the node
+ * they live on, but their grants can sit on other nodes, above the manager: whoever manages them
+ * must hold `users:write` on **every** node they are bound on (and cover its subtree when the
+ * binding inherits), so a subordinate administrator can never lock out or demote a superior.
+ * Platform operator accounts are managed by operators only. Operators are exempt.
+ */
+export async function userManagementViolation(
+  tx: Db,
+  actor: Actor,
+  target: { id: string; platformAdmin: boolean },
+  now: Date,
+): Promise<string | null> {
+  if (actor.platformAdmin || target.id === actor.userId) return null;
+  if (target.platformAdmin) return 'platform operator accounts are managed by operators';
+  const rows = await tx
+    .select({ b: tenantRoleBindings, node: tenants })
+    .from(tenantRoleBindings)
+    .innerJoin(tenants, eq(tenants.id, tenantRoleBindings.tenantId))
+    .where(eq(tenantRoleBindings.userId, target.id));
+  for (const { b, node } of rows) {
+    if (b.expiresAt !== null && !(b.expiresAt.getTime() > now.getTime())) continue;
+    const perms = permissionsAt(actor, node, now);
+    if (!perms.has('users:write')) return 'the user holds a role on a tenant you cannot manage';
+    if (!isRole(b.role) || !ROLE_PERMISSIONS[b.role].every((p) => perms.has(p)))
+      return 'the user holds a role above your own';
+    if (b.inherit && !coversSubtree(actor, node, b.role, now))
+      return 'the user holds an inheriting role your bindings do not cover';
+  }
+  return null;
+}
+
+/**
+ * The write-side guard for disabling a user, changing their global roles and revoking their API
+ * tokens: {@link userManagementViolation} (`403`) plus the last-admin rule (`409`) for the changes
+ * that can remove an inheriting root administrator. The caller holds the tree lock (shared) and the
+ * binding lock and passes the transaction. No-op for operators and for the user themselves
+ * (except that leaving as the last admin is still refused).
+ */
+export async function assertMayChangeUser(
+  tx: Db,
+  actor: Actor,
+  target: { id: string; platformAdmin: boolean },
+  change: UserChange,
+  now: Date,
+): Promise<void> {
+  const why = await userManagementViolation(tx, actor, target, now);
+  if (why !== null) throw forbidden(why);
+  if (actor.platformAdmin || change.kind === 'tokens') return;
+  const rows = await tx
+    .select({ b: tenantRoleBindings, node: tenants })
+    .from(tenantRoleBindings)
+    .innerJoin(tenants, eq(tenants.id, tenantRoleBindings.tenantId))
+    .where(eq(tenantRoleBindings.userId, target.id));
+  for (const { b, node } of rows) {
+    // Roles: only the mirror rows follow `global_roles`; explicit grants are not touched by it.
+    const removed =
+      change.kind === 'disable' ||
+      (b.source === 'mirror' && b.tenantId === node.id && !change.wanted.includes(b.role as Role));
+    if (removed) await assertNotLastAdmin(tx, actor, node, b, null);
+  }
 }

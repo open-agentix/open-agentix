@@ -35,7 +35,7 @@ import {
   teams,
   users,
 } from '../db/schema.js';
-import type { tenants } from '../db/schema.js';
+import { tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { Db } from '../db/client.js';
 import type { AuditService } from './audit.js';
@@ -47,6 +47,13 @@ import {
   mirrorGlobalRoles,
 } from './role-bindings.js';
 import { TenantAccess } from './tenant-access.js';
+import {
+  assertMayChangeUser,
+  loadActor,
+  userManagementViolation,
+  type UserChange,
+} from './grant-authority.js';
+import { lockBindings, lockTreeShared } from './tree-lock.js';
 
 export type UserRow = typeof users.$inferSelect;
 export type TeamRow = typeof teams.$inferSelect;
@@ -123,6 +130,9 @@ const unauthenticated = (msg = 'authentication required') =>
   new HttpError(401, 'unauthenticated', msg);
 
 /** Users, teams, sessions, API tokens, local/LDAP/OIDC login and principal resolution. */
+/** A principal that identifies itself: operators are exempt from the lifecycle guard. */
+type GuardedActor = Partial<Pick<Principal, 'platformAdmin' | 'scopes'>>;
+
 export class IdentityService {
   private oidc: OidcClient | null;
   private readonly access: TenantAccess;
@@ -659,7 +669,7 @@ export class IdentityService {
   }
 
   /** API tokens of one user, or of every user of the actor's tenant (`userId` null). */
-  async listTokens(actor: TenantActor, userId: string | null): Promise<TokenInfo[]> {
+  async listTokens(actor: TenantActor & GuardedActor, userId: string | null): Promise<TokenInfo[]> {
     const rows = await this.ctx.db
       .select({ token: apiTokens })
       .from(apiTokens)
@@ -674,33 +684,43 @@ export class IdentityService {
       )
       .orderBy(desc(apiTokens.createdAt))
       .limit(500);
-    return rows.map((r) => toTokenInfo(r.token));
+    const visible = await this.manageableOwners(
+      actor,
+      rows.map((r) => r.token.userId),
+    );
+    return rows.filter((r) => visible.has(r.token.userId)).map((r) => toTokenInfo(r.token));
   }
 
   async revokeToken(principal: Principal, id: string, allowAny: boolean): Promise<void> {
-    const [found] = await this.ctx.db
-      .select({ token: apiTokens, tenantId: users.tenantId })
-      .from(apiTokens)
-      .innerJoin(users, eq(users.id, apiTokens.userId))
-      .where(eq(apiTokens.id, id));
-    const row = found?.token;
-    if (
-      !found ||
-      found.tenantId !== principal.tenantId ||
-      (!allowAny && row!.userId !== principal.userId)
-    )
-      throw notFound('token');
-    await this.ctx.db
-      .update(apiTokens)
-      .set({ revokedAt: this.ctx.now() })
-      .where(eq(apiTokens.id, id));
-    await this.ctx.cache.del(`auth:${id}`);
-    await this.audit.append({
-      actor: principal.userId,
-      tenantId: principal.tenantId,
-      action: 'token.revoked',
-      target: id,
+    await this.ctx.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      const [found] = await tx
+        .select({ token: apiTokens, tenantId: users.tenantId })
+        .from(apiTokens)
+        .innerJoin(users, eq(users.id, apiTokens.userId))
+        .where(eq(apiTokens.id, id));
+      const row = found?.token;
+      if (
+        !found ||
+        found.tenantId !== principal.tenantId ||
+        (!allowAny && row!.userId !== principal.userId)
+      )
+        throw notFound('token');
+      // Revoking another user's token is managing that user (ADR 0014 S5).
+      if (row!.userId !== principal.userId)
+        await this.guardUserChange(tx, principal, row!.userId, { kind: 'tokens' });
+      await tx.update(apiTokens).set({ revokedAt: this.ctx.now() }).where(eq(apiTokens.id, id));
+      await this.audit.append(
+        {
+          actor: principal.userId,
+          tenantId: principal.tenantId,
+          action: 'token.revoked',
+          target: id,
+        },
+        tx,
+      );
     });
+    await this.ctx.cache.del(`auth:${id}`);
   }
 
   async logout(bearer: string): Promise<void> {
@@ -978,7 +998,7 @@ export class IdentityService {
   }
 
   async updateUser(
-    actor: TenantActor,
+    actor: TenantActor & GuardedActor,
     id: string,
     patch: {
       displayName?: string | undefined;
@@ -991,6 +1011,16 @@ export class IdentityService {
     if (patch.globalRoles !== undefined) set.globalRoles = patch.globalRoles;
     if (patch.disabled !== undefined) set.disabled = patch.disabled;
     const updated = await this.ctx.db.transaction(async (tx) => {
+      await this.guardUserChange(
+        tx as unknown as Db,
+        actor,
+        id,
+        patch.disabled === true
+          ? { kind: 'disable' }
+          : patch.globalRoles !== undefined
+            ? { kind: 'roles', wanted: patch.globalRoles }
+            : null,
+      );
       const rows = await tx
         .update(users)
         .set(set)
@@ -1015,6 +1045,59 @@ export class IdentityService {
       payload: patch,
     });
     return this.getUser(id, actor.tenantId);
+  }
+
+  /**
+   * ADR 0014 S5: with inheriting bindings, the user an administrator manages through the acting
+   * node can hold grants above it. Under the tree and binding locks the actor's and the target's
+   * grants are re-read and {@link assertMayChangeUser} decides. Only for non-operator callers that
+   * identify themselves as a principal and only on the `bindings` read path (the legacy path has
+   * no authority below the home node, so nothing can reach above it).
+   */
+  private async guardUserChange(
+    tx: Db,
+    actor: TenantActor & GuardedActor,
+    targetId: string,
+    change: UserChange | null,
+  ): Promise<void> {
+    if (!change || actor.platformAdmin !== false) return;
+    if (this.ctx.config.auth.roleBindingsRead !== 'bindings') return;
+    const [node] = await tx.select().from(tenants).where(eq(tenants.id, actor.tenantId));
+    const [target] = await tx
+      .select({ id: users.id, platformAdmin: users.platformAdmin })
+      .from(users)
+      .where(and(eq(users.id, targetId), eq(users.tenantId, actor.tenantId)));
+    // An unknown user stays a plain 404 further down; nothing to protect.
+    if (!node || !target) return;
+    await lockTreeShared(tx, node.rootId);
+    await lockBindings(tx, node.rootId);
+    const grantor = await loadActor(tx, { ...actor, kind: 'user' } as Principal);
+    await assertMayChangeUser(tx, grantor, target, change, this.ctx.now());
+  }
+
+  /**
+   * The token owners whose tokens the actor may see: themselves, and (on the `bindings` read path,
+   * for non-operators) users that {@link userManagementViolation} does not exclude.
+   */
+  private async manageableOwners(
+    actor: TenantActor & GuardedActor,
+    ownerIds: readonly string[],
+  ): Promise<Set<string>> {
+    const ids = [...new Set(ownerIds)];
+    if (actor.platformAdmin !== false || this.ctx.config.auth.roleBindingsRead !== 'bindings')
+      return new Set(ids);
+    const others = ids.filter((i) => i !== actor.userId);
+    if (others.length === 0) return new Set(ids);
+    const grantor = await loadActor(this.ctx.db, { ...actor, kind: 'user' } as Principal);
+    const targets = await this.ctx.db
+      .select({ id: users.id, platformAdmin: users.platformAdmin })
+      .from(users)
+      .where(inArray(users.id, others));
+    const out = new Set(ids.filter((i) => i === actor.userId));
+    for (const t of targets)
+      if ((await userManagementViolation(this.ctx.db, grantor, t, this.ctx.now())) === null)
+        out.add(t.id);
+    return out;
   }
 
   /** Drops the cached principals of every token of the user (the next request rebuilds them). */
