@@ -456,7 +456,10 @@ remote result), `mcp.oauth.client_registered` (tenant, issuer, method), `mcp.oau
 - New attributes on `execute_tool` (allowlisted, metadata only): `oax.mcp.auth` (`none | static |
   oauth`), `oax.mcp.relay` (boolean), `oax.mcp.tools_digest_match` (boolean). No token, scope
   string, issuer URL of a tenant or tool description is exported.
-- `traceparent` propagation (ADR 0015 S8) goes through the relay unchanged and stays default off.
+- `traceparent` propagation (ADR 0015 S8) stays default off. The relay does not forward anything a
+  node sends (header, `_meta`); it opens its own `execute_tool` span (`oax.mcp.relay=true`) and
+  offers only that span's `traceparent` to the gateway, which sends it when the platform and the
+  connection both opted in.
 - Metrics: `oax_mcp_egress_denied_total{reason}`, `oax_mcp_tools_changed_total`,
   `oax_mcp_oauth_refresh_total{outcome}` (no tenant or connection labels).
 

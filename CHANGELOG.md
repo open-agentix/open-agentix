@@ -89,6 +89,12 @@ All notable changes to this project are documented here. The format follows
 - Docs: the README, `GOVERNANCE.md` and `CONTRIBUTING.md` now describe how changes are really
   reviewed (agent-authored pull requests, independent review agent, no guarantee of a human read
   before merge) and add a "How changes are reviewed" section.
+- **Observability guide** (ADR 0015 S9): `docs/observability.md` now has the span reference, the
+  attribute table checked against the allowlist, what is not built (content capture, tenant-owned
+  exporters), multi-tenant collector configurations (`groupbyattrs` on `oax.tenant.id`, `routing`
+  connector, tenant headers, shared-collector trust note), the audit relationship and dated
+  compatibility examples for Grafana Tempo, Jaeger, Langfuse and Arize Phoenix; `docs/configuration.md`
+  and `docs/airgapped.md` updated.
 
 ### Added
 
@@ -102,6 +108,16 @@ All notable changes to this project are documented here. The format follows
   (effective permissions with the bindings that give them; the basis for the `actions` block of #160). Both tenant
   routes stay operator-only unless `OAX_ROLE_BINDINGS_READ=bindings`. OpenAPI and UI schema types regenerated.
   No migration.
+- **Opt-in MCP trace context propagation** (ADR 0015 S8, #213): with `OAX_OTEL_MCP_PROPAGATION=allow` on
+  the platform and `telemetry.propagate: true` on an MCP connection (tenant admin, or platform operator
+  for platform connections), each `tools/call` carries `params._meta.traceparent` of the run's
+  `execute_tool` span. Default off; never `tracestate`, `baggage`, other `_meta` keys or HTTP headers;
+  the platform `deny` wins; nothing a server returns becomes a parent. The `execute_tool` span gets
+  `mcp.method.name`, `mcp.protocol.version` and `oax.mcp.propagated`. Relayed calls (ADR 0016 S4) get an
+  `execute_tool` span with `oax.mcp.relay` and use only its position, never what a node sends. Turning it
+  on needs a tenant admin again when the destination changes; connection updates are compare-and-swap
+  (409). No migration.
+
 - **Sampling with always-keep classes (ADR 0015 slice S6, #211)**: `OAX_OTEL_SAMPLE_RATIO`
   (default `1`, validated 0 to 1) samples by the run's trace id, so the api and the worker decide
   alike. Below 1, `OAX_OTEL_KEEP` (default `error,deny,approval,budget,guard`) still exports the

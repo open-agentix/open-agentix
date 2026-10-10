@@ -21,8 +21,10 @@ import {
   RELAY_UNSUPPORTED_CLIENT_METHODS,
   RelayMessageSchema,
   ToolGateway,
+  formatTraceparent,
   relayError,
   relayMethodClass,
+  type CallTrace,
   type McpServerConfig,
   type RelayMessage,
 } from '@openagentix/mcp';
@@ -38,6 +40,8 @@ import type { McpToolsService } from './mcp-tools.js';
 import { RelaySessions, relaySessionKey, type RelaySession } from './mcp-relay-sessions.js';
 import { initializeResult, toolCallResult, toolsListResult } from './mcp-relay-results.js';
 import type { RunNodesService } from './run-nodes.js';
+import { spanIdentity, storedParent } from './node-telemetry.js';
+import { tracingEnabled, withSpan } from '../telemetry.js';
 import { VERSION } from '../version.js';
 
 type HttpConfig = Extract<McpServerConfig, { transport: 'streamable-http' }>;
@@ -407,7 +411,7 @@ export class McpRelayService {
     await this.assertAllowed(t, call);
     const started = Date.now();
     try {
-      const { result, guard } = await session.gateway.execute(call, signal);
+      const { result, guard } = await this.executeTraced(t, call, session, signal);
       await this.auditCall(t, call, 'ok', {
         bytes: result.bytes,
         truncated: result.truncated,
@@ -422,6 +426,55 @@ export class McpRelayService {
       });
       throw e;
     }
+  }
+
+  /**
+   * Runs the call inside an `execute_tool` span of the control node (`oax.mcp.relay=true`, ADR 0016
+   * section 8), a child of the span stored for the node's session. The only trace context that can
+   * go upstream is this span's own position, offered to the gateway, which sends it only when the
+   * platform and the connection both opted in (ADR 0015 S8). Nothing the node sent is used: not
+   * the `traceparent` header, not `params._meta`, not a value of the node request. Without an SDK or
+   * a stored session position there is no span and nothing is offered.
+   */
+  private async executeTraced(
+    t: Target,
+    call: ToolCallRequest,
+    session: RelaySession,
+    signal: AbortSignal,
+  ) {
+    const parent = tracingEnabled() ? storedParent(t.node.traceContext) : null;
+    if (!parent) return session.gateway.execute(call, signal);
+    const identity = await spanIdentity(this.ctx, t.run.id, t.node.tenantId);
+    return withSpan(
+      { name: `execute_tool ${call.tool}`, kind: 'execute_tool', parent },
+      {
+        ...identity,
+        'gen_ai.operation.name': 'execute_tool',
+        'gen_ai.tool.type': 'extension',
+        'gen_ai.tool.name': call.tool,
+        'oax.mcp.server': call.server,
+        'oax.mcp.relay': true,
+      },
+      async (span) => {
+        const c = span.spanContext();
+        const trace: CallTrace = {
+          traceparent: formatTraceparent(c.traceId, c.spanId, (c.traceFlags & 1) === 1),
+          onPropagated: (info) =>
+            span.setAttributes({
+              'mcp.method.name': info.method,
+              ...(info.protocolVersion ? { 'mcp.protocol.version': info.protocolVersion } : {}),
+              'oax.mcp.propagated': true,
+            }),
+        };
+        const out = await session.gateway.execute(call, signal, trace);
+        span.setAttributes({
+          'oax.tool.result_bytes': out.result.bytes,
+          'oax.tool.truncated': out.result.truncated,
+          'oax.tool.is_error': out.result.isError,
+        });
+        return out;
+      },
+    );
   }
 
   /**
@@ -586,6 +639,8 @@ export class McpRelayService {
         secrets,
         outbound: this.dispatcher(),
         originFor: () => (t.platform ? 'platform' : 'tenant'),
+        // ADR 0015 S8: the platform switch; the connection must opt in too.
+        tracePropagation: this.ctx.config.otel.mcpPropagation,
         ...(this.ctx.hostLookup ? { lookup: this.ctx.hostLookup } : {}),
       },
       relayGuard(t.cfg),

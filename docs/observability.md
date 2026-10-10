@@ -4,15 +4,12 @@ openagentix emits OpenTelemetry traces (OTLP) and Prometheus metrics. The design
 model and the slice plan are in [ADR 0015](adr/0015-opentelemetry-genai-tracing.md). This page
 documents what is implemented; it grows with each slice.
 
-> **Status.** Slice S5 completes the Prometheus metrics and removes tenant-chosen text from every
-> label (section "Metrics"). The core is hardened (ADR 0015 slice S1): the attribute allowlist, error handling
-> without messages, the exporter configuration and its safety rules. Slice S2 adds the run's trace
-> identity, the audit links and the first spans: `oax.run.admit` at admission, one
-> `invoke_workflow {name}` per worker attempt and one HTTP server span per API request. The spans
-> below the workflow follow in later slices: slice S3 adds the executor spans of in-process steps
-> (handover, agent, model call, policy check, approval wait, tool call); slice S4 adds the spans of
-> isolated steps (run nodes and harnesses: model proxy `chat`, gate `oax.policy.check`,
-> `oax.node.session` with bounded node events, `TRACEPARENT` for log correlation).
+> **Status.** Slices S1 to S9 of ADR 0015 are implemented: the attribute allowlist and exporter
+> rules (S1), run trace identity, audit links and the first spans (S2), executor spans of
+> in-process steps (S3), control-node spans of isolated steps (S4), complete Prometheus metrics
+> (S5), sampling (S6), export through the outbound dispatcher (S7), opt-in MCP trace context (S8)
+> and this documentation with collector configurations (S9). Content capture and tenant-owned
+> exporters (S10) are **not built**, see [What is not built](#what-is-not-built).
 
 ## Convention version
 
@@ -92,7 +89,8 @@ registered and no socket is opened.
   `OAX_OTEL_SAMPLE_RATIO`, see [Sampling](#sampling)), the span limits (`OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*`), the
   batch settings (`OTEL_BSP_*`) and the export timeout. No global propagator is registered
   (`OTEL_PROPAGATORS` is not read): nothing injects `traceparent` or `baggage` into outbound
-  requests. `OTEL_EXPORTER_OTLP_COMPRESSION` is still applied by the exporter (it changes only
+  requests. The one exception is the opt-in MCP `tools/call` context of
+  [MCP trace context](mcp.md#trace-context-propagation-opt-in) (default off). `OTEL_EXPORTER_OTLP_COMPRESSION` is still applied by the exporter (it changes only
   the encoding of the payload).
 - **No auto-instrumentation.** When another OpenTelemetry SDK is registered in the process (for
   example `@opentelemetry/auto-instrumentations-node` loaded with `NODE_OPTIONS=--require ...`,
@@ -199,8 +197,8 @@ invoke_workflow {name}
      └─ execute_tool {tool}                the gateway call
 ```
 
-Steps that a run node executes (isolated runners, harnesses) are not instrumented below
-`invoke_agent` yet (slice S4).
+Steps that a run node executes (isolated runners, harnesses) get their spans below `invoke_agent`
+from the control node, see [Isolated steps](#isolated-steps-run-nodes-and-harnesses).
 
 | Span | Attributes (all from the allowlist) |
 | --- | --- |
@@ -208,8 +206,8 @@ Steps that a run node executes (isolated runners, harnesses) are not instrumente
 | `invoke_agent` | `gen_ai.operation.name`, `gen_ai.agent.name` (step id), `gen_ai.agent.id` (`{definition}/{step}`), `gen_ai.agent.version`, `gen_ai.request.model`, `gen_ai.provider.name`, `oax.runner.kind`, and the step's token and cost totals (also when the step failed) |
 | `chat` | `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature`, `gen_ai.response.finish_reasons`, `gen_ai.usage.*` tokens (including cache read/write when reported), `oax.cost.micro_usd`, `oax.cost.priced`, `oax.usage.source`, `oax.model.via`, `oax.reservation.result` (`reserved`, `none`), `oax.provider.instance` |
 | `oax.policy.check` | `gen_ai.tool.name`, `oax.mcp.server`, `oax.policy.effect`, `oax.policy.reason_codes` (codes, never messages) |
-| `oax.approval.wait` | `oax.approval.outcome` (`approved`, `rejected`, `timeout`) |
-| `execute_tool` | `gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.tool.type=extension`, `gen_ai.tool.call.id` (only in the safe shape), `oax.mcp.server`, `oax.tool.result_bytes`, `oax.tool.truncated`, `oax.tool.is_error`, `oax.cost.micro_usd`; `error.type` for a refused or failed call |
+| `oax.approval.wait` | `oax.approval.outcome` (`approved`, `rejected`, `timeout`, `cancelled`) |
+| `execute_tool` | `gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.tool.type=extension`, `gen_ai.tool.call.id` (only in the safe shape), `oax.mcp.server`, `mcp.method.name` (`tools/call`), `mcp.protocol.version` (closed list) and `oax.mcp.propagated` (all three only when the call carried a `traceparent`), `oax.tool.result_bytes`, `oax.tool.truncated`, `oax.tool.is_error`, `oax.cost.micro_usd`; `error.type` for a refused or failed call |
 
 Every span also carries `oax.run.id`, `oax.tenant.id` and `oax.tenant.root_id`.
 
@@ -356,6 +354,161 @@ changing `otel` in a stored entry breaks the chain like any other payload change
 principals that may read the run (same tenant and permission as the rest of the run); the run
 list, the trigger response and the other run endpoints do not contain them.
 
+## Span reference
+
+Spans exist only while an exporter is configured (`OTEL_EXPORTER_OTLP_ENDPOINT`). The names below
+are the names in the code; `{...}` is replaced by a guarded value (a step id, a model id, a grant
+name).
+
+| Span name | Kind | Created by | `gen_ai.operation.name` |
+| --- | --- | --- | --- |
+| `oax.run.admit` | INTERNAL | api or worker, at run creation (root of the run's trace) | - |
+| `invoke_workflow {workflow}` | INTERNAL | worker, one per attempt | `invoke_workflow` |
+| `oax.handover {step}` | INTERNAL | worker (executor) | - |
+| `invoke_agent {step}` | INTERNAL | worker (also the dispatching span of an isolated step) | `invoke_agent` |
+| `chat {model}` | CLIENT | worker (in-process call) or api (model proxy for run nodes) | `chat` |
+| `oax.policy.check {server}/{tool}` | INTERNAL | worker or api (gate route for run nodes) | - |
+| `oax.approval.wait {server}/{tool}` | INTERNAL | worker, only for `require_approval` | - |
+| `execute_tool {tool}` | INTERNAL | worker (in-process gateway call) or api (MCP relay for run nodes) | `execute_tool` |
+| `oax.node.session` | INTERNAL | api, once when a run node session ends | - |
+| `{METHOD} {route pattern}` | SERVER | api, Fastify hook | - |
+
+The tree is shown under [Executor spans](#executor-spans-steps-that-run-in-the-worker) and
+[Isolated steps](#isolated-steps-run-nodes-and-harnesses). Control decisions, guard reports,
+budget breaches, handover retries and node claims are span **events**, not spans (tables there).
+`gen_ai.conversation.id` is not set. Span kinds other than `CLIENT` (model call) and `SERVER`
+(request) are `INTERNAL`.
+
+## Attribute reference
+
+This table is generated from `ATTRIBUTE_SPECS` and `ALLOWED_KEYS` in
+`packages/core/src/telemetry/attribute-specs.ts` (the closed allowlist); a key that is not in it
+is never exported. "Allowed on" lists the span kinds whose allowlist contains the key; span events
+use the allowlist of the span they are on. "fixed shape" means a value that does not match its
+pattern (UUID, slug, digest, semver, error code, ...) is dropped, not truncated. "free text" is
+control-character-free, passes the ContextGuard and is truncated to the cap. An attribute is
+present only when the code has a value for it. Rows marked **(reserved)** are on the allowlist
+but no current code sets them (checked by searching the sources on 2026-10-10); do not build
+dashboards on them. `exception.message` is accepted only with
+`OAX_OTEL_EXCEPTION_DETAIL=guarded`.
+
+| Attribute | Type and bounds | Allowed on |
+| --- | --- | --- |
+| `oax.run.id` | string, max 36, fixed shape | every span |
+| `oax.tenant.id` | string, max 36, fixed shape | every span |
+| `oax.tenant.root_id` | string, max 36, fixed shape | every span |
+| `oax.redacted` | boolean | every span |
+| `oax.audit.seq` | integer 1..2^53-1 | `oax.run.admit`, `invoke_workflow` |
+| `error.type` | string, max 64, fixed shape | every span |
+| `exception.type` | string, max 64, fixed shape | every span |
+| `exception.message` | string, max 256, free text (guarded, truncated) | every span |
+| `gen_ai.operation.name` | one of `chat`, `invoke_agent`, `invoke_workflow`, `execute_tool` | `invoke_workflow`, `invoke_agent`, `chat`, `execute_tool` |
+| `gen_ai.provider.name` | string, max 63, fixed shape | `invoke_agent`, `chat` |
+| `gen_ai.request.model` | string, max 128, free text (guarded, truncated) | `invoke_agent`, `chat` |
+| `gen_ai.response.model` | string, max 128, free text (guarded, truncated) | `chat` |
+| `gen_ai.request.max_tokens` | integer 0..2^53-1 | `chat` |
+| `gen_ai.request.temperature` | number 0..10 | `chat` |
+| `gen_ai.response.finish_reasons` | string[], max 8 items of 32 chars | `chat` |
+| `gen_ai.response.time_to_first_chunk` | number 0..86400 (reserved) | `chat` |
+| `gen_ai.usage.input_tokens` | integer 0..2^53-1 | `invoke_workflow`, `invoke_agent`, `chat` |
+| `gen_ai.usage.output_tokens` | integer 0..2^53-1 | `invoke_workflow`, `invoke_agent`, `chat` |
+| `gen_ai.usage.cache_read.input_tokens` | integer 0..2^53-1 | `chat` |
+| `gen_ai.usage.cache_write.input_tokens` | integer 0..2^53-1 | `chat` |
+| `gen_ai.workflow.name` | string, max 63, fixed shape | `invoke_workflow` |
+| `gen_ai.agent.name` | string, max 63, fixed shape | `invoke_agent` |
+| `gen_ai.agent.id` | string, max 127, fixed shape | `invoke_agent` |
+| `gen_ai.agent.version` | string, max 64, fixed shape | `invoke_agent` |
+| `gen_ai.tool.name` | string, max 128, free text (guarded, truncated) | `oax.policy.check`, `execute_tool`, `oax.node.session` |
+| `gen_ai.tool.type` | one of `extension` | `execute_tool` |
+| `gen_ai.tool.call.id` | string, max 64, fixed shape | `execute_tool` |
+| `oax.trigger.kind` | string, max 63, fixed shape | `oax.run.admit` |
+| `oax.admission.result` | string, max 63, fixed shape | `oax.run.admit` |
+| `oax.worker` | string, max 64, fixed shape (reserved) | reserved kind `run` (no span uses it) |
+| `oax.agent.version` | string, max 64, fixed shape | `invoke_workflow` |
+| `oax.run.attempt` | integer 0..10000 | `invoke_workflow` |
+| `oax.run.status` | string, max 63, fixed shape | reserved kind `run` (no span uses it), `invoke_workflow` |
+| `oax.cost.micro_usd` | integer 0..2^53-1 | `invoke_workflow`, `invoke_agent`, `chat`, `execute_tool` |
+| `oax.cost.priced` | boolean | `chat` |
+| `oax.classification` | string, max 63, fixed shape (reserved) | `invoke_workflow` |
+| `oax.use_case` | string, max 64, free text (guarded, truncated) (reserved) | `invoke_workflow` |
+| `oax.step.id` | string, max 63, fixed shape | `oax.handover` |
+| `oax.handover.explicit` | boolean | `oax.handover` |
+| `oax.handover.result` | one of `ok`, `skipped`, `invalid` | `oax.handover` |
+| `oax.schema.digest` | string, max 71, fixed shape | `oax.handover`, `invoke_agent` |
+| `oax.runner.kind` | string, max 63, fixed shape | `invoke_agent` |
+| `oax.usage.source` | one of `provider`, `estimate`, `floor` | `chat` |
+| `oax.model.via` | one of `in-process`, `proxy` | `chat` |
+| `oax.model.surface` | string, max 63, fixed shape | `chat` |
+| `oax.reservation.result` | string, max 63, fixed shape | `chat` |
+| `oax.provider.instance` | string, max 63, free text (guarded, truncated) | `chat` |
+| `oax.mcp.server` | string, max 64, free text (guarded, truncated) | `oax.policy.check`, `execute_tool`, `oax.node.session` |
+| `mcp.method.name` | one of `tools/call` | `execute_tool` |
+| `mcp.protocol.version` | one of `2024-10-07`, `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25` | `execute_tool` |
+| `oax.mcp.propagated` | boolean | `execute_tool` |
+| `oax.mcp.relay` | boolean | `execute_tool` |
+| `oax.policy.effect` | one of `allow`, `deny`, `require_approval` | `oax.policy.check` |
+| `oax.policy.reason_codes` | string[], max 8 items of 64 chars | `oax.policy.check` |
+| `oax.policy.bundle_digests` | string[], max 8 items of 71 chars (reserved) | `oax.policy.check` |
+| `oax.approval.outcome` | one of `approved`, `rejected`, `timeout`, `cancelled` | `oax.approval.wait` |
+| `oax.approval.id` | string, max 36, fixed shape (reserved) | `oax.approval.wait` |
+| `oax.tool.result_bytes` | integer 0..2^53-1 | `execute_tool` |
+| `oax.tool.truncated` | boolean | `execute_tool` |
+| `oax.tool.is_error` | boolean | `execute_tool` |
+| `oax.control.action` | one of `pause`, `kill` | `invoke_agent` |
+| `oax.control.rules` | string[], max 8 items of 32 chars | `invoke_agent` |
+| `oax.budget.scopes` | string[], max 4 items of 32 chars | `invoke_agent` |
+| `oax.guard.source` | one of `input`, `tool_result`, `tool_error` | `invoke_agent`, `oax.node.session` |
+| `oax.guard.invisible` | integer 0..2^53-1 | `invoke_agent`, `oax.node.session` |
+| `oax.guard.secrets` | integer 0..2^53-1 | `invoke_agent`, `oax.node.session` |
+| `oax.guard.secret_kinds` | string[], max 8 items of 32 chars | `invoke_agent`, `oax.node.session` |
+| `oax.validation.direction` | one of `input`, `output` | `oax.handover`, `invoke_agent` |
+| `oax.validation.attempt` | integer 0..100 | `oax.handover`, `invoke_agent` |
+| `oax.validation.violations` | integer 0..2^53-1 | `oax.handover`, `invoke_agent` |
+| `oax.node.runner` | one of `container`, `kubernetes-job` | `oax.node.session` |
+| `oax.node.harness` | string, max 63, fixed shape | `oax.node.session` |
+| `oax.node.revoke_reason` | string, max 63, fixed shape | `oax.node.session` |
+| `oax.node.events_dropped` | integer 0..2^53-1 | `oax.node.session` |
+| `oax.claim` | one of `node` | `oax.node.session` |
+| `oax.claimed.duration_ms` | integer 0..3600000 (clamped) | `oax.node.session` |
+| `oax.claimed.status` | one of `ok`, `error`, `denied`, `pending`, `approved`, `rejected`, `skipped` | `oax.node.session` |
+| `http.request.method` | one of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, `_OTHER` | `HTTP server span` |
+| `http.route` | string, max 128, fixed shape | `HTTP server span` |
+| `http.response.status_code` | integer 100..599 | `HTTP server span` |
+| `oax.access` | one of `user`, `run-token`, `model-token`, `public` | `HTTP server span` |
+
+Resource attributes are `service.name` (`OTEL_SERVICE_NAME`; default `openagentix-api` for the api
+and `openagentix-worker` for the worker) and the validated `OAX_OTEL_RESOURCE_ATTRIBUTES`. Tenant
+identity is never a resource attribute of the platform's own SDK: one api or worker process serves
+many tenants, so `oax.tenant.id` and `oax.tenant.root_id` are **span** attributes (see
+[Multi-tenant collectors](#multi-tenant-collectors)).
+
+## What is not built
+
+Do not plan on these; they are not available in this version:
+
+- **Content capture (ADR 0015 slice S10).** Prompts, responses, tool arguments and results are
+  never exported. `OAX_OTEL_CONTENT` accepts only `off`; any other value refuses start-up.
+- **Tenant-owned exporters (slice S10).** A tenant cannot configure its own OTLP endpoint or
+  connection type `telemetry`. One export path exists, configured by the operator through the
+  environment; per-tenant separation is done in the collector.
+- **gRPC export.** Only `http/protobuf` and `http/json` over HTTP(S) to `<endpoint>/v1/traces`.
+- **OTLP metrics or logs export.** Metrics are Prometheus (`/metrics`); logs are not exported as
+  OTLP (log lines carry `trace_id` and `span_id`).
+- **Retries.** A failed batch is dropped and counted, not retried.
+- **Vendor SDKs, auto-instrumentation and resource detectors.** None; the process refuses to start
+  next to another registered OpenTelemetry SDK.
+
+## MCP trace context and shared collectors
+
+With [MCP trace context propagation](mcp.md#trace-context-propagation-opt-in) switched on for a
+connection, the MCP server learns the run's trace id (and the span id of each `execute_tool` span; an
+unsampled span goes out with flags `00`). The platform never ingests the server's spans, but a
+server that can reach your collector could send spans with that trace id (trace poisoning) and set
+attributes of its own, including `oax.tenant.id` (tenant spoofing). In a collector shared by tenants,
+route and separate by the authenticated resource or ingestion endpoint, not by `oax.tenant.id` of
+spans you did not produce, and keep the collector unreachable from MCP servers (details and a reviewed multi-tenant configuration: [Shared collector trust](#shared-collector-trust)). A running run keeps
+the connection config it started with, so switching `propagate` off takes effect for new runs.
+
 ## Sampling
 
 Volume is driven by the number of runs, so the default is `OAX_OTEL_SAMPLE_RATIO=1` (every run
@@ -431,7 +584,7 @@ processors:
         type: ottl_condition
         ottl_condition:
           error_mode: ignore
-          span_event:
+          spanevent:
             - 'IsMatch(name, "^oax\\.(budget\\.breach|guard\\.report|node\\.guard)$")'
       - name: baseline
         type: probabilistic
@@ -445,10 +598,249 @@ service:
       exporters: [otlp/backend]
 ```
 
-`tail_sampling` keeps the policies as an OR: a trace is kept when any policy matches. Verify the
+The `ottl_condition` policy keys (`span`, `spanevent`) and the other policy keys were written from
+memory of the collector's documentation and checked for YAML syntax only; validate them against the
+version you run. `tail_sampling` keeps the policies as an OR: a trace is kept when any policy matches. Verify the
 policy keys against the collector version you run. Use either head sampling in the platform or
 tail sampling in the collector as the volume control, not both on the same traffic, or the two
 ratios multiply.
+
+## Multi-tenant collectors
+
+The platform sends one stream: the spans of every tenant of an installation, to one endpoint.
+Every span carries `oax.tenant.id` (and `oax.tenant.root_id`, the organisation) as a **span**
+attribute; no span mixes tenants and the api never puts spans of different tenants into one span.
+Separating tenants is the collector's and the backend's job. A backend or collector that is read
+by users of several tenants must enforce that split itself: the platform guarantees the tag, not
+the access control of your backend.
+
+**Platform side.** Point the platform at the collector and authenticate it with the headers secret
+(the collector must authenticate who sends; see [the trust note](#shared-collector-trust)):
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otel-collector.observability.svc.cluster.local:4318
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OAX_OTEL_HEADERS_SECRET=otel-collector-auth   # name of a secret holding: Authorization=Bearer <token>
+```
+
+The exporter posts to `<endpoint>/v1/traces`. For a collector without TLS inside the cluster add
+`OAX_OTEL_INSECURE=true`; with `OAX_AIRGAPPED=true` the host and port must also be on
+`OAX_AIRGAPPED_ALLOW` ([air-gapped](airgapped.md#opentelemetry)).
+
+**Collector side.** The examples are for the OpenTelemetry Collector contrib distribution. They
+were checked for YAML syntax only; component and key names change between collector versions, so
+validate them with `otelcol-contrib validate --config` of the version you run before relying on
+them. `groupbyattrs` moves the span attribute `oax.tenant.id` to the resource, so the `routing`
+connector can decide per resource; the routing table then sends each tenant to its own pipeline
+and backend tenant (here the Tempo/Loki-style header `X-Scope-OrgID`).
+
+```yaml
+extensions:
+  bearertokenauth/platform:
+    token: ${env:OAX_OTLP_TOKEN} # the same token as in the platform's headers secret
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: bearertokenauth/platform
+
+processors:
+  groupbyattrs/tenant:
+    keys: [oax.tenant.id]
+  batch: {}
+
+connectors:
+  routing/tenant:
+    # Spans without an oax.tenant.id attribute and tenants without a table entry go to the default
+    # pipeline (here an operator-only backend tenant).
+    default_pipelines: [traces/unrouted]
+    error_mode: ignore
+    table:
+      - context: resource
+        condition: attributes["oax.tenant.id"] == "11111111-1111-4111-8111-111111111111"
+        pipelines: [traces/tenant-a]
+      - context: resource
+        condition: attributes["oax.tenant.id"] == "22222222-2222-4222-8222-222222222222"
+        pipelines: [traces/tenant-b]
+
+exporters:
+  otlphttp/tenant-a:
+    endpoint: https://tempo.internal:4318
+    headers:
+      X-Scope-OrgID: tenant-a
+  otlphttp/tenant-b:
+    endpoint: https://tempo.internal:4318
+    headers:
+      X-Scope-OrgID: tenant-b
+  otlphttp/unrouted:
+    endpoint: https://tempo.internal:4318
+    headers:
+      X-Scope-OrgID: operator
+
+service:
+  extensions: [bearertokenauth/platform]
+  pipelines:
+    traces/in:
+      receivers: [otlp]
+      processors: [groupbyattrs/tenant]
+      exporters: [routing/tenant]
+    traces/tenant-a:
+      receivers: [routing/tenant]
+      processors: [batch]
+      exporters: [otlphttp/tenant-a]
+    traces/tenant-b:
+      receivers: [routing/tenant]
+      processors: [batch]
+      exporters: [otlphttp/tenant-b]
+    traces/unrouted:
+      receivers: [routing/tenant]
+      processors: [batch]
+      exporters: [otlphttp/unrouted]
+```
+
+Notes:
+
+- The tenant ids in the table are the UUIDs the platform shows for the tenant (`oax.tenant.id`),
+  never names; tenant names and slugs are not exported. The routing table is static: a new tenant
+  needs a new entry (and a pipeline) in your collector configuration.
+- Spans of one run always carry the same tenant, so grouping by `oax.tenant.id` keeps a trace
+  together. Use `oax.tenant.root_id` instead when you separate by organisation (ADR 0013) and not
+  by tenant.
+- The `X-Scope-OrgID` header is how a multi-tenant Grafana Tempo or Loki selects its tenant
+  (vendor behaviour, see [Compatibility examples](#compatibility-examples)); other backends use
+  other mechanisms (separate projects, API keys). The platform itself never sets a tenant header:
+  it has one credential for the collector.
+- **Operator view and tenant view are different things.** Everything above gives the operator all
+  tenants. A tenant that may read its own traces needs a backend that enforces the tenant per
+  read, with the header or key set by your gateway, never by the user. The platform has no
+  tenant-facing trace viewer.
+
+### Shared collector trust
+
+Trust the tag only for spans the platform produced. Two ways a shared collector can be abused:
+
+- **Trace poisoning.** With [MCP trace context](mcp.md#trace-context-propagation-opt-in) switched
+  on for a connection (opt-in since slice S8, default off), the MCP server learns the run's trace
+  id and the span id of each `execute_tool` span. A server that can reach your collector could send
+  spans with that trace id, and they would appear inside the run's trace.
+- **Tenant spoofing.** Such spans, or any client that can reach the collector's OTLP port, can set
+  `oax.tenant.id` to another tenant's UUID, and the routing above would file them under that
+  tenant.
+
+So: keep the collector's OTLP receiver reachable only from the api and worker (network policy),
+require the platform's credential on the receiver (the `auth` block above), do not let MCP servers
+or run nodes reach it (run nodes have no route to a collector by design), and if untrusted senders
+must use the same collector, route on what the collector authenticated (a per-sender receiver or
+ingestion endpoint, resource attributes set by the collector itself), not on `oax.tenant.id` of
+spans you did not produce. The trace id is not a secret: a link or a stored `traceId` is not an
+access right.
+
+## Relationship to the audit chain
+
+Traces are an operations tool, not evidence. The audit chain
+([ADR 0002](adr/0002-audit-hash-chain.md)) and the database remain the source of truth for what
+happened; billing, budgets, compliance evidence and incident reconstruction never use a trace
+backend, because traces may be sampled, dropped, delayed or deleted by the collector or the
+backend. The two are linked in both directions so that you can jump from one to the other:
+audit entry to trace through `payload.otel.traceId` / `spanId`, and span to audit entry through
+`oax.audit.seq` (only `oax.run.admit` and `invoke_workflow` carry it today). Details, the chain
+compatibility guarantee and the run API (`traceId`, `traceUrl`) are under
+[Audit links](#audit-links). The ids exist even when no exporter is configured or the run was not
+sampled.
+
+## Compatibility examples
+
+Everything here is plain OTLP over HTTP; the platform adds no vendor SDK and sends no vendor
+attributes. Examples were written from the platform's own behaviour (endpoint, headers, protocol).
+**Statements about a vendor's product are vendor behaviour as understood in October 2026
+(2026-10), were not re-verified against live vendor documentation when this page was written,
+and can change at any time; check the vendor's current documentation before relying on them.**
+Because telemetry is metadata only, a backend shows the run tree, token counts, cost, latency,
+error codes and policy outcomes, but never prompts, responses or tool arguments, in every tool
+below.
+
+Facts about the platform that apply to all of them:
+
+- The exporter appends `/v1/traces` to `OTEL_EXPORTER_OTLP_ENDPOINT` (no query, no credentials in
+  the URL), uses `http/protobuf` or `http/json`, optional gzip, and sends the headers of
+  `OAX_OTEL_HEADERS_SECRET` (`Name=value,Name2=value2`).
+- `http://` is accepted for loopback or with `OAX_OTEL_INSECURE=true`. A SaaS backend is a
+  third-party destination: spans leave your installation, with tenant UUIDs and cost numbers.
+  Route it deliberately (network configuration, purpose `telemetry`); it is unreachable in air-gapped
+  mode unless self-hosted and allowlisted.
+- `OAX_OTEL_TRACE_URL_TEMPLATE` is only a string template for the link `traceUrl` in
+  `GET /v1/runs/{id}`; the platform never fetches it. It must contain `{traceId}`.
+
+### Grafana Tempo
+
+Directly (single-tenant Tempo with its OTLP/HTTP receiver enabled, vendor default port 4318 as of
+2026-10) or through the collector above:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://tempo.internal:4318
+```
+
+Find a run in TraceQL with the span attributes (vendor query syntax, 2026-10):
+`{ span.oax.run.id = "<run id>" }`, failed policy decisions `{ span.oax.policy.effect = "deny" }`,
+a model `{ span.gen_ai.request.model = "<model id>" }`. After `groupbyattrs` the tenant is a
+resource attribute: `{ resource.oax.tenant.id = "<tenant id>" }`. Multi-tenant Tempo selects the
+tenant with the `X-Scope-OrgID` header; set it in the collector as shown, not in the platform.
+A link template depends on how you reach the trace (Grafana Explore, a Tempo UI); the platform
+only inserts the trace id into the template you write.
+
+### Jaeger
+
+Jaeger accepts OTLP natively in current versions (vendor behaviour, 2026-10: OTLP/HTTP on port
+4318), so the platform can send directly, or the collector can forward with an `otlphttp` exporter:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger.observability.svc.cluster.local:4318
+OAX_OTEL_INSECURE=true   # plain http inside the cluster
+```
+
+In the Jaeger UI search by tag, for example `oax.run.id=<run id>` or `error.type=<code>`. The
+UI opens a trace at `/trace/<traceId>` (vendor behaviour, 2026-10), so
+`OAX_OTEL_TRACE_URL_TEMPLATE=https://jaeger.internal/trace/{traceId}` produces a working link if
+your Jaeger is served there. Jaeger has no tenant concept of its own; use the collector routing
+above to send each tenant to its own Jaeger instance if you need a split.
+
+### Langfuse
+
+Langfuse documents an OTLP/HTTP trace endpoint with basic authentication (vendor behaviour,
+2026-10; the vendor documents HTTP only, no gRPC, which matches this exporter). The endpoint is
+the base path `/api/public/otel`, to which the platform appends `/v1/traces`:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://langfuse.internal/api/public/otel
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+# secret value (one line): Authorization=Basic <base64 of public_key:secret_key>
+OAX_OTEL_HEADERS_SECRET=langfuse-otlp-auth
+```
+
+Langfuse maps `gen_ai.*` attributes to its generation view (vendor behaviour, 2026-10); because the
+content attributes are never sent, input and output stay empty by design, while model, token usage,
+latency and the run tree are shown. `oax.*` attributes appear as metadata. Prefer a self-hosted
+Langfuse for anything that is not public: tenant UUIDs, cost and policy outcomes are sent. Check
+the vendor's current documentation for the exact path and any required ingestion header.
+
+### Arize Phoenix
+
+Phoenix accepts OTLP/HTTP traces (vendor behaviour, 2026-10: `/v1/traces` on its HTTP port, 6006
+by default for a self-hosted instance):
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix.observability.svc.cluster.local:6006
+OAX_OTEL_INSECURE=true
+```
+
+Phoenix is built around the OpenInference attribute set. How much of the `gen_ai.*` set it
+understands depends on its version (vendor behaviour, 2026-10), so spans may show as generic spans
+with their attributes instead of LLM spans. **Verify with your Phoenix version.** No attribute
+mapping (collector `transform` processor) is shipped here because none has been tested; add one only
+after testing it, and keep it to the attributes on the allowlist above.
 
 ## Log correlation
 
@@ -456,9 +848,7 @@ Every log line written inside a span carries `trace_id` and `span_id` (hex, ids 
 
 ## Configuration
 
-See [`configuration.md`](configuration.md#observability) for the table of variables. Keys whose
-feature lands in a later slice (MCP propagation) are parsed and validated now and have no effect
-yet; the sampling keys are in use since slice S6; `OAX_OTEL_NODE_EVENTS_MAX` is in use since slice S4 and
+See [`configuration.md`](configuration.md#observability) for the table of variables. The sampling keys are in use since slice S6; `OAX_OTEL_NODE_EVENTS_MAX` is in use since slice S4 and
 `OAX_OTEL_GENAI_METRICS` since slice S5.
 
 ## Metrics

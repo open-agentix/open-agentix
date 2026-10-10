@@ -38,6 +38,31 @@ OAX_AIRGAPPED_ALLOW="vllm.llm.svc.cluster.local:8000,.keycloak.svc.cluster.local
 OAX_PROVIDERS='[{"kind":"openai","name":"local","baseUrl":"http://vllm.llm.svc.cluster.local:8000/v1","clearance":"restricted"}]'
 ```
 
+## OpenTelemetry
+
+Tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and then it follows the same rules as
+every other destination ([`observability.md`](observability.md#exporter)):
+
+- With `OAX_AIRGAPPED=true` the endpoint (host **and** port) must be on `OAX_AIRGAPPED_ALLOW`.
+  Otherwise `api` and `worker` refuse to start with `airgap_violation`, before the header secret is
+  resolved and before an exporter exists. Without an endpoint nothing is created: no provider, no
+  socket, no blocked attempt.
+- Use an in-cluster collector or a self-hosted backend. A SaaS backend (for example a hosted
+  Langfuse or Phoenix) is not reachable and must not be allowlisted for an air-gapped install.
+  Plain `http://` to an in-cluster collector needs `OAX_OTEL_INSECURE=true`.
+- Exports go through the outbound dispatcher with purpose `telemetry`, so the network file's routes,
+  trust bundles and client certificates apply and the network guard stays on as a second wall.
+- `OAX_OTEL_TRACE_URL_TEMPLATE` is only a string for the link in `GET /v1/runs/{id}`; the platform
+  never fetches it. `OAX_OTEL_MCP_PROPAGATION` stays `deny` unless you want MCP servers to learn
+  the run's trace id.
+
+```bash
+OAX_AIRGAPPED=true
+OAX_AIRGAPPED_ALLOW="otel-collector.observability.svc.cluster.local:4318,.keycloak.svc.cluster.local"
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.observability.svc.cluster.local:4318
+OAX_OTEL_INSECURE=true
+```
+
 ## Verification (what is tested)
 
 - Unit tests of the allowlist (hosts, suffixes, ports, CIDR v4/v6, IPv4-mapped IPv6, wildcard rejection).
