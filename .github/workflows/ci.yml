@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # On-demand run for a branch or ref (needed when push/pull_request events do not trigger runs):
+  # `gh workflow run ci.yml --ref <branch>`. Uses no pull_request context; the pr-title job is skipped.
+  workflow_dispatch:
 
 permissions:
   contents: read
