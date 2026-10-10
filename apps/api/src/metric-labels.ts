@@ -33,6 +33,13 @@ export const RELAY_OUTCOMES = set(
   'timeout',
   'error',
 );
+export const OAUTH_REFRESH_OUTCOMES = set(
+  'ok',
+  'invalid_grant',
+  'reauthorization_required',
+  'failed',
+  'skipped',
+);
 export const EVENT_KINDS = set('webhook', 'mail', 'kafka', 'cron');
 export const TRIGGER_KINDS = set('manual', 'webhook', 'mail', 'kafka', 'cron', 'demo');
 export const RUN_STATUS_LABELS = set(...RUN_STATUSES);

@@ -42,17 +42,21 @@ export class KeyService {
   }
 
   /** Seals secret values under the tenant's active data key (created on first use). */
-  async seal(plaintext: string, binding: BindingContext): Promise<SealedSecret> {
-    const { keyVersion, ciphertexts } = await this.sealAll([plaintext], binding);
+  async seal(plaintext: string, binding: BindingContext, db: Db = this.db): Promise<SealedSecret> {
+    const { keyVersion, ciphertexts } = await this.sealAll([plaintext], binding, db);
     return { keyVersion, ciphertext: ciphertexts[0] as string };
   }
 
-  /** Seals several values of one binding under the same key version (an access and a refresh token). */
+  /**
+   * Seals several values of one binding under the same key version (an access and a refresh token).
+   * `db` lets a caller that holds a transaction keep every read inside it.
+   */
   async sealAll(
     plaintexts: readonly string[],
     binding: BindingContext,
+    db: Db = this.db,
   ): Promise<{ keyVersion: number; ciphertexts: string[] }> {
-    const { version, key } = await this.activeKey(binding.tenantId);
+    const { version, key } = await this.activeKey(binding.tenantId, db);
     try {
       const aad = bindingAad(binding);
       return { keyVersion: version, ciphertexts: plaintexts.map((p) => seal(key, p, aad)) };
@@ -62,8 +66,13 @@ export class KeyService {
   }
 
   /** Opens a value sealed under `keyVersion`; fails for another binding or a destroyed key. */
-  async open(keyVersion: number, ciphertext: string, binding: BindingContext): Promise<string> {
-    const key = await this.dataKey(binding.tenantId, keyVersion);
+  async open(
+    keyVersion: number,
+    ciphertext: string,
+    binding: BindingContext,
+    db: Db = this.db,
+  ): Promise<string> {
+    const key = await this.dataKey(binding.tenantId, keyVersion, db);
     try {
       return open(key, ciphertext, bindingAad(binding)).toString('utf8');
     } finally {
@@ -97,21 +106,21 @@ export class KeyService {
     return Buffer.from(JSON.stringify(['data-key', tenantId, String(version), kekId]), 'utf8');
   }
 
-  private async activeKey(tenantId: string): Promise<{ version: number; key: Buffer }> {
+  private async activeKey(tenantId: string, db: Db): Promise<{ version: number; key: Buffer }> {
     const kek = this.kekKey();
     for (let attempt = 0; attempt < 2; attempt++) {
-      const [row] = await this.db
+      const [row] = await db
         .select()
         .from(tenantDataKeys)
         .where(and(eq(tenantDataKeys.tenantId, tenantId), eq(tenantDataKeys.status, 'active')));
       if (row) return { version: row.version, key: this.unwrap(kek, row) };
-      await this.createKey(kek, tenantId);
+      await this.createKey(kek, tenantId, db);
     }
     throw new OaxError('key_unavailable', 'no active data key for the tenant');
   }
 
-  private async createKey(kek: Buffer, tenantId: string): Promise<void> {
-    const [latest] = await this.db
+  private async createKey(kek: Buffer, tenantId: string, db: Db): Promise<void> {
+    const [latest] = await db
       .select({ v: max(tenantDataKeys.version) })
       .from(tenantDataKeys)
       .where(eq(tenantDataKeys.tenantId, tenantId));
@@ -120,15 +129,15 @@ export class KeyService {
     const wrapped = seal(kek, dataKey, this.wrapAad(tenantId, version, this.kek.id));
     dataKey.fill(0);
     // A concurrent creator wins on the unique active-key index; the loser rereads.
-    await this.db
+    await db
       .insert(tenantDataKeys)
       .values({ tenantId, version, wrappedKey: wrapped, kekId: this.kek.id, createdAt: this.now() })
       .onConflictDoNothing();
   }
 
-  private async dataKey(tenantId: string, version: number): Promise<Buffer> {
+  private async dataKey(tenantId: string, version: number, db: Db): Promise<Buffer> {
     const kek = this.kekKey();
-    const [row] = await this.db
+    const [row] = await db
       .select()
       .from(tenantDataKeys)
       .where(and(eq(tenantDataKeys.tenantId, tenantId), eq(tenantDataKeys.version, version)));

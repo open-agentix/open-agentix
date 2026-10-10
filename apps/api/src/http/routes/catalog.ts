@@ -4,6 +4,8 @@ import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import { connectionDto, policyDto } from '../dto.js';
 import {
+  OauthAuthorizeBody,
+  OauthStatusSchema,
   ConnectionCreateBody,
   ConnectionSchema,
   ConnectionTestBody,
@@ -182,6 +184,67 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
         throw new HttpError(400, 'validation_failed', 'a model connection test needs "model"');
       return services.models.test(actor, req.params.id, req.body.model);
     },
+  );
+
+  // ---------- OAuth for HTTP MCP connections (ADR 0016 section 7) ----------
+
+  app.get(
+    '/v1/connections/:id/oauth',
+    {
+      config: { access: 'connections:read' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'OAuth state of an HTTP MCP connection: status, pinned issuer, scopes, expiry (never a token)',
+        security: sec,
+        params: IdParams,
+        response: { 200: OauthStatusSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => services.mcpOauthFlows.status(principalOf(req), req.params.id),
+  );
+
+  app.post(
+    '/v1/connections/:id/oauth/authorize',
+    {
+      config: { access: 'connections:write' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'Authorize an OAuth connection (client_credentials): discover the authorization server, pin its issuer and endpoints, obtain a token (audited, rate limited)',
+        description:
+          'Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. The answer carries the state only, never a token.',
+        security: sec,
+        params: IdParams,
+        body: OauthAuthorizeBody,
+        response: {
+          200: OauthStatusSchema,
+          400: ErrorSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+          422: ErrorSchema,
+          429: ErrorSchema,
+        },
+      },
+    },
+    async (req) => services.mcpOauthFlows.authorize(principalOf(req), req.params.id, req.body),
+  );
+
+  app.post(
+    '/v1/connections/:id/oauth/disconnect',
+    {
+      config: { access: 'connections:write' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'Disconnect an OAuth connection: delete the stored tokens and revoke them at the authorization server (RFC 7009, best effort, audited)',
+        security: sec,
+        params: IdParams,
+        response: { 200: OauthStatusSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => services.mcpOauthFlows.disconnect(principalOf(req), req.params.id),
   );
 
   // ---------- pinned tool definitions (ADR 0016 section 5) ----------

@@ -13,6 +13,7 @@ import { IdentityService } from './identity.js';
 import { IngestService } from './ingest.js';
 import { ModelAccountingService } from './model-accounting.js';
 import { ModelProxyService } from './model-proxy.js';
+import { McpOauthService } from './mcp-oauth.js';
 import { McpRelayService } from './mcp-relay.js';
 import { McpTestService } from './mcp-test.js';
 import { McpToolsService } from './mcp-tools.js';
@@ -52,6 +53,8 @@ export interface Services {
   agentCheck: AgentCheckService;
   /** Key service, encrypted token stores and credentials of MCP OAuth (ADR 0016 S5). */
   mcpOauth: McpOauthStores;
+  /** OAuth flows of HTTP MCP connections (authorize, renew, revoke); trusted processes only. */
+  mcpOauthFlows: McpOauthService;
   subtree: SubtreeScopes;
 }
 
@@ -99,11 +102,21 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const pentest = new PentestService(ctx, audit, identity);
   const modelProxy = new ModelProxyService(ctx, audit, agents, models, modelAccounting, runNodes);
   const agentCheck = new AgentCheckService(ctx, audit, catalog, models, budgets);
-  const mcpTest = new McpTestService(ctx, catalog, runNodes, audit);
+  const mcpOauth = createMcpOauth(ctx, role);
+  const mcpOauthFlows = new McpOauthService(ctx, audit, catalog, runNodes, mcpOauth);
+  const mcpTest = new McpTestService(ctx, catalog, runNodes, audit, mcpOauthFlows);
   const mcpTools = new McpToolsService(ctx, audit, catalog, mcpTest, runNodes);
   runNodes.pinResolver = (definition, scope, servers) =>
     mcpTools.pinsFor(definition, scope, servers);
-  const mcpRelay = new McpRelayService(ctx, audit, catalog, control, runNodes, mcpTools);
+  const mcpRelay = new McpRelayService(
+    ctx,
+    audit,
+    catalog,
+    control,
+    runNodes,
+    mcpTools,
+    mcpOauthFlows,
+  );
   return {
     audit,
     budgets,
@@ -128,7 +141,8 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     mcpTools,
     mcpRelay,
     agentCheck,
-    mcpOauth: createMcpOauth(ctx, role),
+    mcpOauth,
+    mcpOauthFlows,
     subtree: new SubtreeScopes(ctx),
   };
 }
@@ -147,6 +161,7 @@ export {
   IngestService,
   ModelAccountingService,
   ModelProxyService,
+  McpOauthService,
   McpRelayService,
   McpToolsService,
   ModelsService,

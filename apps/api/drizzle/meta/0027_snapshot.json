@@ -1,5 +1,5 @@
 {
-  "id": "2530f7d2-fed8-4f96-bff2-44f2c9a253a2",
+  "id": "a339f268-4cc9-466d-a63c-a669e642c337",
   "prevId": "2c5b57c8-e0be-4856-9d99-986999316920",
   "version": "7",
   "dialect": "postgresql",
@@ -2009,6 +2009,26 @@
           "notNull": true,
           "default": "'active'"
         },
+        "grant_type": {
+          "name": "grant_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'client_credentials'"
+        },
+        "endpoints": {
+          "name": "endpoints",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "authorized_by": {
           "name": "authorized_by",
           "type": "uuid",
@@ -2095,6 +2115,10 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "mcp_oauth_tokens_grant": {
+          "name": "mcp_oauth_tokens_grant",
+          "value": "\"mcp_oauth_tokens\".\"grant_type\" in ('client_credentials', 'authorization_code')"
+        },
         "mcp_oauth_tokens_status": {
           "name": "mcp_oauth_tokens_status",
           "value": "\"mcp_oauth_tokens\".\"status\" in ('active', 'refresh_failed', 'reauthorization_required', 'revoked')"
@@ -2656,80 +2680,6 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.pentest_sessions": {
-      "name": "pentest_sessions",
-      "schema": "",
-      "columns": {
-        "token_id": {
-          "name": "token_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "pentest_sessions_token_id_api_tokens_id_fk": {
-          "name": "pentest_sessions_token_id_api_tokens_id_fk",
-          "tableFrom": "pentest_sessions",
-          "tableTo": "api_tokens",
-          "columnsFrom": [
-            "token_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "pentest_sessions_tenant_id_tenants_id_fk": {
-          "name": "pentest_sessions_tenant_id_tenants_id_fk",
-          "tableFrom": "pentest_sessions",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "pentest_sessions_token_id_tenant_id_expires_at_pk": {
-          "name": "pentest_sessions_token_id_tenant_id_expires_at_pk",
-          "columns": [
-            "token_id",
-            "tenant_id",
-            "expires_at"
-          ]
-        }
-      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
@@ -3875,12 +3825,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "expiry_warned_at": {
-          "name": "expiry_warned_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "granted_by": {
           "name": "granted_by",
           "type": "uuid",
@@ -4389,125 +4333,6 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.user_notices": {
-      "name": "user_notices",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "payload": {
-          "name": "payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "user_notices_user_idx": {
-          "name": "user_notices_user_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "user_notices_created_idx": {
-          "name": "user_notices_created_idx",
-          "columns": [
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "user_notices_user_id_users_id_fk": {
-          "name": "user_notices_user_id_users_id_fk",
-          "tableFrom": "user_notices",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "user_notices_tenant_id_tenants_id_fk": {
-          "name": "user_notices_tenant_id_tenants_id_fk",
-          "tableFrom": "user_notices",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "user_notices_kind": {
-          "name": "user_notices_kind",
-          "value": "\"user_notices\".\"kind\" in ('pentest_granted','pentest_expiring','pentest_expired')"
-        }
-      },
       "isRLSEnabled": false
     },
     "public.users": {

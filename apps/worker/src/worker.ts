@@ -139,7 +139,14 @@ export class Worker {
     const run = await this.services.runs.get(runId);
     const toolScope = { tenantId: run.tenantId, teamId: run.teamId, agentId: run.agentId };
     // Configs and platform names from one resolution: the stdio guard below decides by name.
-    const { configs: mcp, platformNames } = await this.services.catalog.mcpRunConfigs(toolScope);
+    const {
+      configs: mcp,
+      platformNames,
+      oauth,
+    } = await this.services.catalog.mcpRunConfigs(toolScope);
+    // The run's guard also protects the OAuth tokens the trusted worker attaches to HTTP requests.
+    const guard = contextGuardFromEnv(process.env);
+    this.services.mcpOauthFlows.setOutbound(this.mcpOutbound());
     const tools = new ToolGateway(
       mcp,
       {
@@ -157,9 +164,10 @@ export class Worker {
         // Platform switch for trace context propagation (ADR 0015 S8); a connection still has to
         // opt in. Default deny.
         tracePropagation: this.ctx.config.otel.mcpPropagation,
+        tokens: this.services.mcpOauthFlows.tokensFor(oauth, guard),
         ...(this.opts.inMemoryMcp ? { inMemory: this.opts.inMemoryMcp } : {}),
       },
-      contextGuardFromEnv(process.env),
+      guard,
     );
     try {
       const prepared = await this.services.control.prepare(runId);

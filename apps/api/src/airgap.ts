@@ -151,6 +151,9 @@ export function connectionEndpoints(kind: string, name: string, config: unknown)
     if (cfg.transport !== 'streamable-http') return [];
     const out: AirgapEndpoint[] = [];
     if (cfg.url) out.push({ purpose: `MCP connection "${name}"`, url: cfg.url });
+    const issuer = (config as { auth?: { kind?: string; issuer?: unknown } } | null)?.auth;
+    if (issuer?.kind === 'oauth' && typeof issuer.issuer === 'string')
+      out.push({ purpose: `MCP connection "${name}" issuer`, url: issuer.issuer });
     // Egress entries (ADR 0016 4.6) must be on the allowlist as well. An entry is a host or
     // host:port; anything else is reported as an invalid endpoint instead of being skipped.
     if (Array.isArray(cfg.egress))
@@ -160,6 +163,15 @@ export function connectionEndpoints(kind: string, name: string, config: unknown)
           url: typeof e === 'string' && !e.includes('://') ? `https://${e}` : String(e),
         });
     return out;
+  }
+  // Pinned authorization server endpoints of a connection (ADR 0016 section 4.6): synthetic rows
+  // built by the start-up check from `mcp_oauth_tokens.endpoints`.
+  if (kind === 'mcp-oauth-pin') {
+    const pin = (config as { endpoints?: Record<string, unknown> } | null)?.endpoints ?? {};
+    return Object.entries(pin).map(([k, url]) => ({
+      purpose: `MCP connection "${name}" authorization server ${k}`,
+      url: String(url),
+    }));
   }
   if (kind === 'model') return providerEndpoints(config, `model connection "${name}"`);
   if (kind === 'telemetry')
