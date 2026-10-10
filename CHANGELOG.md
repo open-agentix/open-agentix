@@ -349,9 +349,12 @@ claude-code | opencode` runs a step in a run node with the harness as executor. 
 
 - **Telemetry**: the worker's `oax.run` span carries `oax.run.id` (was `oax.run_id`) and
   `oax.tenant.id`. The default OTLP protocol is now `http/protobuf` (was JSON); set
-  `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` to keep the old wire format. `OTEL_EXPORTER_OTLP_ENDPOINT`
-  with `http://` to a non-loopback host now needs `OAX_OTEL_INSECURE=true`, and an endpoint with
-  credentials, a query or a fragment is refused. **Breaking** for installs that relied on the
+  `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` to keep the old wire format. **Breaking:**
+  `OTEL_EXPORTER_OTLP_ENDPOINT` with `http://` to a non-loopback host (for example an in-cluster
+  collector such as `http://otel-collector.observability.svc:4318`, as in the Helm EKS example) now
+  fails start-up unless `OAX_OTEL_INSECURE=true` is set (Helm: add it to `config.extraEnv`
+  until the chart has its own value), and an endpoint with credentials, a query or
+  a fragment is refused. **Breaking** as well for installs that relied on the
   standard `OTEL_EXPORTER_OTLP_HEADERS`, `_CERTIFICATE`, `_CLIENT_CERTIFICATE` or `_CLIENT_KEY`
   variables (also the `_TRACES_` variants), `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
   `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, `OTEL_TRACES_SAMPLER` or `OTEL_TRACES_SAMPLER_ARG`: start-up
