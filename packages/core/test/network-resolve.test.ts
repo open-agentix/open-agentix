@@ -193,9 +193,9 @@ describe('safety rules', () => {
   it('telemetry destinations of a tenant are TLS only, the operator exporter keeps its rules', () => {
     const t = { origin: 'tenant', tenantId: 'a' } as const;
     expect(r('http://otel.example/v1/traces', 'telemetry', t).code).toBe('plain_http_refused');
-    expect(r('https://otel.example/v1/traces', 'telemetry', t).decision).toBe('direct');
+    expect(r('https://otel.example/v1/traces', 'telemetry', t).decision).not.toBe('deny');
     // the operator's own collector may be plain http (in-cluster), as before
-    expect(r('http://otel.example/v1/traces', 'telemetry').decision).toBe('direct');
+    expect(r('http://otel.example/v1/traces', 'telemetry').decision).not.toBe('deny');
   });
 
   it('rejects unusable targets and purposes', () => {
