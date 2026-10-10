@@ -151,6 +151,15 @@ describe('tenant isolation', () => {
       ],
       ['PATCH', `/v1/tenants/${tenantB}/role-bindings/${b.user}`, { inherit: true }],
       ['DELETE', `/v1/tenants/${tenantB}/role-bindings/${b.user}`],
+      ['GET', `/v1/tenants/${tenantB}/access?userId=${b.user}`],
+      ['GET', `/v1/me/access?tenant=${tenantB}`],
+      // With the legacy read path both are plain 403s for everybody but operators (as before).
+      ...(n.ctx.config.auth.roleBindingsRead === 'bindings'
+        ? ([
+            ['POST', '/v1/tenants', { parentId: tenantB, slug: 'probe-child', name: 'Probe' }],
+            ['PATCH', `/v1/tenants/${tenantB}`, { name: 'taken over' }],
+          ] as [string, string, unknown?][])
+        : []),
     ];
     for (const [method, url, payload] of probes) {
       const r = await A({ method: method as 'GET', url, ...(payload ? { payload } : {}) });

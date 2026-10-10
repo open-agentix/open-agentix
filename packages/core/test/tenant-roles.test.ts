@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   GRANTABLE_ROLES,
-  INHERITED_READ_ONLY,
   PERMISSIONS,
   ROLES,
   ROLE_PERMISSIONS,
@@ -205,20 +204,31 @@ describe('effectiveAt', () => {
     for (const n of [f.root, f.b, f.x]) expect(effectiveAt(raw, n, opts)).toEqual([]);
   });
 
-  it('clamps inherited bindings to reads by default and only then', () => {
+  it('write inheritance: an inherited binding gives its whole role below, and nothing else (S5)', () => {
     const raw = rawOf(f.root, { nodeBindings: [grant(f.root.id, 'admin', { inherit: true })] });
-    const clamped = effectiveAt(raw, f.a1, opts);
-    expect(clamped).toHaveLength(1);
-    expect(clamped[0]!.permissions.every((p) => INHERITED_READ_ONLY.includes(p))).toBe(true);
-    expect(clamped[0]!.permissions).not.toContain('agents:write');
-    expect(INHERITED_READ_ONLY).toContain('audit:verify');
-    expect(INHERITED_READ_ONLY).not.toContain('audit:export');
-    // The binding at the node itself is never clamped.
+    const inherited = effectiveAt(raw, f.a1, opts);
+    expect(inherited).toHaveLength(1);
+    expect(inherited[0]).toMatchObject({ source: 'inherited', role: 'admin' });
+    // The role is the ceiling: exactly what holding admin at the node itself gives.
+    expect(inherited[0]!.permissions).toEqual(ROLE_PERMISSIONS.admin);
+    expect(inherited[0]!.permissions).toContain('agents:write');
+    expect(inherited[0]!.permissions).toContain('users:write');
     expect(effectiveAt(raw, f.root, opts)[0]!.permissions).toEqual(ROLE_PERMISSIONS.admin);
-    // Slice S5 switches the clamp off.
-    expect(effectiveAt(raw, f.a1, { ...opts, clampInherited: false })[0]!.permissions).toEqual(
-      ROLE_PERMISSIONS.admin,
-    );
+    // A weaker role stays weaker: an inherited viewer cannot write.
+    const viewer = rawOf(f.root, { nodeBindings: [grant(f.root.id, 'viewer', { inherit: true })] });
+    expect(effectiveAt(viewer, f.a1, opts)[0]!.permissions).toEqual(ROLE_PERMISSIONS.viewer);
+    expect(effectiveAt(viewer, f.a1, opts)[0]!.permissions).not.toContain('agents:write');
+    // Without the opt-in nothing flows down, whatever the role.
+    const plain = rawOf(f.root, { nodeBindings: [grant(f.root.id, 'admin')] });
+    expect(effectiveAt(plain, f.a1, opts)).toEqual([]);
+  });
+
+  it('team and agent bindings never inherit, even with write inheritance on (S5)', () => {
+    const raw = rawOf(f.root, {
+      teamBindings: [{ tenantId: f.root.id, teamId: 't', role: 'admin' }],
+      agentBindings: [{ tenantId: f.root.id, agentId: 'a', teamId: 't', role: 'admin' }],
+    });
+    expect(effectiveAt(raw, f.a1, opts)).toEqual([]);
   });
 
   it('never applies a binding in another organisation, even a hand-made one', () => {
@@ -365,7 +375,7 @@ describe('effectiveAt', () => {
       });
       const atA = rawOf(f.root, { nodeBindings: [grant(f.a.id, 'operator', { inherit: true })] });
       const below = rawOf(f.root, { nodeBindings: [grant(f.a1.id, 'operator')] });
-      const withR = { ...opts, restrictions: r, clampInherited: false };
+      const withR = { ...opts, restrictions: r };
       // Bound above the restricting node: untouched, also when it is felt below it.
       expect(effectiveAt(above, f.a1, withR)[0]!.permissions).toContain('runs:approve');
       // Bound on the restricting node or below it: restricted.
@@ -444,7 +454,6 @@ function naivePermissions(
   target: Node,
   now: Date,
   restrictions: readonly RoleRestriction[],
-  clamp: boolean,
 ): Permission[] {
   if (raw.platformAdmin) return [...PERMISSIONS];
   const out = new Set<Permission>();
@@ -458,7 +467,7 @@ function naivePermissions(
       ids.push(cur.id);
     return ids;
   };
-  const add = (role: Role, anchor: Node, source: string) => {
+  const add = (role: Role, anchor: Node) => {
     const above = new Set(chainIds(anchor));
     for (const p of ROLE_PERMISSIONS[role]) {
       if (
@@ -466,18 +475,16 @@ function naivePermissions(
         restrictions.some((r) => r.role === role && r.permission === p && above.has(r.tenantId))
       )
         continue;
-      if (source === 'inherited' && clamp && !(p.endsWith(':read') || p === 'audit:verify'))
-        continue;
       out.add(p);
     }
   };
   for (const b of raw.nodeBindings) {
     const how = naiveCovers(byId, b, target, raw.homeRootId, now);
-    if (how) add(b.role, byId.get(b.tenantId)!, how);
+    if (how) add(b.role, byId.get(b.tenantId)!);
   }
   if (target.rootId === raw.homeRootId) {
-    for (const t of raw.teamBindings) if (t.tenantId === target.id) add(t.role, target, 'team');
-    for (const a of raw.agentBindings) if (a.tenantId === target.id) add(a.role, target, 'agent');
+    for (const t of raw.teamBindings) if (t.tenantId === target.id) add(t.role, target);
+    for (const a of raw.agentBindings) if (a.tenantId === target.id) add(a.role, target);
   }
   return PERMISSIONS.filter((p) => out.has(p));
 }
@@ -517,7 +524,7 @@ function randomCase(seed: number) {
     role: r.pick(ROLES),
     permission: r.pick(PERMISSIONS),
   }));
-  return { r, nodes, byId, home, raw, restrictions, clamp: r.bool(0.7) };
+  return { r, nodes, byId, home, raw, restrictions };
 }
 
 const SEEDS = Array.from({ length: 200 }, (_, i) => i + 1);
@@ -527,14 +534,8 @@ describe('property: the resolver agrees with a naive parent-walking reference', 
     for (const seed of SEEDS) {
       const c = randomCase(seed);
       for (const n of c.nodes) {
-        const got = permsOf(
-          effectiveAt(c.raw, n, {
-            now: NOW,
-            restrictions: c.restrictions,
-            clampInherited: c.clamp,
-          }),
-        );
-        const want = naivePermissions(c.byId, c.raw, n, NOW, c.restrictions, c.clamp);
+        const got = permsOf(effectiveAt(c.raw, n, { now: NOW, restrictions: c.restrictions }));
+        const want = naivePermissions(c.byId, c.raw, n, NOW, c.restrictions);
         expect(got, `seed ${seed} node ${n.id}`).toEqual(want);
       }
     }
@@ -545,7 +546,7 @@ describe('property: nothing flows up, sideways or across organisations', () => {
   it('only bindings on the chain of the node contribute (seeds 1..200)', () => {
     for (const seed of SEEDS) {
       const c = randomCase(seed);
-      const o = { now: NOW, restrictions: c.restrictions, clampInherited: c.clamp };
+      const o = { now: NOW, restrictions: c.restrictions };
       for (const n of c.nodes) {
         const chain = new Set(n.path.split('/').filter(Boolean));
         const pruned: RawGrants = {
@@ -576,7 +577,7 @@ describe('property: nothing flows up, sideways or across organisations', () => {
       const raw = { ...c.raw, nodeBindings: [b], teamBindings: [], agentBindings: [] };
       const origin = c.byId.get(b.tenantId)!;
       for (const n of c.nodes) {
-        const out = effectiveAt(raw, n, { now: NOW, clampInherited: false });
+        const out = effectiveAt(raw, n, { now: NOW });
         const inSubtree = n.path.startsWith(origin.path);
         const sameOrg = n.rootId === c.home.rootId;
         const expected = sameOrg && (n.id === origin.id || (b.inherit && inSubtree));
@@ -624,7 +625,7 @@ describe('property: nothing flows up, sideways or across organisations', () => {
   });
 });
 
-describe('property: monotonicity, expiry, platform admin, clamp', () => {
+describe('property: monotonicity, expiry, platform admin, role ceiling', () => {
   it('adding a binding never removes a permission; adding a restriction never adds one (seeds 1..200)', () => {
     for (const seed of SEEDS) {
       const c = randomCase(seed);
@@ -638,7 +639,7 @@ describe('property: monotonicity, expiry, platform admin, clamp', () => {
         role: r.pick(ROLES),
         permission: r.pick(PERMISSIONS),
       };
-      const o = { now: NOW, restrictions: c.restrictions, clampInherited: c.clamp };
+      const o = { now: NOW, restrictions: c.restrictions };
       for (const n of c.nodes) {
         const before = permsOf(effectiveAt(c.raw, n, o));
         const after = permsOf(effectiveAt(more, n, o));
@@ -673,7 +674,7 @@ describe('property: monotonicity, expiry, platform admin, clamp', () => {
       };
       for (const n of c.nodes) {
         // R is below the binding's node, so R is not on the chain of the binding's node: untouched.
-        const o = { now: NOW, clampInherited: false };
+        const o = { now: NOW };
         expect(
           bindingFingerprint(effectiveAt(raw, n, { ...o, restrictions: [restriction] })),
           `seed ${seed} node ${n.id}`,
@@ -715,15 +716,20 @@ describe('property: monotonicity, expiry, platform admin, clamp', () => {
     }
   });
 
-  it('with the clamp on, inherited bindings yield reads only (seeds 1..200)', () => {
+  it('without restrictions an inherited binding gives exactly its role, never more (seeds 1..200)', () => {
+    let inherited = 0;
     for (const seed of SEEDS) {
       const c = randomCase(seed);
       for (const n of c.nodes)
-        for (const b of effectiveAt(c.raw, n, { now: NOW, restrictions: c.restrictions }))
-          if (b.source === 'inherited')
-            for (const p of b.permissions)
-              expect(p === 'audit:verify' || p.endsWith(':read'), `seed ${seed} ${p}`).toBe(true);
+        for (const b of effectiveAt(c.raw, n, { now: NOW }))
+          if (b.source === 'inherited') {
+            inherited++;
+            expect([...b.permissions!].sort(), `seed ${seed}`).toEqual(
+              [...ROLE_PERMISSIONS[b.role]].sort(),
+            );
+          }
     }
+    expect(inherited).toBeGreaterThan(100);
   });
 
   it('every effective permission belongs to the role of the binding (seeds 1..200)', () => {
@@ -742,7 +748,7 @@ describe('S2: appliedAt is the one implementation behind effectiveAt', () => {
     for (const seed of SEEDS) {
       const c = randomCase(seed);
       for (const n of c.nodes) {
-        const opts = { now: NOW, restrictions: c.restrictions, clampInherited: c.clamp };
+        const opts = { now: NOW, restrictions: c.restrictions };
         const plain = effectiveAt(c.raw, n, opts);
         const applied = appliedAt(c.raw, n, opts);
         expect(
@@ -792,7 +798,7 @@ describe('S2: the visible set of a principal', () => {
     }
   });
 
-  it('shrinks to nothing when every grant expires, and an inherited grant stays read-only', () => {
+  it('shrinks to nothing when every grant expires, and an inherited grant keeps its role', () => {
     const f = fixture();
     const raw = rawOf(f.root, {
       nodeBindings: [grant(f.root.id, 'admin', { inherit: true, expiresAt: ahead(1000) })],
@@ -803,6 +809,8 @@ describe('S2: the visible set of a principal', () => {
     );
     expect(visibleNodeIds(raw, f.all, at(1000))).toEqual([]);
     for (const b of effectiveAt(raw, f.a, at(0))) expect(b.source).toBe('inherited');
-    for (const p of permsOf(effectiveAt(raw, f.a, at(0)))) expect(INHERITED_READ_ONLY).toContain(p);
+    expect(permsOf(effectiveAt(raw, f.a, at(0)))).toEqual(
+      PERMISSIONS.filter((p) => ROLE_PERMISSIONS.admin.includes(p)),
+    );
   });
 });

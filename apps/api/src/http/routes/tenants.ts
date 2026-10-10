@@ -58,8 +58,8 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
         summary:
           "The tenant tree the caller may see, with the caller's roles and optional counts per node",
         description:
-          'Platform operators see every organisation; everybody else, tenant admins included, their ' +
-          'own node until role bindings can inherit down the tree (ADR 0014). ' +
+          'Platform operators see every organisation; everybody else the nodes where their role ' +
+          'bindings reach (their own node, plus descendants of inheriting bindings, ADR 0014). ' +
           "The ancestors of the caller's node appear as path stubs " +
           '(`visible: false`: name and slug only). Siblings, cousins and other organisations never ' +
           "appear. A `root` outside the caller's reach is 404. Counts are included only for nodes " +
@@ -126,17 +126,35 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
   app.post(
     '/v1/tenants',
     {
-      config: { access: 'settings:write' },
+      config: { access: 'authenticated' },
       schema: {
         tags,
-        summary: 'Create a tenant (platform operators only)',
+        summary: 'Create a tenant: an organisation (platform operators) or a sub-tenant',
+        description:
+          'Platform operators with `settings:write` create organisations (no `parentId`) and ' +
+          'sub-tenants anywhere. With `OAX_ROLE_BINDINGS_READ=bindings` a tenant admin creates a ' +
+          'sub-tenant by naming `parentId`: the caller needs an **inheriting** `admin` binding on ' +
+          'the parent or an ancestor (403 `inheritance_required` if they are only a direct ' +
+          'admin there), evaluated on the parent and never on the acting tenant. A parent the ' +
+          'caller cannot see is 404. `admin` and `monthlyBudgetUsd` are for platform operators ' +
+          'only (403). The depth, node and slug limits are the same for everybody; a slug that is ' +
+          'taken is 409 without naming the other tenant. Audited as `tenant.created` in the ' +
+          'partition of the new tenant.',
         security: sec,
         body: TenantCreateBody,
-        response: { 201: TenantSchema, 403: ErrorSchema, 409: ErrorSchema },
+        response: {
+          201: TenantSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+          422: ErrorSchema,
+        },
       },
     },
     async (req, reply) =>
-      reply.status(201).send(await view(await tenants.create(principalOf(req), req.body))),
+      reply
+        .status(201)
+        .send(await view(await tenants.createFromRequest(principalOf(req), req.body))),
   );
 
   app.get(
@@ -157,14 +175,20 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
   app.patch(
     '/v1/tenants/:id',
     {
-      config: { access: 'settings:write' },
+      config: { access: 'authenticated' },
       schema: {
         tags,
-        summary: 'Rename a tenant or change its monthly budget (platform operators only)',
+        summary: 'Rename a tenant; budget and secret references are platform operators only',
+        description:
+          'Platform operators with `settings:write` change any field. With ' +
+          '`OAX_ROLE_BINDINGS_READ=bindings` a tenant admin renames (`name` only) a tenant where ' +
+          'they hold an inheriting `admin` binding on it or an ancestor (403 ' +
+          '`inheritance_required` for a direct admin); this is evaluated on the tenant in the ' +
+          'path, never on the acting tenant. A tenant the caller cannot see is 404.',
         security: sec,
         params: IdParams,
         body: TenantPatchBody,
-        response: { 200: TenantSchema, 403: ErrorSchema },
+        response: { 200: TenantSchema, 403: ErrorSchema, 404: ErrorSchema },
       },
     },
     async (req) => view(await tenants.update(principalOf(req), req.params.id, req.body)),
