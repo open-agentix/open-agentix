@@ -598,6 +598,11 @@ export const connections = pgTable(
     name: text('name').notNull(),
     kind: text('kind').notNull(),
     config: jsonb('config').notNull(),
+    /**
+     * Bumped when the server URL changes (ADR 0016 section 7.4): stored OAuth tokens belong to one
+     * (connection, credential version) and are deleted with the bump.
+     */
+    credentialVersion: integer('credential_version').notNull().default(1),
     createdBy: uuid('created_by'),
     createdAt: created(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
@@ -605,6 +610,9 @@ export const connections = pgTable(
   (t) => [
     // Platform connections share one namespace, everything else is unique inside its tenant.
     uniqueIndex('connections_tenant_name_uq').on(t.tenantId, t.name),
+    // Target of the composite foreign key of `mcp_oauth_tokens` (a token row cannot name a tenant
+    // other than the owner of its connection).
+    uniqueIndex('connections_id_tenant_uq').on(t.id, t.tenantId),
   ],
 );
 
@@ -654,6 +662,111 @@ export const mcpToolSnapshots = pgTable(
     check(
       'mcp_tool_snapshots_tools',
       sql`jsonb_typeof(${t.tools}) = 'array' and jsonb_array_length(${t.tools}) <= 500 and ${t.toolCount} = jsonb_array_length(${t.tools})`,
+    ),
+  ],
+);
+
+/**
+ * Data keys of the platform's minimal key service (ADR 0016 section 7.5, extended by ADR 0012
+ * W12-2). One active key per tenant; `wrapped_key` is the data key sealed with the platform
+ * key-encryption key (AES-256-GCM, AAD = tenant | version | kek id), never the key itself.
+ * `destroyed` rows keep no key material (crypto-shredding): everything encrypted under that
+ * version is unreadable for good.
+ */
+export const tenantDataKeys = pgTable(
+  'tenant_data_keys',
+  {
+    tenantId: uuid('tenant_id').notNull(),
+    version: integer('version').notNull(),
+    wrappedKey: text('wrapped_key'),
+    kekId: text('kek_id').notNull(),
+    status: text('status').notNull().default('active'),
+    createdAt: created(),
+    destroyedAt: ts('destroyed_at'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.tenantId, t.version] }),
+    // At most one active key per tenant: new keys are written by a rotation that retires the old one.
+    uniqueIndex('tenant_data_keys_active_uq')
+      .on(t.tenantId)
+      .where(sql`${t.status} = 'active'`),
+    check('tenant_data_keys_status', sql`${t.status} in ('active', 'retired', 'destroyed')`),
+    check(
+      'tenant_data_keys_material',
+      sql`(${t.status} = 'destroyed') = (${t.wrappedKey} is null)`,
+    ),
+  ],
+);
+
+/**
+ * OAuth tokens of MCP connections (ADR 0016 section 7.5). The only stored credential values of the
+ * platform, and they are ciphertext: `access_token_enc` / `refresh_token_enc` are AES-256-GCM
+ * envelopes under the tenant data key `key_version`, bound to (tenant, connection, issuer,
+ * resource, credential version) by the additional authenticated data, so a row copied to another
+ * connection or tenant does not decrypt. Read only through `McpCredentials` in the api and the
+ * trusted worker; never selected by an API route.
+ */
+export const mcpOauthTokens = pgTable(
+  'mcp_oauth_tokens',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull(),
+    connectionId: uuid('connection_id').notNull(),
+    credentialVersion: integer('credential_version').notNull().default(1),
+    issuer: text('issuer').notNull(),
+    /** Registration row (`mcp_oauth_clients.id`) or a secret reference; never a secret value. */
+    clientRef: text('client_ref').notNull(),
+    /** Canonical URI of the MCP server the token is bound to (RFC 8707). */
+    resource: text('resource').notNull(),
+    scopes: text('scopes').notNull().default(''),
+    keyVersion: integer('key_version').notNull(),
+    accessTokenEnc: text('access_token_enc').notNull(),
+    refreshTokenEnc: text('refresh_token_enc'),
+    expiresAt: ts('expires_at'),
+    status: text('status').notNull().default('active'),
+    authorizedBy: uuid('authorized_by'),
+    authorizedAt: ts('authorized_at').notNull().defaultNow(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'mcp_oauth_tokens_connection_tenant_fk',
+      columns: [t.connectionId, t.tenantId],
+      foreignColumns: [connections.id, connections.tenantId],
+    }).onDelete('cascade'),
+    uniqueIndex('mcp_oauth_tokens_connection_version_uq').on(t.connectionId, t.credentialVersion),
+    index('mcp_oauth_tokens_tenant_idx').on(t.tenantId, t.status),
+    check(
+      'mcp_oauth_tokens_status',
+      sql`${t.status} in ('active', 'refresh_failed', 'reauthorization_required', 'revoked')`,
+    ),
+  ],
+);
+
+/**
+ * Clients registered dynamically (RFC 7591) at an authorization server, one per tenant and issuer
+ * (ADR 0016 section 7.2; never shared across tenants). The client secret, when the server issued
+ * one, is ciphertext like the tokens.
+ */
+export const mcpOauthClients = pgTable(
+  'mcp_oauth_clients',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull(),
+    issuer: text('issuer').notNull(),
+    registration: text('registration').notNull().default('dcr'),
+    clientId: text('client_id').notNull(),
+    keyVersion: integer('key_version'),
+    clientSecretEnc: text('client_secret_enc'),
+    createdBy: uuid('created_by'),
+    createdAt: created(),
+  },
+  (t) => [
+    uniqueIndex('mcp_oauth_clients_tenant_issuer_uq').on(t.tenantId, t.issuer),
+    check('mcp_oauth_clients_registration', sql`${t.registration} in ('dcr', 'cimd')`),
+    check(
+      'mcp_oauth_clients_secret',
+      sql`(${t.clientSecretEnc} is null) = (${t.keyVersion} is null)`,
     ),
   ],
 );

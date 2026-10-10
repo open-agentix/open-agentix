@@ -43,6 +43,8 @@ import {
   type ModelEntry,
 } from '@openagentix/providers';
 import { legacyNetwork } from '@openagentix/providers';
+import { canonicalResource } from '../mcp-oauth/resource.js';
+import { processSecrets } from '../mcp-oauth/secret-registry.js';
 import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
@@ -50,6 +52,7 @@ import {
   DEFAULT_TENANT_ID,
   agents,
   connections,
+  mcpOauthTokens,
   mcpToolSnapshots,
   policies,
   teams,
@@ -750,19 +753,36 @@ export class CatalogService {
       parsed,
       current.config,
     );
-    const [row] = await this.ctx.db
-      .update(connections)
-      .set({ config: parsed, updatedAt: this.ctx.now() })
-      .where(
-        and(
-          eq(connections.id, id),
-          eq(connections.tenantId, actor.tenantId),
-          // Compare and swap: the checks above were made against the config read at the start. If
-          // someone changed it meanwhile, nothing is written (409) instead of skipping the checks.
-          sql`${connections.config} = ${JSON.stringify(current.config)}::jsonb`,
-        ),
-      )
-      .returning();
+    // A new server URL is a new OAuth resource (ADR 0016 section 7.4): bump the credential
+    // version and delete the stored tokens, which were issued for the old one, in one transaction
+    // (a token write racing the bump waits for the row lock and then sees the new version).
+    const moved = resourceOf(current.config) !== resourceOf(parsed);
+    const row = await this.ctx.db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(connections)
+        .set({
+          config: parsed,
+          updatedAt: this.ctx.now(),
+          ...(moved ? { credentialVersion: sql`${connections.credentialVersion} + 1` } : {}),
+        })
+        .where(
+          and(
+            eq(connections.id, id),
+            eq(connections.tenantId, actor.tenantId),
+            // Compare and swap: the checks above were made against the config read at the start. If
+            // someone changed it meanwhile, nothing is written (409) instead of skipping the checks.
+            sql`${connections.config} = ${JSON.stringify(current.config)}::jsonb`,
+          ),
+        )
+        .returning();
+      if (updated && moved)
+        await tx
+          .delete(mcpOauthTokens)
+          .where(
+            and(eq(mcpOauthTokens.connectionId, id), eq(mcpOauthTokens.tenantId, actor.tenantId)),
+          );
+      return updated;
+    });
     if (!row) {
       // Gone (deleted meanwhile) is a 404; present but different is a 409.
       const [still] = await this.ctx.db
@@ -772,6 +792,7 @@ export class CatalogService {
       if (!still) throw notFound('connection');
       throw conflict(`connection "${current.name}" was changed meanwhile; reload and try again`);
     }
+    if (moved) processSecrets.forgetOwnerPrefix(`${id}:`);
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,
@@ -788,6 +809,8 @@ export class CatalogService {
     await this.ctx.db
       .delete(connections)
       .where(and(eq(connections.id, id), eq(connections.tenantId, actor.tenantId)));
+    // The token rows went with the connection (foreign key); forget the values in memory too.
+    processSecrets.forgetOwnerPrefix(`${id}:`);
     await this.invalidateConnections();
     await this.audit.append({
       actor: actor.userId,
@@ -936,5 +959,16 @@ export class CatalogService {
       toolAccess: definition.toolAccess,
       bundles: [...(await this.enabledBundles(tenantId)), ...extraBundles],
     });
+  }
+}
+
+/** Canonical resource of an HTTP MCP connection config, or null (stdio, in-memory, malformed). */
+function resourceOf(config: unknown): string | null {
+  const url = (config as { url?: unknown } | null)?.url;
+  if (typeof url !== 'string') return null;
+  try {
+    return canonicalResource(url);
+  } catch {
+    return null;
   }
 }

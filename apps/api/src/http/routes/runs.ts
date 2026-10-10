@@ -26,6 +26,7 @@ import {
   pageOf,
 } from '../schemas.js';
 import { assertNotBoth, rowTenants } from '../subtree.js';
+import { processSecrets, stringifyScrubbed } from '../../mcp-oauth/index.js';
 import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
@@ -156,6 +157,7 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
     },
     async (req, reply) => {
       await runs.getVisible(principalOf(req), req.params.id);
+      const tenantId = principalOf(req).tenantId;
       const lastId = Number(req.headers['last-event-id'] ?? 0);
       let after = Number.isInteger(lastId) && lastId > 0 ? lastId : 0;
       let closed = false;
@@ -176,16 +178,22 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
           after > 0 ? encodeSeqCursor(after) : undefined,
         );
         for (const s of items) {
-          reply.raw.write(`id: ${s.seq}\nevent: step\ndata: ${JSON.stringify(stepDto(s))}\n\n`);
+          reply.raw.write(
+            `id: ${s.seq}\nevent: step\ndata: ${stringifyScrubbed(processSecrets, stepDto(s), tenantId)}\n\n`,
+          );
           after = s.seq;
         }
         const run = await runs.get(req.params.id);
         if (run.status !== lastStatus) {
-          reply.raw.write(`event: status\ndata: ${JSON.stringify({ status: run.status })}\n\n`);
+          reply.raw.write(
+            `event: status\ndata: ${stringifyScrubbed(processSecrets, { status: run.status }, tenantId)}\n\n`,
+          );
           lastStatus = run.status;
         }
         if (isTerminal(run.status as RunStatus) && items.length === 0) {
-          reply.raw.write(`event: end\ndata: ${JSON.stringify(runDto(run))}\n\n`);
+          reply.raw.write(
+            `event: end\ndata: ${stringifyScrubbed(processSecrets, runDto(run), tenantId)}\n\n`,
+          );
           break;
         }
         if (items.length === 0 && ++idle % 30 === 0) reply.raw.write(': keep-alive\n\n');
