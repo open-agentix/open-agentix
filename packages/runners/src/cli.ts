@@ -9,7 +9,7 @@ import { createHarness } from './harness.js';
 import { runLocal } from './local.js';
 import type { StepInput } from './types.js';
 
-export const CLI_VERSION = '0.1.0';
+export const CLI_VERSION = '0.2.0-alpha.1';
 
 export interface CliIo {
   out: (line: string) => void;

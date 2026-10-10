@@ -1,6 +1,6 @@
 {
   "name": "@openagentix/worker",
-  "version": "0.1.0",
+  "version": "0.2.0-alpha.1",
   "private": true,
   "description": "openagentix worker: claims runs from the Postgres SKIP LOCKED queue, executes them via runners, schedules cron triggers and consumes Kafka sources",
   "license": "Apache-2.0",

@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: openagentix API
-  version: 0.1.0
+  version: 0.2.0-alpha.1
   description: "Control node API of openagentix: agents, events, runs, approvals, audit, costs and RBAC."
   license:
     name: Apache-2.0

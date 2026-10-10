@@ -17,7 +17,7 @@ export interface MockTool {
 
 /** A small in-process MCP server (tests, the demo and the local CLI). */
 export function createMockMcpServer(name: string, tools: readonly MockTool[]): Server {
-  const server = new Server({ name, version: '0.1.0' }, { capabilities: { tools: {} } });
+  const server = new Server({ name, version: '0.2.0-alpha.1' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({
       name: t.name,

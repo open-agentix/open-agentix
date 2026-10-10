@@ -18,7 +18,7 @@ export interface GateServerOptions {
  */
 export function createPolicyGateServer(opts: GateServerOptions): Server {
   const server = new Server(
-    { name: 'openagentix-gate', version: '0.1.0' },
+    { name: 'openagentix-gate', version: '0.2.0-alpha.1' },
     { capabilities: { tools: {} } },
   );
   const byName = new Map(opts.tools.map((t) => [t.modelName, t]));
