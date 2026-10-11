@@ -24,3 +24,10 @@ export const sameString = (a: string, b: string): boolean => {
   const y = Buffer.from(b);
   return x.length === y.length && timingSafeEqual(x, y);
 };
+
+/** The console's nonce: 16 to 128 base64url characters (it generates 43). */
+export const NONCE_SHAPE = /^[A-Za-z0-9_-]{16,128}$/;
+/** The hash the console sends at authorize time (SHA-256, hex, lower case). */
+export const NONCE_HASH_SHAPE = /^[0-9a-f]{64}$/;
+export const nonceHash = (nonce: string): string =>
+  createHash('sha256').update(nonce, 'utf8').digest('hex');

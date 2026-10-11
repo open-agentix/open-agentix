@@ -595,7 +595,39 @@ export const OauthAuthorizeBody = z.object({
     .string()
     .url()
     .optional()
-    .describe('Authorization server to use when the resource names several'),
+    .describe(
+      'Authorization server to use when the resource names several, or to confirm on the first authorization_code consent',
+    ),
+  nonceHash: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional()
+    .describe(
+      'authorization_code: SHA-256 (hex) of a nonce the console keeps in its tab; only that session can complete the consent (POST .../oauth/complete)',
+    ),
+});
+export const OauthCompleteBody = z.object({
+  state: z.string().max(256),
+  nonce: z.string().max(256),
+  code: z.string().max(2048).optional(),
+  iss: z.string().max(2048).optional(),
+  error: z.string().max(64).optional(),
+});
+export const OauthCompleteResultSchema = z.object({
+  result: z.enum([
+    'ok',
+    'denied',
+    'state_invalid',
+    'state_expired',
+    'iss_mismatch',
+    'iss_missing',
+    'code_invalid',
+    'token_refused',
+    'forbidden',
+    'conflict',
+    'error',
+  ]),
+  status: OauthStatusSchema.nullable(),
 });
 export const ToolSnapshotApproveBody = z.object({
   scope: z

@@ -868,8 +868,13 @@ export const mcpOauthPending = pgTable(
     tenantId: uuid('tenant_id').notNull(),
     connectionId: uuid('connection_id').notNull(),
     credentialVersion: integer('credential_version').notNull(),
-    /** The administrator who started the request; checked again, with their permissions, at the callback. */
+    /** The administrator who started the request; only that session may complete it. */
     userId: uuid('user_id').notNull(),
+    /**
+     * SHA-256 (hex) of the nonce the console generated for this request and keeps in its tab's
+     * session storage: the browser that started the consent is the only one that can complete it.
+     */
+    nonceHash: text('nonce_hash').notNull(),
     /** The issuer the authorization was started for (RFC 9207: the response must come from it). */
     issuer: text('issuer').notNull(),
     resource: text('resource').notNull(),

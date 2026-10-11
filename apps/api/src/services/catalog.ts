@@ -585,14 +585,6 @@ export class CatalogService {
   }
 
   /**
-   * ADR 0016 S1: an HTTP MCP connection may not carry credentials in its URL or platform-owned
-   * headers (400), and the URL of a tenant, team or agent connection passes the ADR 0011 tenant
-   * destination rules (422 `egress_denied`): https only, no localhost, no metadata or private
-   * address in any numeric spelling, and nothing the operator's `deny` routes or air-gapped
-   * allowlist refuse. Pure checks, no DNS: the dispatcher resolves, checks and pins every address
-   * at connect time, so saving a connection is never a name-resolution oracle.
-   */
-  /**
    * authorization_code needs a person's consent, which cannot be shared with the tenants that use a
    * central (platform) instance (ADR 0016 section 7.6); the metadata document and dynamic
    * registration exist only when the operator turned them on (never in air-gapped mode).
@@ -622,6 +614,14 @@ export class CatalogService {
       );
   }
 
+  /**
+   * ADR 0016 S1: an HTTP MCP connection may not carry credentials in its URL or platform-owned
+   * headers (400), and the URL of a tenant, team or agent connection passes the ADR 0011 tenant
+   * destination rules (422 `egress_denied`): https only, no localhost, no metadata or private
+   * address in any numeric spelling, and nothing the operator's `deny` routes or air-gapped
+   * allowlist refuse. Pure checks, no DNS: the dispatcher resolves, checks and pins every address
+   * at connect time, so saving a connection is never a name-resolution oracle.
+   */
   private assertHttpAllowed(name: string, scope: ConnectionScope, stored: unknown): void {
     const cfg = stored as McpServerConfig;
     if (cfg.transport !== 'streamable-http') return;

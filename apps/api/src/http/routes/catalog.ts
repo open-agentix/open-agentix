@@ -6,6 +6,8 @@ import { connectionDto, policyDto } from '../dto.js';
 import {
   OauthAuthorizeBody,
   OauthAuthorizeResultSchema,
+  OauthCompleteBody,
+  OauthCompleteResultSchema,
   OauthStatusSchema,
   ConnectionCreateBody,
   ConnectionSchema,
@@ -34,7 +36,6 @@ import {
 import { SUBTREE_DEFAULT_PAGE, assertPagingNeedsSubtree, rowTenants } from '../subtree.js';
 import { HttpError } from '../../errors.js';
 import { cimdDocument } from '../../mcp-oauth/registration.js';
-import type { CallbackOutcome } from '../../services/mcp-oauth.js';
 import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
@@ -250,9 +251,11 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
     async (req) => services.mcpOauthFlows.disconnect(principalOf(req), req.params.id),
   );
 
-  // The browser lands here after the consent at the authorization server. There is no session: the
-  // single-use state decides, and the answer is a redirect to the console (or, without a console
-  // URL, a page of fixed text). The query is never echoed: only the closed result codes leave.
+  // The browser lands here after the consent at the authorization server. This route redeems
+  // nothing and consumes nothing: a browser redirect has no session, so it only hands `state`, `code`
+  // and `iss` to the console in the URL FRAGMENT (never sent to a server, never in an access log).
+  // The console, in the tab that started the consent, completes it with its session and nonce
+  // (`POST /v1/connections/{id}/oauth/complete`). The query is never echoed.
   app.get(
     '/v1/oauth/mcp/callback',
     {
@@ -261,43 +264,63 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
         tags: ['connections'],
         summary: 'Redirect target of the MCP OAuth authorization-code flow (browser)',
         description:
-          'Consumes the state, checks the RFC 9207 `iss` parameter, redeems the code with the PKCE verifier and stores the tokens on the connection instance. Redirects to the console with `mcp_oauth=<result>` (a closed set) or answers a small page of fixed text.',
+          'Redirects to the console with `state`, `code`, `iss` and `error` in the URL fragment; the consent is completed there with the session and nonce of the browser that started it. Answers a page of fixed text when the state is malformed or no console URL is configured.',
         querystring: z.object({}).passthrough(),
-        response: { 200: z.string(), 302: z.void(), 400: z.string() },
+        response: { 400: z.string(), 302: z.void() },
       },
     },
     async (req, reply) => {
       const q = req.query as Record<string, unknown>;
       // A parameter that is repeated, nested or not a string is treated as absent.
       const one = (k: string) => (typeof q[k] === 'string' ? (q[k] as string) : undefined);
-      let outcome: CallbackOutcome;
-      try {
-        outcome = await services.mcpOauthFlows.completeAuthorization({
-          state: one('state'),
-          code: one('code'),
-          iss: one('iss'),
-          error: one('error'),
-        });
-      } catch {
-        outcome = { result: 'error' };
-      }
       void reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer');
-      if (ctx.config.uiUrl) {
-        const target = new URL('/connections', ctx.config.uiUrl);
-        target.searchParams.set('mcp_oauth', outcome.result);
-        if (outcome.connectionId) target.searchParams.set('connection', outcome.connectionId);
-        return reply.redirect(target.toString());
-      }
-      const text =
-        outcome.result === 'ok'
-          ? 'Authorization completed. You can close this window and return to the console.'
-          : `Authorization failed (${outcome.result}). Close this window and try again in the console.`;
-      void reply.status(outcome.result === 'ok' ? 200 : 400);
-      return reply
-        .type('text/html; charset=utf-8')
-        .send(
-          `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>openagentix</title></head><body><p>${text}</p></body></html>`,
+      const state = one('state');
+      if (!ctx.config.uiUrl || state === undefined || !/^[A-Za-z0-9_-]{43}$/.test(state)) {
+        void reply.status(400).type('text/html; charset=utf-8');
+        return reply.send(
+          '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>openagentix</title></head><body><p>Authorization failed. Close this window and try again in the console.</p></body></html>',
         );
+      }
+      const frag = new URLSearchParams({ oauth_state: state });
+      const code = one('code');
+      if (code !== undefined && /^[\x21-\x7e]{1,2048}$/.test(code)) frag.set('oauth_code', code);
+      const iss = one('iss');
+      // A malformed issuer must not turn into "absent": it is passed on and fails the comparison.
+      if (iss !== undefined) frag.set('oauth_iss', /^[\x21-\x7e]{1,2048}$/.test(iss) ? iss : '!');
+      const error = one('error');
+      if (error !== undefined)
+        frag.set('oauth_error', /^[a-z_]{1,40}$/.test(error) ? error : 'other');
+      const target = new URL('/connections', ctx.config.uiUrl);
+      return reply.redirect(`${target.toString()}#${frag.toString()}`);
+    },
+  );
+
+  app.post(
+    '/v1/connections/:id/oauth/complete',
+    {
+      config: { access: 'connections:write' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'Complete an authorization-code consent: redeem the code (session of the person who started it, nonce of their browser)',
+        description:
+          'Takes `state`, `code` and `iss` as the callback handed them to the console, plus the nonce whose hash was sent with the authorization request. The state is spent whatever the outcome. Only the session of the person who started the consent, with the nonce of that browser, can complete it; the result is one of a closed set and `forbidden` for anything else.',
+        security: sec,
+        params: IdParams,
+        body: OauthCompleteBody,
+        response: { 200: OauthCompleteResultSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => {
+      const actor = principalOf(req);
+      const out = await services.mcpOauthFlows.completeAuthorization(
+        actor,
+        req.params.id,
+        req.body,
+      );
+      const status =
+        out.result === 'ok' ? await services.mcpOauthFlows.status(actor, req.params.id) : null;
+      return { result: out.result, status };
     },
   );
 

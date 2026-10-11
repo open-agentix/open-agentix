@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { ContextGuard, type SecretResolver } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -68,6 +68,13 @@ const tools = {
 const publicAuth = {
   kind: 'oauth',
   grant: 'authorization_code',
+  issuer: 'https://auth.example.org',
+  client: { clientIdSecret: 'oa-public-id', clientAuth: 'none' },
+};
+/** Not pinned: the administrator confirms the server first, and a public client needs `iss`. */
+const publicUnpinned = {
+  kind: 'oauth',
+  grant: 'authorization_code',
   client: { clientIdSecret: 'oa-public-id', clientAuth: 'none' },
 };
 const confidentialAuth = {
@@ -80,8 +87,18 @@ const confidentialAuth = {
     clientSecretSecret: 'oa-client-secret',
   },
 };
-const cimdAuth = { kind: 'oauth', grant: 'authorization_code', client: { registration: 'cimd' } };
-const dcrAuth = { kind: 'oauth', grant: 'authorization_code', client: { registration: 'dcr' } };
+const cimdAuth = {
+  kind: 'oauth',
+  grant: 'authorization_code',
+  issuer: 'https://auth.example.org',
+  client: { registration: 'cimd' },
+};
+const dcrAuth = {
+  kind: 'oauth',
+  grant: 'authorization_code',
+  issuer: 'https://auth.example.org',
+  client: { registration: 'dcr' },
+};
 
 let seq = 0;
 async function create(node: TestNode, auth: unknown, extra: Record<string, unknown> = {}) {
@@ -96,26 +113,87 @@ async function create(node: TestNode, auth: unknown, extra: Record<string, unkno
   expect(res.statusCode, res.body).toBe(201);
   return res.json().id as string;
 }
-const post = (node: TestNode, id: string, body: unknown = {}, token?: string | null) =>
+const sha = (v: string) => createHash('sha256').update(v).digest('hex');
+/** Consents that were started, by state: the connection, the console's nonce and the session. */
+const consents = new Map<string, { id: string; nonce: string; token: string | null | undefined }>();
+const post = (
+  node: TestNode,
+  id: string,
+  body: Record<string, unknown> = {},
+  token?: string | null,
+) =>
   node.req({
     method: 'POST',
     url: `/v1/connections/${id}/oauth/authorize`,
-    payload: body as never,
+    payload: { nonceHash: sha(newToken()), ...body } as never,
     ...(token !== undefined ? { token } : {}),
   });
-/** Starts a consent and returns the authorization URL. */
-async function start(node: TestNode, id: string, token?: string | null) {
-  const res = await post(node, id, {}, token);
+/** Starts a consent as the console does (nonce kept, its hash sent) and returns the authorization URL. */
+async function start(
+  node: TestNode,
+  id: string,
+  token?: string | null,
+  extra: Record<string, unknown> = {},
+) {
+  const nonce = newToken();
+  const res = await post(node, id, { nonceHash: sha(nonce), issuer: as.issuer, ...extra }, token);
   expect(res.statusCode, res.body).toBe(200);
   const url = res.json().authorizationUrl as string;
   expect(url).toBeTruthy();
+  consents.set(new URL(url).searchParams.get('state')!, { id, nonce, token });
   return url;
 }
-/** The browser follows the redirect of the authorization server to the callback. */
-const visit = (node: TestNode, url: URL | string) => {
+interface Visit {
+  statusCode: number;
+  body: string;
+  headers: Record<string, unknown>;
+  result: string;
+  callback: { statusCode: number; headers: Record<string, unknown>; body: string };
+}
+/**
+ * The browser follows the redirect of the authorization server to the callback, which sends it on
+ * to the console with the answer in the URL fragment; the console then completes the consent with
+ * its session and nonce. `nonce: null` models a browser that never started the consent.
+ */
+async function visit(
+  node: TestNode,
+  url: URL | string,
+  o: { token?: string | null; nonce?: string | null; id?: string } = {},
+): Promise<Visit> {
   const u = new URL(url);
-  return node.app.inject({ method: 'GET', url: u.pathname + u.search });
-};
+  const cb = await node.app.inject({ method: 'GET', url: u.pathname + u.search });
+  if (cb.statusCode !== 302)
+    return {
+      statusCode: 400,
+      body: 'Authorization failed (state_invalid)',
+      headers: cb.headers,
+      result: 'state_invalid',
+      callback: cb,
+    };
+  const frag = new URLSearchParams(new URL(String(cb.headers.location)).hash.slice(1));
+  const known = consents.get(frag.get('oauth_state') ?? '');
+  const res = await node.req({
+    method: 'POST',
+    url: `/v1/connections/${o.id ?? known?.id ?? randomUUID()}/oauth/complete`,
+    ...(o.token !== undefined ? { token: o.token } : known ? { token: known.token } : {}),
+    payload: {
+      state: frag.get('oauth_state') ?? '',
+      nonce: o.nonce === null ? '' : (o.nonce ?? known?.nonce ?? ''),
+      ...(frag.has('oauth_code') ? { code: frag.get('oauth_code') } : {}),
+      ...(frag.has('oauth_iss') ? { iss: frag.get('oauth_iss') } : {}),
+      ...(frag.has('oauth_error') ? { error: frag.get('oauth_error') } : {}),
+    } as never,
+  });
+  // a refusal of the route itself (no or insufficient session) is a refusal of the consent
+  const result = res.statusCode === 200 ? (res.json().result as string) : 'forbidden';
+  return {
+    statusCode: result === 'ok' ? 200 : 400,
+    body: result === 'ok' ? 'Authorization completed' : `Authorization failed (${result})`,
+    headers: res.headers,
+    result,
+    callback: cb,
+  };
+}
 const status = async (node: TestNode, id: string) =>
   (await node.req({ method: 'GET', url: `/v1/connections/${id}/oauth` })).json();
 const ref = async (node: TestNode, id: string) => {
@@ -131,8 +209,7 @@ const actions = async (node: TestNode, id: string) =>
 /** Open consent requests of one connection (other tests leave theirs behind). */
 const pendingCount = async (node: TestNode, id: string) =>
   (await node.ctx.db.select().from(mcpOauthPending)).filter((p) => p.connectionId === id).length;
-const resultOf = (res: { headers: Record<string, unknown>; body: string }) =>
-  /\((\w+)\)/.exec(res.body)?.[1] ?? (res.body.includes('completed') ? 'ok' : 'unknown');
+const resultOf = (res: { result: string }) => res.result;
 
 beforeAll(async () => {
   world = new World();
@@ -148,6 +225,7 @@ beforeAll(async () => {
   const env = {
     OAX_MCP_OAUTH_KEK: randomBytes(32).toString('base64'),
     OAX_PUBLIC_URL: PUBLIC,
+    OAX_UI_URL: 'https://console.example.org',
     ...(process.env.OAX_TEST_FLOW_DATABASE_URL
       ? { OAX_DATABASE_URL: process.env.OAX_TEST_FLOW_DATABASE_URL }
       : {}),
@@ -270,9 +348,15 @@ describe('configuration', () => {
 describe('the consent', () => {
   it('sends PKCE S256, the exact redirect URI, a fresh state and the resource; stores the tokens on the instance', async () => {
     const id = await create(n, publicAuth);
-    const res = await post(n, id);
+    const nonce = newToken();
+    const res = await post(n, id, { nonceHash: sha(nonce) });
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json();
+    consents.set(new URL(body.authorizationUrl).searchParams.get('state')!, {
+      id,
+      nonce,
+      token: undefined,
+    });
     expect(body).toMatchObject({
       status: 'not_authorized',
       grant: 'authorization_code',
@@ -363,17 +447,35 @@ describe('the consent', () => {
     const back = as.consent(authUrl);
     const code = back.searchParams.get('code')!;
     const res = await logged.inject({ method: 'GET', url: back.pathname + back.search });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(302);
+    // the answer travels in the fragment: no query, nothing for a server or an access log
+    const location = String(res.headers.location);
+    expect(location).not.toContain('?');
+    expect(location).toContain('#');
+    const nonce = consents.get(state)!.nonce;
+    const frag = new URLSearchParams(new URL(location).hash.slice(1));
+    const done = await logged.inject({
+      method: 'POST',
+      url: `/v1/connections/${id}/oauth/complete`,
+      headers: { authorization: `Bearer ${n.admin}` },
+      payload: {
+        state: frag.get('oauth_state'),
+        code: frag.get('oauth_code'),
+        iss: frag.get('oauth_iss'),
+        nonce,
+      },
+    });
+    expect(done.json().result).toBe('ok');
     await logged.close();
     const verifier = as.tokenRequests.at(-1)!.form.get('code_verifier')!;
     const access = (await token(n, id)).token;
     const logs = sink.join('\n');
     expect(logs).toContain('/v1/oauth/mcp/callback');
     const audit = JSON.stringify(await n.ctx.db.select().from(auditLog));
-    for (const secret of [code, state, verifier, access]) {
+    for (const secret of [code, state, verifier, access, nonce]) {
       expect(logs).not.toContain(secret);
       expect(audit).not.toContain(secret);
-      expect(res.body).not.toContain(secret);
+      expect(done.body).not.toContain(secret);
       expect(JSON.stringify(await status(n, id))).not.toContain(secret);
     }
   });
@@ -474,23 +576,17 @@ describe('state', () => {
     expect(resultOf(await visit(n, back))).toBe('state_invalid');
   });
 
-  it('is bound to the person, connection and tenant that started it, whoever visits the callback', async () => {
+  it('is bound to the connection: the state of A cannot be completed through B', async () => {
     const a = await create(n, publicAuth);
     const b = await create(n, publicAuth);
     const ua = await start(n, a);
     await start(n, b);
-    // the callback carries no session: a visitor with someone else's bearer token changes nothing
-    const back = as.consent(ua);
-    const res = await n.app.inject({
-      method: 'GET',
-      url: back.pathname + back.search,
-      headers: { authorization: `Bearer ${n.admin}` },
-    });
-    expect(res.statusCode).toBe(200);
-    expect((await status(n, a)).status).toBe('active');
+    world.clear();
+    const res = await visit(n, as.consent(ua), { id: b });
+    expect(resultOf(res)).toBe('state_invalid');
+    expect(world.to('auth.example.org').filter((r) => r.url.pathname === '/token')).toEqual([]);
+    expect((await status(n, a)).status).toBe('not_authorized');
     expect((await status(n, b)).status).toBe('not_authorized');
-    const me = (await n.req({ method: 'GET', url: '/v1/me' })).json().user.id as string;
-    expect((await status(n, a)).authorizedBy).toBe(me);
   });
 
   it('the sealed verifier does not open when the row is moved to another connection', async () => {
@@ -518,6 +614,122 @@ describe('state', () => {
     expect(await pendingCount(n, id)).toBe(1);
     expect(resultOf(await visit(n, first))).toBe('state_invalid');
     expect((await visit(n, second)).statusCode).toBe(200);
+  });
+});
+
+describe('the consent is bound to the browser that started it', () => {
+  const tokenRequests = () =>
+    world.to('auth.example.org').filter((r) => r.url.pathname === '/token').length;
+  let ops: string;
+  beforeAll(async () => {
+    const r = await n.req({
+      method: 'POST',
+      url: '/v1/users',
+      payload: {
+        email: 'bind-code@example.org',
+        displayName: 'b',
+        password: PW,
+        globalRoles: ['admin'],
+      },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    ops = await n.login('bind-code@example.org', PW);
+  });
+
+  it('a consent started by one person and completed by another (the forwarded link) stores nothing', async () => {
+    const id = await create(n, publicAuth);
+    // the attacker (a colleague with connections:write) starts; the victim opens the link and consents
+    const back = as.consent(await start(n, id, ops));
+    world.clear();
+    // the victim's console never started this consent: no nonce (or a guessed one), and a session
+    // of its own; the state is spent by the attempt
+    expect(resultOf(await visit(n, back, { token: n.admin, nonce: null }))).toBe('forbidden');
+    const second = as.consent(await start(n, id, ops));
+    expect(resultOf(await visit(n, second, { token: n.admin, nonce: newToken() }))).toBe(
+      'forbidden',
+    );
+    expect(tokenRequests()).toBe(0);
+    expect((await status(n, id)).status).toBe('not_authorized');
+    // the state is spent: not even the attacker can use what the victim's consent produced
+    expect(resultOf(await visit(n, back))).toBe('state_invalid');
+    expect(
+      await n.ctx.db.select().from(mcpOauthTokens).where(eq(mcpOauthTokens.connectionId, id)),
+    ).toEqual([]);
+  });
+
+  it('the same person in another browser (no nonce, or a wrong one) cannot complete either', async () => {
+    const id = await create(n, publicAuth);
+    const back = as.consent(await start(n, id));
+    world.clear();
+    expect(resultOf(await visit(n, back, { nonce: null }))).toBe('forbidden');
+    expect(tokenRequests()).toBe(0);
+    const again = as.consent(await start(n, id));
+    expect(resultOf(await visit(n, again, { nonce: newToken() }))).toBe('forbidden');
+    expect(tokenRequests()).toBe(0);
+    expect((await status(n, id)).status).toBe('not_authorized');
+  });
+
+  it('a consent started in another tenant cannot be completed by a user of this one (and vice versa)', async () => {
+    const r = await n2.req({
+      method: 'POST',
+      url: '/v1/tenants',
+      payload: {
+        slug: 'atk-code',
+        name: 'Attacker',
+        admin: { email: 'admin@atk-code.example.org', displayName: 'A', password: PW },
+      },
+    });
+    expect(r.statusCode, r.body).toBe(201);
+    const atk = await n2.login('admin@atk-code.example.org', PW);
+    const created = await n2.req({
+      method: 'POST',
+      url: '/v1/connections',
+      token: atk,
+      payload: {
+        name: `atk-${++seq}`,
+        config: { transport: 'streamable-http', url: MCP, auth: cimdAuth, ...tools },
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const atkConn = created.json().id as string;
+    const back = as.consent(await start(n2, atkConn, atk));
+    world.clear();
+    // the victim (default tenant) lands in the console with the attacker's state
+    const res = await visit(n2, back, { token: n2.admin, nonce: null });
+    expect(resultOf(res)).toBe('state_invalid');
+    expect(tokenRequests()).toBe(0);
+    const st = await n2.req({ method: 'GET', url: `/v1/connections/${atkConn}/oauth`, token: atk });
+    expect(st.json().status).toBe('not_authorized');
+  });
+
+  it('a nonce does not work twice: the state is spent by the first completion', async () => {
+    const id = await create(n, publicAuth);
+    const back = as.consent(await start(n, id));
+    expect(resultOf(await visit(n, back))).toBe('ok');
+    world.clear();
+    expect(resultOf(await visit(n, back))).toBe('state_invalid');
+    expect(tokenRequests()).toBe(0);
+  });
+
+  it('refuses to start without a nonce hash, and without a console URL', async () => {
+    const id = await create(n, publicAuth);
+    const res = await n.req({
+      method: 'POST',
+      url: `/v1/connections/${id}/oauth/authorize`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    const config = n.ctx.config as unknown as { uiUrl: string | undefined };
+    const ui = config.uiUrl;
+    config.uiUrl = undefined;
+    try {
+      const noUi = await post(n, id);
+      expect(noUi.statusCode).toBe(400);
+      expect(noUi.json().error).toBe('mcp_oauth_ui_url_required');
+    } finally {
+      config.uiUrl = ui;
+    }
+    expect(await pendingCount(n, id)).toBe(0);
   });
 });
 
@@ -606,9 +818,10 @@ describe('redirect URI, error responses and the callback page', () => {
     expect((await status(n, id)).status).toBe('not_authorized');
   });
 
-  it('serves a page of fixed text with a strict CSP and no caching', async () => {
+  it('a malformed state gets a page of fixed text with a strict CSP and no caching', async () => {
     const u = new URL(`${CALLBACK}?state=${encodeURIComponent('"><img src=x onerror=alert(1)>')}`);
-    const res = await visit(n, u);
+    const res = await n.app.inject({ method: 'GET', url: u.pathname + u.search });
+    expect(res.statusCode).toBe(400);
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.headers['content-security-policy']).toContain("default-src 'none'");
     expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'");
@@ -619,27 +832,49 @@ describe('redirect URI, error responses and the callback page', () => {
     expect(res.body).toMatch(/^<!doctype html><html lang="en">/);
   });
 
-  it('with a console URL it redirects there with a closed result and the stored connection id only', async () => {
+  it('hands the answer to the console in the fragment only, never in a query, and nothing else', async () => {
     const id = await create(n2, publicAuth);
     const url = await start(n2, id);
-    const ok = await visit(n2, as.consent(url));
-    expect(ok.statusCode).toBe(302);
-    expect(ok.headers.location).toBe(
-      `https://console.example.org/connections?mcp_oauth=ok&connection=${id}`,
-    );
-    // errors: only a member of the closed set is in the URL, never the server's text
-    const url2 = await start(n2, id);
-    const bad = await visit(n2, as.consent(url2, { error: 'https://evil.example.org' }));
-    expect(bad.headers.location).toBe(
-      `https://console.example.org/connections?mcp_oauth=denied&connection=${id}`,
-    );
-    const unknown = await visit(
-      n2,
-      new URL(`${CALLBACK}?state=nope&redirect_uri=https://evil.example.org`),
-    );
-    expect(unknown.headers.location).toBe(
-      'https://console.example.org/connections?mcp_oauth=state_invalid',
-    );
+    const state = new URL(url).searchParams.get('state')!;
+    const back = as.consent(url);
+    back.searchParams.set('redirect_uri', 'https://evil.example.org');
+    back.searchParams.set('next', 'https://evil.example.org');
+    const cb = await n2.app.inject({ method: 'GET', url: back.pathname + back.search });
+    expect(cb.statusCode).toBe(302);
+    const loc = new URL(String(cb.headers.location));
+    expect(loc.origin + loc.pathname).toBe('https://console.example.org/connections');
+    expect(loc.search).toBe('');
+    const frag = new URLSearchParams(loc.hash.slice(1));
+    expect([...frag.keys()].sort()).toEqual(['oauth_code', 'oauth_iss', 'oauth_state']);
+    expect(frag.get('oauth_state')).toBe(state);
+    expect(cb.headers['cache-control']).toBe('no-store');
+    expect(cb.headers['referrer-policy']).toBe('no-referrer');
+    // an error text is reduced to a token of letters, a malformed issuer cannot become "absent"
+    const err = as.consent(await start(n2, id), { error: 'https://evil.example.org' });
+    const e2 = await n2.app.inject({ method: 'GET', url: err.pathname + err.search });
+    const f2 = new URLSearchParams(new URL(String(e2.headers.location)).hash.slice(1));
+    expect(f2.get('oauth_error')).toBe('other');
+    expect(f2.has('oauth_code')).toBe(false);
+    const bad = as.consent(await start(n2, id), { iss: 'https://a b\u0001' });
+    const e3 = await n2.app.inject({ method: 'GET', url: bad.pathname + bad.search });
+    expect(
+      new URLSearchParams(new URL(String(e3.headers.location)).hash.slice(1)).get('oauth_iss'),
+    ).toBeTruthy();
+  });
+
+  it('without a console URL the callback is a page of fixed text and nothing is redeemed', async () => {
+    const id = await create(n, publicAuth);
+    const back = as.consent(await start(n, id));
+    const config = n.ctx.config as unknown as { uiUrl: string | undefined };
+    const ui = config.uiUrl;
+    config.uiUrl = undefined;
+    try {
+      const cb = await n.app.inject({ method: 'GET', url: back.pathname + back.search });
+      expect(cb.statusCode).toBe(400);
+      expect(cb.body).not.toContain(back.searchParams.get('code')!);
+    } finally {
+      config.uiUrl = ui;
+    }
   });
 });
 
@@ -690,6 +925,30 @@ describe('who may consent', () => {
     expect(world.to('auth.example.org')).toEqual([]);
     expect((await status(n, id)).status).toBe('not_authorized');
     await n.req({ method: 'PATCH', url: `/v1/users/${opsId}`, payload: { disabled: false } });
+  });
+
+  it('a person who lost connections:write between start and complete is refused and no token is requested', async () => {
+    const id = await create(n, publicAuth);
+    const back = as.consent(await start(n, id, ops));
+    const down = await n.req({
+      method: 'PATCH',
+      url: `/v1/users/${opsId}`,
+      payload: { globalRoles: ['viewer'] },
+    });
+    expect(down.statusCode, down.body).toBe(200);
+    world.clear();
+    try {
+      const res = await visit(n, back);
+      expect(resultOf(res)).toBe('forbidden');
+      expect(world.to('auth.example.org').filter((r) => r.url.pathname === '/token')).toEqual([]);
+      expect((await status(n, id)).status).toBe('not_authorized');
+    } finally {
+      await n.req({
+        method: 'PATCH',
+        url: `/v1/users/${opsId}`,
+        payload: { globalRoles: ['admin'] },
+      });
+    }
   });
 
   it('another tenant can neither start, read nor complete a consent of this one', async () => {
@@ -997,7 +1256,7 @@ describe('Client ID Metadata Document', () => {
     const id = await create(n2, cimdAuth);
     const url = await start(n2, id);
     expect(new URL(url).searchParams.get('client_id')).toBe(`${PUBLIC}/oauth/mcp-client.json`);
-    expect((await visit(n2, as.consent(url))).statusCode).toBe(302);
+    expect((await visit(n2, as.consent(url))).statusCode).toBe(200);
     expect((await status(n2, id)).status).toBe('active');
     as.metadata = { ...codeMetadata(), client_id_metadata_document_supported: false };
     const res = await post(n2, id);
@@ -1045,7 +1304,7 @@ describe('dynamic client registration', () => {
       application_type: 'web',
     });
     expect(new URL(url).searchParams.get('client_id')).toMatch(/^dcr-client-/);
-    expect((await visit(n2, as.consent(url))).statusCode).toBe(302);
+    expect((await visit(n2, as.consent(url))).statusCode).toBe(200);
     // the second connection of the tenant reuses the registration
     await start(n2, b);
     expect(as.registrations.length).toBe(before + 1);
@@ -1089,7 +1348,7 @@ describe('dynamic client registration', () => {
     expect(as.registrations.at(-1)!.token_endpoint_auth_method).toBe('client_secret_basic');
     const rows = await n2.ctx.db.select().from(mcpOauthClients);
     expect(JSON.stringify(rows)).not.toContain(as.registeredSecret);
-    expect((await visit(n2, as.consent(url))).statusCode).toBe(302);
+    expect((await visit(n2, as.consent(url))).statusCode).toBe(200);
     expect(as.tokenRequests.at(-1)!.headers.get('authorization')).toMatch(/^Basic /);
   });
 
@@ -1187,5 +1446,135 @@ describe('metrics', () => {
     expect(lines.join('\n')).toContain('outcome="ok"');
     expect(lines.join('\n')).toContain('outcome="state_invalid"');
     expect(lines.join('\n')).toContain('outcome="started"');
+  });
+});
+
+describe('mix-up and unseen choices of a hostile MCP server', () => {
+  const unverifiable = () => ({
+    ...codeMetadata(),
+    authorization_response_iss_parameter_supported: false,
+  });
+
+  it('asks for the issuer and the suggested scopes before the first consent without a pin', async () => {
+    const id = await create(n, publicUnpinned);
+    const first = await post(n, id);
+    expect(first.statusCode).toBe(409);
+    expect(first.json().error).toBe('mcp_oauth_issuer_required');
+    expect(first.json().details).toEqual({
+      issuers: [as.issuer],
+      scopes: ['issues.read'],
+    });
+    expect(await pendingCount(n, id)).toBe(0);
+    as.metadata = { ...codeMetadata(), authorization_response_iss_parameter_supported: true };
+    const second = await post(n, id, { issuer: as.issuer });
+    expect(second.statusCode, second.body).toBe(200);
+    expect(second.json().authorizationUrl).toBeTruthy();
+  });
+
+  it('refuses a public client at a server that does not send iss, unless the issuer is pinned', async () => {
+    for (const auth of [publicUnpinned, { ...cimdAuth, issuer: undefined }]) {
+      const node = auth === publicUnpinned ? n : n2;
+      as.metadata = unverifiable();
+      const id = await create(node, auth);
+      const res = await post(node, id, { issuer: as.issuer });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().error).toBe('mcp_oauth_iss_unverifiable');
+      expect(await pendingCount(node, id)).toBe(0);
+      const denied = (await node.ctx.db.select().from(auditLog)).filter(
+        (a) => a.target === id && a.action === 'mcp.oauth.denied',
+      );
+      expect(denied.at(-1)!.payload).toMatchObject({ code: 'iss_unverifiable' });
+    }
+    // pinned: the response can be attributed to the issuer
+    as.metadata = unverifiable();
+    const pinned = await create(n, publicAuth);
+    expect((await post(n, pinned, { issuer: as.issuer })).statusCode).toBe(200);
+  });
+
+  it('keeps step-up scopes to what the server offers and bounds the stored union', async () => {
+    const id = await create(n, publicAuth);
+    expect((await visit(n, as.consent(await start(n, id)))).statusCode).toBe(200);
+    const rows = await n.ctx.db.select().from(connections).where(eq(connections.id, id));
+    const source = n.services.mcpOauthFlows.sourceFor(
+      rows[0]!,
+      rows[0]!.config as never,
+      new ContextGuard(),
+    );
+    const current = (await token(n, id)).token;
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+    source.insufficientScope!(current, ['issues.write', 'not.offered']);
+    await settle();
+    const many = (k: number) => Array.from({ length: 40 }, (_, i) => `s${k}.${i}`);
+    source.insufficientScope!(current, many(1));
+    await settle();
+    source.insufficientScope!(current, many(2));
+    await settle();
+    const st = await status(n, id);
+    expect(st.requiredScopes.length).toBeLessThanOrEqual(64);
+    const url = new URL(await start(n, id));
+    const asked = url.searchParams.get('scope')!.split(' ');
+    expect(asked).toContain('issues.write');
+    expect(asked).not.toContain('not.offered');
+    expect(asked.some((x) => x.startsWith('s1.'))).toBe(false);
+  });
+});
+
+describe('storage of pending requests', () => {
+  it('seals the verifier so that it does not open as a token of the same connection', async () => {
+    const id = await create(n, publicAuth);
+    await start(n, id);
+    const [row] = (await n.ctx.db.select().from(mcpOauthPending)).filter(
+      (p) => p.connectionId === id,
+    );
+    const r = await ref(n, id);
+    await expect(
+      n.services.mcpOauth.keys.open(row!.keyVersion, row!.verifierEnc, {
+        tenantId: r.tenantId,
+        connectionId: id,
+        issuer: row!.issuer,
+        resource: row!.resource,
+        credentialVersion: row!.credentialVersion,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('checks the destination rules again when the code is redeemed', async () => {
+    const id = await create(n, publicAuth);
+    const back = as.consent(await start(n, id));
+    await n.ctx.db
+      .update(mcpOauthPending)
+      .set({ endpoints: { tokenEndpoint: 'https://169.254.169.254/token' } })
+      .where(eq(mcpOauthPending.connectionId, id));
+    world.clear();
+    expect(resultOf(await visit(n, back))).toBe('error');
+    expect(world.reqs.filter((q) => q.url.host === '169.254.169.254')).toEqual([]);
+  });
+
+  it('refuses a new consent while a tenant has too many open requests', async () => {
+    const id = await create(n, publicAuth);
+    const r = await ref(n, id);
+    const rows = Array.from({ length: 200 }, (_, i) => ({
+      id: randomUUID(),
+      stateHash: `filler-${i}-${randomUUID()}`,
+      tenantId: r.tenantId,
+      connectionId: id,
+      credentialVersion: 1,
+      userId: randomUUID(),
+      nonceHash: sha('x'),
+      issuer: as.issuer,
+      resource: MCP,
+      redirectUri: CALLBACK,
+      clientRef: 'x',
+      registration: 'preregistered',
+      keyVersion: 1,
+      verifierEnc: 'oaxe1.a.b.c',
+      endpoints: {},
+      issAdvertised: false,
+      expiresAt: new Date(clock.getTime() + 60_000),
+    }));
+    await n.ctx.db.insert(mcpOauthPending).values(rows);
+    const res = await post(n, id, { issuer: as.issuer });
+    expect(res.statusCode).toBe(429);
+    await n.ctx.db.delete(mcpOauthPending).where(eq(mcpOauthPending.connectionId, id));
   });
 });

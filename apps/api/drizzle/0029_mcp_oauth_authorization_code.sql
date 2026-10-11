@@ -5,6 +5,7 @@ CREATE TABLE "mcp_oauth_pending" (
 	"connection_id" uuid NOT NULL,
 	"credential_version" integer NOT NULL,
 	"user_id" uuid NOT NULL,
+	"nonce_hash" text NOT NULL,
 	"issuer" text NOT NULL,
 	"resource" text NOT NULL,
 	"redirect_uri" text NOT NULL,

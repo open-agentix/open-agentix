@@ -40,7 +40,15 @@ import {
   type AuthServerMetadata,
 } from '../mcp-oauth/discovery.js';
 import { assertTokenShape } from '../mcp-oauth/token-shape.js';
-import { challengeOf, newSecretToken, STATE_SHAPE } from '../mcp-oauth/pkce.js';
+import {
+  challengeOf,
+  NONCE_HASH_SHAPE,
+  NONCE_SHAPE,
+  newSecretToken,
+  nonceHash,
+  sameString,
+  STATE_SHAPE,
+} from '../mcp-oauth/pkce.js';
 import { callbackUrl, cimdUrl, registerClient } from '../mcp-oauth/registration.js';
 import { OauthFetch, hostOf, type OauthOrigin } from '../mcp-oauth/oauth-fetch.js';
 import type { McpOauthStores } from '../mcp-oauth/index.js';
@@ -123,8 +131,10 @@ export interface CallbackOutcome {
   connectionId?: string;
 }
 
-/** Query parameters of the callback; anything that is not a plain single string is dropped. */
-export interface CallbackQuery {
+/** What the console reports after the redirect (read from the URL fragment); only plain strings count. */
+export interface CompleteInput {
+  /** The browser's nonce of this consent; its SHA-256 was sent when the consent started. */
+  nonce?: string | undefined;
   state?: string | undefined;
   code?: string | undefined;
   iss?: string | undefined;
@@ -201,13 +211,6 @@ export class McpOauthService {
   private readonly unpersisted = new Map<string, Rotation>();
   /** Pauses between attempts to commit a rotated token pair; tests shorten them. */
   rotationRetryMs: readonly number[] = [250, 1000, 3000];
-  /**
-   * The principal of a user acting in a tenant, as the console session would have it. Wired by the
-   * service factory; the callback uses it to check that the person who started a consent may still
-   * authorize the connection.
-   */
-  principalFor: ((userId: string, tenantId: string) => Promise<Principal>) | undefined;
-
   constructor(
     private readonly ctx: AppContext,
     private readonly audit: AuditService,
@@ -417,6 +420,7 @@ export class McpOauthService {
             mcp_resource_metadata_origin: 'resource_metadata_origin',
             mcp_oauth_endpoints_changed: 'endpoints_changed',
             mcp_pkce_unsupported: 'pkce_unsupported',
+            mcp_oauth_iss_unverifiable: 'iss_unverifiable',
             mcp_oauth_cimd_disabled: 'registration_disabled',
             mcp_oauth_dcr_disabled: 'registration_disabled',
           }[e.code] ?? null)
@@ -507,7 +511,7 @@ export class McpOauthService {
   async authorize(
     actor: Principal,
     id: string,
-    body: { issuer?: string | undefined } = {},
+    body: { issuer?: string | undefined; nonceHash?: string | undefined } = {},
   ): Promise<OauthAuthorizeResult> {
     const row = await this.catalog.getOwnConnection(actor, id);
     const cfg = oauthConfig(row);
@@ -699,9 +703,19 @@ export class McpOauthService {
     actor: Principal,
     row: ConnectionRow,
     cfg: OauthConfig,
-    body: { issuer?: string | undefined },
+    body: { issuer?: string | undefined; nonceHash?: string | undefined },
   ): Promise<OauthAuthorizeResult> {
     const by = actor.userId;
+    // The callback hands the browser back to the console, which completes the consent with its
+    // session and its nonce: both are needed.
+    if (!this.ctx.config.uiUrl)
+      throw new HttpError(
+        400,
+        'mcp_oauth_ui_url_required',
+        'the authorization-code flow needs OAX_UI_URL (the callback returns the browser to the console)',
+      );
+    if (typeof body.nonceHash !== 'string' || !NONCE_HASH_SHAPE.test(body.nonceHash))
+      throw new HttpError(400, 'validation_failed', 'nonceHash (SHA-256, hex) is required');
     // A human's consent cannot be shared with the tenants that use a central instance.
     if (row.scope === 'platform')
       throw new HttpError(
@@ -729,6 +743,19 @@ export class McpOauthService {
       await this.denied(row, `user:${by}`, e);
       throw e;
     }
+    // The first consent without a pin: the administrator sees the server and the scopes the MCP
+    // server suggested and names the issuer to confirm, before the browser is sent anywhere.
+    const known = await this.stores.tokens.meta(row.tenantId, row.id, row.credentialVersion);
+    const pinnedAlready =
+      cfg.auth.issuer !== undefined ||
+      (known?.grantType === 'authorization_code' && known.issuer === issuer);
+    if (!pinnedAlready && body.issuer !== issuer)
+      throw new HttpError(
+        409,
+        'mcp_oauth_issuer_required',
+        'confirm the authorization server and the scopes before the first consent',
+        { issuers: [issuer], scopes: suggested },
+      );
     const { client, clientRef } = await this.clientForConsent(
       row,
       cfg,
@@ -737,13 +764,32 @@ export class McpOauthService {
       redirectUri,
       by,
     );
+    // RFC 9207 is the defence against a forwarded browser (mix-up). A public client cannot be told
+    // apart from the same client at another server, so without `iss` and without a pinned issuer
+    // the response could not be attributed.
+    if (client.method === 'none' && !as.issParameterSupported && !cfg.auth.issuer) {
+      const e = new OaxError(
+        'mcp_oauth_iss_unverifiable',
+        'a public client needs an authorization server that sends the iss parameter (RFC 9207) or a pinned auth.issuer',
+      );
+      await this.denied(row, `user:${by}`, e);
+      throw e;
+    }
     // Step-up: the new consent covers what is granted, what a server asked for and what the
     // profiles need, so that no scope is lost when the administrator consents again.
     const meta = await this.stores.tokens.meta(row.tenantId, row.id, row.credentialVersion);
     const sameIssuer = meta && meta.issuer === issuer && meta.grantType === 'authorization_code';
     const wanted = new Set([
       ...suggested,
-      ...(sameIssuer ? [...meta.scopes, ...meta.requiredScopes] : []),
+      ...(sameIssuer
+        ? [
+            ...meta.scopes,
+            // what a server asked for, limited to what this authorization server offers
+            ...meta.requiredScopes.filter(
+              (x) => !as.scopesSupported || as.scopesSupported.includes(x),
+            ),
+          ]
+        : []),
     ]);
     // offline_access only when the server advertises it (refresh tokens for unattended runs).
     if (as.scopesSupported?.includes('offline_access')) wanted.add('offline_access');
@@ -758,6 +804,7 @@ export class McpOauthService {
       connectionId: row.id,
       credentialVersion: row.credentialVersion,
       userId: by,
+      nonceHash: body.nonceHash,
       issuer,
       resource,
       redirectUri,
@@ -800,7 +847,11 @@ export class McpOauthService {
    * and is consumed before anything else happens. Every outcome is one of {@link CALLBACK_RESULTS};
    * nothing from the query is echoed.
    */
-  async completeAuthorization(q: CallbackQuery): Promise<CallbackOutcome> {
+  async completeAuthorization(
+    principal: Principal,
+    id: string,
+    q: CompleteInput,
+  ): Promise<CallbackOutcome> {
     const outcome = (result: CallbackResult, connectionId?: string): CallbackOutcome => {
       this.ctx.metrics.oauthAuthorize(result);
       return connectionId ? { result, connectionId } : { result };
@@ -813,15 +864,28 @@ export class McpOauthService {
       return outcome('error');
     }
     if (!pending) return outcome('state_invalid');
+    // A request of another tenant or connection looks like an unknown state.
+    const own = (t: string, c: string) => t === principal.tenantId && c === id;
     if ('expired' in pending) {
-      await this.auditDenied(
-        pending.expired.tenantId,
-        pending.expired.connectionId,
-        'state_invalid',
-      );
-      return outcome('state_expired', pending.expired.connectionId);
+      if (!own(pending.expired.tenantId, pending.expired.connectionId))
+        return outcome('state_invalid');
+      await this.auditDenied(pending.expired.tenantId, id, 'state_invalid');
+      return outcome('state_expired', id);
     }
     const req = pending.request;
+    if (!own(req.tenantId, req.connectionId)) return outcome('state_invalid');
+    // The consent can be completed only by the session that started it: same person, and the
+    // console of the browser that was sent to the authorization server holds the nonce. A link
+    // that was forwarded to someone else leads nowhere (the other person has neither).
+    const nonce = typeof q.nonce === 'string' && NONCE_SHAPE.test(q.nonce) ? q.nonce : null;
+    if (
+      req.userId !== principal.userId ||
+      nonce === null ||
+      !sameString(nonceHash(nonce), req.nonceHash)
+    ) {
+      await this.auditDenied(req.tenantId, id, 'nonce_mismatch');
+      return outcome('forbidden', id);
+    }
     const row = await this.rowOf({ id: req.connectionId, tenantId: req.tenantId });
     const cfg = row && oauthConfig(row);
     if (
@@ -833,12 +897,8 @@ export class McpOauthService {
     )
       return outcome('conflict', req.connectionId);
     const actor = `user:${req.userId}`;
-    // The person must still be allowed to authorize this connection (their access may have been
-    // withdrawn since the request started).
-    let principal: Principal;
+    // The person must still be allowed to authorize this connection.
     try {
-      if (!this.principalFor) throw new Error('no principal resolver');
-      principal = await this.principalFor(req.userId, req.tenantId);
       if (!hasPermission(principal, 'connections:write')) throw new Error('forbidden');
       await this.catalog.getOwnConnection(principal, row.id);
       if (row.scope === 'platform') throw new Error('central');
@@ -1247,7 +1307,9 @@ export class McpOauthService {
             this.unpersisted.delete(key);
             return;
           }
+          // The row changed meanwhile: the held tokens will not be stored, tell their server.
           this.unpersisted.delete(key);
+          await this.revokeIssued(row, client, as.revocationEndpoint, held.write);
         }
         const resource = canonicalResource(cfg.url);
         // A client-credentials grant has no refresh token to rotate (RFC 6749 section 4.4.3): it is

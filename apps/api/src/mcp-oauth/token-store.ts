@@ -292,8 +292,9 @@ export class McpOauthTokenStore {
     const stored = await this.open(tenantId, connectionId, credentialVersion).catch(() => null);
     if (!stored || stored.accessToken !== token || stored.meta.grantType !== 'authorization_code')
       return false;
-    const union = [...new Set([...stored.meta.requiredScopes, ...needed])].sort();
-    await this.db
+    // Capped: concurrent 403s of a server must not grow the stored union without bound.
+    const union = [...new Set([...stored.meta.requiredScopes, ...needed])].sort().slice(0, 64);
+    const changed = await this.db
       .update(mcpOauthTokens)
       .set({
         status: 'reauthorization_required',
@@ -306,7 +307,9 @@ export class McpOauthTokenStore {
           this.where(tenantId, connectionId, credentialVersion),
           eq(mcpOauthTokens.updatedAt, stored.meta.updatedAt),
         ),
-      );
+      )
+      .returning({ id: mcpOauthTokens.id });
+    if (changed.length === 0) return false;
     // The token is still valid at the server until the new consent replaces and revokes it, so it
     // stays known to the redactors.
     return true;

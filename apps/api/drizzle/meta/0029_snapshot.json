@@ -1,5 +1,5 @@
 {
-  "id": "d74d3a03-cd90-4ca1-91ae-b633ca986e47",
+  "id": "38111fbc-33b6-40ca-8e68-16011a76ad6e",
   "prevId": "69fe7d6e-b66a-46f9-85a5-d4cf0fe57494",
   "version": "7",
   "dialect": "postgresql",
@@ -1967,6 +1967,12 @@
         "user_id": {
           "name": "user_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nonce_hash": {
+          "name": "nonce_hash",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },

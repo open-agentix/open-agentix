@@ -19,6 +19,7 @@ export interface PendingWrite {
   connectionId: string;
   credentialVersion: number;
   userId: string;
+  nonceHash: string;
   issuer: string;
   resource: string;
   redirectUri: string;
@@ -103,6 +104,7 @@ export class McpOauthPendingStore {
         connectionId: w.connectionId,
         credentialVersion: w.credentialVersion,
         userId: w.userId,
+        nonceHash: w.nonceHash,
         issuer: w.issuer,
         resource: w.resource,
         redirectUri: w.redirectUri,
@@ -145,6 +147,7 @@ export class McpOauthPendingStore {
         connectionId: row.connectionId,
         credentialVersion: row.credentialVersion,
         userId: row.userId,
+        nonceHash: row.nonceHash,
         issuer: row.issuer,
         resource: row.resource,
         redirectUri: row.redirectUri,

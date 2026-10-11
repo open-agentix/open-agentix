@@ -104,8 +104,6 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const agentCheck = new AgentCheckService(ctx, audit, catalog, models, budgets);
   const mcpOauth = createMcpOauth(ctx, role);
   const mcpOauthFlows = new McpOauthService(ctx, audit, catalog, runNodes, mcpOauth);
-  mcpOauthFlows.principalFor = async (userId, tenantId) =>
-    identity.actingIn(await identity.principalForUser(userId), tenantId);
   const mcpTest = new McpTestService(ctx, catalog, runNodes, audit, mcpOauthFlows);
   const mcpTools = new McpToolsService(ctx, audit, catalog, mcpTest, runNodes);
   runNodes.pinResolver = (definition, scope, servers) =>

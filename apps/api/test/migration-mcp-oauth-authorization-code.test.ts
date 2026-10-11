@@ -66,10 +66,10 @@ describe.each(sqlTargets)('migration 0029 on existing data (%s)', (_kind, enable
     ).rows.length > 0;
   const pending = (state: string, registration = 'preregistered') =>
     c.query(
-      `insert into mcp_oauth_pending (id, state_hash, tenant_id, connection_id, credential_version, user_id,
+      `insert into mcp_oauth_pending (id, state_hash, tenant_id, connection_id, credential_version, user_id, nonce_hash,
                                       issuer, resource, redirect_uri, client_ref, registration, key_version,
                                       verifier_enc, endpoints, iss_advertised, expires_at)
-       values ($1, $2, $3, $4, 1, $5, 'https://auth.example.org', 'https://x.example/mcp',
+       values ($1, $2, $3, $4, 1, $5, 'nonce', 'https://auth.example.org', 'https://x.example/mcp',
                'https://oax.example/v1/oauth/mcp/callback', 'client', $6, 1, 'oaxe1.a.b.c', '{}', false, now())`,
       [randomUUID(), state, DEFAULT_TENANT_ID, connection, randomUUID(), registration],
     );
