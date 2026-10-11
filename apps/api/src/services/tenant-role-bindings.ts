@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import {
   BINDING_ROLES as ALL_BINDING_ROLES,
   ROLE_PERMISSIONS,
+  isValidUseCase,
+  useCaseCovers,
   type Permission,
   type GrantableRole,
   type Principal,
@@ -13,6 +15,7 @@ import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { tenantRoleBindings, tenants, users } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
+import { useCaseMatch } from './use-case-scope.js';
 import { decodeTimeCursor, encodeTimeCursor } from '../pagination.js';
 import type { AuditService } from './audit.js';
 import type { IdentityService, TenantRow } from './identity.js';
@@ -23,9 +26,12 @@ import {
   coversSubtree,
   isTenantAdminAt,
   loadActor,
+  mayGrantInUseCase,
   permissionsAt,
+  useCaseGrantAuthority,
   visibleUser,
   type Actor,
+  type UseCaseGrantAuthority,
 } from './grant-authority.js';
 import { PENTEST_WARNING_MS, type PentestService } from './pentest.js';
 import { TenantAccess } from './tenant-access.js';
@@ -170,6 +176,71 @@ export class TenantRoleBindingsService {
       );
   }
 
+  /** Whether a binding's use case is one a use-case administrator administers. */
+  private inScope(useCases: readonly UseCaseGrantAuthority[], useCase: string | null): boolean {
+    return useCase !== null && useCases.some((a) => useCaseCovers(a.useCase, useCase));
+  }
+
+  /** A use-case binding only takes effect on the resolver read path; elsewhere it would do nothing. */
+  private assertUseCaseReadable(): void {
+    if (this.ctx.config.auth.roleBindingsRead !== 'bindings')
+      throw new HttpError(
+        409,
+        'use_case_requires_bindings_read',
+        'use-case bindings need OAX_ROLE_BINDINGS_READ=bindings; with the legacy read path they would have no effect',
+      );
+  }
+
+  /**
+   * What the actor holds at the node for `permission` (`users:read` or `users:write`): the
+   * node-level permission (tenant administrators, directly or inherited), or, failing that, the
+   * use cases it administers through its own use-case bindings on the node (rule 3).
+   */
+  private authority(
+    actor: Actor,
+    node: RoleNode,
+    permission: 'users:read' | 'users:write',
+  ): { nodeWide: boolean; perms: Set<Permission>; useCases: UseCaseGrantAuthority[] } {
+    const perms = this.permissionsAt(actor, node);
+    const nodeWide = perms.has(permission);
+    return {
+      nodeWide,
+      perms,
+      useCases: nodeWide ? [] : useCaseGrantAuthority(actor, node, this.ctx.now(), permission),
+    };
+  }
+
+  /**
+   * Rules 1 to 3 for one tuple `(use case, role, inherit)`: a node-level grantor passes the usual
+   * checks (nothing above its own permissions, coverage for `inherit`); a use-case administrator
+   * only grants for its own use case and its sub-use cases (never node-wide, never `pentest`), and
+   * an inheriting grant needs its own binding to inherit.
+   */
+  private assertAuthority(
+    actor: Actor,
+    auth: { nodeWide: boolean; perms: Set<Permission>; useCases: UseCaseGrantAuthority[] },
+    node: RoleNode,
+    tuple: { useCase: string | null; role: Role; inherit: boolean },
+  ): void {
+    if (auth.nodeWide) {
+      this.assertMayHold(actor, auth.perms, node, tuple.role, tuple.inherit);
+      return;
+    }
+    if (tuple.useCase === null)
+      throw deny(
+        'grant_exceeds_own',
+        'a use-case administrator grants roles for the own use case only',
+      );
+    const r = mayGrantInUseCase(auth.useCases, tuple.useCase, tuple.role, tuple.inherit);
+    if (!r.ok)
+      throw deny(
+        r.code,
+        r.code === 'inheritance_required'
+          ? 'an inheriting binding needs an inheriting binding of your own for this use case'
+          : `role ${tuple.role} for use case ${tuple.useCase} gives more than the permissions you hold here`,
+      );
+  }
+
   /** The notice, audit-free (the grant is already audited): who is told about a new pentest grant. */
   private async noticeGranted(
     tx: Db,
@@ -216,8 +287,14 @@ export class TenantRoleBindingsService {
    * in the grantor's `users:read` coverage, or the user already holds a binding (node, team or
    * agent) inside it. Platform admins see every user but still cannot cross organisations.
    */
-  private async grantee(tx: Db, actor: Actor, node: TenantRow, userId: string) {
-    const u = await visibleUser(tx, actor, node, userId, this.ctx.now());
+  private async grantee(
+    tx: Db,
+    actor: Actor,
+    node: TenantRow,
+    userId: string,
+    alsoCovered: readonly string[] = [],
+  ) {
+    const u = await visibleUser(tx, actor, node, userId, this.ctx.now(), alsoCovered);
     const [home] = await tx
       .select({ rootId: tenants.rootId })
       .from(tenants)
@@ -283,10 +360,18 @@ export class TenantRoleBindingsService {
   ): Promise<{ items: BindingView[]; nextCursor: string | null }> {
     const node = await this.visibleNode(p, tenantId);
     const actor = await loadActor(this.ctx.db, p);
-    if (!this.permissionsAt(actor, node).has('users:read')) throw forbidden();
+    const auth = this.authority(actor, node, 'users:read');
+    if (!auth.nodeWide && auth.useCases.length === 0) throw forbidden();
     const cursor = decodeTimeCursor(q.cursor);
     const where = and(
       eq(tenantRoleBindings.tenantId, node.id),
+      // A use-case administrator sees the bindings of its own use cases, nothing else of the node.
+      auth.nodeWide
+        ? undefined
+        : useCaseMatch(
+            tenantRoleBindings.useCase,
+            auth.useCases.map((a) => a.useCase),
+          ),
       q.userId ? eq(tenantRoleBindings.userId, q.userId) : undefined,
       cursor
         ? or(
@@ -317,21 +402,35 @@ export class TenantRoleBindingsService {
         const tx = t as unknown as Db;
         await this.lock(tx, node.rootId);
         const actor = await loadActor(tx, p);
-        const perms = this.permissionsAt(actor, node);
-        // Rule 1 (permission): users:write at this node.
-        if (!perms.has('users:write')) throw forbidden();
-        // Use-case bindings cannot be scoped by the services before S8 (fail closed).
-        if (input.useCase !== null && input.useCase !== undefined)
-          throw new HttpError(
-            422,
-            'use_case_bindings_unsupported',
-            'use-case bindings are not supported yet',
-          );
+        // Rule 1 (permission): users:write at this node, or, for a use-case administrator, the own
+        // use-case binding on this node (rule 3).
+        const auth = this.authority(actor, node, 'users:write');
+        if (!auth.nodeWide && auth.useCases.length === 0) throw forbidden();
+        const useCase = input.useCase ?? null;
+        if (useCase !== null) {
+          if (!isValidUseCase(useCase))
+            throw new HttpError(
+              422,
+              'validation_failed',
+              'useCase must be segments of letters, digits, ".", "_" or "-" separated by "/"',
+            );
+          if (input.role === 'pentest')
+            throw new HttpError(
+              422,
+              'validation_failed',
+              'pentest cannot be limited to a use case; it is granted for a tenant',
+            );
+          this.assertUseCaseReadable();
+        }
         // Rule 6: nobody widens their own access (platform admins excepted).
         if (input.userId === actor.userId && !actor.platformAdmin)
           throw deny('self_grant', 'you cannot grant a role to yourself');
-        // Rules 1 and 2.
-        this.assertMayHold(actor, perms, node, input.role, input.inherit);
+        // Rules 1 to 3.
+        this.assertAuthority(actor, auth, node, {
+          useCase,
+          role: input.role,
+          inherit: input.inherit,
+        });
         // Rule 7: pentest is time-boxed and granted by tenant administrators only.
         if (input.role === 'pentest') {
           this.assertPentestReadable();
@@ -345,7 +444,13 @@ export class TenantRoleBindingsService {
         }
         this.checkExpiry(input.expiresAt);
         // Rules 4 and 5.
-        const user = await this.grantee(tx, actor, node, input.userId);
+        const user = await this.grantee(
+          tx,
+          actor,
+          node,
+          input.userId,
+          auth.nodeWide ? [] : [node.id],
+        );
         const [held] = await tx
           .select({ n: count() })
           .from(tenantRoleBindings)
@@ -363,7 +468,7 @@ export class TenantRoleBindingsService {
           userId: user.id,
           tenantId: node.id,
           role: input.role,
-          useCase: null,
+          useCase,
           inherit: input.inherit,
           expiresAt,
           // A grant that ends within the notice period is its own notice: no second one.
@@ -386,7 +491,7 @@ export class TenantRoleBindingsService {
               bindingId: id,
               userId: user.id,
               role: input.role,
-              useCase: null,
+              useCase,
               inherit: input.inherit,
               expiresAt: input.expiresAt?.toISOString() ?? null,
               grantedBy: actor.userId,
@@ -431,14 +536,18 @@ export class TenantRoleBindingsService {
         const tx = t as unknown as Db;
         await this.lock(tx, node.rootId);
         const actor = await loadActor(tx, p);
-        const perms = this.permissionsAt(actor, node);
-        if (!perms.has('users:write')) throw forbidden();
+        const auth = this.authority(actor, node, 'users:write');
+        if (!auth.nodeWide && auth.useCases.length === 0) throw forbidden();
         const row = await this.binding(tx, node, bindingId);
-        if (row.useCase !== null)
+        // A use-case administrator only sees the bindings of its own use cases: any other binding
+        // of the node answers like one that does not exist.
+        if (!auth.nodeWide && !this.inScope(auth.useCases, row.useCase))
+          throw notFound('role binding');
+        if (row.useCase !== null && patch.role === 'pentest')
           throw new HttpError(
             422,
-            'use_case_bindings_unsupported',
-            'use-case bindings are not supported yet',
+            'validation_failed',
+            'pentest cannot be limited to a use case; it is granted for a tenant',
           );
         if (row.source === 'mirror' && (patch.role !== undefined || patch.expiresAt !== undefined))
           throw new HttpError(
@@ -468,8 +577,16 @@ export class TenantRoleBindingsService {
           throw deny('self_grant', 'you cannot change your own role bindings');
         // Rule 9: who may grant may revoke. The old tuple is taken away, the new one is granted;
         // both must be within the grantor's authority, so a PATCH is never a way around rules 1 to 6.
-        this.assertMayHold(actor, perms, node, row.role as Role, row.inherit);
-        this.assertMayHold(actor, perms, node, next.role, next.inherit);
+        this.assertAuthority(actor, auth, node, {
+          useCase: row.useCase,
+          role: row.role as Role,
+          inherit: row.inherit,
+        });
+        this.assertAuthority(actor, auth, node, {
+          useCase: row.useCase,
+          role: next.role,
+          inherit: next.inherit,
+        });
         // Rule 7 for every change that touches a pentest binding, in its old or new state.
         if (next.role === 'pentest' && row.role !== 'pentest') {
           // becoming pentest is a grant: authority, required and bounded expiry
@@ -553,7 +670,7 @@ export class TenantRoleBindingsService {
       const tx = t as unknown as Db;
       await this.lock(tx, node.rootId);
       const actor = await loadActor(tx, p);
-      const perms = this.permissionsAt(actor, node);
+      const auth = this.authority(actor, node, 'users:write');
       const [found] = await tx
         .select()
         .from(tenantRoleBindings)
@@ -562,15 +679,22 @@ export class TenantRoleBindingsService {
       const own = found !== undefined && found.userId === actor.userId;
       // Rule 9: a user may always leave; everybody else needs users:write. Missing and foreign
       // bindings answer alike for a caller without it.
-      if (!own && !perms.has('users:write')) throw forbidden();
+      if (!own && !auth.nodeWide && auth.useCases.length === 0) throw forbidden();
       if (!found) throw notFound('role binding');
+      if (!own && !auth.nodeWide && !this.inScope(auth.useCases, found.useCase))
+        throw notFound('role binding');
       if (found.source === 'mirror')
         throw new HttpError(
           409,
           'mirror_binding',
           'this binding mirrors the global roles of the user; change the global roles instead',
         );
-      if (!own) this.assertMayHold(actor, perms, node, found.role as Role, found.inherit);
+      if (!own)
+        this.assertAuthority(actor, auth, node, {
+          useCase: found.useCase,
+          role: found.role as Role,
+          inherit: found.inherit,
+        });
       if (!own && found.role === 'pentest') this.assertPentestAuthority(actor, node);
       await assertNotLastAdmin(tx, actor, node, found, null);
       await tx.delete(tenantRoleBindings).where(eq(tenantRoleBindings.id, found.id));
@@ -584,6 +708,7 @@ export class TenantRoleBindingsService {
             bindingId: found.id,
             userId: found.userId,
             role: found.role,
+            useCase: found.useCase,
             reason: own ? 'self' : 'revoked',
           },
         },

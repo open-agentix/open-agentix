@@ -1,8 +1,10 @@
 import {
   ROLE_PERMISSIONS,
+  USE_CASE_PERMISSIONS,
   appliedAt,
   isRole,
   pathIds,
+  useCaseCovers,
   type Permission,
   type Principal,
   type RawGrants,
@@ -52,12 +54,19 @@ export async function loadActor(tx: Db, p: Principal): Promise<Actor> {
   return { userId: u.id, platformAdmin: u.platformAdmin, raw: loaded.raw, scopes: p.scopes };
 }
 
-/** Node-level permissions of the actor at `node` (platform admin: admin; token scopes apply). */
+/**
+ * Node-level permissions of the actor at `node` (platform admin: admin; token scopes apply).
+ * Bindings limited to a use case never count here: they are not node-level, and a use-case
+ * administrator's authority over grants is {@link useCaseGrantAuthority}. Bindings that reach a node
+ * only through an attached child (`source: attached`) do not give the right to change the tree or
+ * its grants either.
+ */
 export function permissionsAt(actor: Actor, node: RoleNode, now: Date): Set<Permission> {
   const out = new Set<Permission>();
   for (const b of appliedAt(actor.raw, node, { now })) {
-    // Team and agent scoped bindings never give the right to change the tree or its grants.
+    // Team, agent and use-case scoped bindings never give the right to change the tree or its grants.
     if (b.source !== 'direct' && b.source !== 'inherited' && b.source !== 'platform') continue;
+    if (b.useCase !== null) continue;
     for (const perm of b.permissions) out.add(perm);
   }
   if (actor.scopes) for (const perm of out) if (!actor.scopes.includes(perm)) out.delete(perm);
@@ -110,8 +119,81 @@ export function isTenantAdminAt(actor: Actor, node: RoleNode, now: Date): boolea
   if (actor.scopes && !actor.scopes.includes('users:write')) return false;
   if (actor.platformAdmin) return true;
   return appliedAt(actor.raw, node, { now, implicitPlatformAdmin: false }).some(
-    (b) => b.role === 'admin' && (b.source === 'direct' || b.source === 'inherited'),
+    (b) =>
+      b.role === 'admin' &&
+      b.useCase === null &&
+      (b.source === 'direct' || b.source === 'inherited'),
   );
+}
+
+/** One use case an actor may grant roles for (ADR 0014 section 7, rule 3). */
+export interface UseCaseGrantAuthority {
+  useCase: string;
+  role: Role;
+  /** The binding itself inherits (it also covers the nodes attached to the use case). */
+  inherit: boolean;
+  /** The permissions the binding gives (the role's, limited to the use-case permissions). */
+  permissions: ReadonlySet<Permission>;
+}
+
+/**
+ * The use cases the actor administers **at `node`**: the actor's own use-case bindings bound on
+ * the node (not inherited ones: a use-case binding applies at its node only) that carry
+ * `users:write`, and a token that is allowed to use it. Rule 3: a use-case administrator grants
+ * roles for the own use case and its sub-use cases on that node, nothing else; tenant
+ * administrators are not in this list (they have {@link permissionsAt}).
+ */
+export function useCaseGrantAuthority(
+  actor: Actor,
+  node: RoleNode,
+  now: Date,
+  /** `users:write` to grant, change or revoke; `users:read` to list the bindings of the use case. */
+  permission: 'users:read' | 'users:write' = 'users:write',
+): UseCaseGrantAuthority[] {
+  if (actor.platformAdmin) return [];
+  if (actor.scopes && !actor.scopes.includes(permission)) return [];
+  const out: UseCaseGrantAuthority[] = [];
+  for (const b of appliedAt(actor.raw, node, { now, implicitPlatformAdmin: false })) {
+    if (b.useCase === null || b.source !== 'direct' || b.tenantId !== node.id) continue;
+    if (!b.permissions.includes(permission)) continue;
+    const permissions = new Set<Permission>(
+      b.permissions.filter((p) => USE_CASE_PERMISSIONS.includes(p)),
+    );
+    if (actor.scopes)
+      for (const perm of permissions) if (!actor.scopes.includes(perm)) permissions.delete(perm);
+    out.push({ useCase: b.useCase, role: b.role, inherit: b.inherit, permissions });
+  }
+  return out;
+}
+
+/**
+ * Whether a use-case administrator may hold `role` for `useCase` at the node (rules 1 to 3 for a
+ * grant limited to a use case): some own use-case binding covers `useCase` (the same use case or a
+ * sub-use case), gives every permission the grantee's binding would carry (the role's, limited to
+ * the use-case permissions), and, for an inheriting grant, itself inherits. `pentest` never has a
+ * use case.
+ */
+export function mayGrantInUseCase(
+  authority: readonly UseCaseGrantAuthority[],
+  useCase: string,
+  role: Role,
+  inherit: boolean,
+): { ok: true } | { ok: false; code: 'grant_exceeds_own' | 'inheritance_required' } {
+  if (role === 'pentest') return { ok: false, code: 'grant_exceeds_own' };
+  const wanted = ROLE_PERMISSIONS[role].filter((p) => USE_CASE_PERMISSIONS.includes(p));
+  const covering = authority.filter((a) => useCaseCovers(a.useCase, useCase));
+  const sufficient = covering.filter((a) => wanted.every((p) => a.permissions.has(p)));
+  if (sufficient.length === 0) return { ok: false, code: 'grant_exceeds_own' };
+  // An inheriting grant also reaches the nodes attached to the use case, where the grantee holds the
+  // whole role: the grantor's own binding must inherit and be at least as strong there.
+  if (
+    inherit &&
+    !sufficient.some(
+      (a) => a.inherit && ROLE_PERMISSIONS[role].every((p) => ROLE_PERMISSIONS[a.role].includes(p)),
+    )
+  )
+    return { ok: false, code: 'inheritance_required' };
+  return { ok: true };
 }
 
 /**
@@ -157,6 +239,11 @@ export async function visibleUser(
   node: { rootId: string },
   userId: string,
   now: Date,
+  /**
+   * Nodes whose users the actor may see although it holds no node-level `users:read` there: the
+   * node of a use-case administrator's own binding (slice S8, rule 3). Nothing else is added.
+   */
+  alsoCovered: readonly string[] = [],
 ): Promise<typeof users.$inferSelect> {
   const [u] = await tx.select().from(users).where(eq(users.id, userId));
   if (actor.platformAdmin) {
@@ -168,7 +255,7 @@ export async function visibleUser(
     .from(tenants)
     .where(eq(tenants.rootId, node.rootId));
   const covered = nodes
-    .filter((n) => permissionsAt(actor, n, now).has('users:read'))
+    .filter((n) => permissionsAt(actor, n, now).has('users:read') || alsoCovered.includes(n.id))
     .map((n) => n.id);
   const probe = u?.id ?? NIL_UUID;
   const hit = async (q: PromiseLike<{ n: number }[]>) => Number((await q)[0]?.n ?? 0) > 0;
