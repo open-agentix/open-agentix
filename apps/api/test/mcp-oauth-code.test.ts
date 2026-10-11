@@ -431,6 +431,15 @@ describe('state', () => {
     expect(world.to('auth.example.org')).toEqual([]);
   });
 
+  it('works once even when two callbacks arrive at the same time', async () => {
+    const id = await create(n, publicAuth);
+    const back = as.consent(await start(n, id));
+    const before = as.tokenRequests.length;
+    const results = await Promise.all([visit(n, back), visit(n, back), visit(n, back)]);
+    expect(results.map(resultOf).sort()).toEqual(['ok', 'state_invalid', 'state_invalid']);
+    expect(as.tokenRequests.length - before).toBe(1);
+  });
+
   it('expires after ten minutes, is removed, and redeems nothing', async () => {
     const id = await create(n, publicAuth);
     const back = as.consent(await start(n, id));
