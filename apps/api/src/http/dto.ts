@@ -223,6 +223,7 @@ export const tenantDto = (t: TenantRow, slugPath: string) => ({
   name: t.name,
   monthlyBudgetUsd: t.monthlyBudgetMicros === null ? null : Number(t.monthlyBudgetMicros) / 1e6,
   secretRefs: t.secretRefs,
+  useCase: t.useCase,
   createdAt: iso(t.createdAt),
 });
 

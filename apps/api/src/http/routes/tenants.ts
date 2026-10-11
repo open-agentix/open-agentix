@@ -178,13 +178,20 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
       config: { access: 'authenticated' },
       schema: {
         tags,
-        summary: 'Rename a tenant; budget and secret references are platform operators only',
+        summary:
+          'Rename a tenant or attach it to a use case; budget and secret references are platform operators only',
         description:
           'Platform operators with `settings:write` change any field. With ' +
-          '`OAX_ROLE_BINDINGS_READ=bindings` a tenant admin renames (`name` only) a tenant where ' +
+          '`OAX_ROLE_BINDINGS_READ=bindings` a tenant admin renames (`name`) a tenant where ' +
           'they hold an inheriting `admin` binding on it or an ancestor (403 ' +
           '`inheritance_required` for a direct admin); this is evaluated on the tenant in the ' +
-          'path, never on the acting tenant. A tenant the caller cannot see is 404.',
+          'path, never on the acting tenant. `useCase` attaches the tenant to a use case of its ' +
+          'parent (or detaches it with null) and needs an inheriting `admin` binding without use ' +
+          'case on the parent or an ancestor: a use-case administrator cannot attach a tenant (403). ' +
+          'Attaching is a grant to every inheriting use-case administrator of that use case on the ' +
+          'parent; it is audited as `tenant.attached` / `tenant.detached` at the tenant and the ' +
+          'parent. An organisation (root) cannot be attached (422 `use_case_on_root`). A tenant the ' +
+          'caller cannot see is 404.',
         security: sec,
         params: IdParams,
         body: TenantPatchBody,
@@ -239,7 +246,9 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
           "one's own permissions, an inheriting grant needs an inheriting binding of at least the " +
           'same role on the tenant or above, no grant to oneself (platform operators excepted), ' +
           'the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown ' +
-          'id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. ' +
+          'id). `inherit` is required. A use-case binding (`useCase`) applies to the resources of ' +
+          'the use case on this tenant; with `inherit` also in the child tenants attached to it. A ' +
+          'use-case administrator grants for its own use case only (rule 3). ' +
           '`pentest` (rule 7): only tenant admins of the tenant or above and platform operators ' +
           '(403 `pentest_grant_forbidden`); `expiresAt` is required (422 `expiry_required`) and at ' +
           'most `OAX_PENTEST_MAX_DAYS` ahead (422 `expiry_too_long`); the resolver read path only ' +

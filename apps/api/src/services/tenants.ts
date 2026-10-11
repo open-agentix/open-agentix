@@ -3,6 +3,7 @@ import {
   OaxError,
   canonicalSecretRef,
   hasPermission,
+  isValidUseCase,
   pathIds,
   parseSecretRefPatterns,
   placeNode,
@@ -366,6 +367,14 @@ export class TenantsService {
    * node or an ancestor, with `OAX_ROLE_BINDINGS_READ=bindings` (so an installation that does not
    * use inheritance sees no change); the budget and the secret references stay operator-only. The
    * node is the one in the path, never the acting node.
+   *
+   * `useCase` attaches the node to a use case of its parent (or detaches it with `null`; ADR 0014
+   * section 3.3, slice S8). That is a grant to every inheriting use-case administrator of that use
+   * case, so it needs an **inheriting tenant admin on the parent** (a binding without use case, on
+   * the parent or an ancestor) or a platform operator, evaluated on the parent from grants re-read
+   * under the shared tree lock. A use-case administrator never attaches a node, not even to its own
+   * use case; neither does a tenant admin who is only bound on the node itself. A root has no parent
+   * and cannot be attached (`422 use_case_on_root`).
    */
   async update(
     p: Principal,
@@ -374,8 +383,15 @@ export class TenantsService {
       name?: string | undefined;
       monthlyBudgetUsd?: number | null | undefined;
       secretRefs?: string[] | undefined;
+      useCase?: string | null | undefined;
     },
   ): Promise<TenantRow> {
+    if (patch.useCase !== undefined && patch.useCase !== null && !isValidUseCase(patch.useCase))
+      throw new HttpError(
+        422,
+        'validation_failed',
+        'useCase must be segments of letters, digits, ".", "_" or "-" separated by "/"',
+      );
     if (p.platformAdmin) {
       if (!hasPermission(p, 'settings:write')) throw forbidden();
     } else if (
@@ -397,6 +413,7 @@ export class TenantsService {
         throw new HttpError(400, 'validation_failed', (e as Error).message);
       }
     }
+    if (patch.useCase !== undefined) set.useCase = patch.useCase;
     const now = this.ctx.now();
     return this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
@@ -404,14 +421,39 @@ export class TenantsService {
       // Re-read under the lock: authorisation looks at the node as it is now, not as it was.
       const [fresh] = await tx.select().from(tenants).where(eq(tenants.id, id));
       if (!fresh) throw notFound('tenant');
+      let parent: TenantRow | undefined;
+      if (patch.useCase !== undefined) {
+        // A root has no parent to attach to (the database refuses it as well).
+        if (fresh.parentId === null)
+          throw new HttpError(
+            422,
+            'use_case_on_root',
+            'an organisation has no parent; only a sub-tenant can be attached to a use case',
+          );
+        [parent] = await tx.select().from(tenants).where(eq(tenants.id, fresh.parentId));
+        if (!parent) throw notFound('tenant');
+      }
       if (!p.platformAdmin) {
         // Grants re-read under the lock, evaluated at the node of the path (never the acting node).
         const actor = await loadActor(tx, p);
-        if (!isInheritingAdminAt(actor, fresh, now)) throw this.notInheriting(actor, fresh, now);
+        const attaching = patch.useCase !== undefined;
+        if (patch.name !== undefined || !attaching) {
+          if (!isInheritingAdminAt(actor, fresh, now)) throw this.notInheriting(actor, fresh, now);
+        }
+        // Attaching is a grant to the use case's administrators: the authority is that of the parent.
+        if (parent && !isInheritingAdminAt(actor, parent, now))
+          throw this.notInheriting(actor, parent, now);
       }
+      // Unchanged attachment: not a change (no audit entry, no epoch bump).
+      if (set.useCase !== undefined && set.useCase === fresh.useCase) delete set.useCase;
       if (Object.keys(set).length === 0) return fresh;
       const [row] = await tx.update(tenants).set(set).where(eq(tenants.id, id)).returning();
       if (!row) throw notFound('tenant');
+      if (patch.useCase !== undefined && patch.useCase !== fresh.useCase && parent)
+        await this.auditAttachment(tx, p, fresh, parent, patch.useCase);
+      const { useCase: _attached, ...rest } = patch;
+      // The attachment has its own entries; `tenant.updated` only when something else changed.
+      if (Object.keys(rest).length === 0) return row;
       await this.audit.append(
         {
           actor: p.userId,
@@ -419,7 +461,7 @@ export class TenantsService {
           action: 'tenant.updated',
           target: id,
           payload: {
-            ...patch,
+            ...rest,
             authority: p.platformAdmin ? ('platform' as const) : ('inheriting_admin' as const),
           },
         },
@@ -427,5 +469,35 @@ export class TenantsService {
       );
       return row;
     });
+  }
+
+  /**
+   * `tenant.detached` (the use case the node leaves) and `tenant.attached` (the one it joins), each
+   * written in the partition of the child and in that of the parent (ADR 0014 section 10): names and
+   * ids only.
+   */
+  private async auditAttachment(
+    tx: Db,
+    p: Principal,
+    child: TenantRow,
+    parent: TenantRow,
+    next: string | null,
+  ): Promise<void> {
+    const authority = p.platformAdmin ? ('platform' as const) : ('inheriting_admin' as const);
+    const entries: { action: string; useCase: string }[] = [];
+    if (child.useCase !== null) entries.push({ action: 'tenant.detached', useCase: child.useCase });
+    if (next !== null) entries.push({ action: 'tenant.attached', useCase: next });
+    for (const e of entries)
+      for (const tenantId of [child.id, parent.id])
+        await this.audit.append(
+          {
+            actor: p.userId,
+            tenantId,
+            action: e.action,
+            target: child.id,
+            payload: { nodeId: child.id, parentId: parent.id, useCase: e.useCase, authority },
+          },
+          tx,
+        );
   }
 }
