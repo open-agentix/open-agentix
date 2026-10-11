@@ -257,7 +257,13 @@ describe.each(['bindings', 'legacy'] as const)('locate, read path %s', (mode) =>
       expect(missing.statusCode).toBe(404);
       expect(hidden.body).toBe(missing.body);
       const strip = (h: Record<string, unknown>) => {
-        const { date: _d, 'x-request-id': _r, 'x-ratelimit-remaining': _l, ...rest } = h;
+        const {
+          date: _d,
+          'x-request-id': _r,
+          'x-ratelimit-remaining': _l,
+          'x-ratelimit-reset': _t,
+          ...rest
+        } = h;
         return rest;
       };
       expect(strip(hidden.headers)).toEqual(strip(missing.headers));
