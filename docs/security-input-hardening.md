@@ -11,6 +11,11 @@ and never instructions; they do not replace it, and they are not a prompt-inject
 
 Code: `packages/core/src/invisible-text.ts`, `secret-patterns.ts`, `context-guard.ts`.
 
+These stages work on text that has already reached the platform. What an MCP server can reach in the
+first place, how its tool definitions are pinned and where stored OAuth tokens live is covered by
+[`mcp.md`](mcp.md) and summarized, with the residual risks, in the
+[MCP threat model](threat-model-mcp.md).
+
 ## Where it runs (the choke points)
 
 1. **Tool results: `ToolGateway.call`** (`packages/mcp/src/gateway.ts`). Every tool call of every
