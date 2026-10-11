@@ -39,6 +39,7 @@ import {
   verifyIssuerParameter,
   type AuthServerMetadata,
 } from '../mcp-oauth/discovery.js';
+import { RenewalLimiter } from '../mcp-oauth/renewal-limiter.js';
 import { assertTokenShape } from '../mcp-oauth/token-shape.js';
 import {
   challengeOf,
@@ -74,6 +75,8 @@ const WINDOW_MS = 60_000;
 const DISCOVERY_TTL_MS = 60 * 60_000;
 /** Renewals of one connection closer together than this are refused (a server that keeps saying 401). */
 const MIN_REFRESH_GAP_MS = 5_000;
+/** After a renewal found no free slot, the same connection is not tried again for this long. */
+const BUSY_BACKOFF_MS = 1_000;
 const SYSTEM_ACTOR = 'system:mcp-oauth';
 
 /** What the console may know about the OAuth state of a connection: no value, no ciphertext. */
@@ -179,10 +182,14 @@ interface Rotation {
 /** Errors that retrying the commit cannot cure: the stored row changed or the connection did. */
 const DETERMINISTIC = new Set([
   'mcp_auth_required',
+  'mcp_token_changed',
   'not_found',
   'conflict',
   'mcp_resource_mismatch',
 ]);
+
+const busyError = () =>
+  new OaxError('mcp_auth_refresh_failed', 'the access token could not be renewed just now');
 
 const splitScopes = (s: string | undefined) => (s ?? '').split(' ').filter(Boolean);
 
@@ -209,11 +216,18 @@ export class McpOauthService {
    * algorithms the authorization server published then (needed to pick the JWS algorithm of a
    * private_key_jwt assertion while the pin is not re-fetched).
    */
-  private readonly verified = new Map<string, { at: number; algs: readonly string[] | undefined }>();
+  private readonly verified = new Map<
+    string,
+    { at: number; algs: readonly string[] | undefined }
+  >();
   private readonly lastRefresh = new Map<string, number>();
   private readonly hits = new Map<string, number[]>();
   /** Rotated token pairs that could not be committed yet (see {@link persistRotation}). */
   private readonly unpersisted = new Map<string, Rotation>();
+  /** Renewals running at once, per process and tenant (see {@link RenewalLimiter}). */
+  private readonly limiter: RenewalLimiter;
+  /** Connections whose renewal found the limiter full, with the time before which it is not retried. */
+  private readonly busyUntil = new Map<string, number>();
   /** Pauses between attempts to commit a rotated token pair; tests shorten them. */
   rotationRetryMs: readonly number[] = [250, 1000, 3000];
   constructor(
@@ -223,6 +237,8 @@ export class McpOauthService {
     private readonly runNodes: RunNodesService,
     private readonly stores: McpOauthStores,
   ) {
+    const { renewals } = ctx.config.mcp.oauth;
+    this.limiter = new RenewalLimiter(renewals.max, renewals.perTenant);
     stores.credentials.useRefresher({ refresh: (c) => this.refresh(c) });
     catalog.oauth = {
       prepareRevoke: (row) => this.prepareRevoke(row),
@@ -1175,6 +1191,15 @@ export class McpOauthService {
   }
 
   private async refreshOnce(ref: ConnectionRef): Promise<void> {
+    const busyKey = `${ref.tenantId}:${ref.id}`;
+    const backoff = this.busyUntil.get(busyKey);
+    if (backoff !== undefined) {
+      if (this.ctx.now().getTime() < backoff) {
+        this.ctx.metrics.oauthRefresh('busy');
+        throw busyError();
+      }
+      this.busyUntil.delete(busyKey);
+    }
     const row = await this.rowOf(ref);
     const cfg = row && oauthConfig(row);
     if (!row || !cfg)
@@ -1197,7 +1222,7 @@ export class McpOauthService {
       as = await this.verifyPin(row, cfg, meta.issuer, meta.endpoints, origin);
       const resolver = await this.resolverOf(row);
       const client = await this.clientOf(row, cfg, resolver, meta.issuer);
-      await this.renewLocked(row, cfg, as, client, origin);
+      await this.renewBounded(row, cfg, as, client, origin);
       this.ctx.metrics.oauthRefresh('ok');
       await this.audit.append({
         actor: SYSTEM_ACTOR,
@@ -1207,7 +1232,24 @@ export class McpOauthService {
         payload: { connection: row.id, outcome: 'ok' },
       });
     } catch (e) {
-      const permanent = await this.failRefresh(row, e);
+      // No slot, a busy lock or a row somebody else just rewrote: nothing is wrong with the
+      // credentials and nothing is recorded; the stored token is used while it lasts and the next
+      // request renews again.
+      if (
+        e instanceof OaxError &&
+        (e.code === 'mcp_renewal_busy' ||
+          e.code === 'mcp_credential_busy' ||
+          e.code === 'mcp_token_changed')
+      ) {
+        this.lastRefresh.delete(gapKey);
+        if (e.code !== 'mcp_token_changed')
+          this.busyUntil.set(busyKey, this.ctx.now().getTime() + BUSY_BACKOFF_MS);
+        this.ctx.metrics.oauthRefresh(e.code === 'mcp_token_changed' ? 'failed' : 'busy');
+        throw e.code === 'mcp_token_changed'
+          ? new OaxError('mcp_auth_refresh_failed', 'the access token is being renewed elsewhere')
+          : busyError();
+      }
+      const permanent = await this.failRefresh(row, e, meta.updatedAt);
       // `mcp_auth_required`: the credentials are no good until an administrator acts. The other
       // code is a failure that may pass; a token that has not expired yet is still used meanwhile.
       throw e instanceof OaxError && e.code === 'mcp_auth_required'
@@ -1268,6 +1310,35 @@ export class McpOauthService {
       ...(signingAlgs ? { signingAlgs: [...signingAlgs] } : {}),
       issParameterSupported: false,
     };
+  }
+
+  /**
+   * {@link renewLocked} within the concurrency bound of this process. A renewal holds a database
+   * connection across the call to the authorization server, so the number of renewals is limited
+   * (per process and per tenant) and a renewal that finds no free slot fails at once instead of
+   * waiting: the pool stays available for everything else. A write that lost the compare-and-swap
+   * (the stored row was rewritten meanwhile) is tried once more: the second attempt re-reads the
+   * row under the lock and finds it renewed, or renews it.
+   */
+  private async renewBounded(
+    row: ConnectionRow,
+    cfg: OauthConfig,
+    as: AuthServerMetadata,
+    client: ClientCredentials,
+    origin: OauthOrigin,
+  ): Promise<void> {
+    const release = this.limiter.tryAcquire(row.tenantId);
+    if (!release) throw new OaxError('mcp_renewal_busy', 'too many token renewals are running');
+    try {
+      try {
+        await this.renewLocked(row, cfg, as, client, origin);
+      } catch (e) {
+        if (!(e instanceof OaxError && e.code === 'mcp_token_changed')) throw e;
+        await this.renewLocked(row, cfg, as, client, origin);
+      }
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -1417,7 +1488,7 @@ export class McpOauthService {
   }
 
   /** Records the failure; true when the credentials are rejected for good. */
-  private async failRefresh(row: ConnectionRow, e: unknown): Promise<boolean> {
+  private async failRefresh(row: ConnectionRow, e: unknown, seen: Date): Promise<boolean> {
     let status: TokenStatus | null = null;
     let outcome = 'failed';
     let code = e instanceof OaxError ? e.code : 'error';
@@ -1446,10 +1517,16 @@ export class McpOauthService {
       const expired = !meta?.expiresAt || meta.expiresAt.getTime() <= this.ctx.now().getTime();
       status = expired ? 'refresh_failed' : 'active';
     }
+    // Only over the row this renewal saw: tokens written meanwhile (a new authorization, a renewal
+    // on another replica) are not marked by a failure that belongs to the old ones.
+    const recorded = await this.stores.tokens
+      .recordFailure(row.tenantId, row.id, row.credentialVersion, status, code.slice(0, 64), seen)
+      .catch(() => true);
+    if (!recorded) {
+      this.ctx.metrics.oauthRefresh('failed');
+      return false;
+    }
     this.ctx.metrics.oauthRefresh(outcome);
-    await this.stores.tokens
-      .recordFailure(row.tenantId, row.id, row.credentialVersion, status, code.slice(0, 64))
-      .catch(() => undefined);
     await this.audit.append({
       actor: SYSTEM_ACTOR,
       tenantId: row.tenantId,

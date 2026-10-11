@@ -39,6 +39,7 @@ export const OAUTH_REFRESH_OUTCOMES = set(
   'reauthorization_required',
   'failed',
   'skipped',
+  'busy',
 );
 export const OAUTH_AUTHORIZE_OUTCOMES = set(
   'started',

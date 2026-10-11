@@ -335,6 +335,14 @@ export const EnvSchema = z.object({
    * default (deprecated by the MCP specification); refused in air-gapped mode.
    */
   OAX_MCP_OAUTH_DCR: bool.default(false),
+  /**
+   * Token renewals (calls to an authorization server under the credential lock) that may run at
+   * the same time in one process, and per tenant. A renewal holds a database connection for the
+   * length of the call (up to 10 s); beyond these limits a renewal fails fast and is retried by
+   * the next request instead of draining the connection pool.
+   */
+  OAX_MCP_OAUTH_RENEWALS: z.coerce.number().int().min(1).max(64).default(4),
+  OAX_MCP_OAUTH_RENEWALS_PER_TENANT: z.coerce.number().int().min(1).max(64).default(2),
   /** `trusted`: platform stdio connections may start in air-gapped mode (child sockets are not guarded). */
   OAX_AIRGAPPED_STDIO: z.enum(['trusted']).optional(),
 });
@@ -491,6 +499,8 @@ export interface Config {
       cimd: boolean;
       /** Dynamic client registration allowed (`OAX_MCP_OAUTH_DCR`). */
       dcr: boolean;
+      /** Concurrent renewals per process and per tenant (`OAX_MCP_OAUTH_RENEWALS*`). */
+      renewals: { max: number; perTenant: number };
     };
     relay: {
       concurrency: number;
@@ -760,7 +770,15 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
     stdioCommands,
     stdioEgress: parseStdioEgressGrants(e.OAX_MCP_STDIO_EGRESS, stdioCommands),
     requireToolPin: e.OAX_MCP_REQUIRE_TOOL_PIN,
-    oauth: { ...kekOf(e), cimd: e.OAX_MCP_OAUTH_CIMD, dcr: e.OAX_MCP_OAUTH_DCR },
+    oauth: {
+      ...kekOf(e),
+      cimd: e.OAX_MCP_OAUTH_CIMD,
+      dcr: e.OAX_MCP_OAUTH_DCR,
+      renewals: {
+        max: e.OAX_MCP_OAUTH_RENEWALS,
+        perTenant: Math.min(e.OAX_MCP_OAUTH_RENEWALS_PER_TENANT, e.OAX_MCP_OAUTH_RENEWALS),
+      },
+    },
     relay: {
       concurrency: e.OAX_MCP_RELAY_CONCURRENCY,
       ratePerMinute: e.OAX_MCP_RELAY_RATE_PER_MINUTE,
@@ -776,7 +794,9 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
  * The 32-byte key-encryption key from the value or the file; errors never quote the value. The key
  * is exposed through a non-enumerable getter, so serialising or logging the config cannot print it.
  */
-function kekOf(e: z.infer<typeof EnvSchema>): Omit<Config['mcp']['oauth'], 'cimd' | 'dcr'> {
+function kekOf(
+  e: z.infer<typeof EnvSchema>,
+): Omit<Config['mcp']['oauth'], 'cimd' | 'dcr' | 'renewals'> {
   if (e.OAX_MCP_OAUTH_KEK && e.OAX_MCP_OAUTH_KEK_FILE)
     throw new OaxError(
       'config_invalid',
