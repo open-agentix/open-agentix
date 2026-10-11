@@ -7756,6 +7756,8 @@ export interface paths {
                                 monthlyBudgetUsd: number | null;
                                 /** @description secret reference globs the credential broker may hand out for this tenant */
                                 secretRefs: string[];
+                                /** @description the use case of the parent this tenant is attached to (inheriting use-case administrators of the parent also administer it); null when not attached */
+                                useCase: string | null;
                                 /** @description ISO 8601 timestamp */
                                 createdAt: string;
                             }[];
@@ -7837,6 +7839,8 @@ export interface paths {
                             monthlyBudgetUsd: number | null;
                             /** @description secret reference globs the credential broker may hand out for this tenant */
                             secretRefs: string[];
+                            /** @description the use case of the parent this tenant is attached to (inheriting use-case administrators of the parent also administer it); null when not attached */
+                            useCase: string | null;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                         };
@@ -8125,6 +8129,8 @@ export interface paths {
                             monthlyBudgetUsd: number | null;
                             /** @description secret reference globs the credential broker may hand out for this tenant */
                             secretRefs: string[];
+                            /** @description the use case of the parent this tenant is attached to (inheriting use-case administrators of the parent also administer it); null when not attached */
+                            useCase: string | null;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                         };
@@ -8165,8 +8171,8 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Rename a tenant; budget and secret references are platform operators only
-         * @description Platform operators with `settings:write` change any field. With `OAX_ROLE_BINDINGS_READ=bindings` a tenant admin renames (`name` only) a tenant where they hold an inheriting `admin` binding on it or an ancestor (403 `inheritance_required` for a direct admin); this is evaluated on the tenant in the path, never on the acting tenant. A tenant the caller cannot see is 404.
+         * Rename a tenant or attach it to a use case; budget and secret references are platform operators only
+         * @description Platform operators with `settings:write` change any field. With `OAX_ROLE_BINDINGS_READ=bindings` a tenant admin renames (`name`) a tenant where they hold an inheriting `admin` binding on it or an ancestor (403 `inheritance_required` for a direct admin); this is evaluated on the tenant in the path, never on the acting tenant. `useCase` attaches the tenant to a use case of its parent (or detaches it with null) and needs an inheriting `admin` binding without use case on the parent or an ancestor: a use-case administrator cannot attach a tenant (403). Attaching is a grant to every inheriting use-case administrator of that use case on the parent; it is audited as `tenant.attached` / `tenant.detached` at the tenant and the parent. An organisation (root) cannot be attached (422 `use_case_on_root`). A tenant the caller cannot see is 404.
          */
         patch: {
             parameters: {
@@ -8184,6 +8190,8 @@ export interface paths {
                         monthlyBudgetUsd?: number | null;
                         /** @description secret reference globs (`*` wildcard only); an empty list allows no secret */
                         secretRefs?: string[];
+                        /** @description attach the tenant to a use case of its parent (segments of letters, digits, ".", "_" or "-" separated by "/"), or `null` to detach it. Needs an inheriting `admin` binding on the parent or an ancestor, or platform operator access; a use-case administrator cannot do this (403) */
+                        useCase?: string | null;
                     };
                 };
             };
@@ -8208,6 +8216,8 @@ export interface paths {
                             monthlyBudgetUsd: number | null;
                             /** @description secret reference globs the credential broker may hand out for this tenant */
                             secretRefs: string[];
+                            /** @description the use case of the parent this tenant is attached to (inheriting use-case administrators of the parent also administer it); null when not attached */
+                            useCase: string | null;
                             /** @description ISO 8601 timestamp */
                             createdAt: string;
                         };
@@ -8300,7 +8310,7 @@ export interface paths {
                                     displayName: string;
                                 };
                                 role: string;
-                                /** @description always null until use-case bindings arrive (S8) */
+                                /** @description the use case the role is limited to (it then applies to the resources of that use case and its sub-use cases, on this tenant only); null = the whole tenant */
                                 useCase: string | null;
                                 /** @description true: the role also applies at every descendant of the node (ADR 0014 section 2) */
                                 inherit: boolean;
@@ -8358,7 +8368,7 @@ export interface paths {
         put?: never;
         /**
          * Bind a role to a user on a tenant
-         * @description The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. `pentest` (rule 7): only tenant admins of the tenant or above and platform operators (403 `pentest_grant_forbidden`); `expiresAt` is required (422 `expiry_required`) and at most `OAX_PENTEST_MAX_DAYS` ahead (422 `expiry_too_long`); the resolver read path only (409 `pentest_requires_bindings_read`). Audited as `tenant.role_bound` in the partition of the tenant.
+         * @description The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. A use-case binding (`useCase`) applies to the resources of the use case on this tenant; with `inherit` also in the child tenants attached to it. A use-case administrator grants for its own use case only (rule 3). `pentest` (rule 7): only tenant admins of the tenant or above and platform operators (403 `pentest_grant_forbidden`); `expiresAt` is required (422 `expiry_required`) and at most `OAX_PENTEST_MAX_DAYS` ahead (422 `expiry_too_long`); the resolver read path only (409 `pentest_requires_bindings_read`). Audited as `tenant.role_bound` in the partition of the tenant.
          */
         post: {
             parameters: {
@@ -8380,7 +8390,7 @@ export interface paths {
                         inherit: boolean;
                         /** @description required for `pentest` (at most `OAX_PENTEST_MAX_DAYS` ahead, default 30); optional otherwise */
                         expiresAt?: string | null;
-                        /** @description refused with 422 `use_case_bindings_unsupported` until ADR 0014 S8 */
+                        /** @description limit the role to a use case and its sub-use cases on this tenant (segments of letters, digits, ".", "_" or "-" separated by "/"; not for `pentest`); with `inherit` it also reaches the child tenants attached to the use case. Needs OAX_ROLE_BINDINGS_READ=bindings (409 `use_case_requires_bindings_read`) */
                         useCase?: string | null;
                     };
                 };
@@ -8407,7 +8417,7 @@ export interface paths {
                                 displayName: string;
                             };
                             role: string;
-                            /** @description always null until use-case bindings arrive (S8) */
+                            /** @description the use case the role is limited to (it then applies to the resources of that use case and its sub-use cases, on this tenant only); null = the whole tenant */
                             useCase: string | null;
                             /** @description true: the role also applies at every descendant of the node (ADR 0014 section 2) */
                             inherit: boolean;
@@ -8623,7 +8633,7 @@ export interface paths {
                                 displayName: string;
                             };
                             role: string;
-                            /** @description always null until use-case bindings arrive (S8) */
+                            /** @description the use case the role is limited to (it then applies to the resources of that use case and its sub-use cases, on this tenant only); null = the whole tenant */
                             useCase: string | null;
                             /** @description true: the role also applies at every descendant of the node (ADR 0014 section 2) */
                             inherit: boolean;
@@ -8979,6 +8989,8 @@ export interface paths {
                                  */
                                 tenantId: string;
                                 tenantSlugPath: string;
+                                /** @description the use case the role is limited to; null = the whole tenant */
+                                useCase: string | null;
                                 inherit: boolean;
                                 expiresAt: string | null;
                                 /**
@@ -8992,6 +9004,8 @@ export interface paths {
                                 permission: string;
                                 /** @description the kinds of binding that give it */
                                 sources: ("direct" | "inherited" | "attached" | "team" | "agent" | "platform")[];
+                                /** @description the use cases the permission is limited to (it then applies to the resources of those use cases only); empty when it is held for the whole tenant */
+                                useCases: string[];
                             }[];
                         };
                     };
@@ -9097,6 +9111,8 @@ export interface paths {
                                  */
                                 tenantId: string;
                                 tenantSlugPath: string;
+                                /** @description the use case the role is limited to; null = the whole tenant */
+                                useCase: string | null;
                                 inherit: boolean;
                                 expiresAt: string | null;
                                 /**
@@ -9110,6 +9126,8 @@ export interface paths {
                                 permission: string;
                                 /** @description the kinds of binding that give it */
                                 sources: ("direct" | "inherited" | "attached" | "team" | "agent" | "platform")[];
+                                /** @description the use cases the permission is limited to (it then applies to the resources of those use cases only); empty when it is held for the whole tenant */
+                                useCases: string[];
                             }[];
                         };
                     };

@@ -201,6 +201,13 @@ describe.each(sqlTargets)('role-binding API (%s)', (_kind, enabled, open) => {
 
     it('rule 3: a tenant admin binds a role to a use case (use-case administrators: use-case-bindings.test.ts)', async () => {
       const r = await post('admin-a', 'org-a', grant('m1', 'viewer', false, { useCase: 'secops' }));
+      if (n.ctx.config.auth.roleBindingsRead !== 'bindings') {
+        // a use-case binding would do nothing on the legacy read path: refused, nothing is written
+        expect(r.statusCode).toBe(409);
+        expect(r.json().error).toBe('use_case_requires_bindings_read');
+        expect(await bound('m1', 'org-a', 'viewer')).toHaveLength(0);
+        return;
+      }
       expect(r.statusCode, r.body).toBe(201);
       expect(r.json().useCase).toBe('secops');
       // a malformed use case is refused, and so is a duplicate
