@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { ContextGuard, NetworkConfigSchema, compileNetwork } from '@openagentix/core';
 import { ToolGateway } from '@openagentix/mcp';
 import { createOutboundDispatcher, type OutboundDispatcher } from '@openagentix/providers';
@@ -7,7 +7,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createLogger } from '../src/context.js';
 import { connections } from '../src/db/schema.js';
 import { processSecrets } from '../src/mcp-oauth/index.js';
-import { ENABLED, Lab, type LabServer, type Tls } from './engine-lab.js';
+import { ContainerRunner } from '@openagentix/runners';
+import {
+  ENABLED,
+  ENGINE_URL,
+  IMAGE,
+  Lab,
+  RAW_SOCKET,
+  docker,
+  type LabServer,
+  type Tls,
+} from './engine-lab.js';
 import { testNode, type TestNode } from './helpers.js';
 import { newToken } from './oauth-world.js';
 
@@ -214,6 +224,73 @@ describe.skipIf(!ENABLED)('token leaks across a real network (OAX_TEST_DOCKER=1)
     }
     const verify = await n.req({ method: 'POST', url: '/v1/audit/verify', payload: {} });
     expect(verify.json().valid).toBe(true);
+  });
+
+  it('a live run node next to the stored token holds no trace of it (environment, command lines, inspect, logs)', async () => {
+    // The node is started by the real ContainerRunner while the control node holds an active OAuth
+    // token and the client secret for a connection of the same tenant. The probe scans what a
+    // process in the node can see about itself: its environment, every command line, the files of
+    // its tmpfs. It cannot prove that the platform's own worker never fetches the token (that
+    // needs the worker image); it proves that nothing in the runner's node path carries it.
+    const nodes = lab.network('nodes', { internal: true });
+    // The probe's own command line must not contain a needle whole, or it would find itself.
+    const half = (v: string) =>
+      `${JSON.stringify(v.slice(0, 12))} + ${JSON.stringify(v.slice(12))}`;
+    const scan = `
+      const fs = require('node:fs');
+      const text = [];
+      for (const p of fs.readdirSync('/proc').filter((x) => /^\\d+$/.test(x)))
+        for (const f of ['environ', 'cmdline'])
+          try { text.push(fs.readFileSync('/proc/' + p + '/' + f, 'latin1')); } catch {}
+      for (const d of ['/run/oax', '/tmp'])
+        try { for (const f of fs.readdirSync(d)) text.push(f + fs.readFileSync(d + '/' + f, 'latin1')); } catch {}
+      const all = text.join('\\n');
+      console.log('SCAN ' + JSON.stringify({
+        token: all.includes(${half(ACCESS)}),
+        clientSecret: all.includes(${half(CLIENT_SECRET)}),
+        size: all.length,
+      }));
+    `;
+    const runner = new ContainerRunner({
+      engineUrl: ENGINE_URL,
+      allowRawSocket: RAW_SOCKET,
+      image: IMAGE,
+      network: nodes.name,
+      command: ['node', '-e', scan],
+      workingDir: '/',
+      uid: 10001,
+      memoryMb: 256,
+      instanceId: lab.prefix.replace('oax-s8-', 's8-'),
+    });
+    const nodeId = randomUUID();
+    const handle = await runner.startNode({
+      runId: randomUUID(),
+      nodeId,
+      steps: ['step'],
+      image: IMAGE,
+      controlUrl: 'http://api:8080',
+      runToken: 'oaxrt.NODEPROBE.sig',
+      limits: { cpus: 1, memoryMb: 256, timeoutSeconds: 60, pids: 64 },
+      egress: [],
+    });
+    const exit = await handle.wait();
+    const logs = docker('logs', `oax-node-${nodeId}`);
+    const inspect = docker('inspect', `oax-node-${nodeId}`);
+    await handle.stop('step_end');
+    expect(exit.exitCode, logs).toBe(0);
+    const line = logs.split('\n').find((l) => l.startsWith('SCAN '))!;
+    const result = JSON.parse(line.slice(5)) as {
+      token: boolean;
+      clientSecret: boolean;
+      size: number;
+    };
+    expect(result.size).toBeGreaterThan(100); // the scan really read something
+    // the scan source holds the values, so test the result flags, not the raw command line
+    expect(result).toMatchObject({ token: false, clientSecret: false });
+    const env = (JSON.parse(inspect)[0].Config.Env as string[]).join('\n');
+    expect(env).not.toContain(ACCESS);
+    expect(env).not.toContain(CLIENT_SECRET);
+    expect(logs.replace(/SCAN .*/, '')).not.toContain(ACCESS);
   });
 
   it('an error answer of a connection endpoint does not echo the values either', async () => {
