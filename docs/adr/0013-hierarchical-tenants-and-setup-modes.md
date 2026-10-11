@@ -1,5 +1,7 @@
 # ADR 0013: Hierarchical tenants and setup modes
 
+> Note (ADR 0017 S10): the role `agent-engineer` named below was renamed to `agent-maintainer` without an alias; `agent-developer` was added. Read `agent-engineer` as `agent-maintainer` in this document.
+
 - Status: Accepted (accepted by the owner 2026-10-09; the owner decisions of 2026-10-09 on all eight
   original open questions are incorporated, see "Owner decisions")
 - Date: 2026-10-09 (amended 2026-10-09 with the owner decisions)

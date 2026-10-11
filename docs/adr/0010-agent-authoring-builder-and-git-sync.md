@@ -1,5 +1,7 @@
 # ADR 0010: Authoring agents: no-code form builder, code view and Git-synced agent repositories
 
+> Note (ADR 0017 S10): the role `agent-engineer` named below was renamed to `agent-maintainer` without an alias; `agent-developer` was added. Read `agent-engineer` as `agent-maintainer` in this document.
+
 - Status: Proposed
 - Date: 2026-10-04
 - Amended: 2026-10-09, [Amendment 1](#amendment-1-2026-10-04-any-git-host-over-plain-git) (owner

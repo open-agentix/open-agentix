@@ -80,7 +80,7 @@ beforeAll(async () => {
   );
   for (const [email, role] of [
     ['viewer@example.com', 'viewer'],
-    ['eng@example.com', 'agent-engineer'],
+    ['eng@example.com', 'agent-maintainer'],
   ] as const) {
     await n.req({
       method: 'POST',
@@ -89,7 +89,7 @@ beforeAll(async () => {
     });
   }
   viewer = await n.login('viewer@example.com', 'viewer-password-1');
-  engineer = await n.login('eng@example.com', 'agent-engineer-password-1');
+  engineer = await n.login('eng@example.com', 'agent-maintainer-password-1');
   await addConnection('jira', {
     transport: 'in-memory',
     tools: { get_issue: { access: 'read' }, add_comment: { access: 'write' } },

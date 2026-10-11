@@ -32,12 +32,12 @@ beforeAll(async () => {
   await n.req({
     method: 'PUT',
     url: `/v1/teams/${teamSec}/members`,
-    payload: { members: [{ userId: e1, role: 'agent-engineer' }] },
+    payload: { members: [{ userId: e1, role: 'agent-maintainer' }] },
   });
   await n.req({
     method: 'PUT',
     url: `/v1/teams/${teamOps}/members`,
-    payload: { members: [{ userId: e2, role: 'agent-engineer' }] },
+    payload: { members: [{ userId: e2, role: 'agent-maintainer' }] },
   });
   engineer = await n.login('sec-eng@example.com', 'long-password-1');
   otherEngineer = await n.login('ops-eng@example.com', 'long-password-1');
@@ -392,13 +392,13 @@ describe('agent-scoped role bindings', () => {
         await node.req({
           method: 'PUT',
           url: `/v1/agents/${ids[0]}/members`,
-          payload: { members: [{ userId, role: 'agent-engineer' }] },
+          payload: { members: [{ userId, role: 'agent-maintainer' }] },
         })
       ).statusCode,
     ).toBe(204);
     expect(
       (await node.req({ method: 'GET', url: `/v1/agents/${ids[0]}/members` })).json().items,
-    ).toEqual([{ userId, email: 'a@example.org', displayName: 'A', role: 'agent-engineer' }]);
+    ).toEqual([{ userId, email: 'a@example.org', displayName: 'A', role: 'agent-maintainer' }]);
     const a = await node.login('a@example.org', 'agent-scoped-pw');
     expect(
       (await node.req({ method: 'GET', url: '/v1/agents', token: a }))

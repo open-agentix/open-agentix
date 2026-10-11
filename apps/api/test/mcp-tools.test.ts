@@ -341,7 +341,7 @@ describe('review', () => {
       });
       return n.login(email, PW);
     };
-    const engineer = await mk('eng-tools@example.com', 'agent-engineer');
+    const engineer = await mk('eng-tools@example.com', 'agent-maintainer');
     const viewer = await mk('view-tools@example.com', 'viewer');
     // reading needs connections:read (engineers have it, viewers do not)
     expect((await list(id, engineer)).statusCode).toBe(200);
