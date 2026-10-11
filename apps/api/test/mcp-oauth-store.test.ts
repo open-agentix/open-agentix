@@ -227,12 +227,12 @@ describe('encrypted token store', () => {
 
   it('seals dynamically registered client secrets per tenant and issuer', async () => {
     const secret = 'Xq72LmZk9PaRt4YcWe8NhB1v';
-    const id = await oauth.clients.put({
+    const id = (await oauth.clients.put({
       tenantId: DEFAULT_TENANT_ID,
       issuer: 'https://dcr.example.org',
       clientId: 'cid',
       clientSecret: secret,
-    });
+    }))!;
     const [row] = await n.ctx.db.select().from(mcpOauthClients).where(eq(mcpOauthClients.id, id));
     expect(JSON.stringify(row)).not.toContain(secret);
     expect(await oauth.clients.clientSecret(DEFAULT_TENANT_ID, 'https://dcr.example.org')).toBe(

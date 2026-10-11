@@ -36,6 +36,7 @@ export interface TokenWrite extends TokenBinding {
 /** Everything about a stored token except its values (safe to show in an API response). */
 export interface TokenMeta extends TokenBinding {
   scopes: string[];
+  clientRef: string;
   status: TokenStatus;
   expiresAt: Date | null;
   authorizedBy: string | null;
@@ -44,6 +45,8 @@ export interface TokenMeta extends TokenBinding {
   grantType: string;
   endpoints: Record<string, string>;
   lastError: string | null;
+  /** Scopes the server asked for (step-up); empty when none. */
+  requiredScopes: string[];
 }
 
 export interface StoredTokens {
@@ -168,6 +171,7 @@ export class McpOauthTokenStore {
       grantType: w.grantType ?? 'client_credentials',
       endpoints: w.endpoints ?? {},
       lastError: null,
+      requiredScopes: '',
       authorizedBy: w.authorizedBy ?? null,
       authorizedAt: at,
       updatedAt: at,
@@ -274,6 +278,44 @@ export class McpOauthTokenStore {
   }
 
   /**
+   * The server answered `insufficient_scope` to `token` of an authorization-code connection: the
+   * connection needs a new consent for the union of scopes and fails closed until it is given
+   * (status `reauthorization_required`). Only if `token` is still the stored one.
+   */
+  async requireStepUp(
+    tenantId: string,
+    connectionId: string,
+    credentialVersion: number,
+    token: string,
+    needed: readonly string[],
+  ): Promise<boolean> {
+    const stored = await this.open(tenantId, connectionId, credentialVersion).catch(() => null);
+    if (!stored || stored.accessToken !== token || stored.meta.grantType !== 'authorization_code')
+      return false;
+    // Capped: concurrent 403s of a server must not grow the stored union without bound.
+    const union = [...new Set([...stored.meta.requiredScopes, ...needed])].sort().slice(0, 64);
+    const changed = await this.db
+      .update(mcpOauthTokens)
+      .set({
+        status: 'reauthorization_required',
+        lastError: 'insufficient_scope',
+        requiredScopes: union.join(' '),
+        updatedAt: this.now(),
+      })
+      .where(
+        and(
+          this.where(tenantId, connectionId, credentialVersion),
+          eq(mcpOauthTokens.updatedAt, stored.meta.updatedAt),
+        ),
+      )
+      .returning({ id: mcpOauthTokens.id });
+    if (changed.length === 0) return false;
+    // The token is still valid at the server until the new consent replaces and revokes it, so it
+    // stays known to the redactors.
+    return true;
+  }
+
+  /**
    * The server rejected `token`: treat it as expired so that the next use renews it. Only if it is
    * still the stored token: another replica may have renewed it meanwhile.
    */
@@ -358,6 +400,7 @@ function metaOf(r: typeof mcpOauthTokens.$inferSelect): TokenMeta {
     issuer: r.issuer,
     resource: r.resource,
     scopes: splitScopes(r.scopes),
+    clientRef: r.clientRef,
     status: r.status as TokenStatus,
     expiresAt: r.expiresAt,
     authorizedBy: r.authorizedBy,
@@ -366,6 +409,7 @@ function metaOf(r: typeof mcpOauthTokens.$inferSelect): TokenMeta {
     grantType: r.grantType,
     endpoints: (r.endpoints ?? {}) as Record<string, string>,
     lastError: r.lastError,
+    requiredScopes: splitScopes(r.requiredScopes),
   };
 }
 
@@ -380,41 +424,77 @@ export class McpOauthClientStore {
     return { tenantId, connectionId: `client:${id}`, issuer, resource: '', credentialVersion: 1 };
   }
 
+  /**
+   * Stores a dynamically registered client. One client per tenant and issuer (unique index): the
+   * caller that loses a registration race gets `null` and reads the winner's row.
+   */
   async put(w: {
     tenantId: string;
     issuer: string;
     clientId: string;
     clientSecret?: string | undefined;
+    redirectUri?: string | undefined;
+    registration?: 'dcr' | 'cimd' | undefined;
     createdBy?: string | undefined;
-  }): Promise<string> {
+  }): Promise<string | null> {
     assertHttpsUrl(w.issuer, 'the issuer');
     if (w.clientSecret !== undefined) assertTokenShape(w.clientSecret, [w.tenantId]);
     const id = randomUUID();
     const sealed = w.clientSecret
       ? await this.keys.seal(w.clientSecret, this.binding(w.tenantId, id, w.issuer))
       : null;
-    await this.db.insert(mcpOauthClients).values({
-      id,
-      tenantId: w.tenantId,
-      issuer: w.issuer,
-      clientId: w.clientId,
-      keyVersion: sealed?.keyVersion ?? null,
-      clientSecretEnc: sealed?.ciphertext ?? null,
-      createdBy: w.createdBy ?? null,
-    });
-    return id;
+    const inserted = await this.db
+      .insert(mcpOauthClients)
+      .values({
+        id,
+        tenantId: w.tenantId,
+        issuer: w.issuer,
+        registration: w.registration ?? 'dcr',
+        clientId: w.clientId,
+        keyVersion: sealed?.keyVersion ?? null,
+        clientSecretEnc: sealed?.ciphertext ?? null,
+        redirectUri: w.redirectUri ?? null,
+        createdBy: w.createdBy ?? null,
+      })
+      .onConflictDoNothing()
+      .returning({ id: mcpOauthClients.id });
+    return inserted[0]?.id ?? null;
   }
 
-  async clientSecret(tenantId: string, issuer: string): Promise<string | null> {
+  /** The client registered for the tenant at the issuer, with its secret opened; null when none. */
+  async get(
+    tenantId: string,
+    issuer: string,
+  ): Promise<{
+    id: string;
+    clientId: string;
+    clientSecret: string | null;
+    redirectUri: string | null;
+  } | null> {
     const [row] = await this.db
       .select()
       .from(mcpOauthClients)
       .where(and(eq(mcpOauthClients.tenantId, tenantId), eq(mcpOauthClients.issuer, issuer)));
-    if (!row?.clientSecretEnc || row.keyVersion === null) return null;
-    return this.keys.open(
-      row.keyVersion,
-      row.clientSecretEnc,
-      this.binding(tenantId, row.id, issuer),
-    );
+    if (!row) return null;
+    const clientSecret =
+      row.clientSecretEnc && row.keyVersion !== null
+        ? await this.keys.open(
+            row.keyVersion,
+            row.clientSecretEnc,
+            this.binding(tenantId, row.id, issuer),
+          )
+        : null;
+    return { id: row.id, clientId: row.clientId, clientSecret, redirectUri: row.redirectUri };
+  }
+
+  /** Drops the registration (the redirect URI changed, or the authorization server forgot it). */
+  async delete(tenantId: string, id: string): Promise<void> {
+    await this.db
+      .delete(mcpOauthClients)
+      .where(and(eq(mcpOauthClients.tenantId, tenantId), eq(mcpOauthClients.id, id)));
+  }
+
+  async clientSecret(tenantId: string, issuer: string): Promise<string | null> {
+    return (await this.get(tenantId, issuer))?.clientSecret ?? null;
   }
 }

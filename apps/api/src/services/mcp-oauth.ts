@@ -1,9 +1,16 @@
 import { and, eq } from 'drizzle-orm';
-import { OaxError, resolveRoute, type Principal, type SecretResolver } from '@openagentix/core';
+import {
+  OaxError,
+  hasPermission,
+  resolveRoute,
+  type Principal,
+  type SecretResolver,
+} from '@openagentix/core';
 import {
   McpServerConfigSchema,
   authKindOf,
   canonicalResource,
+  clientAuthOf,
   requestedScopes,
   scopesNeededByProfiles,
   type McpOauthAuth,
@@ -16,6 +23,7 @@ import {
   type OutboundDispatcher,
 } from '@openagentix/providers';
 import { getNetworkSettings } from '../airgap.js';
+import { isLocalHost } from '../config.js';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { connections, mcpOauthTokens } from '../db/schema.js';
@@ -28,12 +36,28 @@ import {
   endpointHosts,
   pinOf,
   samePin,
+  verifyIssuerParameter,
   type AuthServerMetadata,
 } from '../mcp-oauth/discovery.js';
 import { assertTokenShape } from '../mcp-oauth/token-shape.js';
+import {
+  challengeOf,
+  NONCE_HASH_SHAPE,
+  NONCE_SHAPE,
+  newSecretToken,
+  nonceHash,
+  sameString,
+  STATE_SHAPE,
+} from '../mcp-oauth/pkce.js';
+import { callbackUrl, cimdUrl, registerClient } from '../mcp-oauth/registration.js';
 import { OauthFetch, hostOf, type OauthOrigin } from '../mcp-oauth/oauth-fetch.js';
 import type { McpOauthStores } from '../mcp-oauth/index.js';
-import { lockCredential, ownerKey, type TokenStatus } from '../mcp-oauth/token-store.js';
+import {
+  lockCredential,
+  ownerKey,
+  type TokenStatus,
+  type TokenWrite,
+} from '../mcp-oauth/token-store.js';
 import { TokenRequestError, requestToken, revokeToken } from '../mcp-oauth/token-client.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService, ConnectionRow } from './catalog.js';
@@ -67,7 +91,71 @@ export interface OauthStatus {
   endpointHosts: string[];
   /** The granted scopes exceed what the profiles need (`mcp_scope_wider`). */
   scopesWider: boolean;
+  /** `preregistered`, `cimd` or `dcr` (authorization_code); null for client_credentials. */
+  registration: 'preregistered' | 'cimd' | 'dcr' | null;
+  /** The exact redirect URI of the authorization-code flow (what a pre-registered client lists). */
+  redirectUri: string | null;
+  /** Scopes the profiles need that the grant lacks (authorization_code): a new consent is due. */
+  scopesMissing: string[];
+  /** Scopes a server asked for with `insufficient_scope` (step-up). */
+  requiredScopes: string[];
+  /** A consent is due: the status says so, or the grant lacks scopes the profiles need. */
+  reauthorizationNeeded: boolean;
+  /** The consent request of the caller that has not been answered yet. */
+  pendingExpiresAt: string | null;
 }
+
+/** What `authorize` answers: the status, plus the URL to open for an authorization-code consent. */
+export interface OauthAuthorizeResult extends OauthStatus {
+  authorizationUrl: string | null;
+}
+
+/** The closed outcomes of the callback; the route turns one into a redirect or a small page. */
+export const CALLBACK_RESULTS = [
+  'ok',
+  'denied',
+  'state_invalid',
+  'state_expired',
+  'iss_mismatch',
+  'iss_missing',
+  'code_invalid',
+  'token_refused',
+  'forbidden',
+  'conflict',
+  'error',
+] as const;
+export type CallbackResult = (typeof CALLBACK_RESULTS)[number];
+export interface CallbackOutcome {
+  result: CallbackResult;
+  /** Known only when the state was valid; it comes from the stored request, never from the URL. */
+  connectionId?: string;
+}
+
+/** What the console reports after the redirect (read from the URL fragment); only plain strings count. */
+export interface CompleteInput {
+  /** The browser's nonce of this consent; its SHA-256 was sent when the consent started. */
+  nonce?: string | undefined;
+  state?: string | undefined;
+  code?: string | undefined;
+  iss?: string | undefined;
+  error?: string | undefined;
+}
+
+const CALLBACK_ERRORS: ReadonlySet<string> = new Set([
+  'access_denied',
+  'invalid_scope',
+  'server_error',
+  'temporarily_unavailable',
+  'unauthorized_client',
+  'unsupported_response_type',
+  'invalid_request',
+  'interaction_required',
+  'login_required',
+  'consent_required',
+]);
+
+/** An authorization code is opaque but bounded printable ASCII (RFC 6749 appendix A.11). */
+const CODE_SHAPE = /^[\x21-\x7e]{1,2048}$/;
 
 /** Revokes what a connection held once the change that made it necessary has been committed. */
 export interface PendingRevocation {
@@ -78,6 +166,23 @@ export interface PendingRevocation {
    */
   run(reason: string, actor?: string, rows?: 'delete' | 'gone' | 'replaced'): Promise<void>;
 }
+
+/** A renewed token pair that the server issued but the database has not (yet) confirmed. */
+interface Rotation {
+  write: TokenWrite;
+  /** `updated_at` of the row it replaces: the pair is written only over exactly that row. */
+  replace: Date;
+  /** The refresh token the stored row held when the server rotated it (identifies the row later). */
+  previousRefresh: string | null;
+}
+
+/** Errors that retrying the commit cannot cure: the stored row changed or the connection did. */
+const DETERMINISTIC = new Set([
+  'mcp_auth_required',
+  'not_found',
+  'conflict',
+  'mcp_resource_mismatch',
+]);
 
 const splitScopes = (s: string | undefined) => (s ?? '').split(' ').filter(Boolean);
 
@@ -102,7 +207,10 @@ export class McpOauthService {
   private readonly verified = new Map<string, number>();
   private readonly lastRefresh = new Map<string, number>();
   private readonly hits = new Map<string, number[]>();
-
+  /** Rotated token pairs that could not be committed yet (see {@link persistRotation}). */
+  private readonly unpersisted = new Map<string, Rotation>();
+  /** Pauses between attempts to commit a rotated token pair; tests shorten them. */
+  rotationRetryMs: readonly number[] = [250, 1000, 3000];
   constructor(
     private readonly ctx: AppContext,
     private readonly audit: AuditService,
@@ -164,6 +272,9 @@ export class McpOauthService {
           .expireIfCurrent(row.tenantId, row.id, row.credentialVersion, rejected)
           .catch(() => undefined);
       },
+      insufficientScope: (token, needed) => {
+        void this.stepUp(row, token, needed).catch(() => undefined);
+      },
     };
   }
 
@@ -198,33 +309,62 @@ export class McpOauthService {
     if (this.hits.size > 1000) this.hits.clear();
   }
 
-  /** Reads the client secrets of the connection; the values go to the redactors at once. */
-  private async clientOf(
+  /** Redaction target for a client secret: only values with the shape of a credential qualify. */
+  private registerSecret(row: ConnectionRow, owner: string, v: string): void {
+    // A weak secret such as a short word would blank ordinary text; the run's guard still covers it.
+    try {
+      assertTokenShape(v);
+    } catch {
+      return;
+    }
+    this.stores.registry.register(v, { owner, tenant: row.tenantId, ttlMs: 10 * 60_000 });
+  }
+
+  /**
+   * The client of the connection at one authorization server. `preregistered`: the secret
+   * references of the configuration are read; `cimd`: the platform's metadata document URL is the
+   * id; `dcr`: the registration stored for this tenant and issuer. The values go to the redactors
+   * at once.
+   */
+  async clientOf(
     row: ConnectionRow,
     cfg: OauthConfig,
     resolver: SecretResolver,
+    issuer: string,
   ): Promise<ClientCredentials> {
     const c = cfg.auth.client;
     const owner = `${row.id}:client`;
-    // Only values with the shape of a credential become redaction targets (a weak secret such as
-    // a short word would blank ordinary text); the run's guard still covers weak secrets.
-    const reg = (v: string) => {
-      try {
-        assertTokenShape(v);
-      } catch {
-        return;
+    if (c.registration === 'cimd') {
+      if (!this.ctx.config.mcp.oauth.cimd)
+        throw new OaxError(
+          'mcp_oauth_cimd_disabled',
+          'client ID metadata documents are not enabled',
+        );
+      return { clientId: cimdUrl(this.ctx.config.publicUrl), method: 'none' };
+    }
+    if (c.registration === 'dcr') {
+      const reg = await this.stores.clients.get(row.tenantId, issuer);
+      if (!reg)
+        throw new OaxError(
+          'mcp_oauth_client_unavailable',
+          'no client is registered for this authorization server',
+        );
+      if (reg.clientSecret) {
+        this.registerSecret(row, owner, reg.clientSecret);
+        return { clientId: reg.clientId, method: 'client_secret_basic', secret: reg.clientSecret };
       }
-      this.stores.registry.register(v, { owner, tenant: row.tenantId, ttlMs: 10 * 60_000 });
-    };
+      return { clientId: reg.clientId, method: 'none' };
+    }
     try {
-      const clientId = await resolver.resolve(c.clientIdSecret);
+      const clientId = await resolver.resolve(c.clientIdSecret as string);
+      if (c.clientAuth === 'none') return { clientId, method: 'none' };
       if (c.clientAuth === 'client_secret_basic') {
         const secret = await resolver.resolve(c.clientSecretSecret as string);
-        reg(secret);
+        this.registerSecret(row, owner, secret);
         return { clientId, method: 'client_secret_basic', secret };
       }
       const privateKeyPem = await resolver.resolve(c.keySecret as string);
-      reg(privateKeyPem);
+      this.registerSecret(row, owner, privateKeyPem);
       return {
         clientId,
         method: 'private_key_jwt',
@@ -252,16 +392,21 @@ export class McpOauthService {
     }
   }
 
-  private checkAlgorithm(cfg: OauthConfig, as: AuthServerMetadata): void {
-    if (as.grantTypes && !as.grantTypes.includes('client_credentials'))
+  private checkAlgorithm(cfg: OauthConfig, as: AuthServerMetadata, method?: string): void {
+    const grant = cfg.auth.grant;
+    if (as.grantTypes && !as.grantTypes.includes(grant))
       throw new OaxError(
         'mcp_oauth_unsupported',
-        'the authorization server does not support client_credentials',
+        `the authorization server does not support ${grant}`,
       );
-    if (!as.tokenAuthMethods.includes(cfg.auth.client.clientAuth))
+    // DCR decides the method at registration time; the others are configured.
+    const wanted =
+      method ??
+      (cfg.auth.client.registration === 'dcr' ? undefined : clientAuthOf(cfg.auth.client));
+    if (wanted && wanted !== 'none' && !as.tokenAuthMethods.includes(wanted))
       throw new OaxError(
         'mcp_oauth_unsupported',
-        `the authorization server does not support ${cfg.auth.client.clientAuth}`,
+        `the authorization server does not support ${wanted}`,
       );
   }
 
@@ -274,6 +419,10 @@ export class McpOauthService {
             mcp_resource_mismatch: 'resource_mismatch',
             mcp_resource_metadata_origin: 'resource_metadata_origin',
             mcp_oauth_endpoints_changed: 'endpoints_changed',
+            mcp_pkce_unsupported: 'pkce_unsupported',
+            mcp_oauth_iss_unverifiable: 'iss_unverifiable',
+            mcp_oauth_cimd_disabled: 'registration_disabled',
+            mcp_oauth_dcr_disabled: 'registration_disabled',
           }[e.code] ?? null)
         : null;
     if (!code) return;
@@ -288,25 +437,18 @@ export class McpOauthService {
 
   // ---------- authorization ----------
 
-  async authorize(
-    actor: Principal,
-    id: string,
-    body: { issuer?: string | undefined } = {},
-  ): Promise<OauthStatus> {
-    const row = await this.catalog.getOwnConnection(actor, id);
-    const cfg = oauthConfig(row);
-    if (!cfg)
-      throw new HttpError(
-        400,
-        'mcp_oauth_not_configured',
-        'the connection is not an HTTP MCP connection with auth.kind "oauth"',
-      );
-    this.limit(actor.userId);
+  /**
+   * Discovery shared by both grants: the issuer (pinned in the configuration, pinned by an earlier
+   * authorization, or the only one the resource names), its metadata with every endpoint checked
+   * against the destination rules, and the scopes the resource suggests.
+   */
+  private async discover(
+    row: ConnectionRow,
+    cfg: OauthConfig,
+    body: { issuer?: string | undefined },
+    by: string,
+  ): Promise<{ issuer: string; as: AuthServerMetadata; scopes: string[] }> {
     const origin = this.originOf(row);
-    const by = actor.userId;
-    let issuer: string;
-    let as: AuthServerMetadata;
-    let scopes: string[];
     try {
       const prm = await discoverProtectedResource(this.http(), cfg.url, origin);
       // The issuer pinned in the configuration, else the one pinned by an earlier authorization:
@@ -329,6 +471,7 @@ export class McpOauthService {
           'the resource no longer names the authorization server of the earlier authorization: confirm the new one',
           { issuers: prm.authorizationServers },
         );
+      let issuer: string;
       if (wanted) {
         if (!prm.authorizationServers.includes(wanted))
           throw new OaxError('mcp_issuer_mismatch', 'the resource does not name that issuer');
@@ -341,30 +484,54 @@ export class McpOauthService {
           'the resource names several authorization servers: choose one',
           { issuers: prm.authorizationServers },
         );
-      as = await discoverAuthorizationServer(this.http(), issuer, origin);
+      const as = await discoverAuthorizationServer(this.http(), issuer, origin);
       this.assertEndpointsAllowed(row, Object.values(pinOf(as)));
-      this.checkAlgorithm(cfg, as);
-      scopes = requestedScopes(cfg);
+      let scopes = requestedScopes(cfg);
       if (scopes.length === 0) scopes = splitScopes(prm.challengeScope);
       if (scopes.length === 0) scopes = prm.scopesSupported;
+      await this.audit.append({
+        actor: `user:${by}`,
+        tenantId: row.tenantId,
+        action: 'mcp.oauth.discovered',
+        target: row.id,
+        payload: {
+          connection: row.id,
+          issuer,
+          resource: canonicalResource(cfg.url),
+          endpointHosts: endpointHosts(pinOf(as)),
+        },
+      });
+      return { issuer, as, scopes };
     } catch (e) {
       await this.denied(row, `user:${by}`, e);
       throw e;
     }
-    await this.audit.append({
-      actor: `user:${by}`,
-      tenantId: row.tenantId,
-      action: 'mcp.oauth.discovered',
-      target: id,
-      payload: {
-        connection: id,
-        issuer,
-        resource: canonicalResource(cfg.url),
-        endpointHosts: endpointHosts(pinOf(as)),
-      },
+  }
+
+  async authorize(
+    actor: Principal,
+    id: string,
+    body: { issuer?: string | undefined; nonceHash?: string | undefined } = {},
+  ): Promise<OauthAuthorizeResult> {
+    const row = await this.catalog.getOwnConnection(actor, id);
+    const cfg = oauthConfig(row);
+    if (!cfg)
+      throw new HttpError(
+        400,
+        'mcp_oauth_not_configured',
+        'the connection is not an HTTP MCP connection with auth.kind "oauth"',
+      );
+    this.limit(actor.userId);
+    if (cfg.auth.grant === 'authorization_code')
+      return this.startAuthorization(actor, row, cfg, body);
+    const origin = this.originOf(row);
+    const by = actor.userId;
+    const { issuer, as, scopes } = await this.discover(row, cfg, body, by).then((d) => {
+      this.checkAlgorithm(cfg, d.as);
+      return d;
     });
     const resolver = await this.resolverOf(row);
-    const client = await this.clientOf(row, cfg, resolver);
+    const client = await this.clientOf(row, cfg, resolver, issuer);
     const resource = canonicalResource(cfg.url);
     const issued = await requestToken(this.http(), {
       tokenEndpoint: as.tokenEndpoint,
@@ -403,7 +570,7 @@ export class McpOauthService {
       credentialVersion: row.credentialVersion,
       issuer,
       resource,
-      clientRef: cfg.auth.client.clientIdSecret,
+      clientRef: cfg.auth.client.clientIdSecret as string,
       scopes: issued.scope ?? scopes,
       accessToken: issued.accessToken,
       refreshToken: issued.refreshToken,
@@ -428,7 +595,477 @@ export class McpOauthService {
     });
     // The previous tokens (if any) were overwritten; tell their issuer.
     await previous?.run('reauthorized', `user:${by}`, 'replaced');
-    return this.status(actor, id);
+    return { ...(await this.status(actor, id)), authorizationUrl: null };
+  }
+
+  // ---------- authorization code (ADR 0016 section 7.2) ----------
+
+  /** The exact redirect URI; a plain-http public URL is accepted only for a loopback host (development). */
+  redirectUriOf(): string {
+    const base = this.ctx.config.publicUrl;
+    let u: URL;
+    try {
+      u = new URL(base);
+    } catch {
+      throw new HttpError(400, 'mcp_oauth_redirect_invalid', 'OAX_PUBLIC_URL is not a URL');
+    }
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isLocalHost(u.hostname)))
+      throw new HttpError(
+        400,
+        'mcp_oauth_redirect_insecure',
+        'the redirect URI needs an https OAX_PUBLIC_URL (http is accepted for localhost only)',
+      );
+    if (u.username || u.password || u.search || u.hash || u.pathname.replace(/\/$/, '') !== '')
+      throw new HttpError(
+        400,
+        'mcp_oauth_redirect_invalid',
+        'OAX_PUBLIC_URL must be an origin without credentials, path, query or fragment',
+      );
+    return callbackUrl(base);
+  }
+
+  /** The client of a new consent: pre-registered, the metadata document, or a dynamic registration. */
+  private async clientForConsent(
+    row: ConnectionRow,
+    cfg: OauthConfig,
+    as: AuthServerMetadata,
+    issuer: string,
+    redirectUri: string,
+    by: string,
+  ): Promise<{ client: ClientCredentials; clientRef: string }> {
+    const c = cfg.auth.client;
+    const origin = this.originOf(row);
+    if (c.registration === 'cimd') {
+      if (!this.ctx.config.mcp.oauth.cimd || this.ctx.config.airgap.enabled)
+        throw new OaxError(
+          'mcp_oauth_cimd_disabled',
+          'client ID metadata documents are not enabled',
+        );
+      if (as.cimdSupported !== true)
+        throw new OaxError(
+          'mcp_oauth_unsupported',
+          'the authorization server does not accept client ID metadata documents',
+        );
+      const client = await this.clientOf(row, cfg, await this.resolverOf(row), issuer);
+      return { client, clientRef: client.clientId };
+    }
+    if (c.registration === 'dcr') {
+      if (!this.ctx.config.mcp.oauth.dcr || this.ctx.config.airgap.enabled)
+        throw new OaxError('mcp_oauth_dcr_disabled', 'dynamic client registration is not enabled');
+      let reg = await this.stores.clients.get(row.tenantId, issuer);
+      // The registration lists one redirect URI: a changed public URL needs a new client.
+      if (reg && reg.redirectUri !== redirectUri) {
+        await this.stores.clients.delete(row.tenantId, reg.id);
+        reg = null;
+      }
+      if (!reg) {
+        if (!as.registrationEndpoint)
+          throw new OaxError(
+            'mcp_oauth_unsupported',
+            'the authorization server offers no dynamic client registration',
+          );
+        const made = await registerClient(
+          this.http(),
+          as.registrationEndpoint,
+          redirectUri,
+          origin,
+          as.tokenAuthMethods,
+        );
+        const id = await this.stores.clients.put({
+          tenantId: row.tenantId,
+          issuer,
+          clientId: made.clientId,
+          clientSecret: made.clientSecret,
+          redirectUri,
+          registration: 'dcr',
+          createdBy: by,
+        });
+        // Another request registered first: its client wins, ours stays unused at the server.
+        if (id !== null)
+          await this.audit.append({
+            actor: `user:${by}`,
+            tenantId: row.tenantId,
+            action: 'mcp.oauth.client_registered',
+            target: row.id,
+            payload: { tenant: row.tenantId, issuer, method: 'dcr' },
+          });
+        reg = await this.stores.clients.get(row.tenantId, issuer);
+        if (!reg) throw new OaxError('mcp_oauth_client_unavailable', 'the registration was lost');
+      }
+      const client = await this.clientOf(row, cfg, await this.resolverOf(row), issuer);
+      return { client, clientRef: reg.id };
+    }
+    const client = await this.clientOf(row, cfg, await this.resolverOf(row), issuer);
+    return { client, clientRef: c.clientIdSecret as string };
+  }
+
+  private async startAuthorization(
+    actor: Principal,
+    row: ConnectionRow,
+    cfg: OauthConfig,
+    body: { issuer?: string | undefined; nonceHash?: string | undefined },
+  ): Promise<OauthAuthorizeResult> {
+    const by = actor.userId;
+    // The callback hands the browser back to the console, which completes the consent with its
+    // session and its nonce: both are needed.
+    if (!this.ctx.config.uiUrl)
+      throw new HttpError(
+        400,
+        'mcp_oauth_ui_url_required',
+        'the authorization-code flow needs OAX_UI_URL (the callback returns the browser to the console)',
+      );
+    if (typeof body.nonceHash !== 'string' || !NONCE_HASH_SHAPE.test(body.nonceHash))
+      throw new HttpError(400, 'validation_failed', 'nonceHash (SHA-256, hex) is required');
+    // A human's consent cannot be shared with the tenants that use a central instance.
+    if (row.scope === 'platform')
+      throw new HttpError(
+        400,
+        'central_user_delegation',
+        "authorization_code is refused on central instances: a person's consent cannot be shared with other tenants",
+      );
+    const redirectUri = this.redirectUriOf();
+    const { issuer, as, scopes: suggested } = await this.discover(row, cfg, body, by);
+    try {
+      if (!as.authorizationEndpoint)
+        throw new OaxError(
+          'mcp_oauth_unsupported',
+          'the authorization server publishes no authorization endpoint',
+        );
+      // OAuth 2.1 and the MCP specification: PKCE with S256 or no authorization. A server that does
+      // not advertise it is refused, because the client cannot tell whether it verifies the challenge.
+      if (!as.codeChallengeMethods?.includes('S256'))
+        throw new OaxError(
+          'mcp_pkce_unsupported',
+          'the authorization server does not advertise PKCE with S256',
+        );
+      this.checkAlgorithm(cfg, as);
+    } catch (e) {
+      await this.denied(row, `user:${by}`, e);
+      throw e;
+    }
+    // The first consent without a pin: the administrator sees the server and the scopes the MCP
+    // server suggested and names the issuer to confirm, before the browser is sent anywhere.
+    const known = await this.stores.tokens.meta(row.tenantId, row.id, row.credentialVersion);
+    const pinnedAlready =
+      cfg.auth.issuer !== undefined ||
+      (known?.grantType === 'authorization_code' && known.issuer === issuer);
+    if (!pinnedAlready && body.issuer !== issuer)
+      throw new HttpError(
+        409,
+        'mcp_oauth_issuer_required',
+        'confirm the authorization server and the scopes before the first consent',
+        { issuers: [issuer], scopes: suggested },
+      );
+    const { client, clientRef } = await this.clientForConsent(
+      row,
+      cfg,
+      as,
+      issuer,
+      redirectUri,
+      by,
+    );
+    // RFC 9207 is the defence against a forwarded browser (mix-up). A public client cannot be told
+    // apart from the same client at another server, so without `iss` and without a pinned issuer
+    // the response could not be attributed.
+    if (client.method === 'none' && !as.issParameterSupported && !cfg.auth.issuer) {
+      const e = new OaxError(
+        'mcp_oauth_iss_unverifiable',
+        'a public client needs an authorization server that sends the iss parameter (RFC 9207) or a pinned auth.issuer',
+      );
+      await this.denied(row, `user:${by}`, e);
+      throw e;
+    }
+    // Step-up: the new consent covers what is granted, what a server asked for and what the
+    // profiles need, so that no scope is lost when the administrator consents again.
+    const meta = await this.stores.tokens.meta(row.tenantId, row.id, row.credentialVersion);
+    const sameIssuer = meta && meta.issuer === issuer && meta.grantType === 'authorization_code';
+    const wanted = new Set([
+      ...suggested,
+      ...(sameIssuer
+        ? [
+            ...meta.scopes,
+            // what a server asked for, limited to what this authorization server offers
+            ...meta.requiredScopes.filter(
+              (x) => !as.scopesSupported || as.scopesSupported.includes(x),
+            ),
+          ]
+        : []),
+    ]);
+    // offline_access only when the server advertises it (refresh tokens for unattended runs).
+    if (as.scopesSupported?.includes('offline_access')) wanted.add('offline_access');
+    const scopes = [...wanted].sort();
+    const state = newSecretToken();
+    const verifier = newSecretToken();
+    const resource = canonicalResource(cfg.url);
+    await this.stores.pending.create({
+      state,
+      verifier,
+      tenantId: row.tenantId,
+      connectionId: row.id,
+      credentialVersion: row.credentialVersion,
+      userId: by,
+      nonceHash: body.nonceHash,
+      issuer,
+      resource,
+      redirectUri,
+      clientRef,
+      registration: cfg.auth.client.registration,
+      scopes,
+      endpoints: pinOf(as),
+      signingAlgs: as.signingAlgs,
+      issAdvertised: as.issParameterSupported,
+    });
+    const url = new URL(as.authorizationEndpoint);
+    for (const [k, v] of Object.entries({
+      response_type: 'code',
+      client_id: client.clientId,
+      redirect_uri: redirectUri,
+      state,
+      code_challenge: challengeOf(verifier),
+      code_challenge_method: 'S256',
+      resource,
+    }))
+      url.searchParams.set(k, v);
+    if (scopes.length > 0) url.searchParams.set('scope', scopes.join(' '));
+    this.ctx.metrics.oauthAuthorize('started');
+    await this.audit.append({
+      actor: `user:${by}`,
+      tenantId: row.tenantId,
+      action: 'mcp.oauth.authorization_requested',
+      target: row.id,
+      payload: { connection: row.id, issuer, grant: 'authorization_code', scopes, by },
+    });
+    return {
+      ...(await this.status(actor, row.id)),
+      authorizationUrl: url.toString(),
+    };
+  }
+
+  /**
+   * The callback of the authorization server (browser redirect, no session). Authenticity rests on
+   * the single-use state: it is bound to the person, connection and tenant that started the request
+   * and is consumed before anything else happens. Every outcome is one of {@link CALLBACK_RESULTS};
+   * nothing from the query is echoed.
+   */
+  async completeAuthorization(
+    principal: Principal,
+    id: string,
+    q: CompleteInput,
+  ): Promise<CallbackOutcome> {
+    const outcome = (result: CallbackResult, connectionId?: string): CallbackOutcome => {
+      this.ctx.metrics.oauthAuthorize(result);
+      return connectionId ? { result, connectionId } : { result };
+    };
+    if (typeof q.state !== 'string' || !STATE_SHAPE.test(q.state)) return outcome('state_invalid');
+    let pending;
+    try {
+      pending = await this.stores.pending.consume(q.state);
+    } catch {
+      return outcome('error');
+    }
+    if (!pending) return outcome('state_invalid');
+    // A request of another tenant or connection looks like an unknown state.
+    const own = (t: string, c: string) => t === principal.tenantId && c === id;
+    if ('expired' in pending) {
+      if (!own(pending.expired.tenantId, pending.expired.connectionId))
+        return outcome('state_invalid');
+      await this.auditDenied(pending.expired.tenantId, id, 'state_invalid');
+      return outcome('state_expired', id);
+    }
+    const req = pending.request;
+    if (!own(req.tenantId, req.connectionId)) return outcome('state_invalid');
+    // The consent can be completed only by the session that started it: same person, and the
+    // console of the browser that was sent to the authorization server holds the nonce. A link
+    // that was forwarded to someone else leads nowhere (the other person has neither).
+    const nonce = typeof q.nonce === 'string' && NONCE_SHAPE.test(q.nonce) ? q.nonce : null;
+    if (
+      req.userId !== principal.userId ||
+      nonce === null ||
+      !sameString(nonceHash(nonce), req.nonceHash)
+    ) {
+      await this.auditDenied(req.tenantId, id, 'nonce_mismatch');
+      return outcome('forbidden', id);
+    }
+    const row = await this.rowOf({ id: req.connectionId, tenantId: req.tenantId });
+    const cfg = row && oauthConfig(row);
+    if (
+      !row ||
+      !cfg ||
+      cfg.auth.grant !== 'authorization_code' ||
+      row.credentialVersion !== req.credentialVersion ||
+      canonicalResource(cfg.url) !== req.resource
+    )
+      return outcome('conflict', req.connectionId);
+    const actor = `user:${req.userId}`;
+    // The person must still be allowed to authorize this connection.
+    try {
+      if (!hasPermission(principal, 'connections:write')) throw new Error('forbidden');
+      await this.catalog.getOwnConnection(principal, row.id);
+      if (row.scope === 'platform') throw new Error('central');
+    } catch {
+      await this.auditDenied(req.tenantId, row.id, 'forbidden');
+      return outcome('forbidden', row.id);
+    }
+    // RFC 9207: the issuer parameter is checked before the code or an error is looked at.
+    const iss = verifyIssuerParameter(req.issuer, q.iss, req.issAdvertised);
+    if (iss !== 'ok') {
+      await this.auditDenied(req.tenantId, row.id, iss);
+      return outcome(iss, row.id);
+    }
+    if (typeof q.error === 'string' && q.error !== '') {
+      const code = CALLBACK_ERRORS.has(q.error) ? q.error : 'other';
+      await this.audit.append({
+        actor,
+        tenantId: req.tenantId,
+        action: 'mcp.oauth.denied',
+        target: row.id,
+        payload: { connection: row.id, code: 'authorization_refused', error: code },
+      });
+      return outcome('denied', row.id);
+    }
+    if (typeof q.code !== 'string' || !CODE_SHAPE.test(q.code))
+      return outcome('code_invalid', row.id);
+
+    const origin = this.originOf(row);
+    let client: ClientCredentials;
+    try {
+      this.assertEndpointsAllowed(row, Object.values(req.endpoints));
+      client = await this.clientOf(row, cfg, await this.resolverOf(row), req.issuer);
+    } catch (e) {
+      await this.denied(row, actor, e);
+      return outcome('error', row.id);
+    }
+    let issued;
+    try {
+      issued = await requestToken(this.http(), {
+        tokenEndpoint: req.endpoints.tokenEndpoint as string,
+        grant: 'authorization_code',
+        client,
+        scope: req.scopes,
+        resource: req.resource,
+        code: q.code,
+        codeVerifier: req.verifier,
+        redirectUri: req.redirectUri,
+        origin,
+        now: this.ctx.now(),
+        algsSupported: req.signingAlgs,
+        ids: [row.tenantId, row.id],
+      });
+    } catch (e) {
+      await this.audit.append({
+        actor,
+        tenantId: row.tenantId,
+        action: 'mcp.oauth.refresh_failed',
+        target: row.id,
+        payload: {
+          connection: row.id,
+          error: e instanceof OaxError ? e.code.slice(0, 64) : 'error',
+          phase: 'callback',
+        },
+      });
+      return outcome(e instanceof TokenRequestError ? 'token_refused' : 'error', row.id);
+    }
+    this.register(row, issued.accessToken, issued.refreshToken, issued.expiresIn);
+    for (const v of issued.sensitive) this.registerIfShaped(row, v);
+    const granted = issued.scope ?? req.scopes;
+    const previous = await this.prepareRevoke(row);
+    try {
+      await this.stores.tokens.put({
+        tenantId: row.tenantId,
+        connectionId: row.id,
+        credentialVersion: row.credentialVersion,
+        issuer: req.issuer,
+        resource: req.resource,
+        clientRef: req.clientRef,
+        scopes: granted,
+        accessToken: issued.accessToken,
+        refreshToken: issued.refreshToken,
+        expiresAt: issued.expiresIn
+          ? new Date(this.ctx.now().getTime() + issued.expiresIn * 1000)
+          : undefined,
+        authorizedBy: req.userId,
+        grantType: 'authorization_code',
+        endpoints: req.endpoints,
+      });
+    } catch {
+      // A change raced the consent (credential version, deletion): the freshly issued tokens must
+      // not stay valid at the server with nobody holding them.
+      await this.revokeIssued(row, client, req.endpoints.revocationEndpoint, issued);
+      return outcome('conflict', row.id);
+    }
+    this.verified.set(`${row.id}:${row.credentialVersion}`, this.ctx.now().getTime());
+    await this.audit.append({
+      actor,
+      tenantId: row.tenantId,
+      action: 'mcp.oauth.authorized',
+      target: row.id,
+      payload: {
+        connection: row.id,
+        issuer: req.issuer,
+        grant: 'authorization_code',
+        scopes: granted,
+        by: req.userId,
+      },
+    });
+    await previous?.run('reauthorized', actor, 'replaced');
+    return outcome('ok', row.id);
+  }
+
+  private async auditDenied(tenantId: string, connectionId: string, code: string): Promise<void> {
+    await this.audit
+      .append({
+        actor: 'system:mcp-oauth',
+        tenantId,
+        action: 'mcp.oauth.denied',
+        target: connectionId,
+        payload: { connection: connectionId, code },
+      })
+      .catch(() => undefined);
+  }
+
+  /** Best effort: tells the authorization server to forget tokens nobody stored (RFC 7009). */
+  private async revokeIssued(
+    row: ConnectionRow,
+    client: ClientCredentials,
+    endpoint: string | undefined,
+    issued: { accessToken: string; refreshToken?: string | undefined },
+  ): Promise<void> {
+    if (!endpoint) return;
+    const base = { endpoint, client, origin: this.originOf(row), now: this.ctx.now() };
+    if (issued.refreshToken)
+      await revokeToken(this.http(), {
+        ...base,
+        token: issued.refreshToken,
+        hint: 'refresh_token',
+      }).catch(() => undefined);
+    await revokeToken(this.http(), {
+      ...base,
+      token: issued.accessToken,
+      hint: 'access_token',
+    }).catch(() => undefined);
+  }
+
+  /** A server asked for more scopes: record them and fail the connection closed until consent. */
+  private async stepUp(
+    row: Pick<ConnectionRow, 'id' | 'tenantId' | 'credentialVersion'>,
+    token: string,
+    needed: readonly string[],
+  ): Promise<void> {
+    const marked = await this.stores.tokens.requireStepUp(
+      row.tenantId,
+      row.id,
+      row.credentialVersion,
+      token,
+      needed,
+    );
+    if (!marked) return;
+    await this.audit.append({
+      actor: SYSTEM_ACTOR,
+      tenantId: row.tenantId,
+      action: 'mcp.oauth.step_up_required',
+      target: row.id,
+      payload: { connection: row.id, scopes: [...needed] },
+    });
   }
 
   private registerIfShaped(row: ConnectionRow, v: string): void {
@@ -467,20 +1104,43 @@ export class McpOauthService {
     const meta = await this.stores.tokens.meta(row.tenantId, row.id, row.credentialVersion);
     const needed = cfg ? scopesNeededByProfiles(cfg) : [];
     const granted = meta?.scopes ?? [];
+    const oauth = cfg?.auth?.kind === 'oauth' ? cfg.auth : null;
+    const code = oauth?.grant === 'authorization_code';
+    // What the profiles (or the explicit list) ask for and the grant does not cover: a new consent.
+    const missing = code && cfg ? requestedScopes(cfg).filter((x) => !granted.includes(x)) : [];
+    const status = meta?.status ?? 'not_authorized';
+    const pending = code
+      ? await this.stores.pending.openFor(row.tenantId, row.id, actor.userId)
+      : null;
     return {
-      status: meta?.status ?? 'not_authorized',
-      grant:
-        meta?.grantType ?? (cfg?.auth?.kind === 'oauth' ? cfg.auth.grant : 'client_credentials'),
+      status,
+      grant: meta?.grantType ?? oauth?.grant ?? 'client_credentials',
       issuer: meta?.issuer ?? null,
-      pinnedIssuer: cfg?.auth?.kind === 'oauth' ? (cfg.auth.issuer ?? null) : null,
+      pinnedIssuer: oauth?.issuer ?? null,
       scopes: granted,
       expiresAt: meta?.expiresAt?.toISOString() ?? null,
       authorizedAt: meta?.authorizedAt.toISOString() ?? null,
       authorizedBy: meta?.authorizedBy ?? null,
       lastError: meta?.lastError ?? null,
       endpointHosts: meta ? endpointHosts(meta.endpoints) : [],
-      scopesWider: needed.length > 0 && granted.some((s) => !needed.includes(s)),
+      scopesWider: needed.length > 0 && granted.some((x) => !needed.includes(x)),
+      registration: code ? oauth.client.registration : null,
+      redirectUri: code ? this.safeRedirectUri() : null,
+      scopesMissing: missing,
+      requiredScopes: meta?.requiredScopes ?? [],
+      reauthorizationNeeded:
+        code &&
+        (status === 'reauthorization_required' || (status === 'active' && missing.length > 0)),
+      pendingExpiresAt: pending?.expiresAt.toISOString() ?? null,
     };
+  }
+
+  private safeRedirectUri(): string | null {
+    try {
+      return this.redirectUriOf();
+    } catch {
+      return null;
+    }
   }
 
   // ---------- renewal ----------
@@ -525,7 +1185,7 @@ export class McpOauthService {
     try {
       as = await this.verifyPin(row, cfg, meta.issuer, meta.endpoints, origin);
       const resolver = await this.resolverOf(row);
-      const client = await this.clientOf(row, cfg, resolver);
+      const client = await this.clientOf(row, cfg, resolver, meta.issuer);
       await this.renewLocked(row, cfg, as, client, origin);
       this.ctx.metrics.oauthRefresh('ok');
       await this.audit.append({
@@ -596,7 +1256,17 @@ export class McpOauthService {
     };
   }
 
-  /** Reads, renews and writes under a transaction-scoped advisory lock (one renewal at a time). */
+  /**
+   * Reads, renews and writes under a transaction-scoped advisory lock (one renewal at a time).
+   *
+   * Rotation of refresh tokens (authorization_code): once the server has answered, the old refresh
+   * token may be dead, so the new pair must not be lost to a failed commit. The previous pair stays
+   * in the row until the new one is written (one transaction); when the write or the commit fails,
+   * the commit is retried in new transactions ({@link persistRotation}), and a pair that still
+   * cannot be stored is kept in memory and written first by the next renewal. A process that dies
+   * between the server's answer and the commit loses the pair: the server's reuse detection then
+   * ends in `invalid_grant` and `reauthorization_required`, which is the safe direction.
+   */
   private async renewLocked(
     row: ConnectionRow,
     cfg: OauthConfig,
@@ -604,63 +1274,132 @@ export class McpOauthService {
     client: ClientCredentials,
     origin: OauthOrigin,
   ): Promise<void> {
-    await this.ctx.db.transaction(async (rawTx) => {
-      const tx = rawTx as unknown as Db;
-      await lockCredential(tx, row.id, row.credentialVersion);
-      const stored = await this.stores.tokens.open(row.tenantId, row.id, row.credentialVersion, tx);
-      if (!stored) throw new OaxError('mcp_auth_required', 'the connection needs to be authorized');
-      const nowMs = this.ctx.now().getTime();
-      const exp = stored.meta.expiresAt?.getTime();
-      // Another replica renewed while this one waited for the lock: nothing left to do.
-      if (
-        stored.meta.status === 'active' &&
-        exp !== undefined &&
-        exp - nowMs > refreshSkewMs(stored.meta.updatedAt, new Date(exp)) &&
-        stored.accessToken
-      )
-        return;
-      const resource = canonicalResource(cfg.url);
-      // A client-credentials grant has no refresh token to rotate (RFC 6749 section 4.4.3): it is
-      // always renewed with a new grant, so a lost rotated token can never lock the connection out.
-      const useRefresh =
-        stored.meta.grantType === 'authorization_code' && stored.refreshToken !== null;
-      const issued = await requestToken(this.http(), {
-        tokenEndpoint: as.tokenEndpoint,
-        grant: useRefresh ? 'refresh_token' : 'client_credentials',
-        client,
-        scope: useRefresh ? [] : stored.meta.scopes,
-        resource,
-        refreshToken: stored.refreshToken ?? undefined,
-        origin,
-        now: this.ctx.now(),
-        algsSupported: as.signingAlgs,
-        ids: [row.tenantId, row.id],
-      });
-      this.register(row, issued.accessToken, issued.refreshToken, issued.expiresIn);
-      for (const v of issued.sensitive) this.registerIfShaped(row, v);
-      // The rotated pair (or the new access token with the old refresh token) is one row update in
-      // this transaction: a failure before the commit leaves the previous pair untouched.
-      await this.stores.tokens.write(
-        tx,
-        {
-          tenantId: row.tenantId,
-          connectionId: row.id,
-          credentialVersion: row.credentialVersion,
-          issuer: stored.meta.issuer,
+    const key = ownerKey(row.id, row.credentialVersion);
+    const box: { rotation?: Rotation } = {};
+    try {
+      await this.ctx.db.transaction(async (rawTx) => {
+        const tx = rawTx as unknown as Db;
+        await lockCredential(tx, row.id, row.credentialVersion);
+        const stored = await this.stores.tokens.open(
+          row.tenantId,
+          row.id,
+          row.credentialVersion,
+          tx,
+        );
+        if (!stored)
+          throw new OaxError('mcp_auth_required', 'the connection needs to be authorized');
+        const nowMs = this.ctx.now().getTime();
+        const exp = stored.meta.expiresAt?.getTime();
+        // Another replica renewed while this one waited for the lock: nothing left to do.
+        if (
+          stored.meta.status === 'active' &&
+          exp !== undefined &&
+          exp - nowMs > refreshSkewMs(stored.meta.updatedAt, new Date(exp)) &&
+          stored.accessToken
+        )
+          return;
+        // A pair this process obtained earlier and could not store goes first, with no request.
+        const held = this.unpersisted.get(key);
+        if (held) {
+          // The row is still the one that was rotated (a failed attempt only touches its status).
+          if (stored.refreshToken === held.previousRefresh) {
+            await this.stores.tokens.write(tx, held.write, { updatedAt: stored.meta.updatedAt });
+            this.unpersisted.delete(key);
+            return;
+          }
+          // The row changed meanwhile: the held tokens will not be stored, tell their server.
+          this.unpersisted.delete(key);
+          await this.revokeIssued(row, client, as.revocationEndpoint, held.write);
+        }
+        const resource = canonicalResource(cfg.url);
+        // A client-credentials grant has no refresh token to rotate (RFC 6749 section 4.4.3): it is
+        // always renewed with a new grant, so a lost rotated token can never lock the connection
+        // out. An authorization code can only be renewed with its refresh token.
+        const code = stored.meta.grantType === 'authorization_code';
+        if (code && stored.refreshToken === null)
+          throw new OaxError('mcp_no_refresh_token', 'the grant has no refresh token');
+        const useRefresh = code;
+        const issued = await requestToken(this.http(), {
+          tokenEndpoint: as.tokenEndpoint,
+          grant: useRefresh ? 'refresh_token' : 'client_credentials',
+          client,
+          scope: useRefresh ? [] : stored.meta.scopes,
           resource,
-          clientRef: cfg.auth.client.clientIdSecret,
-          scopes: issued.scope ?? stored.meta.scopes,
-          accessToken: issued.accessToken,
-          refreshToken:
-            issued.refreshToken ?? (useRefresh ? (stored.refreshToken ?? undefined) : undefined),
-          expiresAt: issued.expiresIn ? new Date(nowMs + issued.expiresIn * 1000) : undefined,
-          authorizedBy: stored.meta.authorizedBy ?? undefined,
-          grantType: stored.meta.grantType as 'client_credentials' | 'authorization_code',
-          endpoints: stored.meta.endpoints,
-        },
-        { updatedAt: stored.meta.updatedAt },
-      );
-    });
+          refreshToken: stored.refreshToken ?? undefined,
+          origin,
+          now: this.ctx.now(),
+          algsSupported: as.signingAlgs,
+          ids: [row.tenantId, row.id],
+        });
+        this.register(row, issued.accessToken, issued.refreshToken, issued.expiresIn);
+        for (const v of issued.sensitive) this.registerIfShaped(row, v);
+        // The rotated pair (or the new access token with the old refresh token) is one row update in
+        // this transaction: a failure before the commit leaves the previous pair untouched.
+        box.rotation = {
+          replace: stored.meta.updatedAt,
+          previousRefresh: stored.refreshToken,
+          write: {
+            tenantId: row.tenantId,
+            connectionId: row.id,
+            credentialVersion: row.credentialVersion,
+            issuer: stored.meta.issuer,
+            resource,
+            clientRef: stored.meta.clientRef ?? (cfg.auth.client.clientIdSecret as string),
+            scopes: issued.scope ?? stored.meta.scopes,
+            accessToken: issued.accessToken,
+            refreshToken:
+              issued.refreshToken ?? (useRefresh ? (stored.refreshToken ?? undefined) : undefined),
+            expiresAt: issued.expiresIn ? new Date(nowMs + issued.expiresIn * 1000) : undefined,
+            authorizedBy: stored.meta.authorizedBy ?? undefined,
+            grantType: stored.meta.grantType as 'client_credentials' | 'authorization_code',
+            endpoints: stored.meta.endpoints,
+          },
+        };
+        await this.stores.tokens.write(tx, box.rotation.write, {
+          updatedAt: stored.meta.updatedAt,
+        });
+      });
+    } catch (e) {
+      const r = box.rotation;
+      if (!r) throw e;
+      if (e instanceof OaxError && DETERMINISTIC.has(e.code)) {
+        // The row changed or went away while the server answered: nobody will hold these tokens.
+        await this.revokeIssued(row, client, as.revocationEndpoint, r.write);
+        throw e;
+      }
+      await this.persistRotation(row, key, r);
+    }
+  }
+
+  /**
+   * Commits a rotated pair after the first attempt failed: new transactions, short pauses, only
+   * over the very row the renewal read. If every attempt fails the pair is kept in memory (it is
+   * already registered with the redactors) and the renewal fails; the next renewal stores it.
+   */
+  private async persistRotation(row: ConnectionRow, key: string, r: Rotation): Promise<void> {
+    for (const pause of this.rotationRetryMs) {
+      await new Promise((resolve) => setTimeout(resolve, pause));
+      try {
+        await this.ctx.db.transaction(async (rawTx) => {
+          const tx = rawTx as unknown as Db;
+          await lockCredential(tx, row.id, row.credentialVersion);
+          await this.stores.tokens.write(tx, r.write, { updatedAt: r.replace });
+        });
+        this.unpersisted.delete(key);
+        return;
+      } catch (e) {
+        if (e instanceof OaxError && DETERMINISTIC.has(e.code)) {
+          this.unpersisted.delete(key);
+          throw e;
+        }
+      }
+    }
+    this.unpersisted.set(key, r);
+    if (this.unpersisted.size > 1000) this.unpersisted.clear();
+    throw new OaxError(
+      'mcp_auth_refresh_failed',
+      'the renewed token could not be stored; it is written by the next renewal',
+    );
   }
 
   /** Records the failure; true when the credentials are rejected for good. */
@@ -676,9 +1415,12 @@ export class McpOauthService {
       }
     } else if (
       e instanceof OaxError &&
-      ['mcp_issuer_mismatch', 'mcp_oauth_endpoints_changed', 'mcp_resource_mismatch'].includes(
-        e.code,
-      )
+      [
+        'mcp_issuer_mismatch',
+        'mcp_oauth_endpoints_changed',
+        'mcp_resource_mismatch',
+        'mcp_no_refresh_token',
+      ].includes(e.code)
     ) {
       status = 'reauthorization_required';
       outcome = 'reauthorization_required';
@@ -716,7 +1458,12 @@ export class McpOauthService {
     if (row.kind !== 'mcp') return null;
     const versions = await this.stores.tokens.versions(row.tenantId, row.id);
     if (versions.length === 0) return null;
-    const held: { token: string; hint: 'access_token' | 'refresh_token'; endpoint?: string }[] = [];
+    const held: {
+      token: string;
+      hint: 'access_token' | 'refresh_token';
+      issuer: string;
+      endpoint?: string;
+    }[] = [];
     for (const v of versions) {
       let stored;
       try {
@@ -729,12 +1476,14 @@ export class McpOauthService {
       held.push({
         token: stored.accessToken,
         hint: 'access_token',
+        issuer: stored.meta.issuer,
         ...(endpoint ? { endpoint } : {}),
       });
       if (stored.refreshToken)
         held.push({
           token: stored.refreshToken,
           hint: 'refresh_token',
+          issuer: stored.meta.issuer,
           ...(endpoint ? { endpoint } : {}),
         });
     }
@@ -754,9 +1503,15 @@ export class McpOauthService {
         const targets = held.filter((h) => h.endpoint);
         if (cfg && targets.length > 0) {
           try {
-            const client = await this.clientOf(full, cfg, await this.resolverOf(full));
+            const resolver = await this.resolverOf(full);
+            const clients = new Map<string, ClientCredentials>();
             remote = 'ok';
             for (const t of targets) {
+              let client = clients.get(t.issuer);
+              if (!client) {
+                client = await this.clientOf(full, cfg, resolver, t.issuer);
+                clients.set(t.issuer, client);
+              }
               const r = await revokeToken(this.http(), {
                 endpoint: t.endpoint as string,
                 token: t.token,
@@ -789,6 +1544,8 @@ export class McpOauthService {
 
   async disconnect(actor: Principal, id: string): Promise<OauthStatus> {
     const row = await this.catalog.getOwnConnection(actor, id);
+    // An open consent request must not complete after the connection was disconnected.
+    await this.stores.pending.deleteFor(row.tenantId, row.id);
     const pending = await this.prepareRevoke(row);
     await pending?.run('disconnect', `user:${actor.userId}`);
     return this.status(actor, id);

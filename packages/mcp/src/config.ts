@@ -45,17 +45,30 @@ const secretRef = z.string().min(1).max(128);
  * How a streamable-HTTP connection authenticates (ADR 0016 section 7.1). `static` is the
  * `headerSecrets` of earlier versions and the meaning of an absent `auth`; `none` sends no
  * credential; `oauth` obtains audience-bound access tokens (OAuth 2.1 per the MCP authorization
- * specification). This slice implements `client_credentials` with a pre-registered client; the
- * client id, the client secret and the private key are secret references, never values.
+ * specification). `client_credentials` uses a pre-registered client, `authorization_code` any of the
+ * three registrations; the client id, the client secret and the private key are secret references,
+ * never values.
  */
 export const McpOauthAuthSchema = z
   .strictObject({
     kind: z.literal('oauth'),
-    grant: z.literal('client_credentials'),
+    /**
+     * `client_credentials`: service connections, nobody present (pre-registered client only).
+     * `authorization_code`: an administrator consents once per connection instance (PKCE S256).
+     */
+    grant: z.enum(['client_credentials', 'authorization_code']),
     client: z.strictObject({
-      registration: z.literal('preregistered').default('preregistered'),
-      clientIdSecret: secretRef,
-      clientAuth: z.enum(['private_key_jwt', 'client_secret_basic']),
+      /**
+       * `preregistered`: the client exists at the authorization server and is referenced by
+       * secret references. `cimd` (authorization_code only): the platform's Client ID Metadata
+       * Document is the client id. `dcr` (authorization_code only): dynamic registration, one
+       * client per tenant and authorization server. Both are off unless the operator enables them.
+       */
+      registration: z.enum(['preregistered', 'cimd', 'dcr']).default('preregistered'),
+      /** Required for `preregistered`; the client id of `cimd` and `dcr` is not configuration. */
+      clientIdSecret: secretRef.optional(),
+      /** Required for `preregistered`; `none` (public client) only with `authorization_code`. */
+      clientAuth: z.enum(['private_key_jwt', 'client_secret_basic', 'none']).optional(),
       /** `private_key_jwt`: the PEM private key (RSA, P-256 or Ed25519). */
       keySecret: secretRef.optional(),
       /** `kid` header of the client assertion, when the authorization server needs one. */
@@ -75,20 +88,35 @@ export const McpOauthAuthSchema = z
   })
   .superRefine((a, ctx) => {
     const c = a.client;
-    const need = c.clientAuth === 'private_key_jwt' ? 'keySecret' : 'clientSecretSecret';
-    const forbid = c.clientAuth === 'private_key_jwt' ? 'clientSecretSecret' : 'keySecret';
-    if (!c[need])
-      ctx.addIssue({
-        code: 'custom',
-        path: ['client', need],
-        message: `${c.clientAuth} needs ${need}`,
-      });
-    if (c[forbid])
-      ctx.addIssue({
-        code: 'custom',
-        path: ['client', forbid],
-        message: `${c.clientAuth} does not use ${forbid}`,
-      });
+    const bad = (path: string, message: string) =>
+      ctx.addIssue({ code: 'custom', path: ['client', path], message });
+    if (a.grant === 'client_credentials' && c.registration !== 'preregistered')
+      bad('registration', 'client_credentials needs a preregistered client');
+    if (c.registration === 'preregistered') {
+      if (!c.clientIdSecret) bad('clientIdSecret', 'a preregistered client needs clientIdSecret');
+      if (!c.clientAuth) bad('clientAuth', 'a preregistered client needs clientAuth');
+      if (c.clientAuth === 'none' && a.grant === 'client_credentials')
+        bad('clientAuth', 'client_credentials needs a confidential client');
+      if (c.clientAuth) {
+        const need =
+          c.clientAuth === 'private_key_jwt'
+            ? 'keySecret'
+            : c.clientAuth === 'client_secret_basic'
+              ? 'clientSecretSecret'
+              : null;
+        for (const field of ['keySecret', 'clientSecretSecret'] as const) {
+          if (field === need && !c[field]) bad(field, `${c.clientAuth} needs ${field}`);
+          if (field !== need && c[field]) bad(field, `${c.clientAuth} does not use ${field}`);
+        }
+      }
+    } else {
+      // The client id is the metadata document (cimd) or the registration result (dcr): nothing
+      // about the client is configured, and no secret reference can be steered to a server.
+      for (const field of ['clientIdSecret', 'keySecret', 'clientSecretSecret', 'keyId'] as const)
+        if (c[field]) bad(field, `${c.registration} does not use ${field}`);
+      if (c.clientAuth && c.clientAuth !== 'none')
+        bad('clientAuth', `${c.registration} registers a public client`);
+    }
     // A shared secret goes to whatever token endpoint the MCP server's metadata names; only an
     // operator-pinned issuer keeps a hostile or hijacked server from collecting it.
     if (c.clientAuth === 'client_secret_basic' && !a.issuer)
@@ -97,12 +125,8 @@ export const McpOauthAuthSchema = z
         path: ['issuer'],
         message: 'client_secret_basic needs auth.issuer (the secret is sent to the token endpoint)',
       });
-    if (c.keyId && c.clientAuth !== 'private_key_jwt')
-      ctx.addIssue({
-        code: 'custom',
-        path: ['client', 'keyId'],
-        message: 'keyId needs private_key_jwt',
-      });
+    if (c.keyId && c.clientAuth !== 'private_key_jwt' && c.registration === 'preregistered')
+      bad('keyId', 'keyId needs private_key_jwt');
     if (a.issuer) {
       let u: URL | undefined;
       try {
@@ -119,6 +143,11 @@ export const McpOauthAuthSchema = z
     }
   });
 export type McpOauthAuth = z.infer<typeof McpOauthAuthSchema>;
+
+/** How the client authenticates at the token endpoint; `cimd` and `dcr` clients are public by default. */
+export const clientAuthOf = (
+  c: McpOauthAuth['client'],
+): 'private_key_jwt' | 'client_secret_basic' | 'none' => c.clientAuth ?? 'none';
 
 export const McpAuthSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('none') }),

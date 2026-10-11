@@ -795,6 +795,11 @@ export const mcpOauthTokens = pgTable(
     endpoints: jsonb('endpoints').$type<Record<string, string>>().notNull().default({}),
     /** Closed code of the last failed refresh (never a server text). */
     lastError: text('last_error'),
+    /**
+     * Scopes the server asked for with `insufficient_scope` (step-up, authorization_code only):
+     * the next consent asks for the union of these, the granted and the configured scopes.
+     */
+    requiredScopes: text('required_scopes').notNull().default(''),
     authorizedBy: uuid('authorized_by'),
     authorizedAt: ts('authorized_at').notNull().defaultNow(),
     updatedAt: ts('updated_at').notNull().defaultNow(),
@@ -833,6 +838,8 @@ export const mcpOauthClients = pgTable(
     clientId: text('client_id').notNull(),
     keyVersion: integer('key_version'),
     clientSecretEnc: text('client_secret_enc'),
+    /** Redirect URI the client was registered with; a changed `OAX_PUBLIC_URL` registers again. */
+    redirectUri: text('redirect_uri'),
     createdBy: uuid('created_by'),
     createdAt: created(),
   },
@@ -842,6 +849,62 @@ export const mcpOauthClients = pgTable(
     check(
       'mcp_oauth_clients_secret',
       sql`(${t.clientSecretEnc} is null) = (${t.keyVersion} is null)`,
+    ),
+  ],
+);
+
+/**
+ * Authorization requests that wait for the callback (ADR 0016 section 7.2, authorization_code):
+ * one row per `authorize` call. `state_hash` is the SHA-256 of the state (the state itself is only
+ * ever in the authorization URL); `verifier_enc` is the PKCE verifier sealed with the tenant data
+ * key, bound to (tenant, connection, issuer, resource, credential version). The row is deleted by
+ * the callback (single use) or when it has expired (10 minutes). No token is ever stored here.
+ */
+export const mcpOauthPending = pgTable(
+  'mcp_oauth_pending',
+  {
+    id: uuid('id').primaryKey(),
+    stateHash: text('state_hash').notNull(),
+    tenantId: uuid('tenant_id').notNull(),
+    connectionId: uuid('connection_id').notNull(),
+    credentialVersion: integer('credential_version').notNull(),
+    /** The administrator who started the request; only that session may complete it. */
+    userId: uuid('user_id').notNull(),
+    /**
+     * SHA-256 (hex) of the nonce the console generated for this request and keeps in its tab's
+     * session storage: the browser that started the consent is the only one that can complete it.
+     */
+    nonceHash: text('nonce_hash').notNull(),
+    /** The issuer the authorization was started for (RFC 9207: the response must come from it). */
+    issuer: text('issuer').notNull(),
+    resource: text('resource').notNull(),
+    redirectUri: text('redirect_uri').notNull(),
+    /** Secret reference, `mcp_oauth_clients.id` or the metadata document URL; never a secret value. */
+    clientRef: text('client_ref').notNull(),
+    registration: text('registration').notNull(),
+    scopes: text('scopes').notNull().default(''),
+    keyVersion: integer('key_version').notNull(),
+    verifierEnc: text('verifier_enc').notNull(),
+    /** Endpoints pinned when the request started; the code is redeemed only at these. */
+    endpoints: jsonb('endpoints').$type<Record<string, string>>().notNull(),
+    signingAlgs: text('signing_algs'),
+    /** The server advertised `authorization_response_iss_parameter_supported` (RFC 9207). */
+    issAdvertised: boolean('iss_advertised').notNull(),
+    createdAt: created(),
+    expiresAt: ts('expires_at').notNull(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'mcp_oauth_pending_connection_tenant_fk',
+      columns: [t.connectionId, t.tenantId],
+      foreignColumns: [connections.id, connections.tenantId],
+    }).onDelete('cascade'),
+    uniqueIndex('mcp_oauth_pending_state_uq').on(t.stateHash),
+    index('mcp_oauth_pending_connection_idx').on(t.connectionId, t.userId),
+    index('mcp_oauth_pending_expires_idx').on(t.expiresAt),
+    check(
+      'mcp_oauth_pending_registration',
+      sql`${t.registration} in ('preregistered', 'cimd', 'dcr')`,
     ),
   ],
 );

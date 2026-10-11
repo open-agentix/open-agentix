@@ -45,6 +45,8 @@ describe('route access declarations', () => {
       'GET /v1/auth/methods',
       'GET /v1/auth/oidc/callback',
       'GET /v1/auth/oidc/login',
+      'GET /v1/oauth/mcp-client.json',
+      'GET /v1/oauth/mcp/callback',
       'GET /v1/version',
       'POST /v1/auth/login',
     ]);

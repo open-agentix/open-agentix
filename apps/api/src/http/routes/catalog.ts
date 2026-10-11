@@ -5,6 +5,9 @@ import { principalOf } from '../app.js';
 import { connectionDto, policyDto } from '../dto.js';
 import {
   OauthAuthorizeBody,
+  OauthAuthorizeResultSchema,
+  OauthCompleteBody,
+  OauthCompleteResultSchema,
   OauthStatusSchema,
   ConnectionCreateBody,
   ConnectionSchema,
@@ -32,6 +35,7 @@ import {
 } from '../schemas.js';
 import { SUBTREE_DEFAULT_PAGE, assertPagingNeedsSubtree, rowTenants } from '../subtree.js';
 import { HttpError } from '../../errors.js';
+import { cimdDocument } from '../../mcp-oauth/registration.js';
 import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
@@ -211,14 +215,14 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
       schema: {
         tags: ['connections'],
         summary:
-          'Authorize an OAuth connection (client_credentials): discover the authorization server, pin its issuer and endpoints, obtain a token (audited, rate limited)',
+          'Authorize an OAuth connection: client_credentials obtains a token now; authorization_code returns the authorization URL for the consent (audited, rate limited)',
         description:
-          'Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. The answer carries the state only, never a token.',
+          'Discovery goes through the outbound dispatcher with the tenant destination rules. Authorizing again with another issuer or other endpoints revokes the old tokens at their issuer. authorization_code: PKCE S256 always, a single-use state (10 minutes) bound to the caller, the connection and the tenant, and the exact redirect URI `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback`; refused on central (platform) instances (`central_user_delegation`). Authorizing again after `insufficient_scope` asks for the union of the granted, required and configured scopes (step-up). The answer carries the state and, for authorization_code, the authorization URL; never a token.',
         security: sec,
         params: IdParams,
         body: OauthAuthorizeBody,
         response: {
-          200: OauthStatusSchema,
+          200: OauthAuthorizeResultSchema,
           400: ErrorSchema,
           403: ErrorSchema,
           404: ErrorSchema,
@@ -245,6 +249,99 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
       },
     },
     async (req) => services.mcpOauthFlows.disconnect(principalOf(req), req.params.id),
+  );
+
+  // The browser lands here after the consent at the authorization server. This route redeems
+  // nothing and consumes nothing: a browser redirect has no session, so it only hands `state`, `code`
+  // and `iss` to the console in the URL FRAGMENT (never sent to a server, never in an access log).
+  // The console, in the tab that started the consent, completes it with its session and nonce
+  // (`POST /v1/connections/{id}/oauth/complete`). The query is never echoed.
+  app.get(
+    '/v1/oauth/mcp/callback',
+    {
+      config: { access: 'public' },
+      schema: {
+        tags: ['connections'],
+        summary: 'Redirect target of the MCP OAuth authorization-code flow (browser)',
+        description:
+          'Redirects to the console with `state`, `code`, `iss` and `error` in the URL fragment; the consent is completed there with the session and nonce of the browser that started it. Answers a page of fixed text when the state is malformed or no console URL is configured.',
+        querystring: z.object({}).passthrough(),
+        response: { 400: z.string(), 302: z.void() },
+      },
+    },
+    async (req, reply) => {
+      const q = req.query as Record<string, unknown>;
+      // A parameter that is repeated, nested or not a string is treated as absent.
+      const one = (k: string) => (typeof q[k] === 'string' ? (q[k] as string) : undefined);
+      void reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer');
+      const state = one('state');
+      if (!ctx.config.uiUrl || state === undefined || !/^[A-Za-z0-9_-]{43}$/.test(state)) {
+        void reply.status(400).type('text/html; charset=utf-8');
+        return reply.send(
+          '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>openagentix</title></head><body><p>Authorization failed. Close this window and try again in the console.</p></body></html>',
+        );
+      }
+      const frag = new URLSearchParams({ oauth_state: state });
+      const code = one('code');
+      if (code !== undefined && /^[\x21-\x7e]{1,2048}$/.test(code)) frag.set('oauth_code', code);
+      const iss = one('iss');
+      // A malformed issuer must not turn into "absent": it is passed on and fails the comparison.
+      if (iss !== undefined) frag.set('oauth_iss', /^[\x21-\x7e]{1,2048}$/.test(iss) ? iss : '!');
+      const error = one('error');
+      if (error !== undefined)
+        frag.set('oauth_error', /^[a-z_]{1,40}$/.test(error) ? error : 'other');
+      const target = new URL('/connections', ctx.config.uiUrl);
+      return reply.redirect(`${target.toString()}#${frag.toString()}`);
+    },
+  );
+
+  app.post(
+    '/v1/connections/:id/oauth/complete',
+    {
+      config: { access: 'connections:write' },
+      schema: {
+        tags: ['connections'],
+        summary:
+          'Complete an authorization-code consent: redeem the code (session of the person who started it, nonce of their browser)',
+        description:
+          'Takes `state`, `code` and `iss` as the callback handed them to the console, plus the nonce whose hash was sent with the authorization request. The state is spent whatever the outcome. Only the session of the person who started the consent, with the nonce of that browser, can complete it; the result is one of a closed set and `forbidden` for anything else.',
+        security: sec,
+        params: IdParams,
+        body: OauthCompleteBody,
+        response: { 200: OauthCompleteResultSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => {
+      const actor = principalOf(req);
+      const out = await services.mcpOauthFlows.completeAuthorization(
+        actor,
+        req.params.id,
+        req.body,
+      );
+      const status =
+        out.result === 'ok' ? await services.mcpOauthFlows.status(actor, req.params.id) : null;
+      return { result: out.result, status };
+    },
+  );
+
+  // The Client ID Metadata Document of this installation (ADR 0016 section 7.2). Off unless the
+  // operator enabled it; the document contains no secret and nothing tenant-specific.
+  app.get(
+    '/v1/oauth/mcp-client.json',
+    {
+      config: { access: 'public' },
+      schema: {
+        tags: ['connections'],
+        summary: 'Client ID Metadata Document of the MCP OAuth client (OAX_MCP_OAUTH_CIMD)',
+        response: { 200: z.record(z.string(), z.unknown()), 404: ErrorSchema },
+      },
+    },
+    async (_req, reply) => {
+      if (!ctx.config.mcp.oauth.cimd)
+        throw new HttpError(404, 'not_found', 'client ID metadata documents are not enabled');
+      void reply.header('cache-control', 'public, max-age=300');
+      return cimdDocument(ctx.config.publicUrl);
+    },
   );
 
   // ---------- pinned tool definitions (ADR 0016 section 5) ----------

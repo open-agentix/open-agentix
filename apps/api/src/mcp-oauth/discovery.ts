@@ -160,6 +160,8 @@ export interface AuthServerMetadata {
   codeChallengeMethods?: string[];
   scopesSupported?: string[];
   issParameterSupported: boolean;
+  /** `client_id_metadata_document_supported`: the server fetches URL-shaped client ids. */
+  cimdSupported?: boolean;
 }
 
 /** The metadata URLs of an issuer: RFC 8414 with path insertion, then the two OIDC forms. */
@@ -241,6 +243,7 @@ export async function discoverAuthorizationServer(
       ...(pkce ? { codeChallengeMethods: pkce } : {}),
       ...(scopes ? { scopesSupported: scopes } : {}),
       issParameterSupported: doc.authorization_response_iss_parameter_supported === true,
+      cimdSupported: doc.client_id_metadata_document_supported === true,
     };
   }
   throw new OaxError(

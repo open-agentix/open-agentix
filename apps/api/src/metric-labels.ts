@@ -40,6 +40,19 @@ export const OAUTH_REFRESH_OUTCOMES = set(
   'failed',
   'skipped',
 );
+export const OAUTH_AUTHORIZE_OUTCOMES = set(
+  'started',
+  'ok',
+  'state_invalid',
+  'state_expired',
+  'iss_mismatch',
+  'iss_missing',
+  'denied',
+  'token_refused',
+  'forbidden',
+  'conflict',
+  'error',
+);
 export const EVENT_KINDS = set('webhook', 'mail', 'kafka', 'cron');
 export const TRIGGER_KINDS = set('manual', 'webhook', 'mail', 'kafka', 'cron', 'demo');
 export const RUN_STATUS_LABELS = set(...RUN_STATUSES);

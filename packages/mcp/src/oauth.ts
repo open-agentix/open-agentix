@@ -16,6 +16,12 @@ export interface McpTokenSource {
   accessToken(): Promise<{ token: string; resource: string }>;
   /** The server answered 401 to the token it was just given: the next call must not reuse it. */
   rejected?(token: string): void;
+  /**
+   * The server answered 403 `insufficient_scope` to the token it was just given. `needed` is the
+   * `scope` of its challenge (possibly empty). An authorization-code connection then needs a new
+   * consent for the union of scopes (step-up) and fails closed until an administrator gives it.
+   */
+  insufficientScope?(token: string, needed: readonly string[]): void;
 }
 
 /**

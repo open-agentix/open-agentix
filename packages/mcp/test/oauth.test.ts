@@ -40,9 +40,8 @@ describe('auth in the connection config', () => {
 
   it.each([
     ['unknown kind', { kind: 'basic' }],
-    ['authorization_code grant (later slice)', { ...oauth, grant: 'authorization_code' }],
     [
-      'dynamic registration (later slice)',
+      'client_credentials with dynamic registration',
       { ...oauth, client: { ...oauth.client, registration: 'dcr' } },
     ],
     [
@@ -128,6 +127,78 @@ describe('scopes from profiles', () => {
     ]);
     expect(requestedScopes(parse({ auth: oauth, tools }))).toEqual([]);
     expect(requestedScopes(parse())).toEqual([]);
+  });
+});
+
+describe('authorization_code configuration', () => {
+  const code = (client: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+    kind: 'oauth',
+    grant: 'authorization_code',
+    client,
+    ...extra,
+  });
+  it.each([
+    ['public pre-registered client', code({ clientIdSecret: 'id', clientAuth: 'none' })],
+    [
+      'confidential pre-registered client',
+      code(
+        { clientIdSecret: 'id', clientAuth: 'private_key_jwt', keySecret: 'key', keyId: 'k1' },
+        {},
+      ),
+    ],
+    ['client id metadata document', code({ registration: 'cimd' })],
+    ['dynamic registration', code({ registration: 'dcr', clientAuth: 'none' })],
+  ])('accepts %s', (_n, auth) => {
+    expect(authKindOf(parse({ auth }))).toBe('oauth');
+  });
+
+  it.each([
+    ['cimd with a client id secret', code({ registration: 'cimd', clientIdSecret: 'id' })],
+    ['dcr with a secret', code({ registration: 'dcr', clientSecretSecret: 's' })],
+    [
+      'dcr with a confidential method',
+      code({ registration: 'dcr', clientAuth: 'private_key_jwt' }),
+    ],
+    [
+      'public client with a key',
+      code({ clientIdSecret: 'id', clientAuth: 'none', keySecret: 'k' }),
+    ],
+    ['pre-registered without clientAuth', code({ clientIdSecret: 'id' })],
+    ['pre-registered without a client id', code({ clientAuth: 'none' })],
+  ])('refuses %s', (_n, auth) => {
+    expect(() => parse({ auth })).toThrow();
+  });
+});
+
+describe('step-up hook', () => {
+  it('passes the scopes of an insufficient_scope challenge to the token source', async () => {
+    const seen: { token: string; needed: readonly string[] }[] = [];
+    const src: McpTokenSource = {
+      accessToken: async () => ({
+        token: 'TOKEN-VALUE-1',
+        resource: 'https://mcp.example.org/mcp',
+      }),
+      insufficientScope: (token, needed) => void seen.push({ token, needed }),
+    };
+    const out = {
+      fetch: async () =>
+        new Response('', {
+          status: 403,
+          headers: {
+            'www-authenticate':
+              'Bearer error="insufficient_scope", scope="issues.write bad\u0001scope repo:admin"',
+          },
+        }),
+      close: async () => undefined,
+    } as unknown as OutboundDispatcher;
+    await expect(
+      createMcpFetch(parse({ auth: oauth }), {
+        outbound: out,
+        originFor: () => 'tenant',
+        tokens: () => src,
+      })('https://mcp.example.org/mcp'),
+    ).rejects.toMatchObject({ code: 'mcp_insufficient_scope' });
+    expect(seen).toEqual([{ token: 'TOKEN-VALUE-1', needed: ['issues.write', 'repo:admin'] }]);
   });
 });
 

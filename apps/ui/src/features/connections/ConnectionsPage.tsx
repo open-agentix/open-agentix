@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, call } from '../../api/client';
 import { connectionsQuery } from '../../api/queries';
 import type { Connection, ModelProposal } from '../../api/types';
@@ -28,6 +28,8 @@ import { useDocumentTitle } from '../../lib/hooks';
 import { redact } from '../../lib/redact';
 import { findInlineSecrets, secretReferences } from './secrets';
 import { ToolAccessSummary, ToolProfilesEditor } from './ToolProfiles';
+import { AuthorizationDialog, usesOauth } from './Authorization';
+import { takeConsent, takeReturnedConsent } from './consent';
 import { ToolsDialog } from './ToolSnapshots';
 
 /** A tenant-owned OTLP exporter (ADR 0015 S10); secrets only as references, content off by default. */
@@ -91,6 +93,45 @@ export function ConnectionsPage() {
   const [editing, setEditing] = useState<Connection | 'new' | null>(null);
   const [deleting, setDeleting] = useState<Connection | null>(null);
   const [toolsOf, setToolsOf] = useState<Connection | null>(null);
+  const [authOf, setAuthOf] = useState<Connection | null>(null);
+  // The authorization server sent the browser back with state and code in the URL fragment. This
+  // tab completes the consent only if it is the tab that started it (it holds the nonce).
+  const [returnedTo, setReturnedTo] = useState<string | null>(null);
+  const items = connections.data?.items;
+  useEffect(() => {
+    const returned = takeReturnedConsent();
+    if (!returned) return;
+    const started = takeConsent();
+    if (!started) {
+      toast.error(t('connections.authorization.results.no_session'));
+      return;
+    }
+    void (async () => {
+      try {
+        const r = await call(
+          api.POST('/v1/connections/{id}/oauth/complete', {
+            params: { path: { id: started.connectionId } },
+            body: { ...returned, nonce: started.nonce },
+          }),
+        );
+        if (r.result === 'ok') toast.success(t('connections.authorization.results.ok'));
+        else toast.error(t(`connections.authorization.results.${r.result}`));
+        await queryClient.invalidateQueries({
+          queryKey: ['connection-oauth', started.connectionId],
+        });
+      } catch (e) {
+        toast.error(errorMessage(e));
+      }
+      setReturnedTo(started.connectionId);
+    })();
+    // once, on arrival
+  }, []);
+  useEffect(() => {
+    if (!returnedTo || !items) return;
+    const c = items.find((x) => x.id === returnedTo);
+    if (c && usesOauth(c)) setAuthOf(c);
+    setReturnedTo(null);
+  }, [returnedTo, items]);
   const remove = async (c: Connection) => {
     await call(api.DELETE('/v1/connections/{id}', { params: { path: { id: c.id } } }));
     await queryClient.invalidateQueries({ queryKey: connectionsQuery.queryKey });
@@ -167,6 +208,11 @@ export function ConnectionsPage() {
                 </p>
                 {c.kind === 'mcp' && c.config.transport === 'streamable-http' ? (
                   <div className="actions">
+                    {usesOauth(c) ? (
+                      <Button size="sm" icon="lock" onClick={() => setAuthOf(c)}>
+                        {t('connections.authorization.open')}
+                      </Button>
+                    ) : null}
                     <Button size="sm" icon="lock" onClick={() => setToolsOf(c)}>
                       {t('connections.tools.open')}
                     </Button>
@@ -189,6 +235,7 @@ export function ConnectionsPage() {
       )}
       <ConnectionDialog editing={editing} onClose={() => setEditing(null)} />
       <ToolsDialog connection={toolsOf} onClose={() => setToolsOf(null)} />
+      <AuthorizationDialog connection={authOf} onClose={() => setAuthOf(null)} />
       <ConfirmTenantAction
         open={!!deleting}
         onClose={() => setDeleting(null)}

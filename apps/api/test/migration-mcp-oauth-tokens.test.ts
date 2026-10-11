@@ -177,6 +177,13 @@ describe.each(sqlTargets)('migration 0026 on existing data (%s)', (_kind, enable
   });
 
   it('the down script removes the tables and can run twice', async () => {
+    // A rollback runs the newest down script first: 0028 has a foreign key on the index dropped here.
+    await c.script(
+      readFileSync(
+        join(MIGRATIONS_FOLDER, 'down/0029_mcp_oauth_authorization_code.down.sql'),
+        'utf8',
+      ),
+    );
     await c.script(DOWN);
     expect(await tables()).toEqual([]);
     const col = await c.query(
