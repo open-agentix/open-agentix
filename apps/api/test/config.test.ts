@@ -103,6 +103,47 @@ describe('mapGroupsToBindings', () => {
   });
 });
 
+describe('group mapping and the agent roles (ADR 0017 S10)', () => {
+  it('accepts agent-developer and agent-maintainer, also as role@team-slug', () => {
+    expect(
+      mapGroupsToBindings(['devs', 'maint', 'both'], {
+        devs: 'agent-developer',
+        maint: ['agent-maintainer@team-security'],
+        both: ['agent-developer@team-ops', 'agent-maintainer'],
+      }),
+    ).toEqual([
+      { role: 'agent-developer', teamSlug: null },
+      { role: 'agent-maintainer', teamSlug: 'team-security' },
+      { role: 'agent-developer', teamSlug: 'team-ops' },
+      { role: 'agent-maintainer', teamSlug: null },
+    ]);
+  });
+
+  it('never maps the removed role agent-engineer', () => {
+    expect(mapGroupsToBindings(['old'], { old: 'agent-engineer' })).toEqual([]);
+  });
+
+  it.each(['OAX_OIDC_ROLE_MAPPING', 'OAX_LDAP_ROLE_MAPPING'])(
+    'refuses agent-engineer in %s at start and names agent-maintainer',
+    (variable) => {
+      for (const value of [
+        { eng: 'agent-engineer' },
+        { eng: ['viewer', 'agent-engineer@team-security'] },
+      ])
+        expect(() => loadConfig({ ...base, [variable]: JSON.stringify(value) })).toThrow(
+          new RegExp(`${variable}.*"eng".*"agent-engineer".*"agent-maintainer"`),
+        );
+    },
+  );
+
+  it('starts with the new roles in both mappings', () => {
+    const mapping = JSON.stringify({ a: 'agent-developer', b: 'agent-maintainer@team-x' });
+    expect(() =>
+      loadConfig({ ...base, OAX_OIDC_ROLE_MAPPING: mapping, OAX_LDAP_ROLE_MAPPING: mapping }),
+    ).not.toThrow();
+  });
+});
+
 describe('runner, toolbox, secrets and worker settings', () => {
   it('parses defaults', () => {
     const c = loadConfig(base);
