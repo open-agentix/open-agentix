@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_TENANT_ID,
   agentVersions,
+  agentRoleBindings,
   agents,
   approvals,
   auditLog,
@@ -371,6 +372,51 @@ describe.each(['bindings', 'legacy'] as const)('locate, read path %s', (mode) =>
         await parity('blue-viewer', 'connection', 'org-a');
       });
 
+      it('does not lend the permissions of the acting node to another owning node', async () => {
+        // viewer on org-a and integrator on div-2, neither inheriting
+        await mkUser('mixed', 'org-a');
+        await bind('mixed', 'org-a', 'viewer', false);
+        await bind('mixed', 'div-2', 'integrator', false);
+        await n.ctx.cache.delPrefix('auth:');
+        const at = (acting: string, key: string) =>
+          locate('mixed', 'connection', res[key]!.connection, { 'x-oax-tenant': id[acting]! });
+        // acting in div-2 (integrator there), the org-a connection needs connections:read at org-a
+        const lent = await at('div-2', 'org-a');
+        expect(lent.statusCode).toBe(404);
+        const none = await locate('mixed', 'connection', randomUUID());
+        expect(lent.body).toBe(none.body);
+        // acting in org-a, the div-2 connection is readable through the binding at div-2
+        const r = await at('org-a', 'div-2');
+        expect(r.statusCode).toBe(200);
+        expect(r.json().tenant.id).toBe(id['div-2']);
+        // and the answer does not depend on the acting node at all
+        expect((await at('div-2', 'div-2')).statusCode).toBe(200);
+        expect((await at('org-a', 'org-a')).statusCode).toBe(404);
+      });
+
+      it('honours agent-scoped bindings: the own agent, its runs and approvals only', async () => {
+        await mkUser('agent-user', 'org-a');
+        await n.ctx.db
+          .insert(agentRoleBindings)
+          .values({ userId: uid['agent-user']!, agentId: res['org-a']!.agent, role: 'viewer' });
+        await n.ctx.cache.delPrefix('auth:');
+        for (const kind of ['agent', 'run', 'approval'] as const) {
+          await ok('agent-user', 'org-a', kind);
+          await parity('agent-user', kind, 'org-a/blue');
+          await parity('agent-user', kind, 'div-1');
+        }
+        await parity('agent-user', 'connection', 'org-a');
+        await parity('agent-user', 'event-source', 'org-a');
+      });
+
+      it('ignores an expired inheriting binding', async () => {
+        await mkUser('expired', 'org-a');
+        await bind('expired', 'org-a', 'viewer', true, new Date(Date.now() - 60_000));
+        await n.ctx.cache.delPrefix('auth:');
+        for (const kind of KINDS)
+          for (const key of ['org-a', 'div-1', 'team-1']) await parity('expired', kind, key);
+      });
+
       it('does not let a visible home node lend permissions to a node below it', async () => {
         // plain-admin is admin of org-a only; div-1 is not covered by a non-inheriting binding
         await ok('plain-admin', 'org-a', 'run');
@@ -420,7 +466,7 @@ describe.each(['bindings', 'legacy'] as const)('locate, read path %s', (mode) =>
       });
 
       it('refuses kinds outside the allowlist and ids that are not UUIDs, before any lookup', async () => {
-        const spy = vi.spyOn(n.ctx.db as never as Record<string, () => unknown>, 'select');
+        const spy = vi.spyOn(n.services.locate, 'locate');
         try {
           for (const [kind, rid] of [
             ['tenant', randomUUID()],
@@ -428,16 +474,17 @@ describe.each(['bindings', 'legacy'] as const)('locate, read path %s', (mode) =>
             ['run', 'not-a-uuid'],
             ['run', "x'; drop table runs; --"],
             ['run', `${randomUUID()}%20`],
-            ['..', randomUUID()],
+            ['a/b', randomUUID()],
             ['agent', '00000000-0000-0000-0000-00000000000g'],
           ] as const) {
             const r = await locate('root-admin', encodeURIComponent(kind), encodeURIComponent(rid));
-            expect([400, 404], `${kind} ${rid}`).toContain(r.statusCode);
+            expect(r.statusCode, `${kind} ${rid}`).toBe(400);
           }
+          expect((await locate('root-admin', 'run', "' or 1=1 --")).statusCode).toBe(400);
+          expect(spy).not.toHaveBeenCalled();
         } finally {
           spy.mockRestore();
         }
-        expect((await locate('root-admin', 'run', "' or 1=1 --")).statusCode).toBe(400);
         // the table is still there
         expect((await locate('root-admin', 'run', res['org-a']!.run)).statusCode).toBe(200);
       });
