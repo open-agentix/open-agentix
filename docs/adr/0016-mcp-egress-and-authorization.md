@@ -338,7 +338,7 @@ Client registration, in the specification's priority order:
    authorization server and stores the references. Always available; the only option in air-gapped
    mode.
 2. **Client ID Metadata Document** (`cimd`): the platform publishes one document per installation
-   at `https://<OAX_PUBLIC_URL>/oauth/mcp-client.json` (`client_id` equals that URL, `client_name`,
+   at `https://<OAX_PUBLIC_URL>/v1/oauth/mcp-client.json` (`client_id` equals that URL, `client_name`,
    `redirect_uris` = the callback, `grant_types: [authorization_code, refresh_token]`,
    `token_endpoint_auth_method: none` or `private_key_jwt` with a platform JWKS). Used only for
    `authorization_code` and only when the authorization server advertises
@@ -443,13 +443,19 @@ the platform refuses to use the stored client and marks the connection `reauthor
 - **Implementation notes (S7, #237).** The authorization-code flow, CIMD and DCR are in. Pending requests
   live in `mcp_oauth_pending` (migration 0029): the state as SHA-256, the PKCE verifier sealed with the tenant
   data key (AAD domain-separated from tokens), the pinned endpoints and whether the server advertises
-  RFC 9207. The callback is public (a browser redirect has no bearer token): the single-use state is the
-  authenticator, the starting person's permission is checked again with the principal of that user, and the
-  endpoints pinned at the start are the only ones the code is redeemed at. Deviations: the audit codes
+  RFC 9207 and the SHA-256 of the console's nonce. The callback is public (a browser redirect has no
+  bearer token) and redeems nothing: it hands state, code and iss to the console in the URL fragment, and
+  `POST /v1/connections/{id}/oauth/complete` redeems them for the session of the person who started the
+  consent that also holds the nonce (kept in the tab's session storage, only its hash is stored). This
+  binds the consent to the browser that started it, so a forwarded authorization URL cannot attach someone
+  else's account to a connection. The endpoints pinned at the start are the only ones the code is
+  redeemed at. A public client needs RFC 9207 `iss` support or a pinned issuer (`mcp_oauth_iss_unverifiable`);
+  the first consent without a pin shows the issuer and scopes for confirmation; the CIMD document is
+  served at `/v1/oauth/mcp-client.json` (inside the routed `/v1` prefix). Deviations: the audit codes
   `iss_missing`, `authorization_refused`, `forbidden`, `registration_disabled` extend the list of
   `mcp.oauth.denied`; `mcp.oauth.authorization_requested` and `mcp.oauth.step_up_required` are new actions;
-  the callback answers a redirect to the console (`OAX_UI_URL`) with a closed result, else a page of fixed
-  text. A public pre-registered client (`clientAuth: none`) is allowed for `authorization_code` only.
+  the callback answers a redirect to the console (`OAX_UI_URL`, required for authorization_code), else a
+  page of fixed text. A public pre-registered client (`clientAuth: none`) is allowed for `authorization_code` only.
   A grant without a refresh token is not renewed with another grant: it needs a new consent at expiry.
   Rotation: the previous pair stays until the new one is committed, the commit is retried (3 attempts) and
   a pair that could not be stored is kept in memory for the next renewal; a crash in that window loses it.
@@ -550,7 +556,7 @@ issuer host, scopes, authorized by/at; never a token) on MCP connections;
 `GET /v1/connections/{id}/tool-snapshots`, `POST /v1/connections/{id}/tool-snapshots/{digest}/approve`
 (`scope`), `.../reject`; `POST /v1/connections/{id}/oauth/authorize` (returns the authorization
 URL), `GET /v1/oauth/mcp/callback`, `POST /v1/connections/{id}/oauth/disconnect`;
-`GET /oauth/mcp-client.json` (CIMD, when enabled); worker endpoint
+`GET /v1/oauth/mcp-client.json` (CIMD, when enabled); worker endpoint
 `POST /v1/worker/runs/{id}/mcp/{server}` (relay). Version detail gains `toolsDigest` per connection.
 
 UI (MCP servers area of ADR 0012): tabs **Network** (effective egress, ceiling, last denials by

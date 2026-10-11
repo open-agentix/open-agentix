@@ -28,7 +28,8 @@ import { useDocumentTitle } from '../../lib/hooks';
 import { redact } from '../../lib/redact';
 import { findInlineSecrets, secretReferences } from './secrets';
 import { ToolAccessSummary, ToolProfilesEditor } from './ToolProfiles';
-import { AuthorizationDialog, isCallbackResult, usesOauth } from './Authorization';
+import { AuthorizationDialog, usesOauth } from './Authorization';
+import { takeConsent, takeReturnedConsent } from './consent';
 import { ToolsDialog } from './ToolSnapshots';
 
 /** A tenant-owned OTLP exporter (ADR 0015 S10); secrets only as references, content off by default. */
@@ -93,28 +94,44 @@ export function ConnectionsPage() {
   const [deleting, setDeleting] = useState<Connection | null>(null);
   const [toolsOf, setToolsOf] = useState<Connection | null>(null);
   const [authOf, setAuthOf] = useState<Connection | null>(null);
-  // The callback of the authorization server brings the browser back here with a closed result.
+  // The authorization server sent the browser back with state and code in the URL fragment. This
+  // tab completes the consent only if it is the tab that started it (it holds the nonce).
+  const [returnedTo, setReturnedTo] = useState<string | null>(null);
   const items = connections.data?.items;
   useEffect(() => {
-    if (!items) return;
-    const q = new URLSearchParams(window.location.search);
-    const result = q.get('mcp_oauth');
-    if (result === null) return;
-    const wanted = q.get('connection');
-    q.delete('mcp_oauth');
-    q.delete('connection');
-    const rest = q.toString();
-    window.history.replaceState(
-      window.history.state,
-      '',
-      window.location.pathname + (rest ? `?${rest}` : '') + window.location.hash,
-    );
-    const known = isCallbackResult(result) ? result : 'error';
-    if (known === 'ok') toast.success(t('connections.authorization.results.ok'));
-    else toast.error(t(`connections.authorization.results.${known}`));
-    const c = items.find((x) => x.id === wanted);
+    const returned = takeReturnedConsent();
+    if (!returned) return;
+    const started = takeConsent();
+    if (!started) {
+      toast.error(t('connections.authorization.results.no_session'));
+      return;
+    }
+    void (async () => {
+      try {
+        const r = await call(
+          api.POST('/v1/connections/{id}/oauth/complete', {
+            params: { path: { id: started.connectionId } },
+            body: { ...returned, nonce: started.nonce },
+          }),
+        );
+        if (r.result === 'ok') toast.success(t('connections.authorization.results.ok'));
+        else toast.error(t(`connections.authorization.results.${r.result}`));
+        await queryClient.invalidateQueries({
+          queryKey: ['connection-oauth', started.connectionId],
+        });
+      } catch (e) {
+        toast.error(errorMessage(e));
+      }
+      setReturnedTo(started.connectionId);
+    })();
+    // once, on arrival
+  }, []);
+  useEffect(() => {
+    if (!returnedTo || !items) return;
+    const c = items.find((x) => x.id === returnedTo);
     if (c && usesOauth(c)) setAuthOf(c);
-  }, [items]);
+    setReturnedTo(null);
+  }, [returnedTo, items]);
   const remove = async (c: Connection) => {
     await call(api.DELETE('/v1/connections/{id}', { params: { path: { id: c.id } } }));
     await queryClient.invalidateQueries({ queryKey: connectionsQuery.queryKey });

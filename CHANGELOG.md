@@ -14,14 +14,17 @@ All notable changes to this project are documented here. The format follows
   refused at start-up in air-gapped mode). `POST /v1/connections/{id}/oauth/authorize` returns the
   authorization URL (PKCE `S256` always, refused when the server does not advertise it; single-use
   `state` for 10 minutes bound to the person, connection and tenant; exact redirect URI
-  `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback`); `GET /v1/oauth/mcp/callback` checks the state and the RFC 9207
-  `iss` matrix and stores the tokens for the connection instance (authorized by/at is shown); a person who
-  lost `connections:write` meanwhile cannot complete. `authorization_code` on central (platform) instances
+  `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback`); the callback only passes state, code and `iss` to the console
+  in the URL fragment, and `POST /v1/connections/{id}/oauth/complete` (session of the person who started
+  the consent plus the nonce of their browser, checked against the hash sent at authorize time) checks the
+  state and the RFC 9207 `iss` matrix and stores the tokens for the connection instance (authorized by/at is
+  shown). Public clients need `iss` support or a pinned issuer; the first consent without a pin asks for
+  confirmation of the issuer and scopes. The CIMD document is served at `/v1/oauth/mcp-client.json`. `authorization_code` on central (platform) instances
   is refused (`central_user_delegation`). A `403 insufficient_scope` records the required scopes and fails
   the connection closed until an administrator authorizes again with the union of scopes (step-up). A
   failed commit of a rotated refresh token is retried and the pair kept until stored; a grant without a
   refresh token needs a new consent at expiry. The callback never echoes the query and its request log
-  has no query. New console view "Authorization" (EN/DE) on OAuth connections. Migration
+  has no query; state and code never reach an access log. New console view "Authorization" (EN/DE) on OAuth connections. Migration
   `0029_mcp_oauth_authorization_code` (new table `mcp_oauth_pending`, additive columns); audit
   `mcp.oauth.authorization_requested | client_registered | step_up_required`; metric
   `oax_mcp_oauth_authorize_total{outcome}`. See

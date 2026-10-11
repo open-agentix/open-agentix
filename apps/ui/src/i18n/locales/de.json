@@ -752,6 +752,8 @@
       "wider": "Die erteilten Scopes sind weiter gefasst, als die Tool-Profile brauchen.",
       "chooseIssuer": "Autorisierungsserver",
       "chooseIssuerHint": "Der Server nennt mehrere Autorisierungsserver. Wähle den zu verwendenden; er wird festgeschrieben.",
+      "confirmFirst": "Erste Autorisierung: Prüfe den Autorisierungsserver und die Scopes, die der MCP-Server verlangt, bevor du fortfährst.",
+      "suggestedScopes": "Scopes, die angefordert werden",
       "instanceHint": "Tokens werden nur für diese Verbindung gespeichert und nie angezeigt.",
       "results": {
         "ok": "Die Verbindung ist autorisiert.",
@@ -762,7 +764,8 @@
         "iss_missing": "Der Autorisierungsserver hat sich nicht ausgewiesen. Die Antwort wurde abgewiesen.",
         "code_invalid": "Die Antwort enthielt keinen nutzbaren Autorisierungscode.",
         "token_refused": "Der Autorisierungsserver hat kein Token ausgestellt.",
-        "forbidden": "Du darfst diese Verbindung nicht mehr autorisieren.",
+        "forbidden": "Diese Autorisierung wurde nicht in dieser Browser-Sitzung gestartet, oder du darfst die Verbindung nicht mehr autorisieren.",
+        "no_session": "Dieser Browser hat keine Autorisierung gestartet. Nichts wurde geändert; starte sie erneut an der Verbindung.",
         "conflict": "Die Verbindung hat sich während der Zustimmung geändert. Neu starten.",
         "error": "Die Autorisierung ist fehlgeschlagen."
       }

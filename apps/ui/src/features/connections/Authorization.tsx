@@ -20,6 +20,7 @@ import {
 } from '../../components/ui';
 import { useI18n } from '../../i18n/i18n';
 import { navigateTo } from '../../lib/navigate';
+import { newNonce, rememberConsent } from './consent';
 
 const oauthKey = (id: string) => ['connection-oauth', id] as const;
 
@@ -30,24 +31,6 @@ const STATUS_TONE = {
   reauthorization_required: 'danger',
   revoked: 'neutral',
 } as const;
-
-/** Results the callback reports in `?mcp_oauth=` (a closed set; anything else is shown as an error). */
-export const CALLBACK_RESULTS = [
-  'ok',
-  'denied',
-  'state_invalid',
-  'state_expired',
-  'iss_mismatch',
-  'iss_missing',
-  'code_invalid',
-  'token_refused',
-  'forbidden',
-  'conflict',
-  'error',
-] as const;
-export type CallbackResult = (typeof CALLBACK_RESULTS)[number];
-export const isCallbackResult = (v: string | null): v is CallbackResult =>
-  v !== null && (CALLBACK_RESULTS as readonly string[]).includes(v);
 
 /** Whether a connection config asks for OAuth (the Authorization view only exists for those). */
 export function usesOauth(c: Connection): boolean {
@@ -77,6 +60,7 @@ export function AuthorizationDialog({
   const queryClient = useQueryClient();
   const id = connection?.id ?? '';
   const [issuers, setIssuers] = useState<string[] | null>(null);
+  const [suggested, setSuggested] = useState<string[]>([]);
   const [issuer, setIssuer] = useState('');
   const [disconnecting, setDisconnecting] = useState(false);
   const status = useQuery({
@@ -86,17 +70,23 @@ export function AuthorizationDialog({
   });
   const users = useQuery({ ...usersQuery, enabled: !!connection && can('users:read') });
   const authorize = useMutation({
-    mutationFn: () =>
-      call(
+    mutationFn: async () => {
+      // The nonce stays in this tab; only its hash goes to the control node.
+      const { nonce, hash } = await newNonce();
+      const r = await call(
         api.POST('/v1/connections/{id}/oauth/authorize', {
           params: { path: { id } },
-          body: issuer ? { issuer } : {},
+          body: { ...(issuer ? { issuer } : {}), nonceHash: hash },
         }),
-      ),
-    onSuccess: async (r) => {
+      );
+      return { r, nonce };
+    },
+    onSuccess: async ({ r, nonce }) => {
       setIssuers(null);
       if (r.authorizationUrl) {
-        // The consent happens at the authorization server; the callback brings the browser back.
+        // The consent happens at the authorization server; the callback brings the browser back
+        // to this tab, which completes it with the nonce.
+        rememberConsent(id, nonce);
         try {
           navigateTo(r.authorizationUrl);
         } catch {
@@ -113,6 +103,10 @@ export function AuthorizationDialog({
         if (Array.isArray(list) && list.every((x) => typeof x === 'string')) {
           setIssuers(list as string[]);
           setIssuer(list[0] as string);
+          const scopes = (e.details as { scopes?: unknown }).scopes;
+          setSuggested(
+            Array.isArray(scopes) ? scopes.filter((x): x is string => typeof x === 'string') : [],
+          );
           return;
         }
       }
@@ -272,18 +266,30 @@ export function AuthorizationDialog({
                 </div>
               ) : null}
               {issuers ? (
-                <SelectField
-                  label={t('connections.authorization.chooseIssuer')}
-                  hint={t('connections.authorization.chooseIssuerHint')}
-                  value={issuer}
-                  onChange={(e) => setIssuer(e.target.value)}
-                >
-                  {issuers.map((i) => (
-                    <option key={i} value={i}>
-                      {i}
-                    </option>
-                  ))}
-                </SelectField>
+                <div className="stack">
+                  <p role="note" className="notice notice-warning">
+                    {t('connections.authorization.confirmFirst')}
+                  </p>
+                  <SelectField
+                    label={t('connections.authorization.chooseIssuer')}
+                    hint={t('connections.authorization.chooseIssuerHint')}
+                    value={issuer}
+                    onChange={(e) => setIssuer(e.target.value)}
+                  >
+                    {issuers.map((i) => (
+                      <option key={i} value={i}>
+                        {i}
+                      </option>
+                    ))}
+                  </SelectField>
+                  <div>
+                    <p className="strong">{t('connections.authorization.suggestedScopes')}</p>
+                    <Scopes
+                      label={t('connections.authorization.suggestedScopes')}
+                      scopes={suggested}
+                    />
+                  </div>
+                </div>
               ) : null}
               {code ? <p className="muted">{t('connections.authorization.instanceHint')}</p> : null}
             </>

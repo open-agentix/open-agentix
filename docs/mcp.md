@@ -451,7 +451,7 @@ exactly the secret that its `clientAuth` uses, and `client_secret_basic` also an
 | `GET /v1/connections/{id}/oauth` | `connections:read` | Status, pinned issuer, scopes, expiry, last renewal error code, the authorization server hosts, `scopesWider`; for `authorization_code` also `registration`, `redirectUri`, `scopesMissing`, `requiredScopes`, `reauthorizationNeeded` and `pendingExpiresAt`. Never a token. |
 | `POST /v1/connections/{id}/oauth/disconnect` | `connections:write` | Deletes the stored tokens and revokes them at the issuer; an open consent request ends too. |
 | `GET /v1/oauth/mcp/callback` | none (browser redirect) | The redirect target of the authorization server; see below. |
-| `GET /oauth/mcp-client.json` | none | The client ID metadata document, only with `OAX_MCP_OAUTH_CIMD=true` (otherwise `404`). |
+| `GET /v1/oauth/mcp-client.json` | none | The client ID metadata document, only with `OAX_MCP_OAUTH_CIMD=true` (otherwise `404`). |
 
 Consent is explicit: runs never authorize a connection by themselves. A pin outlives a failed
 renewal: when a connection needs a new authorization and the resource now names a different server than
@@ -497,7 +497,7 @@ Checks on what the documents say:
 
 Refusals are audited as `mcp.oauth.denied` with a closed `code` (`issuer_mismatch`, `resource_mismatch`,
 `resource_metadata_origin`, `endpoints_changed`, `egress_denied`, `pkce_unsupported`,
-`registration_disabled`, and from the callback `state_invalid`, `iss_mismatch`, `iss_missing`,
+`registration_disabled`, `iss_unverifiable`, and from `complete` `state_invalid`, `nonce_mismatch`, `iss_mismatch`, `iss_missing`,
 `authorization_refused`, `forbidden`).
 
 ### Pinning
@@ -613,20 +613,27 @@ flow, then refuses an authorization server that does not advertise `S256` in
 `code_challenge_methods_supported`. It stores a pending request (table `mcp_oauth_pending`, migration
 `0029_mcp_oauth_authorization_code`) and answers with the `authorizationUrl`: `response_type=code`,
 `client_id`, `redirect_uri`, `state`, `code_challenge` with `code_challenge_method=S256`, `resource`
-(RFC 8707) and `scope`. The console opens that URL. After the consent the authorization server redirects the
-browser to `GET /v1/oauth/mcp/callback`, which redeems the code (with the verifier, the exact redirect URI
-and `resource`) at the **endpoints pinned when the request started**, stores the tokens for the connection
-instance and revokes tokens a re-authorization replaced.
+(RFC 8707) and `scope`. The console keeps a random **nonce** in the session storage of its tab, sends only
+its SHA-256 (`nonceHash`) with the request and opens that URL. After the consent the authorization server
+redirects the browser to `GET /v1/oauth/mcp/callback`. **That route redeems nothing**: it hands `state`,
+`code` and `iss` to the console in the URL *fragment* (no query, so no server or access log ever sees
+them), and the console removes the fragment at once and calls
+`POST /v1/connections/{id}/oauth/complete` with its bearer token, the values and its nonce. Only there
+is the code redeemed (with the verifier, the exact redirect URI and `resource`) at the **endpoints pinned
+when the request started**; the tokens are stored for the connection instance and tokens a
+re-authorization replaced are revoked.
 
 | Property | How |
 | --- | --- |
 | PKCE | `S256` always, 256-bit verifier from the CSPRNG; never `plain`; the verifier is stored sealed with the tenant data key (AAD: tenant, connection, issuer, resource, credential version, domain-separated from tokens) and never leaves the control node. |
-| `state` | 256 bits, stored only as SHA-256, **single use** (the callback deletes the row in the statement that reads it, whatever the outcome), valid for 10 minutes, bound to the person, connection, tenant and credential version. A new request of the same person for the same connection replaces the old one; at most 200 open requests per tenant. |
-| RFC 9207 | The callback checks `iss` before it looks at `code` or `error`: `iss` present must equal the issuer the request was started for (exact string, also for error responses); `iss` absent is accepted only when the metadata does not advertise `authorization_response_iss_parameter_supported`. Failures are `iss_mismatch` / `iss_missing`, nothing is redeemed. |
+| `state` | 256 bits, stored only as SHA-256, **single use** (`complete` deletes the row in the statement that reads it, whatever the outcome), valid for 10 minutes, bound to the person, connection, tenant, credential version and the console's nonce hash. A new request of the same person for the same connection replaces the old one; at most 200 open requests per tenant. |
+| Browser binding | A forwarded authorization URL must not connect someone else's account to your connection. `complete` needs (1) the session of the person who started the consent, on that tenant and connection, and (2) the nonce whose SHA-256 was stored at authorize time. The browser of a person who merely opened a forwarded link has neither (the nonce lives only in the tab that started the consent); the attempt is refused (`forbidden`, audited as `nonce_mismatch`) and still spends the state. Authorizing needs `OAX_UI_URL` and a `nonceHash`. |
+| RFC 9207 | `complete` checks `iss` before it looks at `code` or `error`: `iss` present must equal the issuer the request was started for (exact string, also for error responses); `iss` absent is accepted only when the metadata does not advertise `authorization_response_iss_parameter_supported`. Failures are `iss_mismatch` / `iss_missing`, nothing is redeemed. A **public client** (CIMD, `clientAuth: none`, or a DCR client without a secret) cannot be told apart from the same client at another server, so it needs a server that advertises `authorization_response_iss_parameter_supported` or a configured `auth.issuer`; otherwise authorizing is refused (`mcp_oauth_iss_unverifiable`). |
 | Redirect URI | Exactly `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback`, computed on the server; no request parameter can change it. `OAX_PUBLIC_URL` must be an `https` origin without path (`http` only for `localhost`/loopback); the console shows the URI so it can be registered at the authorization server. |
-| Who | The route needs `connections:write` on the acting tenant. At the callback the person who started the request must still exist, be enabled and hold `connections:write` on that tenant and connection (`forbidden` otherwise, no token request). Platform (central) connections: `authorization_code` is refused at save and at authorize with `central_user_delegation` (a person's consent cannot be shared with the tenants that use a central instance). |
-| Callback answer | A redirect to `<OAX_UI_URL>/connections?mcp_oauth=<result>&connection=<id>` (the id comes from the stored request; `result` is one of `ok`, `denied`, `state_invalid`, `state_expired`, `iss_mismatch`, `iss_missing`, `code_invalid`, `token_refused`, `forbidden`, `conflict`, `error`), or without a console URL a page of fixed text. Nothing from the query (error, description, state, code) is echoed; there is no `redirect`-style parameter. The page carries `default-src 'none'`, `frame-ancestors 'none'`, `no-store` and `no-referrer`. |
-| Logs | The request log prints the callback path without its query. Neither the state, the code, the verifier nor a token is logged or audited; the audit has names, ids, hosts, scopes and closed codes. |
+| Who | Both routes need `connections:write` on the acting tenant; `complete` is the session of the person who started the request, so a person who lost the permission meanwhile is refused (403, no token request). Platform (central) connections: `authorization_code` is refused at save and at authorize with `central_user_delegation` (a person's consent cannot be shared with the tenants that use a central instance). |
+| Callback answer | A redirect to `<OAX_UI_URL>/connections#oauth_state=...&oauth_code=...&oauth_iss=...` (values shape-checked; an error text is reduced to letters, a malformed `iss` is passed on as an invalid value so that it fails the comparison and never counts as absent), or a page of fixed text (state malformed, no console URL). `complete` answers `{ result, status }` with `result` one of `ok`, `denied`, `state_invalid`, `state_expired`, `iss_mismatch`, `iss_missing`, `code_invalid`, `token_refused`, `forbidden`, `conflict`, `error`. Nothing from the query is echoed; the redirect target is fixed. The page carries `default-src 'none'`, `frame-ancestors 'none'`, `no-store` and `no-referrer`. |
+| First consent | Without `auth.issuer` (and with no earlier authorization at that server), authorizing answers `409 mcp_oauth_issuer_required` with the issuer and the scopes the MCP server suggested; the console shows both and the administrator confirms by naming the issuer. Nothing is sent to the browser unseen. |
+| Logs | The request log prints the callback path without its query, and the state and code travel only in the fragment and in the body of `complete`, which is not logged. Neither the state, the code, the verifier nor a token is logged or audited; the audit has names, ids, hosts, scopes and closed codes. |
 | Token shape | A token the server issues must have the shape of a credential before anything stores or registers it (as for client credentials). |
 
 **Scopes and step-up.** The requested scopes are the profile scopes (or the explicit list), else the
@@ -654,7 +661,7 @@ detection then ends in `invalid_grant` and `reauthorization_required`, never in 
 
 #### Client ID metadata document (`OAX_MCP_OAUTH_CIMD=true`)
 
-The platform publishes one document per installation at `<OAX_PUBLIC_URL>/oauth/mcp-client.json`
+The platform publishes one document per installation at `<OAX_PUBLIC_URL>/v1/oauth/mcp-client.json`
 (`client_id` equals that URL, `redirect_uris` is the callback, `token_endpoint_auth_method: none`). It is
 used only for `authorization_code`, only when the server advertises `client_id_metadata_document_supported`
 (`mcp_oauth_unsupported` otherwise), and needs a public `https` `OAX_PUBLIC_URL` (start-up refuses it
@@ -686,11 +693,13 @@ no tenant or connection label.
 - A process that dies between the authorization server's answer to a refresh and the commit loses the
   rotated refresh token (see [Rotation](#refresh-token-rotation)); the connection then needs a new consent.
   Client-credentials connections are not affected (they never use a refresh token).
-- The callback has no session (a browser redirect carries no bearer token). It trusts the single-use
-  `state` alone, which is bound to the person, connection and tenant that started the request, so a
-  victim who is tricked into opening someone else's authorization URL consents on that person's
-  connection, never on their own (consent phishing is inherent to OAuth; the connection shows who
-  authorized it and every consent is audited).
+- The browser binding rests on the nonce in the session storage of the tab that started the consent: a
+  console opened in another tab or browser (or a cleared storage) cannot complete it and must start
+  again. A person who is tricked into approving a link that someone else started at the authorization
+  server cannot connect their account to that person's connection (no nonce, wrong session).
+- Scopes a server asked for with `insufficient_scope` are limited to what the authorization server
+  publishes in `scopes_supported` and capped at 64 stored; two 403s at the same moment can still
+  overwrite each other (the next one records them again).
 - Authorization code on a central (platform) instance is refused by design (`central_user_delegation`).
 
 ## Control-node relay for run nodes

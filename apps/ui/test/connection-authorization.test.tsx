@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -62,6 +63,7 @@ function stub(st: Record<string, unknown> = status(), connection = oauthConnecti
 beforeEach(() => {
   vi.mocked(navigateTo).mockClear();
   window.history.replaceState({}, '', '/');
+  window.sessionStorage.clear();
 });
 
 describe('Authorization of an OAuth connection', () => {
@@ -99,7 +101,16 @@ describe('Authorization of an OAuth connection', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Authorization of issues' });
     await user.click(await within(dialog).findByRole('button', { name: 'Connect' }));
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith(AUTH_URL));
-    expect(posts).toEqual([{ url: 'authorize', body: {} }]);
+    // only the hash of the nonce is sent; the nonce stays in this tab's session storage
+    const body = posts[0]!.body as { nonceHash: string };
+    expect(body.nonceHash).toMatch(/^[0-9a-f]{64}$/);
+    const kept = JSON.parse(window.sessionStorage.getItem('oax.mcp.consent') ?? 'null') as {
+      connectionId: string;
+      nonce: string;
+    };
+    expect(kept.connectionId).toBe(f.connections[0]!.id);
+    expect(kept.nonce).not.toBe(body.nonceHash);
+    expect(createHash('sha256').update(kept.nonce).digest('hex')).toBe(body.nonceHash);
   });
 
   it('says what a step-up needs and asks to authorize again', async () => {
@@ -133,7 +144,10 @@ describe('Authorization of an OAuth connection', () => {
             {
               error: 'mcp_oauth_issuer_required',
               message: 'choose one',
-              details: { issuers: ['https://a.example.org', 'https://b.example.org'] },
+              details: {
+                issuers: ['https://a.example.org', 'https://b.example.org'],
+                scopes: ['issues.read', 'offline_access'],
+              },
             },
             { status: 409 },
           );
@@ -145,13 +159,16 @@ describe('Authorization of an OAuth connection', () => {
     await user.click(await screen.findByRole('button', { name: 'Authorization' }));
     const dialog = await screen.findByRole('dialog', { name: 'Authorization of issues' });
     await user.click(await within(dialog).findByRole('button', { name: 'Connect' }));
+    // nothing leaves the console before the administrator has seen the server and the scopes
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect(await within(dialog).findByText('offline_access')).toBeInTheDocument();
     await user.selectOptions(
       await within(dialog).findByLabelText('Authorization server'),
       'https://b.example.org',
     );
     await user.click(within(dialog).getByRole('button', { name: 'Connect' }));
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith(AUTH_URL));
-    expect(posts.at(-1)!.body).toEqual({ issuer: 'https://b.example.org' });
+    expect(posts.at(-1)!.body).toMatchObject({ issuer: 'https://b.example.org' });
   });
 
   it('disconnects after a confirmation', async () => {
@@ -178,27 +195,47 @@ describe('Authorization of an OAuth connection', () => {
     expect(within(dialog).queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument();
   });
 
-  it('reports the result of the callback, opens the view and removes the parameters from the URL', async () => {
+  it('completes the consent in the tab that started it, clears the fragment and opens the view', async () => {
     stub();
-    window.history.replaceState(
-      {},
-      '',
-      `/connections?mcp_oauth=iss_mismatch&connection=${f.connections[0]!.id}`,
+    const completes: unknown[] = [];
+    server.use(
+      http.post(api('/v1/connections/:id/oauth/complete'), async ({ request }) => {
+        completes.push(await request.json());
+        return HttpResponse.json({ result: 'iss_mismatch', status: null });
+      }),
     );
+    window.sessionStorage.setItem(
+      'oax.mcp.consent',
+      JSON.stringify({ connectionId: f.connections[0]!.id, nonce: 'the-nonce-of-this-tab' }),
+    );
+    window.history.replaceState({}, '', '/connections#oauth_state=S&oauth_code=C&oauth_iss=I');
     await renderApp('/connections');
     expect(
       await screen.findByText(/came from another authorization server than the request/),
     ).toBeInTheDocument();
+    expect(completes).toEqual([
+      { state: 'S', code: 'C', iss: 'I', nonce: 'the-nonce-of-this-tab' },
+    ]);
     expect(await screen.findByRole('dialog', { name: 'Authorization of issues' })).toBeVisible();
-    expect(window.location.search).toBe('');
+    // the answer is gone from the address bar and the nonce is spent
+    expect(window.location.hash).toBe('');
+    expect(window.sessionStorage.getItem('oax.mcp.consent')).toBeNull();
   });
 
-  it('shows an unknown callback result as a plain failure, never as the text of the URL', async () => {
+  it('a browser that did not start the consent completes nothing and says so', async () => {
     stub();
-    window.history.replaceState({}, '', '/connections?mcp_oauth=%3Cscript%3E');
+    const completes: unknown[] = [];
+    server.use(
+      http.post(api('/v1/connections/:id/oauth/complete'), async ({ request }) => {
+        completes.push(await request.json());
+        return HttpResponse.json({ result: 'ok', status: null });
+      }),
+    );
+    window.history.replaceState({}, '', '/connections#oauth_state=S&oauth_code=C');
     await renderApp('/connections');
-    expect(await screen.findByText('The authorization failed.')).toBeInTheDocument();
-    expect(document.body.innerHTML).not.toContain('<script>');
+    expect(await screen.findByText(/did not start an authorization/)).toBeInTheDocument();
+    expect(completes).toEqual([]);
+    expect(window.location.hash).toBe('');
   });
 
   it('is available in German', async () => {

@@ -745,6 +745,8 @@
       "wider": "The granted scopes are wider than the tool profiles need.",
       "chooseIssuer": "Authorization server",
       "chooseIssuerHint": "The server names several authorization servers. Choose the one to use; it is pinned.",
+      "confirmFirst": "First authorization: check the authorization server and the scopes the MCP server asks for before you continue.",
+      "suggestedScopes": "Scopes that will be requested",
       "instanceHint": "Tokens are stored for this connection only and are never shown.",
       "results": {
         "ok": "The connection is authorized.",
@@ -755,7 +757,8 @@
         "iss_missing": "The authorization server did not identify itself. The response was rejected.",
         "code_invalid": "The response carried no usable authorization code.",
         "token_refused": "The authorization server refused to issue a token.",
-        "forbidden": "You are no longer allowed to authorize this connection.",
+        "forbidden": "This authorization was not started in this browser session, or you may no longer authorize this connection.",
+        "no_session": "This browser did not start an authorization. Nothing was changed; start it again from the connection.",
         "conflict": "The connection changed during the consent. Start again.",
         "error": "The authorization failed."
       }
