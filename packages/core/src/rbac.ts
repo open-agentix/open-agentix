@@ -140,6 +140,22 @@ export const USE_CASE_PERMISSIONS: readonly Permission[] = [
   'users:write',
 ];
 
+/**
+ * What a use-case binding still gives on an agent that **belongs to a team** (ADR 0014 S8 review):
+ * reading it and its runs and costs, and deciding its approvals. Changing, publishing, dry-running,
+ * running or cancelling a team's agent needs a team or node permission, because a team brings its
+ * connections with it and those are not part of a use case. Agents without a team have no such limit.
+ */
+export const USE_CASE_TEAM_AGENT_PERMISSIONS: readonly Permission[] = [
+  'agents:read',
+  'runs:read',
+  'runs:approve',
+  'costs:read',
+  'events:read',
+  'audit:read',
+  'audit:export',
+];
+
 /** Where an effective binding comes from (ADR 0014 section 3.2). */
 export type BindingSource = 'direct' | 'inherited' | 'attached' | 'team' | 'agent' | 'platform';
 
@@ -303,6 +319,13 @@ export function hasPermissionIn(
 ): boolean {
   if (hasPermission(principal, permission, resource.teamId ?? null, resource.agentId ?? null))
     return true;
+  // On an agent of a team a use-case binding gives the read-side permissions only.
+  if (
+    resource.teamId !== undefined &&
+    resource.teamId !== null &&
+    !USE_CASE_TEAM_AGENT_PERMISSIONS.includes(permission)
+  )
+    return false;
   return useCaseScopes(principal, permission).some((s) => useCaseCovers(s, resource.useCase));
 }
 

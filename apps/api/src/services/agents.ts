@@ -137,8 +137,25 @@ export class AgentsService {
     agent: AgentRow,
     next: string | null,
   ): void {
-    if (hasPermission(principal, permission, agent.teamId, agent.id)) return;
-    if (useCaseScopes(principal, permission).some((s) => useCaseCovers(s, next))) return;
+    const own = hasPermission(principal, permission, agent.teamId, agent.id);
+    // Relabelling an agent of a team into another use case hands its runs and costs to the
+    // administrators of that use case: node-level authority, or the use case's own administrator
+    // who also holds the permission for the team (never a team writer alone).
+    if (
+      agent.teamId !== null &&
+      next !== null &&
+      next !== agent.useCase &&
+      !hasPermission(principal, permission, null) &&
+      !(own && useCaseScopes(principal, permission).some((s) => useCaseCovers(s, next)))
+    )
+      throw forbidden('relabelling the use case of a team agent needs node-level authority');
+    if (own) return;
+    // A use-case binding writes agents without a team only.
+    if (
+      agent.teamId === null &&
+      useCaseScopes(principal, permission).some((s) => useCaseCovers(s, next))
+    )
+      return;
     throw forbidden('the use case of the agent is outside your scope');
   }
 
