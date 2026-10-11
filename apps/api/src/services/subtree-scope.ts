@@ -1,6 +1,8 @@
 import {
   hasPermission,
   subtreePrefix,
+  useCaseCovers,
+  useCaseScopes,
   visibleAgents,
   visibleTeams,
   type Permission,
@@ -15,6 +17,7 @@ import { HttpError, notFound } from '../errors.js';
 import type { TenantRow } from './identity.js';
 import { TenantAccess } from './tenant-access.js';
 import { TenantTree } from './tenant-tree.js';
+import { useCaseMatch } from './use-case-scope.js';
 
 /**
  * `?scope=subtree` on the list routes (ADR 0014 section 3.5).
@@ -39,6 +42,12 @@ export interface NodeGrant {
   teams: 'all' | readonly string[];
   /** Agents readable through agent-scoped bindings only. */
   agents: readonly string[];
+  /**
+   * Use cases readable through use-case bindings (ADR 0014 section 3.3): the resources of the node
+   * that carry the use case or a sub-use case. A node where this is all there is has no node-wide
+   * grant: resources that carry no use case are never readable there.
+   */
+  useCases: readonly string[];
 }
 
 /** The tenant a row belongs to, as returned on rows of subtree lists. */
@@ -55,6 +64,12 @@ export interface ScopeColumns {
   teamId?: PgColumn;
   /** Restriction to the given agent ids (a column, or a builder for indirect references). */
   agent?: PgColumn | ((agentIds: string[]) => SQL);
+  /**
+   * Restriction to the given use cases (a column that holds the use case, or a builder for indirect
+   * references). Without it a use-case grant opens nothing: a resource that cannot say which use
+   * case it belongs to is not readable through one (fail closed).
+   */
+  useCase?: PgColumn | ((useCases: string[]) => SQL);
 }
 
 /** The outcome of resolving one request: which nodes, with what read scope. */
@@ -73,25 +88,58 @@ export class ResolvedScope {
     return this.grants.has(id);
   }
 
-  /** Ids of the nodes where the permission is held (in any scope). */
+  /** What the caller may read on one node, or `undefined` when the node is not in the scope. */
+  grantOf(id: string): NodeGrant | undefined {
+    return this.grants.get(id);
+  }
+
+  /** True when the node's node-wide resources are readable (see {@link nodeWideIds}). */
+  isNodeWide(id: string): boolean {
+    const g = this.grants.get(id);
+    return g !== undefined && (g.teams === 'all' || g.teams.length > 0 || g.agents.length > 0);
+  }
+
+  /** Ids of the nodes where the permission is held in any scope (to describe the rows found). */
   nodeIds(): string[] {
     return [...this.grants.keys()];
   }
 
+  /**
+   * Ids of the nodes where the permission is held for the node itself, with all teams or some of
+   * them or some agents: the nodes whose node-wide resources (events, sources, connections, audit,
+   * budgets) are readable. A node where the permission comes from use-case bindings only is not
+   * one of them.
+   */
+  nodeWideIds(): string[] {
+    return [...this.grants]
+      .filter(([, g]) => g.teams === 'all' || g.teams.length > 0 || g.agents.length > 0)
+      .map(([id]) => id);
+  }
+
   /** In-memory twin of {@link predicate}, for rows that are already loaded. */
-  allows(row: { tenantId: string; teamId?: string | null; agentId?: string | null }): boolean {
+  allows(row: {
+    tenantId: string;
+    teamId?: string | null;
+    agentId?: string | null;
+    useCase?: string | null;
+  }): boolean {
     const g = this.grants.get(row.tenantId);
     if (!g) return false;
     if (g.teams === 'all') return true;
     return (
       (typeof row.teamId === 'string' && g.teams.includes(row.teamId)) ||
-      (typeof row.agentId === 'string' && g.agents.includes(row.agentId))
+      (typeof row.agentId === 'string' && g.agents.includes(row.agentId)) ||
+      g.useCases.some((u) => useCaseCovers(u, row.useCase))
     );
   }
 
-  /** `tenant_id in (nodes)`: for resources the permission covers node-wide. */
+  /**
+   * `tenant_id in (nodes)`: for resources the permission covers node-wide. Nodes where the
+   * permission comes from use-case bindings only are left out.
+   */
   nodePredicate(tenantId: PgColumn): SQL {
-    return this.grants.size === 0 ? sql`false` : inArray(tenantId, this.nodeIds());
+    const ids = this.nodeWideIds();
+    return ids.length === 0 ? sql`false` : inArray(tenantId, ids);
   }
 
   /**
@@ -113,6 +161,11 @@ export class ResolvedScope {
             ? cols.agent([...g.agents])
             : inArray(cols.agent, [...g.agents])
           : undefined,
+        cols.useCase && g.useCases.length > 0
+          ? typeof cols.useCase === 'function'
+            ? cols.useCase([...g.useCases])
+            : useCaseMatch(cols.useCase, g.useCases)
+          : undefined,
       );
       if (inner) parts.push(and(eq(cols.tenantId, id), inner)!);
     }
@@ -126,7 +179,7 @@ export class ResolvedScope {
     for (const id of [...this.grants.keys()].sort()) {
       const g = this.grants.get(id)!;
       h.update(
-        `${id}|${g.teams === 'all' ? '*' : [...g.teams].sort().join(',')}|${[...g.agents].sort().join(',')};`,
+        `${id}|${g.teams === 'all' ? '*' : [...g.teams].sort().join(',')}|${[...g.agents].sort().join(',')}|${[...g.useCases].sort().join(',')};`,
       );
     }
     return h.digest('hex').slice(0, 32);
@@ -262,9 +315,13 @@ export class SubtreeScopes {
 
 /** The read scope of a principal on one node; `undefined` when it may read nothing there. */
 function grantOf(p: Principal, permission: Permission): NodeGrant | undefined {
-  if (!hasPermission(p, permission)) return undefined;
+  const useCases = useCaseScopes(p, permission);
+  // Use-case bindings never count as node-wide ones (hasPermission ignores them), so a node where
+  // the permission comes from them only is a grant for those use cases and nothing else.
+  if (!hasPermission(p, permission) && useCases.length === 0) return undefined;
   const teams = visibleTeams(p, permission);
   const agents = visibleAgents(p, permission);
-  if (Array.isArray(teams) && teams.length === 0 && agents.length === 0) return undefined;
-  return { teams, agents };
+  if (Array.isArray(teams) && teams.length === 0 && agents.length === 0 && useCases.length === 0)
+    return undefined;
+  return { teams, agents, useCases };
 }

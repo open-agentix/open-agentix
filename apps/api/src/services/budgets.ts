@@ -3,7 +3,10 @@ import {
   BUDGET_ALERT_EVENT_TYPE,
   crossedThresholds,
   evaluateBudgets,
+  hasPermission,
   percentUsed,
+  useCaseCovers,
+  useCaseScopes,
   type AlertThreshold,
   type BudgetAlertData,
   type BudgetScope,
@@ -30,6 +33,7 @@ import type { AuditService } from './audit.js';
 import { monthOf } from './runs.js';
 import type { ResolvedScope } from './subtree-scope.js';
 import { TenantTree } from './tenant-tree.js';
+import { useCaseMatch } from './use-case-scope.js';
 
 /** What a spend is attributed to; every budget scope that applies to it is checked. */
 export interface BudgetTarget {
@@ -298,11 +302,19 @@ export class BudgetsService {
     );
   }
 
-  /** Current budgets with spend and raised alerts for the caller's tenant. */
+  /**
+   * Current budgets with spend and raised alerts for the caller's tenant. A caller who holds
+   * `costs:read` through use cases only (ADR 0014 S8) gets the limits and spend of those use cases
+   * and nothing of the node: no team lines, no node limit (`tenant.limitUsd` is null) and a `tenant`
+   * spend that counts the caller's use cases only.
+   */
   async overview(principal: Principal): Promise<BudgetOverview> {
     const month = monthOf(this.ctx.now());
     const tenantId = principal.tenantId;
     const db = this.ctx.db;
+    const scopes = useCaseScopes(principal, 'costs:read');
+    if (scopes.length > 0 && !hasPermission(principal, 'costs:read'))
+      return this.overviewForUseCases(principal, scopes, month);
     const [tenant] = await db.select().from(tenants).where(eq(tenants.id, tenantId));
     const raised = await db
       .select()
@@ -345,6 +357,37 @@ export class BudgetsService {
     return { month, tenant: tenantLine, useCases, teams: teamLines };
   }
 
+  private async overviewForUseCases(
+    principal: Principal,
+    scopes: readonly string[],
+    month: string,
+  ): Promise<BudgetOverview> {
+    const tenantId = principal.tenantId;
+    const db = this.ctx.db;
+    const raised = await db
+      .select()
+      .from(budgetAlerts)
+      .where(and(eq(budgetAlerts.tenantId, tenantId), eq(budgetAlerts.month, month)));
+    const inMonth = and(eq(costLedger.tenantId, tenantId), eq(costLedger.month, month));
+    const mine = and(inMonth, useCaseMatch(costLedger.useCase, scopes));
+    const useCases: BudgetLine[] = [];
+    for (const b of await db
+      .select()
+      .from(useCaseBudgets)
+      .where(eq(useCaseBudgets.tenantId, tenantId))
+      .orderBy(useCaseBudgets.useCase)) {
+      // A budget of a wider use case than the caller's covers spend the caller cannot see.
+      if (!scopes.some((sc) => useCaseCovers(sc, b.useCase))) continue;
+      const spent = await this.spent(db, and(inMonth, eq(costLedger.useCase, b.useCase)));
+      useCases.push(
+        budgetLine(raised, 'use_case', b.useCase, b.useCase, b.monthlyBudgetMicros, spent),
+      );
+    }
+    // No alerts on this line: those belong to the limit of the node, which this caller does not see.
+    const tenantLine = budgetLine([], 'tenant', null, '', null, await this.spent(db, mine));
+    return { month, tenant: tenantLine, useCases, teams: [] };
+  }
+
   /**
    * Budgets of every node of a `scope=subtree` overview: the tenant limit, use case limits and team
    * limits with this month's spend, one entry per node, ordered by slug path and keyset-paged by
@@ -357,6 +400,12 @@ export class BudgetsService {
     const limit = Math.min(Math.max(page.limit, 1), NODE_BUDGETS_MAX_LIMIT);
     const ids = subtree.nodeIds();
     if (ids.length === 0) return { items: [], nextCursor: null };
+    // Nodes where the caller reads costs through use cases only show those use cases and nothing of
+    // the node (no node limit, no team lines), as in the single-node overview.
+    const useCasesOf = (nodeId: string) => {
+      const g = subtree.grantOf(nodeId);
+      return g && !subtree.isNodeWide(nodeId) ? [...g.useCases] : null;
+    };
     const db = this.ctx.db;
     const rows = await db.select().from(tenants).where(inArray(tenants.id, ids));
     const paths = await new TenantTree(this.ctx).slugPaths(rows);
@@ -402,6 +451,34 @@ export class BudgetsService {
     const items = slice.map(({ row, slugPath }): NodeBudgetOverview => {
       const alerts = raised.filter((a) => a.tenantId === row.id);
       const spent = (k: string) => toNumber(tenantSpend.find((s) => s.k === k)?.total);
+      const only = useCasesOf(row.id);
+      if (only)
+        return {
+          node: { id: row.id, slugPath, name: row.name },
+          tenant: budgetLine(
+            [],
+            'tenant',
+            null,
+            '',
+            null,
+            useCaseSpend
+              .filter((s) => s.k === row.id && only.some((sc) => useCaseCovers(sc, s.u)))
+              .reduce((sum, s) => sum + toNumber(s.total), 0),
+          ),
+          useCases: useCases
+            .filter((b) => b.tenantId === row.id && only.some((sc) => useCaseCovers(sc, b.useCase)))
+            .map((b) =>
+              budgetLine(
+                alerts,
+                'use_case',
+                b.useCase,
+                b.useCase,
+                b.monthlyBudgetMicros,
+                toNumber(useCaseSpend.find((s) => s.k === row.id && s.u === b.useCase)?.total),
+              ),
+            ),
+          teams: [],
+        };
       return {
         node: { id: row.id, slugPath, name: row.name },
         tenant: budgetLine(alerts, 'tenant', row.slug, '', row.monthlyBudgetMicros, spent(row.id)),

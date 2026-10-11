@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { HttpError, forbidden } from '../../errors.js';
-import type { Principal } from '@openagentix/core';
+import { hasPermission, useCaseScopes, type Principal } from '@openagentix/core';
 import { principalOf } from '../app.js';
 import {
   AuditEntrySchema,
@@ -26,6 +26,16 @@ function auditScope(p: Principal, allTenants: boolean): string | 'all' {
   if (!allTenants) return p.tenantId;
   if (!p.platformAdmin) throw forbidden('allTenants needs platform operator access');
   return 'all';
+}
+
+/**
+ * The use cases a caller is limited to for `permission`, or `undefined` for a node-wide reader. A
+ * caller who holds the permission through use-case bindings only sees the entries about those use
+ * cases; one who also holds it node-wide (or platform operators) sees the node.
+ */
+function useCasesOnly(p: Principal, permission: 'audit:read' | 'audit:export') {
+  if (hasPermission(p, permission)) return undefined;
+  return useCaseScopes(p, permission);
 }
 
 export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
@@ -52,6 +62,7 @@ export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
       const r = await audit.list(
         {
           tenantId: subtree ? principal.tenantId : auditScope(principal, req.query.allTenants),
+          useCases: subtree ? undefined : useCasesOnly(principal, 'audit:read'),
           runId: req.query.runId,
           action: req.query.action,
           from: date(req.query.from),
@@ -112,6 +123,7 @@ export function registerAuditRoutes(app: ZApp, { services }: Deps): void {
     async (req, reply) => {
       const gen = audit.export({
         tenantId: auditScope(principalOf(req), req.query.allTenants),
+        useCases: useCasesOnly(principalOf(req), 'audit:export'),
         runId: req.query.runId,
         action: req.query.action,
         from: date(req.query.from),

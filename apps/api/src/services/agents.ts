@@ -4,8 +4,11 @@ import {
   checkPublish,
   expandProfiles,
   hasPermission,
+  hasPermissionIn,
   loadAgentDefinition,
   stripInvisible,
+  useCaseCovers,
+  useCaseScopes,
   validateAgentSource,
   visibleAgents,
   visibleTeams,
@@ -24,6 +27,7 @@ import { statusFilter, textFilter, useCaseFilter, type AgentStatus } from './age
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import type { ResolvedScope } from './subtree-scope.js';
+import { useCaseMatch } from './use-case-scope.js';
 
 /** Longest reason accepted when an agent is disabled or enabled. */
 export const MAX_DISABLE_REASON_LENGTH = 500;
@@ -103,14 +107,13 @@ export class AgentsService {
     agent: AgentRow,
     permission: 'agents:read' | 'agents:write' | 'agents:publish' | 'runs:execute',
   ): Promise<void> {
-    // Tenant boundary first: another tenant's agent does not exist for this principal.
+    // Tenant boundary first: another tenant's agent does not exist for this principal. An agent
+    // carries a use case, so a use-case binding of that use case (or a parent use case) counts too.
+    const ref = { teamId: agent.teamId, agentId: agent.id, useCase: agent.useCase };
     if (agent.tenantId === principal.tenantId) {
-      if (hasPermission(principal, permission, agent.teamId, agent.id)) return;
+      if (hasPermissionIn(principal, permission, ref)) return;
     }
-    if (
-      agent.tenantId !== principal.tenantId ||
-      !hasPermission(principal, 'agents:read', agent.teamId, agent.id)
-    ) {
+    if (agent.tenantId !== principal.tenantId || !hasPermissionIn(principal, 'agents:read', ref)) {
       await this.audit.append({
         actor: principal.userId,
         tenantId: principal.tenantId,
@@ -121,6 +124,22 @@ export class AgentsService {
       throw notFound('agent');
     }
     throw forbidden();
+  }
+
+  /**
+   * An agent written or published under a use-case binding cannot be relabelled out of the use
+   * case: it would land in another use case, where its administrators never chose it. Callers who
+   * hold the permission node-wide, for the team or for the agent are not limited by the label.
+   */
+  private assertLabelInScope(
+    principal: Principal,
+    permission: 'agents:write' | 'agents:publish',
+    agent: AgentRow,
+    next: string | null,
+  ): void {
+    if (hasPermission(principal, permission, agent.teamId, agent.id)) return;
+    if (useCaseScopes(principal, permission).some((s) => useCaseCovers(s, next))) return;
+    throw forbidden('the use case of the agent is outside your scope');
   }
 
   validate(source: string): ValidationResult {
@@ -134,22 +153,32 @@ export class AgentsService {
   async validateFor(principal: Principal, source: string): Promise<ValidationResult> {
     const result = validateAgentSource(source);
     if (!result.definition) return result;
+    // The connections a team may use are that team's business: a caller who holds the agent
+    // permissions through a use case only is checked against the connections of the whole tenant,
+    // never against those of a team it names (it would be an oracle for the team's connections).
+    const named = await this.teamIdForOwner(principal.tenantId, result.definition.owner);
+    const teamId =
+      named !== null &&
+      !hasPermission(principal, 'agents:read', named) &&
+      useCaseScopes(principal, 'agents:read').length > 0
+        ? null
+        : named;
     const catalog = await this.catalog.accessCatalog({
       tenantId: principal.tenantId,
-      teamId: await this.teamIdForOwner(principal.tenantId, result.definition.owner),
+      teamId,
       agentId: '',
     });
     const { errors } = expandProfiles(result.definition, catalog);
     const stdio = await this.catalog.stdioIsolationIssues(result.definition, {
       tenantId: principal.tenantId,
-      teamId: await this.teamIdForOwner(principal.tenantId, result.definition.owner),
+      teamId,
       agentId: '',
     });
     const all = [...errors, ...stdio.map(({ path, message }) => ({ path, message }))];
     // ADR 0016 S2 lint: MCP hosts that a step still lists in runtime.egress (advisory).
     const unused = await this.catalog.egressUnused(result.definition, {
       tenantId: principal.tenantId,
-      teamId: await this.teamIdForOwner(principal.tenantId, result.definition.owner),
+      teamId,
       agentId: '',
     });
     const withLint =
@@ -171,8 +200,19 @@ export class AgentsService {
   ): Promise<AgentRow> {
     const def = loadAgentDefinition(source);
     const teamId = await this.teamIdForOwner(principal.tenantId, def.owner);
-    if (!hasPermission(principal, 'agents:write', teamId))
-      throw forbidden(`no write access for team "${def.owner}"`);
+    if (!hasPermission(principal, 'agents:write', teamId)) {
+      // A use-case writer creates agents of its use case that belong to no team: a team brings its
+      // connections with it, and those are not part of a use case (ADR 0014 section 3.3).
+      const inScope = useCaseScopes(principal, 'agents:write').some((s) =>
+        useCaseCovers(s, useCaseOf(def)),
+      );
+      if (!(teamId === null && inScope))
+        throw forbidden(
+          teamId === null
+            ? 'the use case of the agent is outside your scope'
+            : `no write access for team "${def.owner}"`,
+        );
+    }
     const [exists] = await this.ctx.db
       .select({ id: agents.id })
       .from(agents)
@@ -235,10 +275,21 @@ export class AgentsService {
     if (subtree)
       return subtree.isEmpty
         ? undefined
-        : subtree.predicate({ tenantId: agents.tenantId, teamId: agents.teamId, agent: agents.id });
+        : subtree.predicate({
+            tenantId: agents.tenantId,
+            teamId: agents.teamId,
+            agent: agents.id,
+            useCase: agents.useCase,
+          });
     const teamsVisible = visibleTeams(principal, 'agents:read');
     const agentsVisible = visibleAgents(principal, 'agents:read');
-    if (Array.isArray(teamsVisible) && teamsVisible.length === 0 && agentsVisible.length === 0)
+    const useCases = useCaseScopes(principal, 'agents:read');
+    if (
+      Array.isArray(teamsVisible) &&
+      teamsVisible.length === 0 &&
+      agentsVisible.length === 0 &&
+      useCases.length === 0
+    )
       return undefined;
     return and(
       eq(agents.tenantId, principal.tenantId),
@@ -247,6 +298,7 @@ export class AgentsService {
         : or(
             teamsVisible.length ? inArray(agents.teamId, teamsVisible) : undefined,
             agentsVisible.length ? inArray(agents.id, agentsVisible) : undefined,
+            useCases.length ? useCaseMatch(agents.useCase, useCases) : undefined,
           ),
     );
   }
@@ -294,6 +346,7 @@ export class AgentsService {
     const def = loadAgentDefinition(source);
     if (def.name !== agent.name)
       throw new HttpError(400, 'validation_failed', `name must stay "${agent.name}"`);
+    this.assertLabelInScope(principal, 'agents:write', agent, useCaseOf(def));
     const [row] = await this.ctx.db
       .update(agents)
       .set({
@@ -521,6 +574,7 @@ export class AgentsService {
     const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:publish');
     const def = loadAgentDefinition(agent.draftSource);
+    this.assertLabelInScope(principal, 'agents:publish', agent, useCaseOf(def));
     this.checkRuntime(def);
     const published = await this.ctx.db
       .select()

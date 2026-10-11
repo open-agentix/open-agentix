@@ -1100,6 +1100,10 @@ export const AccessSchema = z.object({
         agentId: Id.nullable(),
         tenantId: Id.describe('the node the role is bound on'),
         tenantSlugPath: z.string(),
+        useCase: z
+          .string()
+          .nullable()
+          .describe('the use case the role is limited to; null = the whole tenant'),
         inherit: z.boolean(),
         expiresAt: Iso.nullable(),
         source: BindingSourceSchema,
@@ -1111,6 +1115,11 @@ export const AccessSchema = z.object({
       z.object({
         permission: z.string(),
         sources: z.array(BindingSourceSchema).describe('the kinds of binding that give it'),
+        useCases: z
+          .array(z.string())
+          .describe(
+            'the use cases the permission is limited to (it then applies to the resources of those use cases only); empty when it is held for the whole tenant',
+          ),
       }),
     )
     .describe('effective permissions at the tenant (token scopes applied), with their sources'),

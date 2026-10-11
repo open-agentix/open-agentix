@@ -82,7 +82,11 @@ interface Grouped {
 
 /** Roles bound on the whole node (not on a team or an agent). */
 const nodeRoles = (p: Principal): string[] =>
-  [...new Set(p.bindings.filter((b) => b.teamId === null && !b.agentId).map((b) => b.role))].sort();
+  [
+    ...new Set(
+      p.bindings.filter((b) => b.teamId === null && !b.agentId && !b.useCase).map((b) => b.role),
+    ),
+  ].sort();
 
 /**
  * Does the caller hold `permission` on the whole node? Only bindings that cover the node count (a
@@ -268,7 +272,7 @@ export class TenantViews {
         const whole = (source: string) => [
           ...new Set(
             applied
-              .filter((b) => b.source === source && b.teamId === null && !b.agentId)
+              .filter((b) => b.source === source && b.teamId === null && !b.agentId && !b.useCase)
               .map((b) => b.role),
           ),
         ];

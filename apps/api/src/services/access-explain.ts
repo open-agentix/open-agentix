@@ -35,6 +35,8 @@ export interface AccessBinding {
   agentId: string | null;
   tenantId: string;
   tenantSlugPath: string;
+  /** The use case the binding is limited to; null = the whole node. */
+  useCase: string | null;
   inherit: boolean;
   expiresAt: Date | null;
   source: BindingSource;
@@ -47,7 +49,15 @@ export interface AccessView {
   /** True when API token scopes removed permissions the bindings would give. */
   limitedByToken: boolean;
   bindings: AccessBinding[];
-  permissions: { permission: Permission; sources: BindingSource[] }[];
+  permissions: {
+    permission: Permission;
+    sources: BindingSource[];
+    /**
+     * The use cases the permission is limited to; empty when some binding gives it for the whole
+     * node. A permission with use cases applies to the resources of those use cases only.
+     */
+    useCases: string[];
+  }[];
 }
 
 const SOURCE_ORDER: BindingSource[] = [
@@ -186,11 +196,19 @@ export class AccessExplainService {
       return i < 0 ? slugPath : segments.slice(0, i + 1).join('/');
     };
     const bySource = new Map<Permission, Set<BindingSource>>();
+    // Per permission: the use cases of the bindings that give it, or `null` once one gives it node-wide.
+    const useCasesOf = new Map<Permission, Set<string> | null>();
     for (const b of applied)
       for (const perm of b.permissions) {
         const set = bySource.get(perm) ?? new Set<BindingSource>();
         set.add(b.source);
         bySource.set(perm, set);
+        if (b.useCase === null) useCasesOf.set(perm, null);
+        else if (useCasesOf.get(perm) !== null) {
+          const u = useCasesOf.get(perm) ?? new Set<string>();
+          u.add(b.useCase);
+          useCasesOf.set(perm, u);
+        }
       }
     let limitedByToken = false;
     const permissions = PERMISSIONS.filter((perm) => bySource.has(perm))
@@ -202,6 +220,7 @@ export class AccessExplainService {
       .map((permission) => ({
         permission,
         sources: SOURCE_ORDER.filter((s) => bySource.get(permission)!.has(s)),
+        useCases: [...(useCasesOf.get(permission) ?? [])].sort(),
       }));
     return {
       tenant: { id: node.id, slug: node.slug, slugPath, name: node.name },
@@ -214,6 +233,7 @@ export class AccessExplainService {
         agentId: b.agentId ?? null,
         tenantId: b.tenantId,
         tenantSlugPath: anchorPath(b.tenantId),
+        useCase: b.useCase,
         inherit: b.inherit,
         expiresAt: b.expiresAt,
         source: b.source,

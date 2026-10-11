@@ -13,10 +13,11 @@ import {
   runTraceIdentity,
 } from '@openagentix/core';
 import type { KeyObject } from 'node:crypto';
-import { and, asc, desc, eq, gte, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { auditCheckpoints, auditLog, runs } from '../db/schema.js';
+import { agents, auditCheckpoints, auditLog, runs } from '../db/schema.js';
+import { useCaseMatch } from './use-case-scope.js';
 import { decodeSeqCursor, encodeSeqCursor, page } from '../pagination.js';
 import type { ResolvedScope } from './subtree-scope.js';
 import { processSecrets } from '../mcp-oauth/secret-registry.js';
@@ -93,7 +94,24 @@ export interface AuditListFilter {
   action?: string | undefined;
   from?: Date | undefined;
   to?: Date | undefined;
+  /**
+   * For a caller who holds `audit:read` / `audit:export` through use cases only (ADR 0014 S8): the
+   * entries are limited to those about an agent of these use cases (`target`) or about a run of
+   * such an agent (`run_id`). Entries about the node itself (people, settings, connections) are
+   * never part of it. Absent = the view of a node-wide reader.
+   */
+  useCases?: readonly string[] | undefined;
 }
+
+/**
+ * Audit entries about the agents of some use cases or their runs. The `target` of an agent entry is
+ * the agent id; the entries of a run carry its id in `run_id` (including the denials of access to
+ * it). Everything else is node-level and not part of a use case.
+ */
+export const auditOfUseCases = (useCases: readonly string[]): SQL => {
+  const inUseCase = sql`select ${agents.id} from ${agents} where ${useCaseMatch(agents.useCase, useCases)}`;
+  return sql`(${auditLog.target} in (select ${agents.id}::text from ${agents} where ${useCaseMatch(agents.useCase, useCases)}) or ${auditLog.runId} in (select ${runs.id} from ${runs} where ${runs.agentId} in (${inUseCase})))`;
+};
 
 const tenantCondition = (tenantId: string | 'all') =>
   tenantId === 'all' ? undefined : eq(auditLog.tenantId, tenantId);
@@ -260,7 +278,18 @@ export class AuditService {
     const before = decodeSeqCursor(cursor);
     if (subtree?.isEmpty) return { items: [], nextCursor: null };
     const conds = [
-      subtree ? subtree.nodePredicate(auditLog.tenantId) : tenantCondition(filter.tenantId),
+      subtree
+        ? or(
+            subtree.nodePredicate(auditLog.tenantId),
+            and(
+              subtree.predicate({
+                tenantId: auditLog.tenantId,
+                useCase: (ucs) => auditOfUseCases(ucs),
+              }),
+            ),
+          )
+        : tenantCondition(filter.tenantId),
+      filter.useCases ? auditOfUseCases(filter.useCases) : undefined,
       filter.runId ? eq(auditLog.runId, filter.runId) : undefined,
       filter.action ? eq(auditLog.action, filter.action) : undefined,
       filter.from ? gte(auditLog.ts, filter.from) : undefined,
@@ -364,6 +393,7 @@ export class AuditService {
     for (;;) {
       const conds = [
         tenantCondition(filter.tenantId),
+        filter.useCases ? auditOfUseCases(filter.useCases) : undefined,
         sql`${auditLog.seq} > ${after}`,
         filter.runId ? eq(auditLog.runId, filter.runId) : undefined,
         filter.action ? eq(auditLog.action, filter.action) : undefined,
