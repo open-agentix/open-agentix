@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
   OaxError,
+  ROLE_PERMISSIONS,
   bindingFingerprint,
+  bindingPermissions,
   effectiveAt,
   effectivePermissions,
   homeTenantOf,
@@ -49,7 +51,9 @@ import {
 import { TenantAccess } from './tenant-access.js';
 import {
   assertMayChangeUser,
+  isTenantAdminAt,
   loadActor,
+  permissionsAt,
   userManagementViolation,
   type UserChange,
 } from './grant-authority.js';
@@ -131,7 +135,7 @@ const unauthenticated = (msg = 'authentication required') =>
 
 /** Users, teams, sessions, API tokens, local/LDAP/OIDC login and principal resolution. */
 /** A principal that identifies itself: operators are exempt from the lifecycle guard. */
-type GuardedActor = Partial<Pick<Principal, 'platformAdmin' | 'scopes'>>;
+type GuardedActor = Partial<Pick<Principal, 'platformAdmin' | 'scopes' | 'bindings'>>;
 
 export class IdentityService {
   private oidc: OidcClient | null;
@@ -412,7 +416,7 @@ export class IdentityService {
   }
 
   async setAgentMembers(
-    actor: TenantActor,
+    actor: TenantActor & GuardedActor,
     agentId: string,
     members: { userId: string; role: Role }[],
   ): Promise<void> {
@@ -426,6 +430,11 @@ export class IdentityService {
       .from(agentRoleBindings)
       .where(eq(agentRoleBindings.agentId, agentId));
     await this.ctx.db.transaction(async (tx) => {
+      await this.assertNodeAuthority(
+        tx as unknown as Db,
+        actor,
+        members.map((m) => m.role),
+      );
       await tx.delete(agentRoleBindings).where(eq(agentRoleBindings.agentId, agentId));
       if (members.length)
         await tx
@@ -958,8 +967,55 @@ export class IdentityService {
     return Promise.all(rows.map((u) => this.publicUser(u)));
   }
 
+  /**
+   * Who may create accounts, teams and role grants of the acting node (ADR 0014 S8 review): only a
+   * **node-level** administrator, and never roles above the permissions they hold at the node. A
+   * route-level `users:write` is not enough: team-scoped, agent-scoped, use-case and attached
+   * bindings carry it too, and none of them may mint node-level roles. Operators and internal
+   * callers that do not identify themselves as a principal (seed, bootstrap, directory sync) are
+   * exempt. On the `bindings` read path the grants are re-read under the tree and binding locks
+   * (`tx` is the transaction of the write); on `legacy` the caller's global bindings decide.
+   */
+  private async assertNodeAuthority(
+    tx: Db,
+    actor: TenantActor & GuardedActor,
+    roles: readonly Role[],
+  ): Promise<void> {
+    if (actor.platformAdmin !== false) return;
+    const denied = () =>
+      forbidden('creating accounts, teams or role grants needs node-level administrator rights');
+    if (this.ctx.config.auth.roleBindingsRead !== 'bindings') {
+      const perms = new Set<Permission>();
+      for (const b of actor.bindings ?? [])
+        if (b.teamId === null && !b.agentId && !b.useCase)
+          for (const p of bindingPermissions(b)) perms.add(p);
+      if (actor.scopes) for (const p of [...perms]) if (!actor.scopes.includes(p)) perms.delete(p);
+      if (!perms.has('users:write')) throw denied();
+      if (!roles.every((r) => ROLE_PERMISSIONS[r].every((p) => perms.has(p)))) throw denied();
+      return;
+    }
+    const [node] = await tx.select().from(tenants).where(eq(tenants.id, actor.tenantId));
+    if (!node) throw denied();
+    await lockTreeShared(tx, node.rootId);
+    await lockBindings(tx, node.rootId);
+    const grantor = await loadActor(tx, { ...actor, kind: 'user' } as Principal);
+    const perms = permissionsAt(grantor, node, this.ctx.now());
+    if (!isTenantAdminAt(grantor, node, this.ctx.now()) || !perms.has('users:write'))
+      throw denied();
+    if (!roles.every((r) => ROLE_PERMISSIONS[r].every((p) => perms.has(p)))) throw denied();
+  }
+
+  private async assertNodeAuthorityOwnTx(
+    actor: TenantActor & GuardedActor,
+    roles: readonly Role[] = [],
+  ): Promise<void> {
+    await this.ctx.db.transaction((tx) =>
+      this.assertNodeAuthority(tx as unknown as Db, actor, roles),
+    );
+  }
+
   async createLocalUser(
-    actor: TenantActor,
+    actor: TenantActor & GuardedActor,
     input: { email: string; displayName: string; password: string; globalRoles: Role[] },
   ): Promise<PublicUser> {
     const email = input.email.toLowerCase();
@@ -971,6 +1027,7 @@ export class IdentityService {
     const id = randomUUID();
     const passwordHash = await hashPassword(input.password);
     await this.ctx.db.transaction(async (tx) => {
+      await this.assertNodeAuthority(tx as unknown as Db, actor, input.globalRoles);
       await tx.insert(users).values({
         id,
         email,
@@ -1012,6 +1069,8 @@ export class IdentityService {
     if (patch.disabled !== undefined) set.disabled = patch.disabled;
     const updated = await this.ctx.db.transaction(async (tx) => {
       // Any change to another user's account is managing that user (ADR 0014 S5).
+      if (patch.globalRoles !== undefined)
+        await this.assertNodeAuthority(tx as unknown as Db, actor, patch.globalRoles);
       const changes: UserChange[] = [{ kind: 'profile' }];
       if (patch.disabled === true) changes.push({ kind: 'disable' });
       if (patch.globalRoles !== undefined)
@@ -1126,9 +1185,10 @@ export class IdentityService {
   }
 
   async createTeam(
-    actor: TenantActor,
+    actor: TenantActor & GuardedActor,
     input: { slug: string; name: string; monthlyBudgetUsd?: number | undefined },
   ): Promise<TeamRow> {
+    await this.assertNodeAuthorityOwnTx(actor);
     const [exists] = await this.ctx.db
       .select({ id: teams.id })
       .from(teams)
@@ -1157,10 +1217,11 @@ export class IdentityService {
   }
 
   async updateTeam(
-    actor: TenantActor,
+    actor: TenantActor & GuardedActor,
     teamId: string,
     patch: { name?: string | undefined; monthlyBudgetUsd?: number | null | undefined },
   ): Promise<TeamRow> {
+    await this.assertNodeAuthorityOwnTx(actor);
     await this.getTeam(actor, teamId);
     const set: Partial<TeamRow> = {};
     if (patch.name !== undefined) set.name = patch.name;
@@ -1198,7 +1259,8 @@ export class IdentityService {
   }
 
   /** Deletes a team that owns no agents (memberships are removed with it). */
-  async deleteTeam(actor: TenantActor, teamId: string): Promise<void> {
+  async deleteTeam(actor: TenantActor & GuardedActor, teamId: string): Promise<void> {
+    await this.assertNodeAuthorityOwnTx(actor);
     await this.getTeam(actor, teamId);
     const [owned] = await this.ctx.db
       .select({ id: agents.id })
@@ -1222,7 +1284,7 @@ export class IdentityService {
   }
 
   async setTeamMembers(
-    actor: TenantActor,
+    actor: TenantActor & GuardedActor,
     teamId: string,
     members: { userId: string; role: Role }[],
   ): Promise<void> {
@@ -1232,6 +1294,11 @@ export class IdentityService {
       members.map((m) => m.userId),
     );
     await this.ctx.db.transaction(async (tx) => {
+      await this.assertNodeAuthority(
+        tx as unknown as Db,
+        actor,
+        members.map((m) => m.role),
+      );
       await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
       if (members.length)
         await tx
