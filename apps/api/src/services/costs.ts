@@ -97,13 +97,25 @@ const COLUMN: Record<CostGroup, SQL> = {
 export class CostsService {
   constructor(private readonly ctx: AppContext) {}
 
-  private async labels(groupBy: CostGroup, keys: string[]): Promise<Map<string, string>> {
+  private async labels(
+    groupBy: CostGroup,
+    keys: string[],
+    /** Use cases a use-case-only caller is limited to: names of agents elsewhere stay hidden. */
+    onlyUseCases?: readonly string[],
+  ): Promise<Map<string, string>> {
     if (keys.length === 0) return new Map();
     if (groupBy === 'agent') {
+      // Costs keep the use case they were booked with; an agent that has since moved to another
+      // use case still has rows here, but its name is not for this caller.
       const rows = await this.ctx.db
         .select({ id: agents.id, name: agents.name })
         .from(agents)
-        .where(inArray(agents.id, keys));
+        .where(
+          and(
+            inArray(agents.id, keys),
+            onlyUseCases ? useCaseMatch(agents.useCase, onlyUseCases) : undefined,
+          ),
+        );
       return new Map(rows.map((r) => [r.id, r.name]));
     }
     if (groupBy === 'team') {
@@ -264,7 +276,17 @@ export class CostsService {
       const labels =
         subtree && groupBy === 'tenant'
           ? await this.tenantLabels(subtree, keys)
-          : await this.labels(groupBy, keys);
+          : await this.labels(
+              groupBy,
+              keys,
+              !subtree &&
+                useCases.length > 0 &&
+                scope !== 'all' &&
+                scope.length === 0 &&
+                scopedAgents.length === 0
+                ? useCases
+                : undefined,
+            );
       return rows.map((r) => ({
         key: r.key,
         label: (r.key && labels.get(r.key)) ?? null,

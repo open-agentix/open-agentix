@@ -1,8 +1,10 @@
+import type { Principal } from '@openagentix/core';
 import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import type { TenantRow } from '../../services/tenants.js';
 import { roleBindingDto, tenantDto } from '../dto.js';
+import { isUseCaseOnly } from '../use-case-policy.js';
 import {
   EnableInheritanceBody,
   EnableInheritanceSchema,
@@ -28,8 +30,16 @@ const tags = ['tenants'];
 
 export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
   const { tenants, roleBindings } = services;
-  const view = async (row: TenantRow) =>
-    tenantDto(row, (await tenants.slugPaths([row])).get(row.id)!);
+  /**
+   * The node limits (budget, secret references) stay hidden from a caller whose bindings are all
+   * limited to use cases, like the node limit of `/v1/budgets` (ADR 0014 S8).
+   */
+  const redact = (p: Principal, d: ReturnType<typeof tenantDto>) =>
+    isUseCaseOnly(p) ? { ...d, monthlyBudgetUsd: null, secretRefs: [] } : d;
+  const view = async (row: TenantRow, p?: Principal) => {
+    const d = tenantDto(row, (await tenants.slugPaths([row])).get(row.id)!);
+    return p ? redact(p, d) : d;
+  };
 
   app.get(
     '/v1/tenants',
@@ -45,7 +55,9 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
     async (req) => {
       const rows = await tenants.list(principalOf(req));
       const paths = await tenants.slugPaths(rows);
-      return { items: rows.map((t) => tenantDto(t, paths.get(t.id)!)) };
+      return {
+        items: rows.map((t) => redact(principalOf(req), tenantDto(t, paths.get(t.id)!))),
+      };
     },
   );
 
@@ -169,7 +181,7 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
         response: { 200: TenantSchema },
       },
     },
-    async (req) => view(await tenants.get(principalOf(req), req.params.id)),
+    async (req) => view(await tenants.get(principalOf(req), req.params.id), principalOf(req)),
   );
 
   app.patch(

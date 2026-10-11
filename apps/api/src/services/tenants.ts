@@ -19,7 +19,7 @@ import { isInheritingAdminAt, loadActor, permissionsAt, type Actor } from './gra
 import { TenantAccess } from './tenant-access.js';
 import { TenantTree } from './tenant-tree.js';
 import { TenantViews } from './tenant-views.js';
-import { lockTreeShared } from './tree-lock.js';
+import { lockBindings, lockTreeShared } from './tree-lock.js';
 import type { AuditService } from './audit.js';
 import type { IdentityService, TenantRow } from './identity.js';
 
@@ -418,6 +418,8 @@ export class TenantsService {
     return this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
       await lockTreeShared(tx, node.rootId);
+      // Attaching is a grant: the same lock order as the grant path (tree, then bindings).
+      if (patch.useCase !== undefined) await lockBindings(tx, node.rootId);
       // Re-read under the lock: authorisation looks at the node as it is now, not as it was.
       const [fresh] = await tx.select().from(tenants).where(eq(tenants.id, id));
       if (!fresh) throw notFound('tenant');
