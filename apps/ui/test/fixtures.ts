@@ -52,7 +52,7 @@ export const adminUser: User = {
   source: 'local',
   globalRoles: ['admin'],
   disabled: false,
-  teams: [{ teamId: ids.team, role: 'agent-engineer' }],
+  teams: [{ teamId: ids.team, role: 'agent-maintainer' }],
   createdAt: iso(-86_400_000 * 30),
   lastLoginAt: iso(-60_000),
 };
@@ -125,7 +125,15 @@ export const settings: Settings = {
     { kind: 'kubernetes-job', available: false },
   ],
   auth: { local: true, ldap: true, oidc: false },
-  roles: ['admin', 'agent-engineer', 'integrator', 'operator', 'auditor', 'viewer'],
+  roles: [
+    'admin',
+    'agent-developer',
+    'agent-maintainer',
+    'integrator',
+    'operator',
+    'auditor',
+    'viewer',
+  ],
   permissions: [...PERMISSIONS],
   rolePermissions: {
     admin: [...PERMISSIONS],
