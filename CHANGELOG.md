@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **MCP abuse suite and threat model (ADR 0016 S8, #238)**: an opt-in real-engine suite
+  (`apps/api/test/mcp-abuse-{egress,network,leak}.integration.test.ts`, `OAX_TEST_DOCKER=1`, never part of
+  `pnpm test`) that proves with a real container engine zero unexpected connections from a run node and
+  its stdio MCP servers, rug-pull detection, SSRF, redirect and DNS-rebinding refusals for MCP,
+  discovery and token endpoints against malicious lab servers, and token-leak canaries across a real
+  network. Documentation: `docs/mcp.md` overview and abuse-suite section, `docs/airgapped.md` MCP section,
+  the new `docs/threat-model-mcp.md` with the residual risks, a link from
+  `docs/security-input-hardening.md`. Helm mirror: open-agentix-helm#32.
+
 - **MCP OAuth authorization code with PKCE (ADR 0016 S7, #237)**: `grant: authorization_code` for
   OAuth MCP connections, with a pre-registered client (public or confidential), a client ID metadata
   document (`OAX_MCP_OAUTH_CIMD`, off) or dynamic registration per tenant (`OAX_MCP_OAUTH_DCR`, off; both
