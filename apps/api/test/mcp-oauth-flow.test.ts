@@ -332,6 +332,37 @@ describe('authorization with private_key_jwt', () => {
     expect(blob).not.toContain(form.get('client_assertion')!);
   });
 
+  it('keeps signing with PS256 on a renewal inside the verified window (PS256-only server)', async () => {
+    const saved = as.metadata.token_endpoint_auth_signing_alg_values_supported;
+    as.metadata.token_endpoint_auth_signing_alg_values_supported = ['PS256'];
+    const algOf = (form: URLSearchParams) =>
+      JSON.parse(Buffer.from(form.get('client_assertion')!.split('.')[0]!, 'base64url').toString())
+        .alg as string;
+    try {
+      const id = await create(jwtAuth);
+      as.expiresIn = 120;
+      expect((await authorize(id)).statusCode).toBe(200);
+      expect(algOf(as.tokenRequests.at(-1)!.form)).toBe('PS256');
+      as.expiresIn = 3600;
+      advance(70_000); // inside the renewal window, still inside the one hour of the pin
+      const before = as.tokenRequests.length;
+      await token(id);
+      expect(as.tokenRequests.length - before).toBe(1);
+      // the pin is trusted for the hour, so the algorithms come from the cache next to it
+      expect(algOf(as.tokenRequests.at(-1)!.form)).toBe('PS256');
+      expect((await status(id)).status).toBe('active');
+      // and again from a fresh document once the pin has to be verified anew
+      expireDiscoveryCache();
+      advance(10 * 60_000);
+      as.expiresIn = 120;
+      await token(id);
+      expect(algOf(as.tokenRequests.at(-1)!.form)).toBe('PS256');
+    } finally {
+      as.metadata.token_endpoint_auth_signing_alg_values_supported = saved;
+      as.expiresIn = 3600;
+    }
+  });
+
   it('refuses a key the PEM parser cannot read without quoting it', async () => {
     secrets.values['oa-client-key'] = 'not a pem SECRET-MATERIAL';
     try {

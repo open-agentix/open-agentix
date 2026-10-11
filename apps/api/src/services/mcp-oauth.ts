@@ -204,7 +204,12 @@ export class McpOauthService {
   private ownOutbound: OutboundDispatcher | undefined;
   private fetcher: OauthFetch | undefined;
   private readonly inflight = new Map<string, Promise<void>>();
-  private readonly verified = new Map<string, number>();
+  /**
+   * Connections whose pinned issuer and endpoints were verified, with the time and the signing
+   * algorithms the authorization server published then (needed to pick the JWS algorithm of a
+   * private_key_jwt assertion while the pin is not re-fetched).
+   */
+  private readonly verified = new Map<string, { at: number; algs: readonly string[] | undefined }>();
   private readonly lastRefresh = new Map<string, number>();
   private readonly hits = new Map<string, number[]>();
   /** Rotated token pairs that could not be committed yet (see {@link persistRotation}). */
@@ -579,7 +584,10 @@ export class McpOauthService {
       grantType: 'client_credentials',
       endpoints: pinOf(as),
     });
-    this.verified.set(`${row.id}:${row.credentialVersion}`, this.ctx.now().getTime());
+    this.verified.set(`${row.id}:${row.credentialVersion}`, {
+      at: this.ctx.now().getTime(),
+      algs: as.signingAlgs,
+    });
     await this.audit.append({
       actor: `user:${by}`,
       tenantId: row.tenantId,
@@ -993,7 +1001,10 @@ export class McpOauthService {
       await this.revokeIssued(row, client, req.endpoints.revocationEndpoint, issued);
       return outcome('conflict', row.id);
     }
-    this.verified.set(`${row.id}:${row.credentialVersion}`, this.ctx.now().getTime());
+    this.verified.set(`${row.id}:${row.credentialVersion}`, {
+      at: this.ctx.now().getTime(),
+      algs: req.signingAlgs,
+    });
     await this.audit.append({
       actor,
       tenantId: row.tenantId,
@@ -1220,9 +1231,9 @@ export class McpOauthService {
     origin: OauthOrigin,
   ): Promise<AuthServerMetadata> {
     const key = `${row.id}:${row.credentialVersion}`;
-    const at = this.verified.get(key);
-    const fresh = at !== undefined && this.ctx.now().getTime() - at < DISCOVERY_TTL_MS;
-    if (fresh) return this.pinnedMetadata(issuer, pinned);
+    const seen = this.verified.get(key);
+    const fresh = seen !== undefined && this.ctx.now().getTime() - seen.at < DISCOVERY_TTL_MS;
+    if (fresh) return this.pinnedMetadata(issuer, pinned, seen.algs);
     const prm = await discoverProtectedResource(this.http(), cfg.url, origin);
     if (
       !prm.authorizationServers.includes(issuer) ||
@@ -1237,21 +1248,24 @@ export class McpOauthService {
         'the authorization server endpoints changed since the authorization',
       );
     this.checkAlgorithm(cfg, as);
-    this.verified.set(key, this.ctx.now().getTime());
+    this.verified.set(key, { at: this.ctx.now().getTime(), algs: as.signingAlgs });
     return as;
   }
 
   private async pinnedMetadata(
     issuer: string,
     pin: Record<string, string>,
+    signingAlgs: readonly string[] | undefined,
   ): Promise<AuthServerMetadata> {
-    // Within the discovery window the pin itself is the truth; algorithms come from a fresh
-    // document only when it is fetched again.
+    // Within the discovery window the pin itself is the truth for the endpoints; the signing
+    // algorithms are those of the document that was verified (cached next to the time), so that a
+    // key is not signed with an algorithm the server never accepted (a PS256-only server).
     return {
       issuer,
       tokenEndpoint: pin.tokenEndpoint as string,
       ...(pin.revocationEndpoint ? { revocationEndpoint: pin.revocationEndpoint } : {}),
       tokenAuthMethods: ['client_secret_basic', 'private_key_jwt'],
+      ...(signingAlgs ? { signingAlgs: [...signingAlgs] } : {}),
       issParameterSupported: false,
     };
   }
