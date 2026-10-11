@@ -273,7 +273,7 @@ S6 (`pentest`; #191), details in `docs/tenancy.md` ("The `pentest` role"):
 
 S8 (use-case bindings and attached nodes; #193), details in `docs/tenancy.md` ("Use-case bindings and attached nodes"):
 
-- **Migration `0030_tenant_use_case_attach`** (additive; 0029 is taken by the MCP authorization-code slice, #316 - whichever of the two merges second renumbers and raises `when` above the highest journal entry):
+- **Migration `0030_tenant_use_case_attach`** (additive; follows `0029_mcp_oauth_authorization_code`):
   `tenants.use_case` (child nodes only, syntax check), an index on `(parent_id, use_case)`, and the epoch
   trigger `authz_bump_tenant` also fires on a change of `use_case`. Down script included.
 - **Resolver.** A use-case binding applies at its own node, limited to `USE_CASE_PERMISSIONS`
