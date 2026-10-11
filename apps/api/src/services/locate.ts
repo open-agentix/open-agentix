@@ -112,7 +112,8 @@ export class LocateService {
         // Platform operators act with the roles of their home node everywhere (ADR 0014 S2).
         return p.bindings;
       case 'node':
-        return tenantId === reach.home.id ? p.bindings : undefined;
+        // p.bindings are those of the acting node: they stand for the home node only while acting there.
+        return tenantId === reach.home.id && p.tenantId === reach.home.id ? p.bindings : undefined;
       case 'nodes': {
         const node = reach.snapshot.byId.get(tenantId);
         return node && reach.ids.has(node.id) ? reach.appliedAt(node) : undefined;
