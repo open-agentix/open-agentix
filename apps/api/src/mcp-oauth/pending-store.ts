@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { OaxError } from '@openagentix/core';
 import { and, count, eq, lt } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
+import { HttpError } from '../errors.js';
 import { mcpOauthPending } from '../db/schema.js';
 import type { BindingContext } from './envelope.js';
 import type { KeyService } from './key-service.js';
@@ -90,7 +90,8 @@ export class McpOauthPendingStore {
         .from(mcpOauthPending)
         .where(eq(mcpOauthPending.tenantId, w.tenantId));
       if (n >= MAX_PENDING_PER_TENANT)
-        throw new OaxError(
+        throw new HttpError(
+          429,
           'rate_limited',
           'too many open authorizations, try again in a few minutes',
         );
