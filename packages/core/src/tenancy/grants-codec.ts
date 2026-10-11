@@ -14,7 +14,7 @@ import type { AgentRoleGrant, NodeRoleGrant, RawGrants, RoleNode, TeamRoleGrant 
  * from the database instead of acting on a partly understood cache entry. Nothing is ever
  * repaired, defaulted or guessed.
  */
-export const GRANTS_WIRE_VERSION = 1;
+export const GRANTS_WIRE_VERSION = 2;
 
 export interface WireNodeGrant {
   tenantId: string;
@@ -23,6 +23,8 @@ export interface WireNodeGrant {
   inherit: boolean;
   /** Canonical ISO-8601 UTC string (`2026-10-10T12:00:00.000Z`) or `null` for no expiry. */
   expiresAt: string | null;
+  /** Child nodes a use-case binding is attached to (slice S8); empty for every other binding. */
+  attachedNodeIds: string[];
 }
 
 export interface WireGrants {
@@ -84,6 +86,7 @@ export function serializeGrants(g: GrantsAndHome): WireGrants {
       useCase: b.useCase,
       inherit: b.inherit,
       expiresAt,
+      attachedNodeIds: [...(b.attachedNodeIds ?? [])],
     });
   }
   return {
@@ -110,6 +113,7 @@ function reviveNode(v: unknown): NodeRoleGrant | undefined {
   if (!isStr(v.tenantId) || typeof v.role !== 'string' || !isRole(v.role)) return undefined;
   if (v.useCase !== null && !isStr(v.useCase)) return undefined;
   if (typeof v.inherit !== 'boolean') return undefined;
+  if (!Array.isArray(v.attachedNodeIds) || !v.attachedNodeIds.every(isStr)) return undefined;
   let expiresAt: Date | null = null;
   if (v.expiresAt !== null) {
     const d = dateFromWire(v.expiresAt);
@@ -122,6 +126,7 @@ function reviveNode(v: unknown): NodeRoleGrant | undefined {
     useCase: v.useCase,
     inherit: v.inherit,
     expiresAt,
+    ...(v.attachedNodeIds.length > 0 ? { attachedNodeIds: v.attachedNodeIds as string[] } : {}),
   };
 }
 

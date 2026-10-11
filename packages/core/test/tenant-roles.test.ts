@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GRANTABLE_ROLES,
   PERMISSIONS,
+  USE_CASE_PERMISSIONS,
   ROLES,
   ROLE_PERMISSIONS,
   bindingFingerprint,
@@ -270,11 +271,14 @@ describe('effectiveAt', () => {
     expect(effectiveAt(raw, f.a, { now: new Date(t.getTime() + 1) })).toEqual([]);
   });
 
-  it('fails closed: pentest without expiry, use-case bindings, unknown roles, bad nodes', () => {
+  it('fails closed: pentest without expiry, malformed use cases, unknown roles, bad nodes', () => {
     const bad = rawOf(f.a, {
       nodeBindings: [
         grant(f.a.id, 'pentest'),
-        grant(f.a.id, 'admin', { useCase: 'security' }),
+        grant(f.a.id, 'admin', { useCase: 'security/' }),
+        grant(f.a.id, 'admin', { useCase: 'a b' }),
+        grant(f.a.id, 'admin', { useCase: '' }),
+        grant(f.a.id, 'pentest', { useCase: 'security', expiresAt: ahead(1000) }),
         grant(f.a.id, 'root' as Role),
       ],
     });
@@ -434,15 +438,21 @@ function naiveCovers(
   target: Node,
   homeRoot: string,
   now: Date,
-): 'direct' | 'inherited' | null {
-  if (b.useCase !== null) return null;
+): 'direct' | 'inherited' | 'scoped' | 'attached' | null {
+  if (b.useCase !== null && b.role === 'pentest') return null;
   if (b.role === 'pentest' && b.expiresAt === null) return null;
   if (b.expiresAt && b.expiresAt.getTime() <= now.getTime()) return null;
   if (target.rootId !== homeRoot) return null;
-  if (b.tenantId === target.id) return 'direct';
+  if (b.tenantId === target.id) return b.useCase !== null ? 'scoped' : 'direct';
   if (!b.inherit) return null;
+  let below: Node = target;
   for (let cur = target.parentId ? byId.get(target.parentId) : undefined; cur;) {
-    if (cur.id === b.tenantId) return 'inherited';
+    if (cur.id === b.tenantId) {
+      if (b.useCase === null) return 'inherited';
+      // a use-case binding reaches only the attached child on the chain (and its subtree)
+      return b.attachedNodeIds?.includes(below.id) ? 'attached' : null;
+    }
+    below = cur;
     cur = cur.parentId ? byId.get(cur.parentId) : undefined;
   }
   return null;
@@ -467,9 +477,10 @@ function naivePermissions(
       ids.push(cur.id);
     return ids;
   };
-  const add = (role: Role, anchor: Node) => {
+  const add = (role: Role, anchor: Node, scoped = false) => {
     const above = new Set(chainIds(anchor));
     for (const p of ROLE_PERMISSIONS[role]) {
+      if (scoped && !USE_CASE_PERMISSIONS.includes(p)) continue;
       if (
         role !== 'admin' &&
         restrictions.some((r) => r.role === role && r.permission === p && above.has(r.tenantId))
@@ -480,7 +491,7 @@ function naivePermissions(
   };
   for (const b of raw.nodeBindings) {
     const how = naiveCovers(byId, b, target, raw.homeRootId, now);
-    if (how) add(b.role, byId.get(b.tenantId)!);
+    if (how) add(b.role, byId.get(b.tenantId)!, how === 'scoped');
   }
   if (target.rootId === raw.homeRootId) {
     for (const t of raw.teamBindings) if (t.tenantId === target.id) add(t.role, target);
@@ -499,10 +510,16 @@ function randomCase(seed: number) {
   const nodeBindings: NodeRoleGrant[] = Array.from({ length: r.int(8) }, () => {
     const role = r.pick(ROLES);
     const expires = r.bool(0.3) ? new Date(NOW.getTime() + (r.int(3) - 1) * 1000 * r.int(3)) : null;
-    return grant(node().id, role, {
-      inherit: r.bool(0.5),
+    const at = node();
+    const useCase = r.bool(0.15) ? 'security' : null;
+    // For a use-case binding that inherits: some of the children of its node count as attached.
+    const kids = nodes.filter((n) => n.parentId === at.id && r.bool(0.6)).map((n) => n.id);
+    const inherit = r.bool(0.5);
+    return grant(at.id, role, {
+      inherit,
       expiresAt: expires,
-      useCase: r.bool(0.05) ? 'security' : null,
+      useCase,
+      ...(useCase !== null && inherit && kids.length > 0 ? { attachedNodeIds: kids } : {}),
     });
   });
   const raw: RawGrants = rawOf(home, {
@@ -812,5 +829,246 @@ describe('S2: the visible set of a principal', () => {
     expect(permsOf(effectiveAt(raw, f.a, at(0)))).toEqual(
       PERMISSIONS.filter((p) => ROLE_PERMISSIONS.admin.includes(p)),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------- use cases (S8)
+
+describe('use-case bindings (ADR 0014 section 3.3)', () => {
+  const f = fixture();
+  const opts = { now: NOW };
+  const scoped = (b: ReturnType<typeof effectiveAt>[number]) => b.useCase;
+
+  it('apply at their own node only, limited to the use-case permissions', () => {
+    const raw = rawOf(f.a, {
+      nodeBindings: [grant(f.a.id, 'admin', { useCase: 'security', inherit: true })],
+    });
+    const out = effectiveAt(raw, f.a, opts);
+    expect(out).toHaveLength(1);
+    expect(scoped(out[0]!)).toBe('security');
+    expect(out[0]!.source).toBe('direct');
+    expect(out[0]!.teamId).toBeNull();
+    // Node-wide permissions (connections, settings, tokens, audit verification) are never carried.
+    for (const p of PERMISSIONS)
+      expect(out[0]!.permissions.includes(p), p).toBe(USE_CASE_PERMISSIONS.includes(p));
+    // Not below (no attachment), not above, not beside.
+    for (const n of [f.root, f.a1, f.b, f.x]) expect(effectiveAt(raw, n, opts), n.id).toEqual([]);
+  });
+
+  it('reach an attached child and its whole subtree, unrestricted, only with inherit', () => {
+    const attached = [f.a.id];
+    const base = grant(f.root.id, 'operator', { useCase: 'security', attachedNodeIds: attached });
+    const without = rawOf(f.root, { nodeBindings: [{ ...base, inherit: false }] });
+    for (const n of [f.a, f.a1]) expect(effectiveAt(without, n, opts)).toEqual([]);
+    const withInherit = rawOf(f.root, { nodeBindings: [{ ...base, inherit: true }] });
+    for (const n of [f.a, f.a1]) {
+      const out = effectiveAt(withInherit, n, opts);
+      expect(out, n.id).toHaveLength(1);
+      expect(out[0]!.source).toBe('attached');
+      expect(out[0]!.useCase).toBeNull();
+      expect(out[0]!.permissions).toEqual(ROLE_PERMISSIONS.operator);
+    }
+    // The sibling that is not listed, the node itself (scoped) and other organisations.
+    expect(effectiveAt(withInherit, f.b, opts)).toEqual([]);
+    expect(effectiveAt(withInherit, f.root, opts)[0]!.useCase).toBe('security');
+    expect(effectiveAt(withInherit, f.x, opts)).toEqual([]);
+  });
+
+  it('never attach through a missing, empty or foreign attachment list (fail closed)', () => {
+    for (const attachedNodeIds of [undefined, [], [f.b.id], [f.x.id], ['nope']]) {
+      const raw = rawOf(f.root, {
+        nodeBindings: [
+          grant(f.root.id, 'admin', {
+            useCase: 'security',
+            inherit: true,
+            ...(attachedNodeIds ? { attachedNodeIds } : {}),
+          }),
+        ],
+      });
+      for (const n of [f.a, f.a1]) expect(effectiveAt(raw, n, opts), `${n.id}`).toEqual([]);
+    }
+    // A grandchild listed as "attached" is not a child of the binding's node: it does not count.
+    const raw = rawOf(f.root, {
+      nodeBindings: [
+        grant(f.root.id, 'admin', {
+          useCase: 'security',
+          inherit: true,
+          attachedNodeIds: [f.a1.id],
+        }),
+      ],
+    });
+    expect(effectiveAt(raw, f.a1, opts)).toEqual([]);
+  });
+
+  it('respect expiry and the platform-admin short cut', () => {
+    const t = ahead(1000);
+    const raw = rawOf(f.root, {
+      nodeBindings: [
+        grant(f.root.id, 'admin', {
+          useCase: 'security',
+          inherit: true,
+          attachedNodeIds: [f.a.id],
+          expiresAt: t,
+        }),
+      ],
+    });
+    expect(effectiveAt(raw, f.a, { now: new Date(t.getTime() - 1) })).toHaveLength(1);
+    expect(effectiveAt(raw, f.a, { now: t })).toEqual([]);
+    expect(effectiveAt(raw, f.root, { now: t })).toEqual([]);
+  });
+
+  it('are removed from role restrictions only like any binding, never admin', () => {
+    const raw = rawOf(f.a, {
+      nodeBindings: [grant(f.a.id, 'operator', { useCase: 'security' })],
+    });
+    const out = effectiveAt(raw, f.a, {
+      ...opts,
+      restrictions: [{ tenantId: f.a.id, role: 'operator', permission: 'runs:approve' }],
+    });
+    expect(out[0]!.permissions).not.toContain('runs:approve');
+    expect(out[0]!.permissions).toContain('runs:execute');
+  });
+});
+
+/** Naive reference for the loader: the children of `parent` attached to `useCase` or below it. */
+function attachedChildren(
+  nodes: readonly (Node & { useCase?: string | null })[],
+  parent: Node,
+  useCase: string,
+): string[] {
+  return nodes
+    .filter(
+      (n) =>
+        n.parentId === parent.id &&
+        typeof n.useCase === 'string' &&
+        (n.useCase === useCase || n.useCase.startsWith(`${useCase}/`)),
+    )
+    .map((n) => n.id);
+}
+
+describe('property: the attach invariant (ADR 0014 section 13)', () => {
+  const USE_CASES = ['sec', 'sec/appsec', 'sec/infra', 'ops', 'ops/oncall'];
+
+  /** The raw grants of a user with the attachments resolved for the given node attachments. */
+  function withAttachments(
+    raw: RawGrants,
+    nodes: readonly (Node & { useCase?: string | null })[],
+    byId: Map<string, Node>,
+  ): RawGrants {
+    return {
+      ...raw,
+      nodeBindings: raw.nodeBindings.map((b) => {
+        if (b.useCase === null || !b.inherit) return { ...b, attachedNodeIds: undefined };
+        const ids = attachedChildren(nodes, byId.get(b.tenantId)!, b.useCase);
+        return ids.length > 0
+          ? { ...b, attachedNodeIds: ids }
+          : { ...b, attachedNodeIds: undefined };
+      }),
+    };
+  }
+
+  it("attaching C to u changes effective permissions only inside subtree(C), only for inheriting use-case holders on C's parent (seeds 1..200)", () => {
+    let checked = 0;
+    let changed = 0;
+    for (const seed of SEEDS) {
+      const r = rng(seed * 104729);
+      const nodes: (Node & { useCase?: string | null })[] = forest(
+        r,
+        1 + r.int(2),
+        8 + r.int(30),
+      ).map((n) => ({ ...n, useCase: null }));
+      const byId = new Map(nodes.map((n) => [n.id, n as Node]));
+      // a few nodes start out attached
+      for (const n of nodes) if (n.parentId && r.bool(0.2)) n.useCase = r.pick(USE_CASES);
+      // several users with random use-case and plain bindings
+      const home = r.pick(nodes);
+      const users: RawGrants[] = Array.from({ length: 4 }, (_, i) =>
+        rawOf(home, {
+          userId: `user-${i}`,
+          nodeBindings: Array.from({ length: 1 + r.int(5) }, () => {
+            const at = r.pick(nodes.filter((n) => n.rootId === home.rootId));
+            return grant(at.id, r.pick(ROLES.filter((x) => x !== 'pentest')), {
+              useCase: r.bool(0.7) ? r.pick(USE_CASES) : null,
+              inherit: r.bool(0.7),
+            });
+          }),
+        }),
+      );
+      const candidates = nodes.filter((n) => n.parentId !== null);
+      const target = r.pick(candidates);
+      const parent = byId.get(target.parentId!)!;
+      const newUseCase = r.pick(USE_CASES);
+      const before = target.useCase ?? null;
+      target.useCase = null; // baseline: detached
+      const detached = users.map((u) => withAttachments(u, nodes, byId));
+      target.useCase = newUseCase;
+      const attached = users.map((u) => withAttachments(u, nodes, byId));
+      target.useCase = before;
+      for (let i = 0; i < users.length; i++) {
+        for (const n of nodes) {
+          const a = bindingFingerprint(effectiveAt(detached[i]!, n, { now: NOW }));
+          const b = bindingFingerprint(effectiveAt(attached[i]!, n, { now: NOW }));
+          checked++;
+          const inside = n.path.startsWith(target.path);
+          if (!inside) {
+            expect(b, `seed ${seed} user ${i} node ${n.id} outside subtree(C)`).toEqual(a);
+            continue;
+          }
+          if (JSON.stringify(a) === JSON.stringify(b)) continue;
+          changed++;
+          // Something changed inside subtree(C): the user must hold an inheriting use-case
+          // binding on C's parent whose use case is u or an ancestor use case of u.
+          const holder = users[i]!.nodeBindings.some(
+            (bd) =>
+              bd.tenantId === parent.id &&
+              bd.useCase !== null &&
+              bd.inherit &&
+              (newUseCase === bd.useCase || newUseCase.startsWith(`${bd.useCase}/`)),
+          );
+          expect(holder, `seed ${seed} user ${i} node ${n.id}`).toBe(true);
+          // And only ever more: attaching adds permissions, never removes one (monotone).
+          const pa = new Set(permsOf(effectiveAt(detached[i]!, n, { now: NOW })));
+          for (const p of permsOf(effectiveAt(attached[i]!, n, { now: NOW }))) pa.delete(p);
+          expect([...pa], `seed ${seed} user ${i} node ${n.id} lost permissions`).toEqual([]);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(1000);
+    expect(changed).toBeGreaterThan(0);
+  });
+
+  it('detaching is the same statement in reverse: permissions never grow (seeds 1..200)', () => {
+    for (const seed of SEEDS) {
+      const r = rng(seed * 15485863);
+      const nodes: (Node & { useCase?: string | null })[] = forest(r, 1, 6 + r.int(25)).map(
+        (n) => ({
+          ...n,
+          useCase: null,
+        }),
+      );
+      const byId = new Map(nodes.map((n) => [n.id, n as Node]));
+      const root = nodes[0]!;
+      const target = r.pick(nodes.filter((n) => n.parentId !== null));
+      target.useCase = 'sec';
+      const raw = rawOf(root, {
+        nodeBindings: [
+          grant(target.parentId!, 'admin', { useCase: 'sec', inherit: true }),
+          grant(root.id, 'viewer', { inherit: true }),
+        ],
+      });
+      const on = withAttachments(raw, nodes, byId);
+      target.useCase = null;
+      const off = withAttachments(raw, nodes, byId);
+      for (const n of nodes) {
+        const pOn = new Set(permsOf(effectiveAt(on, n, { now: NOW })));
+        for (const p of permsOf(effectiveAt(off, n, { now: NOW }))) pOn.delete(p);
+        // everything the detached state has, the attached state has too
+        expect(
+          permsOf(effectiveAt(off, n, { now: NOW })).every((p) =>
+            permsOf(effectiveAt(on, n, { now: NOW })).includes(p),
+          ),
+        ).toBe(true);
+      }
+    }
   });
 });

@@ -79,6 +79,17 @@ describe('raw grants cache representation', () => {
     expect(rolesAt(back!, ahead(3_599_999))).toContain('pentest');
   });
 
+  it('round-trips the attached nodes of a use-case binding', () => {
+    const g = loaded([
+      grant('admin', { useCase: 'security/appsec', inherit: true, attachedNodeIds: [CHILD] }),
+      grant('viewer'),
+    ]);
+    const back = reviveGrants(viaJson(serializeGrants(g)))!;
+    expect(back).toEqual(g);
+    expect(back.raw.nodeBindings[0]!.attachedNodeIds).toEqual([CHILD]);
+    expect(back.raw.nodeBindings[1]!.attachedNodeIds).toBeUndefined();
+  });
+
   it('keeps team and agent grants and the home node, and is versioned', () => {
     const w = serializeGrants(loaded([grant('viewer')]));
     expect(w.v).toBe(GRANTS_WIRE_VERSION);
@@ -114,7 +125,16 @@ describe('raw grants cache representation', () => {
     });
 
     it.each([
-      ['unknown version', (w: ReturnType<typeof good>) => (w.v = 2)],
+      ['unknown version', (w: ReturnType<typeof good>) => (w.v = GRANTS_WIRE_VERSION + 1)],
+      ['previous version', (w: ReturnType<typeof good>) => (w.v = GRANTS_WIRE_VERSION - 1)],
+      [
+        'attachments that are not a list of ids',
+        (w: ReturnType<typeof good>) => (w.raw.nodeBindings[0]!.attachedNodeIds = [7]),
+      ],
+      [
+        'missing attachments',
+        (w: ReturnType<typeof good>) => delete w.raw.nodeBindings[0]!.attachedNodeIds,
+      ],
       ['missing version', (w: ReturnType<typeof good>) => delete (w as { v?: number }).v],
       [
         'date as epoch number',
