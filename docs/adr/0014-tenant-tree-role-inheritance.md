@@ -307,7 +307,14 @@ S8 (use-case bindings and attached nodes; #193), details in `docs/tenancy.md` ("
   runs, approvals and events is the current use case of their agent; audit entries are matched by `target`
   (agent id) or `run_id`; token routes stay denied for use-case-only holders (follow-up: self-service tokens);
   `pentest` cannot carry a use case; use-case bindings need the `bindings` read path to be created.
-- Tests: `use-case-scope.test.ts` (the service walk), `use-case-routes.test.ts` (registry, fail-closed walk),
+- **Review fixes (Opus review of #321).** Accounts, teams and team/agent role grants need node-level
+  authority and roles within the permissions held at the node (attached, team, agent and use-case
+  bindings no longer mint roles; team-scoped admins neither, a gap that predates S8). Use-case bindings give only the read side on agents of a team
+  (`USE_CASE_TEAM_AGENT_PERMISSIONS`); relabelling a team agent needs node-level authority (section 3.3).
+  Attach takes the binding lock after the tree lock; node limits are hidden from use-case callers; agent
+  names of the cost summary follow the agent's current use case. Accepted: team-less agents of use-case
+  writers use team-less node connections.
+- Tests: `use-case-review.test.ts`, `use-case-scope.test.ts` (the service walk), `use-case-routes.test.ts` (registry, fail-closed walk),
   `use-case-bindings.test.ts` (grants, attach, acting node), the resolver and the attach-invariant property
   tests in `packages/core/test/tenant-roles.test.ts`, `rbac.test.ts`.
 

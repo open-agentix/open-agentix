@@ -616,6 +616,30 @@ The budget view of a use-case holder shows the limits and spend of its use cases
 is `null`, `tenant.spentUsd` counts the holder's use cases, no team lines, no alerts of the node limit; a
 budget of a wider use case is not shown).
 
+**Agents of a team (review of S8).** On an agent that belongs to a team a use-case binding gives the
+read side only: `agents:read`, `runs:read`, `runs:approve`, `costs:read`, `events:read`, `audit:read` and
+`audit:export`. Editing, publishing, dry-running, running and cancelling a team's agent need a team or node
+permission, because a team brings its connections and those are not part of a use case. Relabelling an
+agent of a team into another use case hands its runs and costs to that use case's administrators, so it
+needs node-level authority for the permission, or the administrator of the target use case who also holds
+the permission for the team (`403` otherwise, at draft and at publish).
+
+**Accounts, teams and role grants of a node.** Creating a local user, changing `globalRoles`, creating,
+renaming and deleting teams, and setting team and agent members need **node-level** authority: on the
+`bindings` read path an `admin` binding without use case that applies at the node (direct or inherited;
+re-read under the tree and binding locks) and every role handed out must be within the permissions held
+at the node; on `legacy` the caller's global bindings decide. Team-scoped, agent-scoped, use-case and
+attached bindings carry `users:write` at the route but cannot mint roles. (Before this change a
+team-scoped administrator could create an account with a node-wide role; that existed on `main` before
+the slice.)
+
+Known limits, accepted: use-case writers create agents without a team, and such agents can use every
+team-less connection of the node ("an inherited connection can be used by the use case's agents as before",
+ADR 0013 section 7.2); `POST /v1/agents/validate` can therefore tell them whether a connection name exists
+in the tenant. Costs keep the use case they were booked with: after an agent moves to another use case
+its name is hidden from the cost summary of the old use case (the id stays). The node limits (`monthlyBudgetUsd`,
+`secretRefs`) of `GET /v1/tenants` are hidden from callers with use-case bindings only.
+
 ### Attached nodes
 
 `PATCH /v1/tenants/{id} { useCase }` attaches a **child** node to a use case of its parent (`null`
