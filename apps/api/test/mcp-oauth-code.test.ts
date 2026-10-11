@@ -1232,16 +1232,16 @@ describe('step-up', () => {
 
 describe('Client ID Metadata Document', () => {
   it('is not served unless enabled', async () => {
-    expect((await n.app.inject({ method: 'GET', url: '/oauth/mcp-client.json' })).statusCode).toBe(
-      404,
-    );
+    expect(
+      (await n.app.inject({ method: 'GET', url: '/v1/oauth/mcp-client.json' })).statusCode,
+    ).toBe(404);
   });
 
   it('is served without a session and names the callback as the only redirect URI', async () => {
-    const res = await n2.app.inject({ method: 'GET', url: '/oauth/mcp-client.json' });
+    const res = await n2.app.inject({ method: 'GET', url: '/v1/oauth/mcp-client.json' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      client_id: `${PUBLIC}/oauth/mcp-client.json`,
+      client_id: `${PUBLIC}/v1/oauth/mcp-client.json`,
       client_name: 'openagentix',
       redirect_uris: [CALLBACK],
       grant_types: ['authorization_code', 'refresh_token'],
@@ -1255,7 +1255,7 @@ describe('Client ID Metadata Document', () => {
   it('is the client id when the server advertises support; refused otherwise', async () => {
     const id = await create(n2, cimdAuth);
     const url = await start(n2, id);
-    expect(new URL(url).searchParams.get('client_id')).toBe(`${PUBLIC}/oauth/mcp-client.json`);
+    expect(new URL(url).searchParams.get('client_id')).toBe(`${PUBLIC}/v1/oauth/mcp-client.json`);
     expect((await visit(n2, as.consent(url))).statusCode).toBe(200);
     expect((await status(n2, id)).status).toBe('active');
     as.metadata = { ...codeMetadata(), client_id_metadata_document_supported: false };

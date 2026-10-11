@@ -326,7 +326,7 @@ export const EnvSchema = z.object({
     .regex(/^[A-Za-z0-9._-]{1,64}$/)
     .default('kek-1'),
   /**
-   * Publish the Client ID Metadata Document at `<OAX_PUBLIC_URL>/oauth/mcp-client.json` (ADR 0016
+   * Publish the Client ID Metadata Document at `<OAX_PUBLIC_URL>/v1/oauth/mcp-client.json` (ADR 0016
    * section 7.2). Off by default; needs a public https `OAX_PUBLIC_URL`; refused in air-gapped mode.
    */
   OAX_MCP_OAUTH_CIMD: bool.default(false),

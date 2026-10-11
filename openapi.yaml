@@ -6760,9 +6760,13 @@ paths:
               type: object
               properties:
                 issuer:
-                  description: Authorization server to use when the resource names several
+                  description: Authorization server to use when the resource names several, or to confirm on the first authorization_code consent
                   type: string
                   format: uri
+                nonceHash:
+                  description: "authorization_code: SHA-256 (hex) of a nonce the console keeps in its tab; only that session can complete the consent (POST .../oauth/complete)"
+                  type: string
+                  pattern: ^[0-9a-f]{64}$
       parameters:
         - schema:
             type: string
@@ -7155,14 +7159,8 @@ paths:
       summary: Redirect target of the MCP OAuth authorization-code flow (browser)
       tags:
         - connections
-      description: Consumes the state, checks the RFC 9207 `iss` parameter, redeems the code with the PKCE verifier and stores the tokens on the connection instance. Redirects to the console with `mcp_oauth=<result>` (a closed set) or answers a small page of fixed text.
+      description: Redirects to the console with `state`, `code`, `iss` and `error` in the URL fragment; the consent is completed there with the session and nonce of the browser that started it. Answers a page of fixed text when the state is malformed or no console URL is configured.
       responses:
-        "200":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: string
         "302":
           description: Default Response
           content:
@@ -7174,7 +7172,217 @@ paths:
             application/json:
               schema:
                 type: string
-  /oauth/mcp-client.json:
+  /v1/connections/{id}/oauth/complete:
+    post:
+      summary: "Complete an authorization-code consent: redeem the code (session of the person who started it, nonce of their browser)"
+      tags:
+        - connections
+      description: Takes `state`, `code` and `iss` as the callback handed them to the console, plus the nonce whose hash was sent with the authorization request. The state is spent whatever the outcome. Only the session of the person who started the consent, with the nonce of that browser, can complete it; the result is one of a closed set and `forbidden` for anything else.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                state:
+                  type: string
+                  maxLength: 256
+                nonce:
+                  type: string
+                  maxLength: 256
+                code:
+                  type: string
+                  maxLength: 2048
+                iss:
+                  type: string
+                  maxLength: 2048
+                error:
+                  type: string
+                  maxLength: 64
+              required:
+                - state
+                - nonce
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: string
+                    enum:
+                      - ok
+                      - denied
+                      - state_invalid
+                      - state_expired
+                      - iss_mismatch
+                      - iss_missing
+                      - code_invalid
+                      - token_refused
+                      - forbidden
+                      - conflict
+                      - error
+                  status:
+                    anyOf:
+                      - type: object
+                        properties:
+                          status:
+                            type: string
+                            enum:
+                              - not_authorized
+                              - active
+                              - refresh_failed
+                              - reauthorization_required
+                              - revoked
+                          grant:
+                            type: string
+                          issuer:
+                            description: Authorization server pinned for this connection
+                            type:
+                              - string
+                              - "null"
+                          pinnedIssuer:
+                            description: "`auth.issuer` of the configuration, if set"
+                            type:
+                              - string
+                              - "null"
+                          scopes:
+                            type: array
+                            items:
+                              type: string
+                          expiresAt:
+                            type:
+                              - string
+                              - "null"
+                          authorizedAt:
+                            type:
+                              - string
+                              - "null"
+                          authorizedBy:
+                            type:
+                              - string
+                              - "null"
+                          lastError:
+                            description: Closed code of the last failed renewal
+                            type:
+                              - string
+                              - "null"
+                          endpointHosts:
+                            type: array
+                            items:
+                              type: string
+                            description: Authorization server hosts the connection contacts (purpose identity)
+                          scopesWider:
+                            type: boolean
+                            description: The granted scopes exceed what the profiles need
+                          registration:
+                            anyOf:
+                              - type: string
+                                enum:
+                                  - preregistered
+                                  - cimd
+                                  - dcr
+                              - type: "null"
+                            description: Client registration of an authorization_code connection; null for client_credentials
+                          redirectUri:
+                            description: The exact redirect URI of the authorization-code flow (derived from OAX_PUBLIC_URL)
+                            type:
+                              - string
+                              - "null"
+                          scopesMissing:
+                            type: array
+                            items:
+                              type: string
+                            description: Scopes the connection asks for that the grant lacks (authorization_code)
+                          requiredScopes:
+                            type: array
+                            items:
+                              type: string
+                            description: Scopes a server asked for with insufficient_scope (step-up)
+                          reauthorizationNeeded:
+                            type: boolean
+                            description: A new consent is due; runs fail closed until an administrator gives it
+                          pendingExpiresAt:
+                            description: Expiry of the consent request the caller has started and not completed
+                            type:
+                              - string
+                              - "null"
+                        required:
+                          - status
+                          - grant
+                          - issuer
+                          - pinnedIssuer
+                          - scopes
+                          - expiresAt
+                          - authorizedAt
+                          - authorizedBy
+                          - lastError
+                          - endpointHosts
+                          - scopesWider
+                          - registration
+                          - redirectUri
+                          - scopesMissing
+                          - requiredScopes
+                          - reauthorizationNeeded
+                          - pendingExpiresAt
+                        additionalProperties: false
+                      - type: "null"
+                required:
+                  - result
+                  - status
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/oauth/mcp-client.json:
     get:
       summary: Client ID Metadata Document of the MCP OAuth client (OAX_MCP_OAUTH_CIMD)
       tags:

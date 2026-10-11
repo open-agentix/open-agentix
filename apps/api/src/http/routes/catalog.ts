@@ -327,7 +327,7 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
   // The Client ID Metadata Document of this installation (ADR 0016 section 7.2). Off unless the
   // operator enabled it; the document contains no secret and nothing tenant-specific.
   app.get(
-    '/oauth/mcp-client.json',
+    '/v1/oauth/mcp-client.json',
     {
       config: { access: 'public' },
       schema: {

@@ -8,7 +8,7 @@ import type { OauthFetch, OauthOrigin } from './oauth-fetch.js';
  * are off unless the operator enables them and both are refused in air-gapped mode.
  */
 
-export const CIMD_PATH = '/oauth/mcp-client.json';
+export const CIMD_PATH = '/v1/oauth/mcp-client.json';
 export const CALLBACK_PATH = '/v1/oauth/mcp/callback';
 export const CLIENT_NAME = 'openagentix';
 
