@@ -35,7 +35,7 @@ exponential backoff before it starts.
 | `OAX_HOST` | `0.0.0.0` | api | Listen address. |
 | `OAX_PORT` | `8080` | api | Listen port. |
 | `OAX_PUBLIC_URL` | `http://localhost:8080` | api | External base URL (OIDC redirects, ingest URLs, OpenAPI servers, and the redirect URI `<OAX_PUBLIC_URL>/v1/oauth/mcp/callback` of the MCP OAuth authorization-code flow: an `https` origin without path, `http` only for localhost; the authorization servers must be able to send the browser there). |
-| `OAX_UI_URL` | – | api | UI base URL; OIDC callback redirects to `<ui>/auth/callback#token=…`. |
+| `OAX_UI_URL` | – | api | UI base URL (https, or http for localhost; an origin without credentials, query or fragment); OIDC callback redirects to `<ui>/auth/callback#token=…`. |
 | `OAX_CORS_ORIGINS` | – | api | Comma-separated allowed origins (the UI). Empty = no CORS. |
 | `OAX_TRUST_PROXY` | `false` | api | Trust `X-Forwarded-*` (behind an ingress/ALB). |
 | `OAX_LOG_LEVEL` | `info` | both | `fatal`…`trace`, `silent`. JSON logs, secrets redacted. |

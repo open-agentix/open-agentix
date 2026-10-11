@@ -1048,6 +1048,17 @@ export const AccessQuery = z.object({
     .optional()
     .describe('tenant id or slug path; the acting tenant when omitted'),
 });
+export const LocateParams = z.object({
+  kind: z.enum(['agent', 'run', 'approval', 'event-source', 'connection']),
+  id: Id,
+});
+export const LocateSchema = z.object({
+  tenant: z.object({
+    id: Id,
+    slugPath: z.string().describe('slug path of the owning tenant, usable as `X-OAX-Tenant`'),
+    name: z.string(),
+  }),
+});
 export const UserAccessQuery = z.object({ userId: Id });
 export const AccessSchema = z.object({
   tenant: RowTenantSchema,

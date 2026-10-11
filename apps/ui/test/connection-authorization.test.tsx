@@ -103,6 +103,7 @@ describe('Authorization of an OAuth connection', () => {
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith(AUTH_URL));
     // only the hash of the nonce is sent; the nonce stays in this tab's session storage
     const body = posts[0]!.body as { nonceHash: string };
+    expect(Object.keys(body)).toEqual(['nonceHash']);
     expect(body.nonceHash).toMatch(/^[0-9a-f]{64}$/);
     const kept = JSON.parse(window.sessionStorage.getItem('oax.mcp.consent') ?? 'null') as {
       connectionId: string;

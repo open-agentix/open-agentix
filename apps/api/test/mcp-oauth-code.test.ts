@@ -11,7 +11,7 @@ import {
 } from '../src/db/schema.js';
 import { buildApp } from '../src/http/app.js';
 import { FakeAs, FakeMcp, World, json, newToken } from './oauth-world.js';
-import { testNode, type TestNode } from './helpers.js';
+import { ADMIN, testNode, type TestNode } from './helpers.js';
 
 /**
  * ADR 0016 slice S7: the authorization-code flow end to end on the control node. The database, the
@@ -655,6 +655,31 @@ describe('the consent is bound to the browser that started it', () => {
     expect(
       await n.ctx.db.select().from(mcpOauthTokens).where(eq(mcpOauthTokens.connectionId, id)),
     ).toEqual([]);
+  });
+
+  it('the same person in a second session without the nonce cannot complete either', async () => {
+    const id = await create(n, publicAuth);
+    const back = as.consent(await start(n, id));
+    world.clear();
+    const other = await n.login(ADMIN.email, ADMIN.password);
+    expect(other).not.toBe(n.admin);
+    expect(resultOf(await visit(n, back, { token: other, nonce: null }))).toBe('forbidden');
+    expect(tokenRequests()).toBe(0);
+    expect((await status(n, id)).status).toBe('not_authorized');
+  });
+
+  it('refuses a console URL that is not an https origin', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const base = { NODE_ENV: 'test', OAX_DATABASE_URL: 'memory://' };
+    for (const bad of [
+      'http://console.example.org',
+      'https://u:p@console.example.org',
+      'https://console.example.org/?x=1',
+      'https://console.example.org/#frag',
+    ])
+      expect(() => loadConfig({ ...base, OAX_UI_URL: bad }), bad).toThrow(/OAX_UI_URL/);
+    expect(loadConfig({ ...base, OAX_UI_URL: 'https://console.example.org' }).uiUrl).toBeTruthy();
+    expect(loadConfig({ ...base, OAX_UI_URL: 'http://localhost:5173' }).uiUrl).toBeTruthy();
   });
 
   it('the same person in another browser (no nonce, or a wrong one) cannot complete either', async () => {

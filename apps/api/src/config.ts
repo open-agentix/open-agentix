@@ -573,6 +573,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         'OAX_MCP_OAUTH_CIMD needs OAX_PUBLIC_URL to be a public https URL (the client id is a URL the authorization server fetches)',
       );
   }
+  if (e.OAX_UI_URL) {
+    // The console URL receives the browser after an OAuth consent (state and code in the
+    // fragment): an origin, https except for a local console, nothing that could redirect elsewhere.
+    const u = new URL(e.OAX_UI_URL);
+    if (
+      u.username ||
+      u.password ||
+      u.search ||
+      u.hash ||
+      (u.protocol !== 'https:' && !(u.protocol === 'http:' && isLocalHost(u.hostname)))
+    )
+      throw new OaxError(
+        'config_invalid',
+        'OAX_UI_URL must be an https URL (http only for localhost) without credentials, query or fragment',
+      );
+  }
   const result = buildConfig(e, env, database);
   // The key now lives in the closure of the config. Deleting it from process.env keeps it out of
   // what child processes inherit (stdio MCP servers, harness CLIs) and out of `process.env` readers;

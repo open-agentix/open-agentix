@@ -25,6 +25,7 @@
 | S3 | implemented (PR for #188) | `?scope=node` or `subtree` and `?tenantId=` on the list routes, `tenant` on their rows. No migration. See "S3" below. |
 | S4 | implemented (PR for #189, #226) | Role-binding API, grant rules 1 to 9, audit, bulk opt-in; migration **`0023_trb_source`** (mirror rows get their own key). See "S4" below. |
 | S6 | implemented (PR for #191) | `pentest` grantable with mandatory expiry, notices, `pentest.session_started`, expiry reaper. Migration **`0028_pentest_role`**. See "S6" below. |
+| S7 | implemented (PR for #192) | `GET /v1/locate/{kind}/{id}`; read permission of the kind at the owning node, identical 404, rate-limited `access.denied`. No migration. See `docs/tenancy.md`. |
 | S5 | implemented (PR for #190) | Write inheritance (clamp removed), `POST /v1/tenants { parentId }` and `PATCH /v1/tenants/{id}` for tenant admins, `GET /v1/me/access` and `GET /v1/tenants/{id}/access`. No migration. See "S5" below. |
 
 Differences between the plan below and what S1 shipped:

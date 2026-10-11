@@ -9159,6 +9159,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/locate/{kind}/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which tenant owns this resource (for deep links)
+         * @description Returns the owning tenant (`id`, `slugPath`, `name`) of an agent, run, approval, event source or connection when the caller holds the read permission of that kind (`agents:read`, `runs:read`, `sources:read`, `connections:read`) at the owning tenant, directly or through an inheriting binding; API token scopes are applied. The answer does not depend on the acting tenant (`X-OAX-Tenant`). Everything else is one identical `404`: no such id, a resource of a sibling, an ancestor or another organisation, a tenant the caller can see but lacks the permission in. Misses are audited as `access.denied` (rate-limited per user and kind). The response never contains data of the resource.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kind: "agent" | "run" | "approval" | "event-source" | "connection";
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            tenant: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @description slug path of the owning tenant, usable as `X-OAX-Tenant` */
+                                slugPath: string;
+                                name: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/demo/scenarios": {
         parameters: {
             query?: never;

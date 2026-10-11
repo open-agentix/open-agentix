@@ -29,6 +29,13 @@ All notable changes to this project are documented here. The format follows
   `mcp.oauth.authorization_requested | client_registered | step_up_required`; metric
   `oax_mcp_oauth_authorize_total{outcome}`. See
   [docs/mcp.md](docs/mcp.md#authorization-code-with-pkce).
+- **Locate a resource's tenant (ADR 0014 S7, #192, #163)**: `GET /v1/locate/{kind}/{id}` for `agent`,
+  `run`, `approval`, `event-source` and `connection` returns `{ tenant: { id, slugPath, name } }` of the
+  owning node for deep links, when the caller holds the kind's read permission there (resolver bindings at
+  the owner, token scopes applied). Everything else, including ids that do not exist, siblings, ancestors,
+  other organisations and visible nodes without the permission, is one identical `404` with the same
+  statements per request; misses are audited as `access.denied` (rate-limited per user and kind). No
+  migration.
 - **OAuth for HTTP MCP connections (ADR 0016 S6, #236)**: `auth` on streamable-HTTP connections
   (`none | static | oauth`; absent means `static`), `oauth` with the client-credentials grant and a
   pre-registered client (`private_key_jwt` or `client_secret_basic`). `oauth` or `none` together with an

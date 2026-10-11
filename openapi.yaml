@@ -12831,6 +12831,89 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/locate/{kind}/{id}:
+    get:
+      summary: Which tenant owns this resource (for deep links)
+      tags:
+        - tenants
+      description: "Returns the owning tenant (`id`, `slugPath`, `name`) of an agent, run, approval, event source or connection when the caller holds the read permission of that kind (`agents:read`, `runs:read`, `sources:read`, `connections:read`) at the owning tenant, directly or through an inheriting binding; API token scopes are applied. The answer does not depend on the acting tenant (`X-OAX-Tenant`). Everything else is one identical `404`: no such id, a resource of a sibling, an ancestor or another organisation, a tenant the caller can see but lacks the permission in. Misses are audited as `access.denied` (rate-limited per user and kind). The response never contains data of the resource."
+      parameters:
+        - schema:
+            type: string
+            enum:
+              - agent
+              - run
+              - approval
+              - event-source
+              - connection
+          in: path
+          name: kind
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slugPath:
+                        type: string
+                        description: slug path of the owning tenant, usable as `X-OAX-Tenant`
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slugPath
+                      - name
+                    additionalProperties: false
+                required:
+                  - tenant
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/demo/scenarios:
     get:
       summary: "Demo mode: fixed scenarios, limits and the live-model budget"

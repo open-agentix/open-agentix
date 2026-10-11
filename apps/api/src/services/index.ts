@@ -11,6 +11,7 @@ import { CostsService } from './costs.js';
 import { GuidelinesService } from './guidelines.js';
 import { IdentityService } from './identity.js';
 import { IngestService } from './ingest.js';
+import { LocateService } from './locate.js';
 import { ModelAccountingService } from './model-accounting.js';
 import { ModelProxyService } from './model-proxy.js';
 import { McpOauthService } from './mcp-oauth.js';
@@ -46,6 +47,8 @@ export interface Services {
   /** Notices, session audit and expiry reaper of the `pentest` role (ADR 0014 S6). */
   pentest: PentestService;
   accessExplain: AccessExplainService;
+  /** Which tenant owns a resource, for deep links (ADR 0014 S7). */
+  locate: LocateService;
   models: ModelsService;
   mcpTest: McpTestService;
   mcpTools: McpToolsService;
@@ -136,6 +139,7 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     roleBindings: new TenantRoleBindingsService(ctx, audit, identity, pentest),
     pentest,
     accessExplain: new AccessExplainService(ctx),
+    locate: new LocateService(ctx, audit),
     models,
     mcpTest,
     mcpTools,
