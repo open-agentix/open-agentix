@@ -91,6 +91,7 @@ const DENIED = [
   'DELETE /v1/connections/:id',
   'GET /v1/connections/:id/oauth',
   'POST /v1/connections/:id/oauth/authorize',
+  'POST /v1/connections/:id/oauth/complete',
   'POST /v1/connections/:id/oauth/disconnect',
   'POST /v1/connections/:id/test',
   'POST /v1/connections/:id/tools/refresh',
