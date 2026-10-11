@@ -103,7 +103,8 @@ user's own home node in a legacy role is no longer removed by the reconcile or t
   `approvals(tenant_id, status)`.
 
 Not yet: `status` is always `active` (blocking comes with budget caps, W13-4), and the display colour
-and use case of a node need storage that arrives with W13-2 and W13-8.
+of a node needs storage that arrives with W13-2 and W13-8. The use case a node is attached to is stored
+(`tenants.use_case`, slice S8) and shown as `useCase` on the tenant.
 
 ## Role bindings (ADR 0014, slice S1)
 
@@ -320,7 +321,7 @@ Team and agent scoped bindings never give the right to grant.
 | --- | --- |
 | 1 `users:write` on the node | `403 forbidden` |
 | 2 nothing above one's own permissions; an inheriting grant needs an inheriting binding of at least the same role on the node or an ancestor | `403 grant_exceeds_own`, `403 inheritance_required` |
-| 3 use-case bindings | `422 use_case_bindings_unsupported` until S8 (the use-case admin rule arrives with it) |
+| 3 use-case bindings (`useCase`) | a tenant admin binds any use case; a **use-case administrator** (an `admin` binding limited to a use case, bound on this node) grants only for its own use case and its sub-use cases, on its own node, never node-wide and never `pentest` (`403 grant_exceeds_own`; `403 inheritance_required` when its own binding does not inherit). Needs `OAX_ROLE_BINDINGS_READ=bindings` (`409 use_case_requires_bindings_read`). See "Use-case bindings and attached nodes" |
 | 4 the grantee must be visible: home node in the grantor's `users:read` coverage, or already holding a (node, team or agent) binding inside it | `404 user`, the same body and the same queries as for an unknown id |
 | 5 the grantee's home organisation is the node's organisation | `404 user` for organisation members; platform operators get `422 cross_organisation_grant` (the `trb_same_org` trigger is the backstop) |
 | 6 no self-grant, also not by changing one's own binding | `403 self_grant` (platform operators excepted) |
@@ -557,6 +558,96 @@ naming the owner. At most 3 entries per user and kind per 60 seconds are written
 across replicas with Valkey); further misses in the window are not audited, so probing cannot flood
 the chain and the decision never depends on whether the id exists. A failing audit write does not
 change the 404. Platform operators locate every resource.
+
+## Use-case bindings and attached nodes (ADR 0014, slice S8)
+
+A **use case** is the `labels.useCase` of an agent (stored on the agent as `agents.use_case` and on the
+cost ledger as `cost_ledger.use_case`). `support` covers `support` and `support/billing`, matched per `/`
+segment (never `supported`); the syntax is segments of letters, digits, `.`, `_` and `-` separated by
+`/` (at most 200 characters), the same for a binding and for an attachment. A resource without a
+label belongs to the whole node and is covered by no use case.
+
+### What a use-case binding gives
+
+`POST /v1/tenants/{id}/role-bindings { userId, role, inherit, useCase }` binds a role **limited to a use
+case** on that node. A **use-case administrator** is an `admin` binding with a use case. The binding
+carries the role's permissions on the resources that have a use case and nothing node-wide:
+
+| Use-case permissions | Filtered by |
+| --- | --- |
+| `agents:read/write/publish` | `agents.use_case` (list, detail, versions, members, draft, publish, disable, dry run) |
+| `runs:read/execute/cancel/approve` | the use case of the run's agent (runs, steps, stream, stream token, stats, approvals, decisions, manual runs) |
+| `events:read` | the use case of the agent the event's source triggers (an event without a source or agent is node-level) |
+| `costs:read` | `cost_ledger.use_case` (summary in every grouping, export) and the use-case lines of the budgets |
+| `audit:read`, `audit:export` | entries whose `target` is an agent of the use case or whose `run_id` is a run of such an agent (entries about people, settings and connections are node-level) |
+| `users:read`, `users:write` | only the role-binding API: the bindings of the own use cases (rule 3) |
+
+Connections, event sources, policies, tokens, users, teams, settings, audit verification and checkpoints,
+tenant structure and the demo and plan helpers are **never** part of a use-case binding: the routes answer
+`403` before the handler runs. A use-case binding applies at its own node only (it does not inherit down
+the tree); with `inherit: true` it also reaches the nodes attached to the use case (below). The grant
+rules: a tenant admin binds any use case under rules 1 and 2; a use-case administrator under rule 3 (own
+use case and sub-use cases, own node, never node-wide, never `pentest`, an inheriting grant needs an
+inheriting binding of its own); it lists, changes and revokes only bindings of its own use cases (any
+other binding of the node, and any unknown one, is the same `404 role binding`). `pentest` cannot be
+limited to a use case (`422`). Use-case bindings need `OAX_ROLE_BINDINGS_READ=bindings` to be created
+(`409 use_case_requires_bindings_read`); on the legacy read path existing rows have no effect.
+
+**Fail closed.** `hasPermission`, `visibleTeams` and `visibleAgents` ignore a use-case binding, so a service
+that was not taught about use cases gives it no access. A route opens for a use-case holder only when it
+is listed as `scoped` in the route registry (`apps/api/src/http/use-case-policy.ts`); every route that
+serves a signed-in principal must be listed (`scoped`, `denied` or `self`, with the reason by group), a
+test fails for a route without an entry and for a stale entry, and a route that is missing from the
+registry at run time is refused to use-case holders. `denied` routes (and `authenticated` routes that
+return tenant data) refuse a caller whose bindings are all use-case bindings; a caller who also holds a
+node-wide, team or agent binding keeps what that binding gives. Hidden objects are a plain `404`, identical
+in body to an unknown id. Aggregates (costs, budgets, stats) and their caches are keyed by the use-case
+scope. API token scopes apply to use-case bindings like to any other.
+
+Writes stay inside the use case: an agent written or published under a use-case binding must carry a
+label inside it (a draft or version cannot be relabelled out of the use case, `403`), and a use-case writer
+creates agents that belong to **no team** (a team brings its connections, which are not part of a use
+case; naming a team in `owner` is `403`). Validation of a draft by a use-case holder uses the connections
+of the whole tenant, never those of a team it names.
+
+Notes on what the filters mean: the use case of a run, an approval and an event is the **current** use case
+of its agent (a relabelled agent takes its history with it); costs keep the label they were booked with.
+The budget view of a use-case holder shows the limits and spend of its use cases only (`tenant.limitUsd`
+is `null`, `tenant.spentUsd` counts the holder's use cases, no team lines, no alerts of the node limit; a
+budget of a wider use case is not shown).
+
+### Attached nodes
+
+`PATCH /v1/tenants/{id} { useCase }` attaches a **child** node to a use case of its parent (`null`
+detaches it). Attaching is a grant to every inheriting use-case administrator of that use case on the
+parent, so it needs an **inheriting tenant admin on the parent** (an `admin` binding without use case on
+the parent or an ancestor that inherits) or a platform operator: a use-case administrator never attaches,
+not even to its own use case, and an admin bound only on the child itself does not either (`403`). The
+check runs on the parent from grants re-read under the shared tree lock; token scopes need
+`settings:write`. A root cannot be attached (`422 use_case_on_root`), a malformed value is `422`. It is
+audited as `tenant.detached` (the use case left) and `tenant.attached` (the one joined) in the partition of
+the child **and** of the parent, and bumps the authz epoch, so cached principals see it on their next
+request.
+
+A use-case binding **with `inherit: true`** on the parent then applies in the attached child **and its
+whole subtree**, as an unrestricted binding of the same role (source `attached`); without `inherit` it
+never reaches an attached node (owner decision 6). Attaching or detaching changes effective permissions
+only inside the subtree of the attached node and only for holders of inheriting use-case bindings on its
+parent whose use case covers the attached one (property test). A use-case administrator working inside an
+attached node does not get tree or grant authority there (it cannot create, rename, attach or grant).
+
+### Locate and `scope=subtree`
+
+`GET /v1/locate/...` honours the use case of agents, runs and approvals. `scope=subtree` on agents, runs,
+approvals, costs, budgets, events and audit adds the use-case clause per node: a use-case binding covers
+its own node only (the same use case on a sibling node is not covered), and an attached node is covered
+unrestricted. `GET /v1/tenants/{id}/access` and `GET /v1/me/access` show the `useCase` of each binding and,
+per permission, the use cases it is limited to.
+
+Migration `0030_tenant_use_case_attach` adds `tenants.use_case` (nullable, syntax check, a root cannot
+carry one), an index on `(parent_id, use_case)` and makes the epoch trigger fire on a change of
+`use_case`. The grants loader lists the attached children of every inheriting use-case binding (cache wire
+version 2).
 
 ## Audit
 

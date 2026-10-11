@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Use-case-scoped bindings and node attachment (ADR 0014 S8, #193)**: `POST /v1/tenants/{id}/role-bindings`
+  accepts `useCase` (`use_case_bindings_unsupported` is gone). A use-case binding limits a role to the
+  agents, runs, approvals, events, costs, budgets and audit entries of that use case and its sub-use cases
+  on that node; a use-case administrator (`admin` limited to a use case) grants only for its own use case
+  and sees only the bindings of its use case. `PATCH /v1/tenants/{id} { useCase }` attaches a sub-tenant to
+  a use case of its parent (inheriting tenant admin on the parent or platform operator only; audited as
+  `tenant.attached` / `tenant.detached` at the child and the parent); an inheriting use-case binding then
+  also applies, unrestricted, in the attached tenant and its subtree. Every route that serves a principal
+  is declared `scoped`, `denied` or `self` in a route registry and a missing declaration fails CI and is
+  refused at run time; hidden objects are a plain `404`. Use-case bindings need
+  `OAX_ROLE_BINDINGS_READ=bindings`. `GET /v1/me/access` and the access views show `useCase`. Migration
+  `0030_tenant_use_case_attach` (additive).
 - **MCP abuse suite and threat model (ADR 0016 S8, #238)**: an opt-in real-engine suite
   (`apps/api/test/mcp-abuse-{egress,network,leak}.integration.test.ts`, `OAX_TEST_DOCKER=1`, never part of
   `pnpm test`) that proves with a real container engine zero unexpected connections from a run node and

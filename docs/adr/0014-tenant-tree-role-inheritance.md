@@ -1,6 +1,6 @@
 # ADR 0014: Role inheritance over the tenant tree
 
-- Status: Proposed. Slices S1, S1b, S2, S3, S4, S5 and S6 are implemented (see "Implementation status" below); S7 to S10 are open.
+- Status: Proposed. Slices S1, S1b, S2, S3, S4, S5, S6, S7 and S8 are implemented (see "Implementation status" below); S9 and S10 are open.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
   resolver pattern); wave 13 of the [implementation plan](../IMPLEMENTATION-PLAN.md)
@@ -26,6 +26,7 @@
 | S4 | implemented (PR for #189, #226) | Role-binding API, grant rules 1 to 9, audit, bulk opt-in; migration **`0023_trb_source`** (mirror rows get their own key). See "S4" below. |
 | S6 | implemented (PR for #191) | `pentest` grantable with mandatory expiry, notices, `pentest.session_started`, expiry reaper. Migration **`0028_pentest_role`**. See "S6" below. |
 | S7 | implemented (PR for #192) | `GET /v1/locate/{kind}/{id}`; read permission of the kind at the owning node, identical 404, rate-limited `access.denied`. No migration. See `docs/tenancy.md`. |
+| S8 | implemented (PR for #193) | Use-case-scoped bindings and node attachment: `tenants.use_case`, `PATCH /v1/tenants/{id} { useCase }`, use-case filter in every service that filters by team, route registry (fail closed), `use_case_bindings_unsupported` lifted. Migration **`0030_tenant_use_case_attach`**. See "S8" below. |
 | S5 | implemented (PR for #190) | Write inheritance (clamp removed), `POST /v1/tenants { parentId }` and `PATCH /v1/tenants/{id}` for tenant admins, `GET /v1/me/access` and `GET /v1/tenants/{id}/access`. No migration. See "S5" below. |
 
 Differences between the plan below and what S1 shipped:
@@ -270,6 +271,46 @@ S6 (`pentest`; #191), details in `docs/tenancy.md` ("The `pentest` role"):
   `GET /v1/roles` still lists the six legacy roles. The console badge (U8) and the demo user (#162) build
   on `/v1/me` (`bindings[].expiresAt`, `role: pentest`) and `/v1/me/notices`.
 
+S8 (use-case bindings and attached nodes; #193), details in `docs/tenancy.md` ("Use-case bindings and attached nodes"):
+
+- **Migration `0030_tenant_use_case_attach`** (additive; 0029 is taken by the MCP authorization-code slice, #316 - whichever of the two merges second renumbers and raises `when` above the highest journal entry):
+  `tenants.use_case` (child nodes only, syntax check), an index on `(parent_id, use_case)`, and the epoch
+  trigger `authz_bump_tenant` also fires on a change of `use_case`. Down script included.
+- **Resolver.** A use-case binding applies at its own node, limited to `USE_CASE_PERMISSIONS`
+  (`useCase` stays on the result); with `inherit` it applies unrestricted in the child nodes whose
+  `use_case` is the binding's use case or a sub-use case, with their subtrees (`source: attached`).
+  The attachment is data of the loader (`NodeRoleGrant.attachedNodeIds`, cache wire version 2); without it
+  nothing is attached. Owner decision 6 holds: no `inherit`, no attachment.
+- **Fail closed in the services.** `hasPermission`, `visibleTeams` and `visibleAgents` ignore bindings with a
+  use case; services read them through `useCaseScopes` / `hasPermissionIn` and one SQL helper
+  (`use-case-scope.ts`). Filtered: agents (list, detail, versions, members, draft, publish, disable,
+  dry run, validate), runs (list, stats, detail, steps, stream, stream token, cancel, manual runs),
+  approvals (list, decision with the approver roles), events (through the source's agent), costs (summary,
+  export, cache keys), budgets (use-case lines only), audit (list, export: entries of the agents and runs of
+  the use case), locate, `scope=subtree` of all of these. Everything node-wide (connections, sources,
+  policies, tokens, users, teams, settings, audit verification, tenant structure, plans, demo) is `denied`.
+- **Route registry** (`apps/api/src/http/use-case-policy.ts`): every route that serves a principal is
+  `scoped`, `denied` or `self`; the route-table test fails for a missing or stale entry, the hook refuses
+  an unlisted route to use-case holders, and a walk calls every `scoped` route as the administrator of
+  another use case and looks for traces. This is the "fake new route" check of the plan: adding a route
+  without the decision fails CI.
+- **Grant rule 3** (`grant-authority.ts`: `useCaseGrantAuthority`, `mayGrantInUseCase`): a use-case
+  administrator grants for its own use case and sub-use cases on its own node (never node-wide, never
+  `pentest`); `permissionsAt` and `isTenantAdminAt` ignore use-case bindings, so nothing in the grant,
+  tree and user-management paths mistakes a use-case administrator for a tenant admin. It lists, changes
+  and revokes only bindings of its own use cases (other bindings answer `404`). Attached-node authority is
+  not delegated: a use-case administrator has no tree or grant authority inside an attached node.
+- **Attach** (`TenantsService.update`): inheriting tenant admin on the **parent**, evaluated under the
+  shared tree lock; audited as `tenant.attached` / `tenant.detached` at the child and the parent.
+- **Decisions beyond the text above.** Use-case writers create agents without a team only (team
+  connections are not part of a use case) and cannot relabel an agent out of the use case; the use case of
+  runs, approvals and events is the current use case of their agent; audit entries are matched by `target`
+  (agent id) or `run_id`; token routes stay denied for use-case-only holders (follow-up: self-service tokens);
+  `pentest` cannot carry a use case; use-case bindings need the `bindings` read path to be created.
+- Tests: `use-case-scope.test.ts` (the service walk), `use-case-routes.test.ts` (registry, fail-closed walk),
+  `use-case-bindings.test.ts` (grants, attach, acting node), the resolver and the attach-invariant property
+  tests in `packages/core/test/tenant-roles.test.ts`, `rbac.test.ts`.
+
 ## Context
 
 What exists on `main` (commit `ddec688`):
@@ -414,9 +455,10 @@ return out
   `source = inherited | attached` are clamped to the read permissions
   `*:read` and `audit:verify` (`INHERITED_READ_ONLY`), so the first slices can ship subtree reads
   without any write authority flowing down. The clamp is one constant and one test.
-- Use-case bindings are **refused at creation** (`422 use_case_bindings_unsupported`) until
-  slice S8 has added the use-case filter to every service (fail closed: a binding that the services
-  cannot scope must not exist).
+- Use-case bindings were **refused at creation** (`422 use_case_bindings_unsupported`) until
+  slice S8 added the use-case filter to every service (fail closed: a binding that the services
+  cannot scope must not exist). Slice S8 lifted that; the services now scope them, and a service that
+  does not know about them gives them no access.
 
 #### 3.3 Use-case bindings and attached nodes
 
