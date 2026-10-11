@@ -90,6 +90,12 @@ function mcpHandler(req, res, body) {
   const tools = [...mcp.tools];
   if (mcp.whoami)
     tools.push({
+      name: 'fail_echo',
+      description: 'fails with an error that quotes the authorization header',
+      inputSchema: { type: 'object', properties: {} },
+    });
+  if (mcp.whoami)
+    tools.push({
       name: 'whoami',
       description: 'echoes the authorization header it received',
       inputSchema: { type: 'object', properties: {} },
@@ -98,6 +104,12 @@ function mcpHandler(req, res, body) {
   if (msg.method === 'tools/call') {
     if (msg.params?.name === 'whoami')
       return ok({ content: [{ type: 'text', text: `header was ${auth ?? 'none'}` }] });
+    if (msg.params?.name === 'fail_echo')
+      return reply(res, 200, {
+        jsonrpc: '2.0',
+        id: msg.id,
+        error: { code: -32000, message: `upstream rejected ${auth ?? 'none'}` },
+      });
     return ok({ content: [{ type: 'text', text: `ran ${msg.params?.name}` }] });
   }
   return reply(res, 200, {

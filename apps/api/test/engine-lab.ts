@@ -58,7 +58,7 @@ export class Lab {
   private readonly containers: string[] = [];
   private readonly networks: string[] = [];
   private readonly attached: string[] = [];
-  private hostsBefore: string | undefined;
+  private readonly hostLines: string[] = [];
 
   get self(): string {
     if (!SELF)
@@ -199,8 +199,9 @@ export class Lab {
 
   /** Maps a name to an address for this process (getaddrinfo reads the hosts file). */
   addHost(ip: string, ...names: string[]): void {
-    if (this.hostsBefore === undefined) this.hostsBefore = readFileSync('/etc/hosts', 'utf8');
-    appendFileSync('/etc/hosts', `${ip} ${names.join(' ')}\n`);
+    const line = `${ip} ${names.join(' ')}`;
+    appendFileSync('/etc/hosts', `${line}\n`);
+    this.hostLines.push(line);
   }
 
   /** A throwaway CA and one server certificate for `names`, generated inside a container. */
@@ -254,13 +255,17 @@ export class Lab {
       } catch {
         // already gone
       }
-    if (this.hostsBefore !== undefined) {
+    if (this.hostLines.length > 0) {
+      // remove only our own lines: other test files of the same run add theirs concurrently
       try {
-        writeFileSync('/etc/hosts', this.hostsBefore);
+        const ours = new Set(this.hostLines.splice(0));
+        const rest = readFileSync('/etc/hosts', 'utf8')
+          .split('\n')
+          .filter((l) => !ours.has(l));
+        writeFileSync('/etc/hosts', rest.join('\n'));
       } catch {
         // read-only hosts file: nothing was added either
       }
-      this.hostsBefore = undefined;
     }
   }
 }
