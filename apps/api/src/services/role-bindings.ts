@@ -155,6 +155,11 @@ export interface LoadedGrants {
  * the home node and the grants as of the same instant. Expiries travel as epoch milliseconds
  * (rounded down, so a binding can only end early, never late) and are revived into real `Date`s;
  * a value that is not a finite number drops that binding (fail closed).
+ *
+ * A use-case binding that inherits also carries `attached`: the ids of the child nodes of its node
+ * whose `tenants.use_case` is the binding's use case or a sub-use case of it (per `/` segment;
+ * ADR 0014 section 3.3). The resolver applies the binding, unrestricted, in those nodes and their
+ * subtrees. Attaching a node bumps the authz epoch (migration 0030), so a cached copy is rebuilt.
  */
 export async function loadRawGrants(
   db: Db,
@@ -170,7 +175,19 @@ export async function loadRawGrants(
           'role', ${tenantRoleBindings.role},
           'useCase', ${tenantRoleBindings.useCase},
           'inherit', ${tenantRoleBindings.inherit},
-          'expiresMs', floor(extract(epoch from ${tenantRoleBindings.expiresAt}) * 1000)))
+          'expiresMs', floor(extract(epoch from ${tenantRoleBindings.expiresAt}) * 1000),
+          'attached', case
+            when ${tenantRoleBindings.useCase} is not null and ${tenantRoleBindings.inherit} then
+              coalesce((
+                select json_agg(c.id)
+                from ${tenants} c
+                where c.parent_id = ${tenantRoleBindings.tenantId}
+                  and c.use_case is not null
+                  and (c.use_case = ${tenantRoleBindings.useCase}
+                    or left(c.use_case, char_length(${tenantRoleBindings.useCase}) + 1)
+                      = ${tenantRoleBindings.useCase} || '/')
+              ), '[]'::json)
+            else '[]'::json end))
         from ${tenantRoleBindings}
         where ${tenantRoleBindings.userId} = ${user.id}
           and ${tenantRoleBindings.tenantId} in (${orgNodes(sql`t.root_id`)})
@@ -205,6 +222,7 @@ export async function loadRawGrants(
     useCase: string | null;
     inherit: boolean;
     expiresMs: number | string | null;
+    attached?: unknown;
   };
   type TeamRow = { tenantId: string; teamId: string; role: string };
   type AgentRow = { tenantId: string; agentId: string; teamId: string | null; role: string };
@@ -213,6 +231,9 @@ export async function loadRawGrants(
   const nodeBindings: NodeRoleGrant[] = [];
   for (const r of json(row.nodes) as NodeRow[]) {
     if (!isRole(r.role)) continue;
+    const attached = (Array.isArray(r.attached) ? r.attached : []).filter(
+      (x): x is string => typeof x === 'string' && x.length > 0,
+    );
     let expiresAt: Date | null = null;
     if (r.expiresMs !== null && r.expiresMs !== undefined) {
       const ms = Number(r.expiresMs);
@@ -225,6 +246,7 @@ export async function loadRawGrants(
       useCase: r.useCase,
       inherit: r.inherit,
       expiresAt,
+      ...(attached.length > 0 ? { attachedNodeIds: attached } : {}),
     });
   }
   const teamBindings: TeamRoleGrant[] = (json(row.team_rows) as TeamRow[])

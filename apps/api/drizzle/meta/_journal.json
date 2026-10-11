@@ -169,6 +169,13 @@
       "when": 1792600000001,
       "tag": "0029_mcp_oauth_authorization_code",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792700000000,
+      "tag": "0030_tenant_use_case_attach",
+      "breakpoints": true
     }
   ]
 }
