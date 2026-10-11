@@ -546,7 +546,10 @@ key, the caller's home node, the node row of the answer or of the home node as a
 neither a status nor a statement count nor a lookup by a caller-chosen reference separates them.
 The owner is compared in memory with the epoch-keyed tree snapshot of the caller's own organisation.
 A malformed `id` (not a UUID) or a `kind` outside the list is `400` before any lookup. The response
-carries only the owning node, never data of the resource.
+carries only the owning node, never data of the resource. Its `slugPath` contains the slugs of
+ancestors the caller may not see (like `X-OAX-Acting-Tenant`); only the name of the owning node is
+returned. A connection is located at the node that owns it, so a platform connection owned by a node
+outside the caller's reach is not locatable for tenant users.
 
 Misses are audited as `access.denied` (`payload { permission, resource: <kind>, via: "locate" }`,
 `target` = the requested id, partition of the acting node), for existing and unknown ids alike, never
