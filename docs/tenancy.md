@@ -512,6 +512,49 @@ a cached principal, session event, reaper and notices, route-table walk over eve
 route that pentest does not hold and each write on the tenant tree answers `403`, each read route does not;
 token creation, audit export, bindings and connections; last-admin rule unaffected).
 
+## Locating a resource's tenant (ADR 0014, slice S7)
+
+```text
+GET /v1/locate/{kind}/{id}      kind = agent | run | approval | event-source | connection
+-> 200 { "tenant": { "id", "slugPath", "name" } }
+-> 404 { "error": "not_found", "message": "resource not found" }
+```
+
+For deep links: a console that acts in one tenant asks which tenant owns `/runs/<id>` and switches
+to it (`X-OAX-Tenant: <slugPath>`) instead of showing a 404. The answer needs an authenticated
+caller who holds the **read permission of the kind at the owning node**, not merely visibility of
+that node:
+
+| Kind | Permission at the owning node |
+| --- | --- |
+| `agent` | `agents:read` (team and agent scoped bindings honoured) |
+| `run`, `approval` | `runs:read` (an approval's agent scope goes through its run) |
+| `event-source` | `sources:read` |
+| `connection` | `connections:read` (the node that owns the connection) |
+
+The permissions are those of the resolver at the **owning** node (direct, inherited, team and agent
+bindings), never those of the acting node, and the answer does not change with `X-OAX-Tenant`.
+API token scopes are applied. `viewer` therefore locates agents, runs and approvals but not event
+sources or connections; `pentest` (read-only) locates all five. With `OAX_ROLE_BINDINGS_READ=legacy`
+only the caller's home node can answer.
+
+What the caller cannot tell apart: a 404 is the same for an id that does not exist, a resource of a
+sibling or an ancestor node, of another organisation, of a visible node where the permission is
+missing (404, not 403), and of a kind the token scopes exclude. Body, status and headers are
+identical, and every request runs the same statements in the same order (the resource row by primary
+key, the caller's home node, the node row of the answer or of the home node as a stand-in), so
+neither a status nor a statement count nor a lookup by a caller-chosen reference separates them.
+The owner is compared in memory with the epoch-keyed tree snapshot of the caller's own organisation.
+A malformed `id` (not a UUID) or a `kind` outside the list is `400` before any lookup. The response
+carries only the owning node, never data of the resource.
+
+Misses are audited as `access.denied` (`payload { permission, resource: <kind>, via: "locate" }`,
+`target` = the requested id, partition of the acting node), for existing and unknown ids alike, never
+naming the owner. At most 3 entries per user and kind per 60 seconds are written (shared cache, so
+across replicas with Valkey); further misses in the window are not audited, so probing cannot flood
+the chain and the decision never depends on whether the id exists. A failing audit write does not
+change the 404. Platform operators locate every resource.
+
 ## Audit
 
 The hash chain is global (one chain keeps ordering and tamper detection simple); every entry carries
