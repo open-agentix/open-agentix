@@ -35,6 +35,13 @@ async function data(req, res) {
     authorization: req.headers.authorization ?? null,
     bytes: body.length,
   });
+  let rpc = null;
+  try {
+    rpc = JSON.parse(body).method ?? null;
+  } catch {
+    // not JSON-RPC
+  }
+  hits[hits.length - 1].rpc = rpc;
   const path = (req.url ?? '/').split('?')[0];
   const scripted = routes.get(path);
   if (scripted) {
@@ -116,6 +123,12 @@ createHttp(async (req, res) => {
   if (req.url === '/reset') {
     hits.length = 0;
     routes.clear();
+    Object.assign(mcp, {
+      tools: [],
+      whoami: false,
+      expectToken: undefined,
+      resourceMetadata: undefined,
+    });
     return reply(res, 200, {});
   }
   if (req.url === '/set') {

@@ -42,7 +42,14 @@ export interface LabServer {
   ip: string;
   control(path: string, body?: unknown): Promise<unknown>;
   hits(): Promise<
-    { method: string; url: string; host: string; authorization: string | null; bytes: number }[]
+    {
+      method: string;
+      url: string;
+      host: string;
+      authorization: string | null;
+      bytes: number;
+      rpc: string | null;
+    }[]
   >;
 }
 
@@ -121,13 +128,19 @@ export class Lab {
     );
     this.containers.push(name);
     const ip = this.ipOf(name, network);
-    const control = async (path: string, body?: unknown) => {
-      const res = await fetch(`http://${ip}:9000${path}`, {
-        method: 'POST',
-        body: JSON.stringify(body ?? {}),
-        signal: AbortSignal.timeout(5000),
-      });
-      return res.json();
+    const control = async (path: string, body?: unknown): Promise<unknown> => {
+      for (let attempt = 1; ; attempt++)
+        try {
+          const res = await fetch(`http://${ip}:9000${path}`, {
+            method: 'POST',
+            body: JSON.stringify(body ?? {}),
+            signal: AbortSignal.timeout(5000),
+          });
+          return await res.json();
+        } catch (e) {
+          // a kept-alive socket the server closed meanwhile: try again on a fresh one
+          if (attempt >= 3) throw e;
+        }
     };
     for (let i = 0; ; i++) {
       try {
