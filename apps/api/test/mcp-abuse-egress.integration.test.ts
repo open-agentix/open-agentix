@@ -134,13 +134,32 @@ const raw = (host) => new Promise((resolve) => {
 })();
 `;
 
+interface ProbeChild {
+  hadProxyEnv: boolean;
+  connect: Record<string, string>;
+  direct: Record<string, string>;
+  resolve: Record<string, string>;
+}
+interface ProbeResult {
+  toolbox: ProbeChild;
+  A: ProbeChild;
+  B: ProbeChild;
+  node: {
+    tokenInEnv: boolean;
+    tokenInCmdlines: boolean;
+    tokenSeenOnStdin: boolean;
+    bundleMarker: string;
+    serverAccounts: string[];
+  };
+}
+
 describe.skipIf(!ENABLED)('egress of a real run node (OAX_TEST_DOCKER=1)', () => {
   const lab = new Lab();
   let proxy: EgressProxy;
   let upA: LabServer;
   let upT: LabServer;
   let canary: LabServer;
-  let results: Record<string, Record<string, unknown>> = {};
+  let results = {} as ProbeResult;
   let inspectJson = '';
   let logs = '';
   const nodeId = randomUUID();
@@ -231,9 +250,9 @@ describe.skipIf(!ENABLED)('egress of a real run node (OAX_TEST_DOCKER=1)', () =>
 
   it('stdio server B without egress has no proxy, no route and no name resolution', () => {
     expect(results.B.hadProxyEnv).toBe(false);
-    for (const [target, verdict] of Object.entries<string>(results.B.direct))
+    for (const [target, verdict] of Object.entries(results.B.direct))
       expect(verdict, target).toMatch(/^(error:|timeout)/);
-    for (const [name, verdict] of Object.entries<string>(results.B.resolve))
+    for (const [name, verdict] of Object.entries(results.B.resolve))
       expect(verdict, name).toMatch(/^error:/);
   });
 
