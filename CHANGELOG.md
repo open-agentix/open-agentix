@@ -22,6 +22,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Role restrictions per node (ADR 0014 S9, #194)**: `GET/PUT/DELETE /v1/tenants/{id}/role-restrictions`
+  remove permissions from a role for the bindings bound on that tenant or below (never `admin`, never for
+  platform operators, never narrowing a binding that comes from an ancestor of the restricting node,
+  never adding a permission). Inheriting tenant admins of the node or an ancestor write; the access views
+  (`GET /v1/me/access`, `GET /v1/tenants/{id}/access`) explain removed permissions as `denied[]` with reason
+  `role_restricted` and the restricting node. Audited as `tenant.role_restricted` and
+  `tenant.role_restriction_removed`; applied only with `OAX_ROLE_BINDINGS_READ=bindings` (writes are
+  `409 role_restrictions_require_bindings_read` otherwise). New `OAX_MAX_ROLE_RESTRICTIONS_PER_NODE`
+  (default 100), `OAX_MAX_ROLE_RESTRICTIONS_PER_ORG` (1000) and a write throttle; while the read path is `legacy`
+  stored restrictions make `/readyz` fail unless `OAX_ALLOW_UNENFORCED_RESTRICTIONS=1`. Migration `0033_role_restrictions_epoch` (authz epoch triggers); the cached grants format
+  is version 3, so cached principals are rebuilt once after the upgrade. Drain old pods before writing the
+  first restriction. See [docs/tenancy.md](docs/tenancy.md#role-restrictions-adr-0014-section-5-slice-s9).
+
 - **Lifecycle policy, draft revisions, reviews and approval records, in shadow mode (ADR 0017 S1, #244)**:
   every draft save that changes the normalised content creates an immutable revision with its author
   (`GET /v1/agents/{id}/revisions`); reviews can be opened, decided (approve, request changes, reject) and

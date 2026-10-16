@@ -25,6 +25,16 @@ export async function createControlNode(
       ? 'role authorisation reads tenant_role_bindings (OAX_ROLE_BINDINGS_READ=bindings)'
       : 'role authorisation reads users.global_roles (OAX_ROLE_BINDINGS_READ=legacy)',
   );
+  // ADR 0014 S9: restrictions are the one kind of grant data whose loss widens access. Stored ones
+  // that the legacy read path ignores are loud: error, metric, and /readyz fails (see there).
+  const unenforced = await services.roleRestrictions.countUnenforced().catch(() => 0);
+  ctx.metrics.unenforcedRestrictions.set(unenforced);
+  if (unenforced > 0)
+    ctx.logger.error(
+      { restrictions: unenforced, allowed: config.auth.allowUnenforcedRestrictions },
+      'role restrictions are stored but NOT enforced: OAX_ROLE_BINDINGS_READ=legacy ignores them; ' +
+        'switch to bindings, or set OAX_ALLOW_UNENFORCED_RESTRICTIONS=1 to accept this',
+    );
   await services.identity.ensureBootstrapAdmin();
   // ADR 0017 S1: every agent from before the draft revisions gets its one system revision.
   await services.agentReviews.backfillRevisions().then(

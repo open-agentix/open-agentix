@@ -10,6 +10,7 @@ import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
 import type { PublicUser, TeamRow, TenantRow, TokenInfo } from '../services/identity.js';
 import type { EventRow, SourceRow } from '../services/ingest.js';
 import type { ApprovalRow, RunRow, StepRow } from '../services/runs.js';
+import type { RestrictionView } from '../services/role-restrictions.js';
 import type { BindingView } from '../services/tenant-role-bindings.js';
 
 const iso = (d: Date | string) => (typeof d === 'string' ? d : d.toISOString());
@@ -238,6 +239,13 @@ export const roleBindingDto = (b: BindingView) => ({
   source: b.source,
   grantedBy: b.grantedBy,
   createdAt: iso(b.createdAt),
+});
+
+export const roleRestrictionDto = (r: RestrictionView) => ({
+  role: r.role,
+  permissions: r.permissions,
+  updatedAt: isoOrNull(r.updatedAt),
+  updatedBy: r.updatedBy,
 });
 
 export const checkpointDto = (c: AuditCheckpoint) => c;

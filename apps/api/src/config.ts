@@ -72,6 +72,7 @@ export const EnvSchema = z.object({
   OAX_RATE_LIMIT_MAX: int(600),
   OAX_RATE_LIMIT_LOGIN_MAX: int(10),
   OAX_RATE_LIMIT_PLAN_MAX: int(30),
+  OAX_RATE_LIMIT_RESTRICTION_MAX: int(30),
   OAX_BODY_LIMIT_BYTES: int(1_048_576),
 
   OAX_BOOTSTRAP_ADMIN_EMAIL: z.string().email().optional(),
@@ -92,6 +93,7 @@ export const EnvSchema = z.object({
     ),
   /** Role bindings one user may hold (ADR 0014 3.1); more is `422 binding_limit_exceeded`. */
   OAX_MAX_BINDINGS_PER_USER: z.coerce.number().int().min(1).max(10_000).default(200),
+  OAX_MAX_ROLE_RESTRICTIONS_PER_NODE: z.coerce.number().int().min(1).max(1000).default(100),
   /**
    * Longest validity of a `pentest` binding in days (ADR 0014 section 7, rule 7). A grant needs an
    * `expiresAt` at most this far ahead; a longer period means a new grant.
@@ -130,6 +132,8 @@ export const EnvSchema = z.object({
    */
   OAX_ROLE_BINDINGS_READ: z.enum(['legacy', 'bindings']).default('legacy'),
   OAX_ROLE_BINDINGS_SHADOW: bool.default(true),
+  OAX_ALLOW_UNENFORCED_RESTRICTIONS: bool.default(false),
+  OAX_MAX_ROLE_RESTRICTIONS_PER_ORG: z.coerce.number().int().min(1).max(100_000).default(1000),
   OAX_ROLE_BINDINGS_RECONCILE: bool.default(true),
   OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS: int(3600),
 
@@ -380,13 +384,17 @@ export interface Config {
   trustProxy: boolean;
   database: DatabaseConfig;
   cache: { url: string | undefined; maxEntries: number };
-  rateLimit: { max: number; loginMax: number; planMax: number };
+  rateLimit: { max: number; loginMax: number; planMax: number; restrictionMax: number };
   bodyLimit: number;
   /** Tenant tree guards (ADR 0013): levels below a root (1 to 32) and nodes per organisation. */
   tenancy: {
     maxDepth: number;
     maxNodesPerRoot: number;
     maxBindingsPerUser: number;
+    /** Role restrictions (role, permission pairs) one node may carry (ADR 0014 section 5, S9). */
+    maxRoleRestrictionsPerNode: number;
+    /** Role restrictions one organisation may hold in total (ADR 0014 section 5, S9). */
+    maxRoleRestrictionsPerOrg: number;
     pentestMaxDays: number;
     bindingReaperIntervalSeconds: number;
     reservedSlugs: string[];
@@ -407,6 +415,8 @@ export interface Config {
     /** Compare the tenant role resolver with the legacy bindings (ADR 0014 S1); result unused. */
     roleBindingsRead: 'legacy' | 'bindings';
     roleBindingsShadow: boolean;
+    /** Start and report ready although stored role restrictions are not enforced (legacy read path). */
+    allowUnenforcedRestrictions: boolean;
     /** Reconcile the bindings mirror at start-up and periodically (ADR 0014 S1, #216). */
     roleBindingsReconcile: boolean;
     /** Seconds between periodic reconciles; 0 = at start-up only. */
@@ -684,6 +694,7 @@ function buildConfig(
       max: e.OAX_RATE_LIMIT_MAX,
       loginMax: e.OAX_RATE_LIMIT_LOGIN_MAX,
       planMax: e.OAX_RATE_LIMIT_PLAN_MAX,
+      restrictionMax: e.OAX_RATE_LIMIT_RESTRICTION_MAX,
     },
     bodyLimit: e.OAX_BODY_LIMIT_BYTES,
     tenancy: {
@@ -691,6 +702,8 @@ function buildConfig(
       maxNodesPerRoot: e.OAX_TENANT_MAX_NODES_PER_ROOT,
       reservedSlugs: e.OAX_TENANT_RESERVED_SLUGS,
       maxBindingsPerUser: e.OAX_MAX_BINDINGS_PER_USER,
+      maxRoleRestrictionsPerNode: e.OAX_MAX_ROLE_RESTRICTIONS_PER_NODE,
+      maxRoleRestrictionsPerOrg: e.OAX_MAX_ROLE_RESTRICTIONS_PER_ORG,
       pentestMaxDays: e.OAX_PENTEST_MAX_DAYS,
       bindingReaperIntervalSeconds: e.OAX_BINDING_REAPER_INTERVAL_SECONDS,
     },
@@ -711,6 +724,7 @@ function buildConfig(
       cacheTtlSeconds: e.OAX_AUTH_CACHE_TTL_SECONDS,
       roleBindingsRead: e.OAX_ROLE_BINDINGS_READ,
       roleBindingsShadow: e.OAX_ROLE_BINDINGS_SHADOW,
+      allowUnenforcedRestrictions: e.OAX_ALLOW_UNENFORCED_RESTRICTIONS,
       roleBindingsReconcile: e.OAX_ROLE_BINDINGS_RECONCILE,
       roleBindingsReconcileIntervalSeconds: e.OAX_ROLE_BINDINGS_RECONCILE_INTERVAL_SECONDS,
       oidc: oidcConfigured

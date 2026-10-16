@@ -954,6 +954,46 @@ export const RoleBindingSchema = z.object({
   createdAt: Iso,
 });
 export const RoleBindingParams = z.object({ id: Id, bindingId: Id });
+export const RoleRestrictionSchema = z.object({
+  role: z.string(),
+  permissions: z
+    .array(z.string())
+    .describe('the permissions removed from the role for bindings at this tenant and below'),
+  updatedAt: Iso.nullable().describe('null when the role has no restriction here'),
+  updatedBy: Id.nullable(),
+});
+export const RoleRestrictionListSchema = z.object({
+  items: z.array(RoleRestrictionSchema),
+  enforced: z
+    .boolean()
+    .describe(
+      'false while OAX_ROLE_BINDINGS_READ=legacy: the legacy read path ignores restrictions',
+    ),
+});
+export const RoleRestrictionPutBody = z.object({
+  role: z
+    .string()
+    .min(1)
+    .max(64)
+    .describe(
+      'any role but `admin` (422 `restriction_on_admin`; unknown roles: 422 `unknown_role`)',
+    ),
+  permissions: z
+    .array(z.string().min(1).max(64))
+    .max(PERMISSIONS.length)
+    .describe(
+      'the complete set of permissions to remove from the role here (replaces the current set; empty = none). Each must be a permission the role holds (422 `unknown_permission`, `permission_not_in_role`)',
+    ),
+});
+export const RoleRestrictionDeleteQuery = z.object({
+  role: z.string().min(1).max(64),
+  permission: z
+    .string()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe('remove only this permission; omitted = every restriction of the role here'),
+});
 export const RoleBindingListQuery = z.object({
   userId: Id.optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -1128,6 +1168,22 @@ export const AccessSchema = z.object({
       }),
     )
     .describe('the grants that apply at the tenant, with the node each one is bound on'),
+  denied: z
+    .array(
+      z.object({
+        permission: z.string(),
+        reason: z.literal('role_restricted'),
+        role: z.string().describe('the role whose permission was removed'),
+        restrictedAt: z
+          .object({ tenantId: Id, tenantSlugPath: z.string() })
+          .describe(
+            'the tenant whose role restriction removed it (on the chain of the answered tenant)',
+          ),
+      }),
+    )
+    .describe(
+      'permissions a role binding would give if a role restriction (ADR 0014 section 5) had not removed them, and that no other binding gives',
+    ),
   permissions: z
     .array(
       z.object({

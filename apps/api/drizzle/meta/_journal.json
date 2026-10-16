@@ -190,6 +190,13 @@
       "when": 1792700000001,
       "tag": "0032_agent_lifecycle_reviews",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792700000002,
+      "tag": "0033_role_restrictions_epoch",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,13 @@
-import { isRole, type Role } from '../rbac.js';
+import { PERMISSIONS, isRole, type Permission, type Role } from '../rbac.js';
 import { isValidPath, pathIds } from './path.js';
-import type { AgentRoleGrant, NodeRoleGrant, RawGrants, RoleNode, TeamRoleGrant } from './roles.js';
+import type {
+  AgentRoleGrant,
+  NodeRoleGrant,
+  RawGrants,
+  RoleNode,
+  RoleRestriction,
+  TeamRoleGrant,
+} from './roles.js';
 
 /**
  * Serializable form of the raw grants (ADR 0014 section 6.2), for a JSON cache such as Valkey.
@@ -14,7 +21,7 @@ import type { AgentRoleGrant, NodeRoleGrant, RawGrants, RoleNode, TeamRoleGrant 
  * from the database instead of acting on a partly understood cache entry. Nothing is ever
  * repaired, defaulted or guessed.
  */
-export const GRANTS_WIRE_VERSION = 2;
+export const GRANTS_WIRE_VERSION = 3;
 
 export interface WireNodeGrant {
   tenantId: string;
@@ -37,6 +44,8 @@ export interface WireGrants {
     nodeBindings: WireNodeGrant[];
     teamBindings: TeamRoleGrant[];
     agentBindings: AgentRoleGrant[];
+    /** Role restrictions that can narrow these grants (slice S9, wire version 3). */
+    restrictions: RoleRestriction[];
   };
   home: RoleNode;
 }
@@ -99,6 +108,11 @@ export function serializeGrants(g: GrantsAndHome): WireGrants {
       nodeBindings,
       teamBindings: g.raw.teamBindings.map((b) => ({ ...b })),
       agentBindings: g.raw.agentBindings.map((b) => ({ ...b })),
+      restrictions: (g.raw.restrictions ?? []).map((r) => ({
+        tenantId: r.tenantId,
+        role: r.role,
+        permission: r.permission,
+      })),
     },
     home: { id: g.home.id, rootId: g.home.rootId, path: g.home.path },
   };
@@ -159,6 +173,17 @@ function reviveAgent(v: unknown): AgentRoleGrant | undefined {
   };
 }
 
+function reviveRestriction(v: unknown): RoleRestriction | undefined {
+  if (!isObj(v) || !isStr(v.tenantId)) return undefined;
+  if (typeof v.role !== 'string' || !isRole(v.role)) return undefined;
+  if (
+    typeof v.permission !== 'string' ||
+    !(PERMISSIONS as readonly string[]).includes(v.permission)
+  )
+    return undefined;
+  return { tenantId: v.tenantId, role: v.role as Role, permission: v.permission as Permission };
+}
+
 /** Who the caller expects the cache entry to belong to (see {@link reviveGrants}). */
 export interface GrantsOwner {
   userId: string;
@@ -193,7 +218,8 @@ export function reviveGrants(value: unknown, owner?: GrantsOwner): GrantsAndHome
   const nodeBindings = reviveAll(r.nodeBindings, reviveNode);
   const teamBindings = reviveAll(r.teamBindings, reviveTeam);
   const agentBindings = reviveAll(r.agentBindings, reviveAgent);
-  if (!nodeBindings || !teamBindings || !agentBindings) return undefined;
+  const restrictions = reviveAll(r.restrictions, reviveRestriction);
+  if (!nodeBindings || !teamBindings || !agentBindings || !restrictions) return undefined;
   return {
     raw: {
       userId: r.userId,
@@ -203,6 +229,7 @@ export function reviveGrants(value: unknown, owner?: GrantsOwner): GrantsAndHome
       nodeBindings,
       teamBindings,
       agentBindings,
+      ...(restrictions.length > 0 ? { restrictions } : {}),
     },
     home: { id: h.id, rootId: h.rootId, path: h.path },
   };
