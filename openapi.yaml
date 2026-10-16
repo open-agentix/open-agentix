@@ -8546,6 +8546,68 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/reviews/{id}/people:
+    get:
+      summary: Display names of the people a review involves
+      tags:
+        - lifecycle
+      description: User id to display name for the opener, the authors of revisions, the reviewers and the authors and resolvers of comments, so that the console can show names. Only accounts of the acting tenant are named. Needs `agents:read` on the agent; another tenant or an unreadable agent is 404.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  people:
+                    type: object
+                    propertyNames:
+                      type: string
+                    additionalProperties:
+                      type: string
+                    description: user id to display name
+                required:
+                  - people
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/me/reviews:
     get:
       summary: "Your review inbox: open reviews you could decide now"
