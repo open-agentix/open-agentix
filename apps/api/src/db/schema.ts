@@ -65,6 +65,12 @@ export const tenants = pgTable(
      * (`PATCH /v1/tenants/{id}`); the epoch trigger of migration 0030 bumps the organisation.
      */
     useCase: text('use_case'),
+    /**
+     * Settings the node stores itself, sparse and namespaced (ADR 0013 section 3). Today only
+     * `agentLifecycle` (ADR 0017 section 6): the values this node set, not the effective policy; the
+     * effective policy is resolved down the chain and never looser than the parent's (narrowing only).
+     */
+    settings: jsonb('settings').$type<Record<string, unknown>>().notNull().default({}),
     createdAt: created(),
   },
   (t) => [
@@ -290,6 +296,12 @@ export const teamMembers = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     role: text('role').notNull(),
+    /**
+     * Who added the membership (ADR 0017 rule A4: a binding granted by a contributor of a review does
+     * not make its holder an approver). `null` = not recorded: rows from before migration 0032, the
+     * identity provider and the bootstrap.
+     */
+    grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
   },
   (t) => [
     primaryKey({ columns: [t.teamId, t.userId, t.role] }),
@@ -347,6 +359,11 @@ export const agents = pgTable(
     disabledAt: ts('disabled_at'),
     disabledBy: uuid('disabled_by'),
     disabledReason: text('disabled_reason'),
+    /**
+     * The newest draft revision (ADR 0017 section 4.1); `draft_source` stays as a denormalised copy of
+     * its source. `null` until the revision backfill ran for an agent from before migration 0032.
+     */
+    draftRevisionId: uuid('draft_revision_id'),
     createdBy: uuid('created_by'),
     createdAt: created(),
   },
@@ -373,6 +390,8 @@ export const agentVersions = pgTable(
     definition: jsonb('definition').notNull(),
     publishedBy: uuid('published_by'),
     publishedAt: ts('published_at').notNull().defaultNow(),
+    /** The draft revision this version was published from (ADR 0017 section 4.3); `null` before 0032. */
+    revisionId: uuid('revision_id'),
   },
   (t) => [
     uniqueIndex('agent_versions_agent_version_uq').on(t.agentId, t.version),
@@ -1100,6 +1119,8 @@ export const agentRoleBindings = pgTable(
       .notNull()
       .references(() => agents.id, { onDelete: 'cascade' }),
     role: text('role').notNull(),
+    /** Who added the binding (rule A4 of ADR 0017); `null` = not recorded. */
+    grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
   },
   (t) => [
     primaryKey({ columns: [t.userId, t.agentId, t.role] }),
@@ -1133,5 +1154,141 @@ export const guidelines = pgTable(
   (t) => [
     uniqueIndex('guidelines_scope_name_version_uq').on(t.scope, t.name, t.version),
     index('guidelines_scope_idx').on(t.scope, t.scopeId),
+  ],
+);
+
+/**
+ * Immutable snapshots of an agent's draft (ADR 0017 section 4.1): every save that changes the
+ * normalised content inserts one, with its author. A trigger refuses updates; rows that a review
+ * or version references cannot be deleted (foreign keys). `author_kind = 'system'` is the upgrade
+ * revision, whose author is unknown.
+ */
+export const agentDraftRevisions = pgTable(
+  'agent_draft_revisions',
+  {
+    id: uuid('id').primaryKey(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    seq: integer('seq').notNull(),
+    digest: text('digest').notNull(),
+    source: text('source').notNull(),
+    /** No foreign key: the revision outlives the account (the author stays a contributor). */
+    authorId: uuid('author_id'),
+    authorKind: text('author_kind').notNull(),
+    parentId: uuid('parent_id'),
+    sourceCommit: text('source_commit'),
+    createdAt: created(),
+  },
+  (t) => [
+    uniqueIndex('agent_draft_revisions_agent_seq_uq').on(t.agentId, t.seq),
+    index('agent_draft_revisions_agent_digest_idx').on(t.agentId, t.digest),
+    check('agent_draft_revisions_author_kind', sql`${t.authorKind} in ('user','repo','system')`),
+    check(
+      'agent_draft_revisions_author_check',
+      sql`(${t.authorKind} = 'user' and ${t.authorId} is not null) or ${t.authorKind} <> 'user'`,
+    ),
+    check('agent_draft_revisions_digest_check', sql`${t.digest} ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+/**
+ * A review of an agent's draft (ADR 0017 section 2): one open review per agent. The state shown to
+ * users (review requested, changes requested, approved) is computed from the decisions; `status` is
+ * only the life cycle of the row.
+ */
+export const agentReviews = pgTable(
+  'agent_reviews',
+  {
+    id: uuid('id').primaryKey(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    openedBy: uuid('opened_by').notNull(),
+    openedRevisionId: uuid('opened_revision_id')
+      .notNull()
+      .references(() => agentDraftRevisions.id),
+    /** The version the diff is computed against (the latest when the review was opened). */
+    baseVersionId: uuid('base_version_id').references(() => agentVersions.id),
+    status: text('status').notNull().default('open'),
+    /** The effective policy and matching agent rules when the review was opened (canonical JSON). */
+    policySnapshot: jsonb('policy_snapshot').$type<Record<string, unknown>>().notNull(),
+    policyDigest: text('policy_digest').notNull(),
+    requiredApprovals: integer('required_approvals').notNull(),
+    openedAt: ts('opened_at').notNull().defaultNow(),
+    closedAt: ts('closed_at'),
+    closedBy: uuid('closed_by'),
+  },
+  (t) => [
+    // At most one open review per agent; also the lock-free guard against two openers.
+    uniqueIndex('agent_reviews_one_open_uq')
+      .on(t.agentId)
+      .where(sql`${t.status} = 'open'`),
+    index('agent_reviews_agent_idx').on(t.agentId, t.openedAt.desc()),
+    index('agent_reviews_tenant_status_idx').on(t.tenantId, t.status),
+    check(
+      'agent_reviews_status_check',
+      sql`${t.status} in ('open','withdrawn','rejected','published')`,
+    ),
+    check('agent_reviews_required_check', sql`${t.requiredApprovals} between 1 and 5`),
+    check('agent_reviews_closed_check', sql`(${t.status} = 'open') = (${t.closedAt} is null)`),
+  ],
+);
+
+/**
+ * One decision of one reviewer on one revision, with everything an approval binds to (ADR 0017
+ * section 4.2). Append-only: a reviewer who changes their mind adds a new row, the latest one counts.
+ */
+export const agentReviewDecisions = pgTable(
+  'agent_review_decisions',
+  {
+    id: uuid('id').primaryKey(),
+    reviewId: uuid('review_id')
+      .notNull()
+      .references(() => agentReviews.id),
+    revisionId: uuid('revision_id')
+      .notNull()
+      .references(() => agentDraftRevisions.id),
+    /** SHA-256 of the normalised source, as `agent_versions.digest`. */
+    digest: text('digest').notNull(),
+    expansionDigest: text('expansion_digest').notNull(),
+    /** Digest of the secret resolution; names only until ADR 0017 S4. */
+    resolutionDigest: text('resolution_digest').notNull(),
+    baseVersionId: uuid('base_version_id').references(() => agentVersions.id),
+    policyDigest: text('policy_digest').notNull(),
+    reviewerId: uuid('reviewer_id').notNull(),
+    /** `session` or `token:<id>`. */
+    reviewerAuth: text('reviewer_auth').notNull(),
+    /** The node the reviewer acted in. */
+    actingTenantId: uuid('acting_tenant_id').notNull(),
+    /** The bindings that made the reviewer eligible: id, role, source, granted_by. */
+    bindingRefs: jsonb('binding_refs')
+      .$type<{ id: string; role: string; source: string; grantedBy: string | null }[]>()
+      .notNull(),
+    decision: text('decision').notNull(),
+    comment: text('comment'),
+    /** Agent-rule requirements this decision counts for (ADR 0017 S8); empty until then. */
+    satisfies: jsonb('satisfies').$type<string[]>().notNull().default([]),
+    decidedAt: ts('decided_at').notNull().defaultNow(),
+    expiresAt: ts('expires_at'),
+  },
+  (t) => [
+    index('agent_review_decisions_review_idx').on(t.reviewId, t.decidedAt),
+    index('agent_review_decisions_reviewer_idx').on(t.reviewId, t.reviewerId, t.decidedAt.desc()),
+    check(
+      'agent_review_decisions_decision_check',
+      sql`${t.decision} in ('approve','request_changes','reject')`,
+    ),
+    check('agent_review_decisions_comment_len', sql`char_length(${t.comment}) <= 10000`),
+    check(
+      'agent_review_decisions_expiry_check',
+      sql`(${t.decision} = 'approve') = (${t.expiresAt} is not null)`,
+    ),
   ],
 );
