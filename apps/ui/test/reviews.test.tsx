@@ -617,6 +617,53 @@ describe('threads on the diff', () => {
   });
 });
 
+describe('threads that the diff does not show', () => {
+  const anchored = (line: number) =>
+    r.thread({
+      anchor: {
+        side: 'head',
+        line,
+        lineHash: 'c'.repeat(64),
+        revisionId: r.rid.revision,
+        revisionSeq: 2,
+      },
+      comments: [r.comment({ body: `note on ${line}` })],
+    });
+
+  it('lists a thread of an identical diff in its own section', async () => {
+    openReviewWith({
+      changes: r.changes({ base: { ...r.changes().base!, source: r.HEAD_SOURCE } }),
+      threads: [anchored(3)],
+    });
+    await renderApp(path);
+    const section = (
+      await screen.findByRole('heading', { name: 'Threads not shown in the diff' })
+    ).closest('section')!;
+    expect(within(section).getByText('note on 3')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/identical|no differences|nothing changed/i),
+    ).toBeInTheDocument();
+  });
+
+  it('lists a thread below the cut of a huge diff in its own section', async () => {
+    const head = Array.from({ length: 3200 }, (_, i) => `line ${i + 1}`).join('\n');
+    openReviewWith({
+      changes: r.changes({ headSource: head, base: { ...r.changes().base!, source: '' } }),
+      threads: [anchored(3100)],
+    });
+    await renderApp(path);
+    const section = (
+      await screen.findByRole(
+        'heading',
+        { name: 'Threads not shown in the diff' },
+        { timeout: 15000 },
+      )
+    ).closest('section')!;
+    expect(within(section).getByText('note on 3100')).toBeInTheDocument();
+    expect(screen.getByText(/first 3000 lines/)).toBeInTheDocument();
+  }, 30000);
+});
+
 describe('the inbox', () => {
   it('lists the reviews you could decide and links them to the agent', async () => {
     server.use(

@@ -51,89 +51,118 @@ export function ReviewDiff({
   const coarse = useMemo(() => diffIsCoarse(base, head), [base, head]);
   const [composing, setComposing] = useState<number | null>(null);
   const stats = diffStats(lines);
-  if (stats.added === 0 && stats.removed === 0)
-    return <p className="muted">{t('agents.diff.identical')}</p>;
+  // Threads on a line that is not on the page (identical texts, or rows cut): never lost.
+  const identical = stats.added === 0 && stats.removed === 0;
+  const shown = new Set(identical ? [] : rows.filter((x): x is number => typeof x === 'number'));
+  const unplaced = [...placement.byLine].filter(([i]) => !shown.has(i)).flatMap(([, ths]) => ths);
+  const unplacedList = unplaced.length ? (
+    <section className="diff-unplaced" aria-label={t('reviews.diff.unplaced')}>
+      <h3>{t('reviews.diff.unplaced')}</h3>
+      {unplaced.map((th) => (
+        <ThreadCard
+          key={th.id}
+          thread={th}
+          context={t('reviews.thread.line', { line: th.anchor?.line ?? 0 })}
+          {...shared}
+        />
+      ))}
+    </section>
+  ) : null;
+  if (identical)
+    return (
+      <>
+        <p className="muted">{t('agents.diff.identical')}</p>
+        {unplacedList}
+      </>
+    );
   return (
-    <figure className="diff review-diff">
-      <figcaption>
-        <span className="diff-add-text">{t('agents.diff.added', { count: stats.added })}</span>,{' '}
-        <span className="diff-del-text">{t('agents.diff.removed', { count: stats.removed })}</span>
-      </figcaption>
-      {coarse ? <p className="muted">{t('reviews.diff.tooLarge')}</p> : null}
-      {clipped ? (
-        <p className="muted">{t('reviews.diff.clipped', { count: MAX_RENDERED_LINES })}</p>
-      ) : null}
-      <ol className="diff-body review-diff-body" aria-label={t('reviews.diff.label')}>
-        {rows.map((row, r) => {
-          if (typeof row !== 'number')
+    <>
+      <figure className="diff review-diff">
+        <figcaption>
+          <span className="diff-add-text">{t('agents.diff.added', { count: stats.added })}</span>,{' '}
+          <span className="diff-del-text">
+            {t('agents.diff.removed', { count: stats.removed })}
+          </span>
+        </figcaption>
+        {coarse ? <p className="muted">{t('reviews.diff.tooLarge')}</p> : null}
+        {clipped ? (
+          <p className="muted">{t('reviews.diff.clipped', { count: MAX_RENDERED_LINES })}</p>
+        ) : null}
+        <ol className="diff-body review-diff-body" aria-label={t('reviews.diff.label')}>
+          {rows.map((row, r) => {
+            if (typeof row !== 'number')
+              return (
+                <li key={`skip${r}`} className="review-diff-item diff-skipped muted">
+                  {t('reviews.diff.skipped', { count: row.skipped })}
+                </li>
+              );
+            const i = row;
+            const l = lines[i]!;
+            const anchor = anchorOfLine(l);
+            const commentable = shared.open && l.type !== 'same' && anchor !== null;
+            const commentLabel = anchor
+              ? t(
+                  l.type === 'del'
+                    ? 'reviews.diff.commentOnRemoved'
+                    : 'reviews.diff.commentOnAdded',
+                  {
+                    line: anchor.line,
+                  },
+                )
+              : '';
             return (
-              <li key={`skip${r}`} className="review-diff-item diff-skipped muted">
-                {t('reviews.diff.skipped', { count: row.skipped })}
+              <li key={i} className="review-diff-item">
+                <div className={`diff-line diff-${l.type} review-diff-line`}>
+                  <span className="diff-no" aria-hidden="true">
+                    {l.oldNo ?? ''}
+                  </span>
+                  <span className="diff-no" aria-hidden="true">
+                    {l.newNo ?? ''}
+                  </span>
+                  <Mark line={l} />
+                  <span className="diff-text">{l.text || ' '}</span>
+                  {commentable ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="diff-comment-btn"
+                      aria-label={commentLabel}
+                      onClick={() => setComposing(composing === i ? null : i)}
+                    >
+                      {t('reviews.diff.comment')}
+                    </Button>
+                  ) : null}
+                </div>
+                {composing === i && anchor ? (
+                  <div className="diff-thread">
+                    <CommentForm
+                      label={commentLabel}
+                      submitLabel={t('reviews.diff.startThread')}
+                      onSubmit={(text) =>
+                        shared.actions.startThread(
+                          text,
+                          anchor.side === 'head' ? { ...anchor, revisionId } : anchor,
+                        )
+                      }
+                      onCancel={() => setComposing(null)}
+                    />
+                  </div>
+                ) : null}
+                {(placement.byLine.get(i) ?? []).map((th) => (
+                  <div key={th.id} className="diff-thread">
+                    <ThreadCard
+                      thread={th}
+                      context={t('reviews.thread.line', { line: th.anchor?.line ?? 0 })}
+                      {...shared}
+                    />
+                  </div>
+                ))}
               </li>
             );
-          const i = row;
-          const l = lines[i]!;
-          const anchor = anchorOfLine(l);
-          const commentable = shared.open && l.type !== 'same' && anchor !== null;
-          const commentLabel = anchor
-            ? t(
-                l.type === 'del' ? 'reviews.diff.commentOnRemoved' : 'reviews.diff.commentOnAdded',
-                {
-                  line: anchor.line,
-                },
-              )
-            : '';
-          return (
-            <li key={i} className="review-diff-item">
-              <div className={`diff-line diff-${l.type} review-diff-line`}>
-                <span className="diff-no" aria-hidden="true">
-                  {l.oldNo ?? ''}
-                </span>
-                <span className="diff-no" aria-hidden="true">
-                  {l.newNo ?? ''}
-                </span>
-                <Mark line={l} />
-                <span className="diff-text">{l.text || ' '}</span>
-                {commentable ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="diff-comment-btn"
-                    aria-label={commentLabel}
-                    onClick={() => setComposing(composing === i ? null : i)}
-                  >
-                    {t('reviews.diff.comment')}
-                  </Button>
-                ) : null}
-              </div>
-              {composing === i && anchor ? (
-                <div className="diff-thread">
-                  <CommentForm
-                    label={commentLabel}
-                    submitLabel={t('reviews.diff.startThread')}
-                    onSubmit={(text) =>
-                      shared.actions.startThread(
-                        text,
-                        anchor.side === 'head' ? { ...anchor, revisionId } : anchor,
-                      )
-                    }
-                    onCancel={() => setComposing(null)}
-                  />
-                </div>
-              ) : null}
-              {(placement.byLine.get(i) ?? []).map((th) => (
-                <div key={th.id} className="diff-thread">
-                  <ThreadCard
-                    thread={th}
-                    context={t('reviews.thread.line', { line: th.anchor?.line ?? 0 })}
-                    {...shared}
-                  />
-                </div>
-              ))}
-            </li>
-          );
-        })}
-      </ol>
-    </figure>
+          })}
+        </ol>
+      </figure>
+      {unplacedList}
+    </>
   );
 }
