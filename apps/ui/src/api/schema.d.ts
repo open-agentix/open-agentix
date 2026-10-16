@@ -4718,7 +4718,7 @@ export interface paths {
                                          * @enum {string}
                                          */
                                         scope: "legacy";
-                                        ownerNode: null;
+                                        ownerNode: string | null;
                                         env: string | null;
                                         steps: string[];
                                     }[];
@@ -4769,7 +4769,7 @@ export interface paths {
                                          * @enum {string}
                                          */
                                         scope: "legacy";
-                                        ownerNode: null;
+                                        ownerNode: string | null;
                                         env: string | null;
                                         steps: string[];
                                     }[];
@@ -4854,7 +4854,7 @@ export interface paths {
                                          * @enum {string}
                                          */
                                         scope: "legacy";
-                                        ownerNode: null;
+                                        ownerNode: string | null;
                                         env: string | null;
                                         steps: string[];
                                     }[];
@@ -4865,7 +4865,7 @@ export interface paths {
                                          * @enum {string}
                                          */
                                         scope: "legacy";
-                                        ownerNode: null;
+                                        ownerNode: string | null;
                                         env: string | null;
                                         steps: string[];
                                     }[];

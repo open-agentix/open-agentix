@@ -7893,7 +7893,9 @@ paths:
                                       enum:
                                         - legacy
                                     ownerNode:
-                                      type: "null"
+                                      type:
+                                        - string
+                                        - "null"
                                     env:
                                       type:
                                         - string
@@ -8062,7 +8064,9 @@ paths:
                                   enum:
                                     - legacy
                                 ownerNode:
-                                  type: "null"
+                                  type:
+                                    - string
+                                    - "null"
                                 env:
                                   type:
                                     - string
@@ -8372,7 +8376,9 @@ paths:
                                   enum:
                                     - legacy
                                 ownerNode:
-                                  type: "null"
+                                  type:
+                                    - string
+                                    - "null"
                                 env:
                                   type:
                                     - string
@@ -8401,7 +8407,9 @@ paths:
                                   enum:
                                     - legacy
                                 ownerNode:
-                                  type: "null"
+                                  type:
+                                    - string
+                                    - "null"
                                 env:
                                   type:
                                     - string
