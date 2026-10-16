@@ -88,6 +88,8 @@ jobs:
           node-version: '22'
       # Offline: hashes of the committed files only, no install, no network access.
       - run: node scripts/awp/verify-pin.mjs
+      # Generated types and schema copies are current; a hand edit or a stale file fails here.
+      - run: node scripts/awp/generate-types.mjs --check
 
   pr-title:
     name: Conventional Commit PR title
