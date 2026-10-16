@@ -92,6 +92,15 @@ export interface RawGrants {
   nodeBindings: readonly NodeRoleGrant[];
   teamBindings: readonly TeamRoleGrant[];
   agentBindings: readonly AgentRoleGrant[];
+  /**
+   * The role restrictions that can narrow this principal's bindings (ADR 0014 section 5, slice S9):
+   * every restriction of the organisation on a node that is the anchor of one of the principal's
+   * node, team or agent bindings or an ancestor of it. The loader picks them with the principal's
+   * grants, so a cached principal carries them and an authz epoch bump (a restriction is written)
+   * drops both together. Restrictions on nodes off the chain of the node being resolved are
+   * ignored by the resolver. Absent = none.
+   */
+  restrictions?: readonly RoleRestriction[] | undefined;
 }
 
 /** A permission removed from a role for bindings at a node and below (ADR 0014 section 5). */
@@ -101,9 +110,20 @@ export interface RoleRestriction {
   permission: Permission;
 }
 
+/** A permission a restriction removed from a binding, and the node whose restriction did it. */
+export interface RestrictedPermission {
+  permission: Permission;
+  /** The restricting node (on the chain of the binding's node, the binding's own node included). */
+  tenantId: string;
+}
+
 export interface ResolveOptions {
   now: Date;
-  /** Restrictions on the chain of the acting node; anything else is ignored. */
+  /**
+   * Restrictions on the chain of the acting node; anything else is ignored. They are applied in
+   * addition to `raw.restrictions` (restrictions only ever remove, so the union is the safe way to
+   * combine two sources).
+   */
   restrictions?: readonly RoleRestriction[] | undefined;
   /**
    * A platform admin is `admin` at every node (ADR 0013 7.1; default `true`). The shadow check of
@@ -129,6 +149,12 @@ export interface AppliedBinding extends EffectiveBinding {
   tenantId: string;
   inherit: boolean;
   expiresAt: Date | null;
+  /**
+   * Permissions of the binding's role that a role restriction removed, with the restricting node
+   * (the deepest one when several remove the same permission). Empty when nothing was removed.
+   * Explanation only (`role_restricted` in the access views); `permissions` already excludes them.
+   */
+  restrictedBy: readonly RestrictedPermission[];
 }
 
 /** The ids of a node's chain, root first, or `undefined` when the placement is not coherent. */
@@ -179,6 +205,7 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
         tenantId: node.id,
         inherit: false,
         expiresAt: null,
+        restrictedBy: [],
       },
     ];
   }
@@ -187,20 +214,38 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
 
   const now = opts.now.getTime();
   const position = new Map(chain.map((id, i) => [id, i] as const));
-  const restrictions = opts.restrictions ?? [];
+  // Platform admins returned above, so nothing here can narrow them. `admin` is never narrowed
+  // below, whatever the restriction list says (the database refuses such rows, too).
+  const restrictions = [...(raw.restrictions ?? []), ...(opts.restrictions ?? [])];
 
-  /** Permissions of `role` for a binding anchored at chain position `at`, after restrictions. */
-  const permissionsFor = (role: Role, at: number): Permission[] => {
+  /**
+   * Permissions of `role` for a binding anchored at chain position `at`, after restrictions, and
+   * what was removed. A restriction applies iff its node is on the chain at `at` or above, that
+   * is: the binding's own node or one of its ancestors (ADR 0014 section 5). A restriction below
+   * the binding's node (between it and the acting node) never narrows it: the binding comes from
+   * above that node.
+   */
+  const permissionsFor = (
+    role: Role,
+    at: number,
+  ): { permissions: Permission[]; restrictedBy: RestrictedPermission[] } => {
     const base = ROLE_PERMISSIONS[role];
     // `admin` can never be restricted (a node must not be able to lock out its administrators).
-    if (role === 'admin') return [...base];
-    const removed = new Set<Permission>();
+    if (role === 'admin') return { permissions: [...base], restrictedBy: [] };
+    const removed = new Map<Permission, number>();
     for (const r of restrictions) {
       const i = position.get(r.tenantId);
-      // A restriction applies to bindings at the restricting node and below, never above it.
-      if (r.role === role && i !== undefined && i <= at) removed.add(r.permission);
+      if (r.role !== role || i === undefined || i > at) continue;
+      if (!base.includes(r.permission)) continue;
+      const prev = removed.get(r.permission);
+      if (prev === undefined || i > prev) removed.set(r.permission, i);
     }
-    return base.filter((p) => !removed.has(p));
+    return {
+      permissions: base.filter((p) => !removed.has(p)),
+      restrictedBy: base
+        .filter((p) => removed.has(p))
+        .map((p) => ({ permission: p, tenantId: chain[removed.get(p)!]! })),
+    };
   };
 
   const out: AppliedBinding[] = [];
@@ -250,8 +295,13 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
     // use-case binding is limited to the permissions that have a use case at its own node; in an
     // attached node it is the unrestricted binding of the same role.
     const scoped = useCase !== null && source === 'direct';
-    const base = permissionsFor(b.role, at);
-    const permissions = scoped ? base.filter((p) => USE_CASE_PERMISSIONS.includes(p)) : base;
+    const narrowed = permissionsFor(b.role, at);
+    const permissions = scoped
+      ? narrowed.permissions.filter((p) => USE_CASE_PERMISSIONS.includes(p))
+      : narrowed.permissions;
+    const restrictedBy = scoped
+      ? narrowed.restrictedBy.filter((r) => USE_CASE_PERMISSIONS.includes(r.permission))
+      : narrowed.restrictedBy;
     out.push({
       role: b.role,
       teamId: null,
@@ -261,35 +311,40 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
       tenantId: b.tenantId,
       inherit: b.inherit,
       expiresAt: b.expiresAt,
+      restrictedBy,
     });
   }
 
   const here = chain.length - 1;
   for (const t of raw.teamBindings) {
     if (t.tenantId !== node.id || !isRole(t.role)) continue;
+    const narrowed = permissionsFor(t.role, here);
     out.push({
       role: t.role,
       teamId: t.teamId,
-      permissions: permissionsFor(t.role, here),
+      permissions: narrowed.permissions,
       useCase: null,
       source: 'team',
       tenantId: node.id,
       inherit: false,
       expiresAt: null,
+      restrictedBy: narrowed.restrictedBy,
     });
   }
   for (const a of raw.agentBindings) {
     if (a.tenantId !== node.id || !isRole(a.role)) continue;
+    const narrowed = permissionsFor(a.role, here);
     out.push({
       role: a.role,
       teamId: a.teamId,
       agentId: a.agentId,
-      permissions: permissionsFor(a.role, here),
+      permissions: narrowed.permissions,
       useCase: null,
       source: 'agent',
       tenantId: node.id,
       inherit: false,
       expiresAt: null,
+      restrictedBy: narrowed.restrictedBy,
     });
   }
   return out;

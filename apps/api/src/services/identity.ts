@@ -255,7 +255,18 @@ export class IdentityService {
         // Today a platform operator acts with the roles of its home tenant (also elsewhere).
         implicitPlatformAdmin: false,
       });
-      if (this.ctx.config.auth.roleBindingsShadow) await this.shadowCheckLegacy(user, bindings);
+      if (this.ctx.config.auth.roleBindingsShadow)
+        // The legacy sources know no role restrictions: compare what they would grant with the
+        // resolver result without them, or every restriction would count as a drift.
+        await this.shadowCheckLegacy(
+          user,
+          (loaded.raw.restrictions ?? []).length === 0
+            ? bindings
+            : effectiveAt({ ...loaded.raw, restrictions: [] }, loaded.home, {
+                now: this.ctx.now(),
+                implicitPlatformAdmin: false,
+              }),
+        );
       return {
         principal: { ...base, bindings, grants: loaded, authzEpoch: head.epoch },
         rootId: head.rootId,
@@ -306,7 +317,8 @@ export class IdentityService {
         return;
       }
       // Today a platform operator acts with the roles of its home tenant: no implicit admin yet.
-      const resolved = effectiveAt(loaded.raw, loaded.home, {
+      // The legacy read path ignores role restrictions, so the comparison does too.
+      const resolved = effectiveAt({ ...loaded.raw, restrictions: [] }, loaded.home, {
         now: this.ctx.now(),
         implicitPlatformAdmin: false,
       });
