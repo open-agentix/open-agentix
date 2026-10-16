@@ -759,8 +759,11 @@ Consequences, spelled out because they surprise:
   in the division through the root binding. A restriction narrows what is bound there and below, not what an
   ancestor grants. To take the permission away from that user, restrict `operator` at the node where the root
   binding sits (or narrow the binding itself).
-- **A node can be visible and still empty.** Restricting all permissions of a role leaves the binding in place
-  (the node stays visible, `GET /v1/me` lists the binding) but with no permissions.
+- **A node can drop out of sight.** A node is visible when the principal holds at least one *permission*
+  there (`TenantAccess.reach`). Restricting every permission of the only role a user holds somewhere leaves
+  the binding in place (`GET /v1/me` still lists it, with no permissions) but the node is no longer
+  reachable through it. (The pure helper `visibleNodeIds` in the core package counts bindings, not
+  permissions; the API's reach is the authority.)
 - **Use-case bindings** are narrowed at the node they are bound on; in an attached child they are the
   unrestricted binding of the same role (ADR 0014 section 3.3), so a restriction on the attached child does not
   narrow them. Restrict at the node the use-case binding sits on.
@@ -804,8 +807,8 @@ restrictions too.
 **Caches and races.** Migration `0033_role_restrictions_epoch` makes the database bump the authz epoch of the
 organisation on every insert, update or delete of `tenant_role_restrictions` (any code path, a cascade
 excepted: deleting a node bumps through the node itself). A cached principal built under the old epoch is
-rebuilt on its next request; there is no extra TTL window beyond the existing one for multi-replica installs
-without a shared cache (`OAX_AUTH_CACHE_TTL_SECONDS`). Writes run in one transaction that takes the tree lock
+rebuilt on its next request (the epoch is read from the database on every request, so there is no TTL window,
+also without a shared cache). Writes run in one transaction that takes the tree lock
 (shared) and the binding lock of the organisation, in the same order as the grant paths, and re-read the
 writer's grants from the database, so a restriction write cannot race a change of the writer's own
 administrator binding or a node move. Replicas of the previous version do not know restrictions: during a
@@ -815,9 +818,28 @@ rolling deploy they ignore them, so drain old pods before writing the first rest
 `tenant.role_restriction_removed { role, permissions }`, in the partition of the restricted tenant, actor =
 the writer. Names only.
 
-**Integration points.** ADR 0017 S1 (lifecycle reviews, approver eligibility) is reviewed separately; its
-approver-eligibility code reads role permissions without node restrictions today. When it lands it must call
-the resolver (`appliedAt`, which now carries the restrictions) instead of `ROLE_PERMISSIONS`.
+**Approvals.** Reviewer eligibility (ADR 0017 S1, `approver-facts.ts`) reads the grants with `loadRawGrants`
+and `appliedAt`, so a restricted `agents:approve` makes the reviewer neither eligible nor allowed through the
+route (tested).
+
+**Platform operators** are never narrowed: the loader does not fetch restrictions for them and the resolver
+ignores them, also while an operator acts with the roles of the home tenant.
+
+**Limits and throttling.** Per tenant `OAX_MAX_ROLE_RESTRICTIONS_PER_NODE` (default 100) and per organisation
+`OAX_MAX_ROLE_RESTRICTIONS_PER_ORG` (default 1000; `422 restriction_limit_exceeded` for either). A non-admin role
+holds at most 82 permissions, so the per-node cap alone would still allow 82 x nodes rows; the organisation cap
+bounds the size of a cached principal and the cost of one resolution (restrictions are indexed once per
+principal; a resolution walks only the chain of the binding). Every write bumps the authz epoch of the whole
+organisation, so `PUT` and `DELETE` are throttled per caller (`OAX_RATE_LIMIT_RESTRICTION_MAX`, default 30 per
+minute).
+
+**Stored but not enforced (fail-open guard).** Restrictions are the one kind of grant data whose loss widens
+access. With `OAX_ROLE_BINDINGS_READ=legacy` (also after an application rollback to a version that does not
+read them, or on old pods during a rolling deploy) stored restrictions are ignored. Therefore, when the read
+path is `legacy` and `tenant_role_restrictions` is not empty, start-up logs an error, the gauge
+`oax_unenforced_role_restrictions` is set, and `/readyz` answers `503` with `checks.restrictions: false`,
+unless `OAX_ALLOW_UNENFORCED_RESTRICTIONS=1` accepts it. Before rolling back, lift the restrictions you rely
+on or accept the wider access explicitly.
 
 ## Audit
 

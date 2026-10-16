@@ -658,10 +658,11 @@ stale snapshot is never read after a bump.
   time, so an expired `pentest` binding stops working at the second it expires, cache or not. A
   reaper (every minute) deletes expired bindings, writes `tenant.role_expired` and bumps the
   epoch (housekeeping only; enforcement does not depend on it).
-- **Without Valkey and with more than one API replica**, a revocation reaches other replicas only
-  when their cached principal expires (at most `OAX_AUTH_CACHE_TTL_SECONDS`, default 30 s). This
-  is today's behaviour for role changes; `docs/roles.md` states the window and recommends Valkey
-  for more than one replica.
+- **Replicas.** A cached principal is compared with the authz epoch of its organisation **in the
+  database on every request** (`IdentityService.fromCache`), so a revocation, a binding change or a
+  restriction reaches every replica on its next request, with or without a shared cache; the TTL
+  (`OAX_AUTH_CACHE_TTL_SECONDS`) only bounds how long an entry lives. (Earlier text spoke of a 30 s
+  window; that was true before the epoch check was added in S2.)
 - **Writes recheck under the tree lock.** Grant, revoke, restriction, attach and child creation
   take the L0 tree lock of the root in **shared** mode (ADR 0013 5.1) and re-read the grantor's
   bindings inside the transaction; moves take it exclusive. A grant therefore never races a move

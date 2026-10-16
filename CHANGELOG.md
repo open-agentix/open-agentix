@@ -30,7 +30,8 @@ All notable changes to this project are documented here. The format follows
   `role_restricted` and the restricting node. Audited as `tenant.role_restricted` and
   `tenant.role_restriction_removed`; applied only with `OAX_ROLE_BINDINGS_READ=bindings` (writes are
   `409 role_restrictions_require_bindings_read` otherwise). New `OAX_MAX_ROLE_RESTRICTIONS_PER_NODE`
-  (default 100). Migration `0033_role_restrictions_epoch` (authz epoch triggers); the cached grants format
+  (default 100), `OAX_MAX_ROLE_RESTRICTIONS_PER_ORG` (1000) and a write throttle; while the read path is `legacy`
+  stored restrictions make `/readyz` fail unless `OAX_ALLOW_UNENFORCED_RESTRICTIONS=1`. Migration `0033_role_restrictions_epoch` (authz epoch triggers); the cached grants format
   is version 3, so cached principals are rebuilt once after the upgrade. Drain old pods before writing the
   first restriction. See [docs/tenancy.md](docs/tenancy.md#role-restrictions-adr-0014-section-5-slice-s9).
 
