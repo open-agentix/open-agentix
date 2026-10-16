@@ -72,6 +72,7 @@ export const EnvSchema = z.object({
   OAX_RATE_LIMIT_MAX: int(600),
   OAX_RATE_LIMIT_LOGIN_MAX: int(10),
   OAX_RATE_LIMIT_PLAN_MAX: int(30),
+  OAX_RATE_LIMIT_VALIDATE_MAX: int(120),
   OAX_RATE_LIMIT_COMMENT_MAX: int(30),
   OAX_RATE_LIMIT_RESTRICTION_MAX: int(30),
   OAX_BODY_LIMIT_BYTES: int(1_048_576),
@@ -396,6 +397,7 @@ export interface Config {
     max: number;
     loginMax: number;
     planMax: number;
+    validateMax: number;
     commentMax: number;
     restrictionMax: number;
   };
@@ -709,6 +711,7 @@ function buildConfig(
       max: e.OAX_RATE_LIMIT_MAX,
       loginMax: e.OAX_RATE_LIMIT_LOGIN_MAX,
       planMax: e.OAX_RATE_LIMIT_PLAN_MAX,
+      validateMax: e.OAX_RATE_LIMIT_VALIDATE_MAX,
       commentMax: e.OAX_RATE_LIMIT_COMMENT_MAX,
       restrictionMax: e.OAX_RATE_LIMIT_RESTRICTION_MAX,
     },

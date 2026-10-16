@@ -154,4 +154,51 @@ describe('POST /v1/agents/validate with AWP manifests', () => {
     }[];
     expect(list.map((a) => a.name)).not.toContain('ticket-updater');
   });
+
+  it('also refuses an AWP manifest as a draft update and as a dry-run source; publish keeps the stored draft', async () => {
+    const created = await n.req({
+      method: 'POST',
+      url: '/v1/agents',
+      payload: { source: agentSource('wip-agent', 'team-docs') },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id as string;
+    const put = await n.req({
+      method: 'PUT',
+      url: `/v1/agents/${id}/draft`,
+      payload: { source: UPDATER_MD.replace('ticket-updater', 'wip-agent') },
+    });
+    expect(put.statusCode).toBe(400);
+    expect(put.json().details[0]).toMatchObject({ code: 'awp_not_runnable' });
+    const dry = await n.req({
+      method: 'POST',
+      url: `/v1/agents/${id}/dry-run`,
+      payload: { source: UPDATER_MD, data: {} },
+    });
+    expect(dry.statusCode).toBe(400);
+    // the stored draft is still the legacy source, so publishing works and never sees AWP text
+    const draft = (await n.req({ method: 'GET', url: `/v1/agents/${id}` })).json();
+    expect(draft.draftSource).not.toContain('awp.agenticworkflowprotocol.org');
+    expect((await n.req({ method: 'POST', url: `/v1/agents/${id}/publish` })).statusCode).toBe(201);
+  });
+
+  it('limits the rate of validation per token (tighter than the global limit)', async () => {
+    const strict = await testNode({ OAX_RATE_LIMIT_VALIDATE_MAX: '3' });
+    try {
+      const statuses: number[] = [];
+      for (let i = 0; i < 5; i++)
+        statuses.push(
+          (
+            await strict.req({
+              method: 'POST',
+              url: '/v1/agents/validate',
+              payload: { source: UPDATER_MD },
+            })
+          ).statusCode,
+        );
+      expect(statuses).toEqual([200, 200, 200, 429, 429]);
+    } finally {
+      await strict.close();
+    }
+  });
 });

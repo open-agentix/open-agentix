@@ -36,7 +36,7 @@ import type { ZApp } from '../zapp.js';
 const sec = [{ bearer: [] }];
 const tags = ['agents'];
 
-export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
+export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
   const { agents, agentSummaries } = services;
   const summarize = async (principal: Principal, row: AgentRow) =>
     (await agentSummaries.summarize(principal, [row]))[0]!;
@@ -117,7 +117,10 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
   app.post(
     '/v1/agents/validate',
     {
-      config: { access: 'agents:read' },
+      config: {
+        access: 'agents:read',
+        rateLimit: { max: ctx.config.rateLimit.validateMax, timeWindow: '1 minute' },
+      },
       schema: {
         tags,
         summary: 'Validate an agents.md source or an AWP manifest without storing it',
@@ -128,7 +131,7 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
           'For an AWP manifest the issues carry the AWP diagnostic code and a JSON Pointer path.',
         security: sec,
         body: AgentSourceBody,
-        response: { 200: ValidationResultSchema },
+        response: { 200: ValidationResultSchema, 429: ErrorSchema },
       },
     },
     async (req) => {

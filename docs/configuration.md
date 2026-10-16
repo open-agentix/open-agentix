@@ -89,6 +89,7 @@ Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
 | `OAX_RATE_LIMIT_MAX` | `600` | Requests per minute per token/IP. |
 | `OAX_RATE_LIMIT_LOGIN_MAX` | `10` | Login attempts per minute per IP. |
 | `OAX_RATE_LIMIT_PLAN_MAX` | `30` | Agent plan checks and drafts (`POST /v1/plans/*`) per minute per token/IP. |
+| `OAX_RATE_LIMIT_VALIDATE_MAX` | `120` | `POST /v1/agents/validate` (agents.md and AWP manifests) per minute per token/IP; tighter than the global limit because a validation of a large manifest is CPU work. |
 | `OAX_RATE_LIMIT_COMMENT_MAX` | `30` | Review comments and threads a user may create per minute (`429 rate_limited`), counted in the database over every session and token of the user. |
 | `OAX_OIDC_ISSUER` | – | Issuer URL (Keycloak realm, Entra ID tenant, Okta). OIDC is enabled when issuer, client id and redirect URI are set. |
 | `OAX_OIDC_CLIENT_ID` | – | Client id. |
