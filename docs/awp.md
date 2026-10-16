@@ -193,3 +193,102 @@ record the digest they reviewed.
 schema with the repository's `ajv`, run the vendored semantic rules with digest verification and compare
 the digest with the vendored reference implementation. Golden manifests are in `examples/awp/*.awp.json`
 (regenerate with `UPDATE_GOLDEN=1`, then `pnpm format`). Nothing is fetched at build or run time.
+
+## Manifest validation: reading AWP manifests (AWP-3)
+
+AWP is a **draft** (`v1alpha1`). OpenAgentix validates AWP manifests; it does **not** store, publish or
+run them yet, and it is not conformant to any AWP profile. Wording stays "built to the AWP schema,
+conformance in progress (alpha)". Validation is offline: nothing is fetched at build or run time, and
+the only inputs are the vendored copy (`packages/awp/vendor/`, never edited by hand) and the extension
+schema of this repository.
+
+```sh
+# API: same endpoint as for agents.md; the response says how the source was read
+POST /v1/agents/validate        { "source": "<agents.md, JSON or YAML text>" }   -> format: "awp" | "agents-md"
+
+# CLI: *.awp.yaml, *.awp.json (and .yaml/.yml/.json) are read as AWP; an .md file is read as AWP when its
+# front matter says apiVersion: awp.…, otherwise as the legacy agents.md
+oax validate examples/awp/ticket-updater.awp.md
+```
+
+### Accepted forms
+
+| Form | Example | Notes |
+| --- | --- | --- |
+| `agents.md` with AWP front matter | `examples/awp/ticket-updater.awp.md` | The front matter is one YAML document. `## Agent: <id>` sections supply `instructions`. |
+| plain JSON or YAML | `examples/awp/*.awp.json` | One or more YAML documents (spec 3.1); every document is validated on its own. |
+
+A text is treated as AWP when its `apiVersion` starts with `awp.`; a file with `openagentix.io/v1alpha1` is
+the legacy format and goes to the legacy parser unchanged (its conversion is AWP-3b). The legacy parser
+refuses an AWP file with `awp_not_runnable` instead of listing dozens of unknown fields.
+
+**Effective manifest and digest.** For `agents.md` the effective manifest is the front matter with the text
+of each `## Agent: <id>` section injected as `instructions` of the inline agent `<id>` (trimmed, line endings
+normalised); title, overview and other sections are documentation and do not change it. The digest is
+`sha256:` over the RFC 8785 form without `metadata.integrity`, `signature` and `provenance` (spec 9.1), so
+the JSON form, the YAML form and the `agents.md` form of one manifest give the same digest. A declared
+`metadata.integrity.digest` is verified (`digest.mismatch`); the digest of the `agents.md` source stays an
+OpenAgentix value and is not part of this. Decision: the heading keyword `Agent:` is case-insensitive, the id
+is not (`## Agent: A` does not match agent `a`).
+
+### Findings
+
+The result lists findings with the AWP diagnostic `code` and the JSON Pointer `path` of the rule catalogue
+(`schema/README.md`): the same codes and paths the reference checker reports, for YAML and JSON alike.
+Structure comes first (`schema.<keyword>`, from the pinned schema); only a structurally valid document gets
+the semantic rules (`id.duplicate`, `dependsOn.cycle`, `profile.unsupported`, `digest.mismatch`, ...). A
+warning does not make a manifest invalid. Codes of the form `extension.*`, `wrapper.*`, `limit.*` and
+`yaml.cycle`, `yaml.unsafe-integer`, `yaml.non-json-value`, `digest.not-canonicalizable` are OpenAgentix's own.
+
+**Where the code comes from.** `scripts/awp/generate-types.mjs` writes `packages/core/src/awp/generated/`
+(the embedded pinned schema, the embedded extension schema and the TypeScript types `Awp*`), each file with
+the hash of its input. The output is committed, never edited by hand; CI runs the script with `--check`
+(job `awp-pin`) and fails on a stale or hand-edited file. The structural validator is the repository's `ajv`
+compiled from that copy with the options of the reference checker. The semantic rules
+(`manifest-semantic.ts`) are OpenAgentix's own port; `awp-semantic-diff.test.ts` runs them against the
+vendored `semantic.mjs` on the whole conformance suite and on deterministic mutations and requires equal
+findings, and `awp-manifest-conformance.test.ts` runs every vendored `valid/` and `invalid/` case.
+
+### Fail closed
+
+- **Unknown fields** are errors (`schema.additionalProperties`, the field is in the path). Other vendors'
+  `x-` fields are ignored (spec 3.3).
+- **Profiles.** Supported: `core`, `governance`, `mcp` (what the exporter writes). Fields of `audit`,
+  `security` and `a2a` are rejected with `profile.unsupported` naming field and profile. Supporting a
+  profile here means the validator checks its fields, not that anything enforces them: nothing runs from a
+  manifest. `packages/core/test/data/awp-field-coverage.json` lists every schema property as `handled` or
+  `rejected`; the drift test fails when the pinned schema gains a property that is in neither list.
+- **`x-openagentix-*` extensions** are validated against `packages/awp/extensions/openagentix-extensions.v1alpha1.json`,
+  per location (agent, step, tool permission, spec). Decision: the namespace is ours and stricter than
+  AWP 3.3 requires, because a typo (`x-openagentix-maxCallPerRun`) would silently drop a limit. A name that
+  is not in the schema is `extension.unknown`; a known name on the wrong object is `extension.misplaced`; a
+  bad value is `extension.invalid` with the path inside the value; a credential-shaped literal inside an
+  extension is `extension.secret` (the AWP rule `secret.literal-field` does not look into `x-` subtrees).
+- **Critical extensions** (those that restrict behaviour, the list of "Critical fields" above) are valid
+  but warned about as `extension.critical-not-declared`: the pinned schema has no
+  `metadata.requiredExtensions` (AEP-0011), so the manifest cannot say that a runtime must not ignore
+  them, and it is **not portable**. A manifest that carries `metadata.requiredExtensions` today fails
+  structurally (`schema.additionalProperties /metadata/requiredExtensions`). When a pin upgrade adds the
+  field, the same code switches on: every listed name must be known (`extension.required-unknown`, other
+  vendors' names are refused because they cannot be honoured) and every critical extension must be listed
+  (`extension.required-missing`); tests run this with a schema that has the field.
+- **Limits** for untrusted input (`AWP_LIMITS`): 512 KiB of source, 50 000 nodes, depth 64, 50 YAML aliases
+  (counted with their expansion), 16 documents, 200 findings. No custom tags, no non-string keys, no
+  duplicate keys, no cycles, no `.inf`/`.nan`, no integers beyond 2^53, JSON read by the same YAML
+  parser, YAML 1.2 core schema (so `<<` merge keys are an unknown field). The cycle search is iterative; a
+  hostile document never throws. Prototype-polluting keys (`__proto__`, `constructor`) are plain data and,
+  where the schema is closed, unknown fields.
+
+### No privilege creation
+
+Validation returns what the manifest states and creates nothing: no agent, no grant, no approval, no
+connection. A tool or permission the manifest lists is not granted by being listed; when AWP manifests can
+be stored and run (later slices), the existing grant, approval and connection rules apply to them like to
+any `agents.md`. The `agents.md` wrapper never lets a section override front matter: a section next to
+`instructions` or `promptRef` of the same agent is `wrapper.instructions-conflict`.
+
+### Left out of this slice
+
+Storing, publishing and running an AWP manifest; conversion of the legacy format (AWP-3b); source positions
+(line and column) in findings; the `awp-check` profile selection by the caller; `kind: Agent` and `kind:
+Policy` documents are validated but have no exporter counterpart.
