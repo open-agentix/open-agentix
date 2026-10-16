@@ -287,6 +287,33 @@ export function proposeLifecyclePolicy(
   return apply(parentEffective, own, 'free');
 }
 
+/**
+ * The stricter of two effective policies, key by key (the same per-key rule as narrowing: the
+ * larger `minApprovals`, the shorter expiry, the intersection of the role and source lists, the union
+ * of the production use cases, the stricter requirement). An open review is evaluated against the
+ * stricter of the policy it was opened under and the policy now, so loosening the policy never
+ * relaxes a review that is already open (ADR 0017 section 6, S1 review finding 2). `a` wins where
+ * the two are not comparable (the approver scope).
+ */
+export function stricterPolicy(a: LifecyclePolicy, b: LifecyclePolicy): LifecyclePolicy {
+  const out: Record<string, unknown> = {};
+  for (const k of LIFECYCLE_KEYS) out[k] = SPECS[k].clamp(a[k] as never, b[k] as never);
+  return normalise(out as unknown as LifecyclePolicy);
+}
+
+/**
+ * Reads a stored policy snapshot (`agent_reviews.policy_snapshot.policy`). `undefined` when it is
+ * missing or incomplete, so the caller falls back to the current policy.
+ */
+export function policyFromSnapshot(raw: unknown): LifecyclePolicy | undefined {
+  const policy = (raw as { policy?: unknown } | null | undefined)?.policy;
+  if (!policy || typeof policy !== 'object') return undefined;
+  const o = policy as Record<string, unknown>;
+  for (const k of LIFECYCLE_KEYS) if (o[k] === undefined) return undefined;
+  const parsed = LifecyclePolicyInputSchema.safeParse(o);
+  return parsed.success ? normalise(parsed.data as LifecyclePolicy) : undefined;
+}
+
 /** Whether a stricter-than-before change: names the keys whose effective value differs. */
 export function changedKeys(from: LifecyclePolicy, to: LifecyclePolicy): LifecycleKey[] {
   return LIFECYCLE_KEYS.filter((k) => canonicalJson(from[k]) !== canonicalJson(to[k]));

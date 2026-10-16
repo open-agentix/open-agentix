@@ -310,6 +310,71 @@ describe('checkApprover (rules A1 to A7 and A10)', () => {
   });
 });
 
+describe('A4: the grant chain and unknown grantors', () => {
+  const chained = (users: string[], over: Partial<ApproverBinding> = {}): ApproverBinding => ({
+    ...maintainer('granter'),
+    chain: { users: ['granter', ...users], unknown: false },
+    ...over,
+  });
+
+  it('refuses a binding when a contributor is anywhere up the grant chain', () => {
+    expect(checkApprover(facts({ bindings: [chained(['author'])] }), ctx())).toMatchObject({
+      ok: false,
+      code: 'binding_granted_by_contributor',
+    });
+    expect(checkApprover(facts({ bindings: [chained(['other'])] }), ctx())).toMatchObject({
+      ok: true,
+    });
+  });
+  it('refuses a reviewer whose account a contributor made, whatever granted the role', () => {
+    const f = facts({ creatorChain: { users: ['author'], unknown: false } });
+    expect(checkApprover(f, ctx())).toMatchObject({
+      ok: false,
+      code: 'binding_granted_by_contributor',
+    });
+  });
+  it('keeps a clean binding next to a tainted one', () => {
+    const r = checkApprover(
+      facts({ bindings: [chained(['author']), { ...chained([]), id: 'clean' }] }),
+      ctx(),
+    );
+    expect(r).toMatchObject({ ok: true });
+    expect(r.ok && r.via.map((b) => b.id)).toEqual(['clean']);
+  });
+  it('refuses an unknown grantor, an unknown chain and an unknown creator unless allowed', () => {
+    const unknown = maintainer(null);
+    const cases: Partial<ApproverFacts>[] = [
+      { bindings: [{ ...unknown, grantorUnknown: true }] },
+      { bindings: [{ ...unknown, chain: { users: [], unknown: true } }] },
+      { creatorChain: { users: [], unknown: true } },
+    ];
+    for (const over of cases) {
+      expect(checkApprover(facts({ bindings: [unknown], ...over }), ctx())).toMatchObject({
+        ok: false,
+        code: 'binding_grantor_unknown',
+      });
+      expect(
+        checkApprover(facts({ bindings: [unknown], ...over }), ctx({ unknownGrantor: 'allow' })),
+      ).toMatchObject({ ok: true });
+    }
+    expect(REFUSAL_STATUS.binding_grantor_unknown).toBe(403);
+  });
+  it('treats a null grantor that is not marked unknown as nobody', () => {
+    expect(
+      checkApprover(facts({ bindings: [{ ...maintainer(null), grantorUnknown: false }] }), ctx()),
+    ).toMatchObject({ ok: true });
+  });
+  it('still reports a contributor in the chain before an unknown one', () => {
+    const b = { ...chained(['author']), grantorUnknown: true };
+    expect(checkApprover(facts({ bindings: [b] }), ctx({ unknownGrantor: 'allow' }))).toMatchObject(
+      {
+        ok: false,
+        code: 'binding_granted_by_contributor',
+      },
+    );
+  });
+});
+
 describe('collectContributors', () => {
   it('collects revision authors and the opener', () => {
     const c = collectContributors({
@@ -330,6 +395,23 @@ describe('collectContributors', () => {
       agentCreator: 'creator',
     });
     expect([...c].sort()).toEqual(['creator', 'e1', 'e2', 'o']);
+  });
+  it('treats a repo revision that has an author id as unknown too (no platform user is named)', () => {
+    const c = collectContributors({
+      revisionAuthors: [{ authorId: 'repo-1', authorKind: 'repo' }],
+      opener: 'o',
+      unknownAuthorFallback: ['e1'],
+      agentCreator: 'creator',
+    });
+    expect([...c].sort()).toEqual(['creator', 'e1', 'o']);
+  });
+  it('treats any author kind it does not know as unknown', () => {
+    const c = collectContributors({
+      revisionAuthors: [{ authorId: 'x', authorKind: 'robot' }],
+      opener: 'o',
+      unknownAuthorFallback: ['e1'],
+    });
+    expect([...c].sort()).toEqual(['e1', 'o']);
   });
   it('treats a repo revision without a linked user as unknown too, and adds linked signers', () => {
     const c = collectContributors({
