@@ -1,7 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, connections, mcpOauthTokens } from '../src/db/schema.js';
+import { auditLog, connections, mcpOauthTokens, tenants } from '../src/db/schema.js';
+import { OaxError } from '@openagentix/core';
 import { createMcpOauth, SecretRegistry } from '../src/mcp-oauth/index.js';
 import type { RenewalLimiter } from '../src/mcp-oauth/renewal-limiter.js';
 import { CREDENTIAL_LOCK_NS, lockCredential } from '../src/mcp-oauth/token-store.js';
@@ -160,7 +161,8 @@ describe.skipIf(!PG_URL)('renewal races on a real PostgreSQL', () => {
   it('a permanent failure of the old tokens does not mark tokens written meanwhile', async () => {
     const { id, ref } = await authorized();
     // the renewal's request is the second one the server answers: rejected for good, but only
-    // after a re-authorization (the first answer) has stored new tokens
+    // after a re-authorization (the first answer) has stored new tokens; the one re-discovery that
+    // follows invalid_client finds the fresh tokens under the lock and has nothing left to renew
     let answered = 0;
     as.nextToken = () => (++answered === 2 ? json({ error: 'invalid_client' }, 401) : undefined);
     as.latency = 3000;
@@ -176,7 +178,7 @@ describe.skipIf(!PG_URL)('renewal races on a real PostgreSQL', () => {
         .statusCode,
     ).toBe(200);
     const fresh = (await rows(id))[0]!;
-    expect(await renewing).not.toBe('ok');
+    await renewing; // fine either way: the point is that the new tokens are not marked
     as.nextToken = undefined;
     expect(await statusOf(id)).toMatchObject({ status: 'active', lastError: null });
     const after = (await rows(id))[0]!;
@@ -303,6 +305,75 @@ describe.skipIf(!PG_URL)('renewal races on a real PostgreSQL', () => {
     expect(now.accessToken).not.toBe(old.accessToken);
     expect(now.meta.status).toBe('active');
     expect((await statusOf(id)).lastError).toBeNull();
+  });
+
+  it('invalid_client while the cached discovery is in use re-discovers once before giving up', async () => {
+    const { id, ref } = await authorized();
+    let answered = 0;
+    as.nextToken = () => (++answered === 1 ? json({ error: 'invalid_client' }, 401) : undefined);
+    const before = as.tokenRequests.length;
+    await n.services.mcpOauthFlows.refresh(ref);
+    as.nextToken = undefined;
+    // the first request failed, the second (after forgetting the cache) renewed
+    expect(as.tokenRequests.length - before).toBe(2);
+    expect(await statusOf(id)).toMatchObject({ status: 'active', lastError: null });
+  });
+
+  it('a persistent invalid_client is retried once only, then the connection needs authorization', async () => {
+    const { id, ref } = await authorized();
+    as.nextToken = () => json({ error: 'invalid_client' }, 401);
+    const before = as.tokenRequests.length;
+    const code = await n.services.mcpOauthFlows.refresh(ref).then(
+      () => 'ok',
+      (e: { code: string }) => e.code,
+    );
+    as.nextToken = undefined;
+    expect(code).toBe('mcp_auth_required');
+    expect(as.tokenRequests.length - before).toBe(2);
+    expect(await statusOf(id)).toMatchObject({ status: 'reauthorization_required' });
+  });
+
+  it('a denial is audited only when the failure was stored', async () => {
+    const { id, ref } = await authorized();
+    const svc = n.services.mcpOauthFlows as unknown as {
+      failRefresh(row: unknown, e: unknown, seen: Date): Promise<boolean>;
+    };
+    const [row] = await n.ctx.db.select().from(connections).where(eq(connections.id, id));
+    const denials = async () =>
+      (await n.ctx.db.select().from(auditLog)).filter(
+        (a) => a.action === 'mcp.oauth.denied' && a.target === id,
+      ).length;
+    const err = new OaxError('mcp_issuer_mismatch', 'issuer changed');
+    // the row was rewritten since the renewal saw it: nothing is stored, nothing is audited
+    expect(await svc.failRefresh(row, err, new Date('2000-01-01T00:00:00Z'))).toBe(false);
+    expect(await denials()).toBe(0);
+    expect(await statusOf(id)).toMatchObject({ status: 'active' });
+    // the row is the one that was seen: stored, and audited
+    const [stored] = await rows(id);
+    expect(await svc.failRefresh(row, err, stored!.updatedAt)).toBe(true);
+    expect(await denials()).toBe(1);
+    expect(ref.id).toBe(id);
+  });
+
+  it('the renewal bound is keyed by the root organisation of a sub-tenant', async () => {
+    const [root] = await n.ctx.db.select().from(tenants).limit(1);
+    const rootId = root!.id;
+    const childId = randomUUID();
+    await n.ctx.db.insert(tenants).values({
+      id: childId,
+      slug: `sub-${childId.slice(0, 8)}`,
+      name: 'sub',
+      parentId: rootId,
+      rootId,
+      path: `${root!.path}${childId}/`,
+      depth: root!.depth + 1,
+    });
+    const svc = n.services.mcpOauthFlows as unknown as {
+      rootOf(tenantId: string): Promise<string>;
+    };
+    expect(await svc.rootOf(childId)).toBe(rootId);
+    expect(await svc.rootOf(rootId)).toBe(rootId);
+    await n.ctx.db.delete(tenants).where(eq(tenants.id, childId));
   });
 });
 
