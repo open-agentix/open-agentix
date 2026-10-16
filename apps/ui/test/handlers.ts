@@ -164,6 +164,10 @@ export const handlers = [
       draft: failing ? null : '---\napiVersion: openagentix.io/v1alpha1\nname: demo-plan\n---\n',
     });
   }),
+  // reviews (ADR 0017 S2): none open by default; the review tests bring their own
+  http.get(api('/v1/agents/:id/reviews'), () => json({ items: [], nextCursor: null })),
+  http.get(api('/v1/reviews/:id/people'), () => json({ people: {} })),
+  http.get(api('/v1/me/reviews'), () => json({ items: [] })),
   http.post(api('/v1/agents/validate'), async ({ request }) => {
     const { source } = (await request.json()) as { source: string };
     const valid = !source.includes('INVALID');
