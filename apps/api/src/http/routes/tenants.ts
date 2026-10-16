@@ -31,8 +31,16 @@ import type { ZApp } from '../zapp.js';
 
 const sec = [{ bearer: [] }];
 const tags = ['tenants'];
+/**
+ * Every write of a role restriction bumps the authz epoch of the whole organisation (all cached
+ * principals are rebuilt), so writes are throttled per caller (ADR 0014 S9).
+ */
 
-export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
+export function registerTenantRoutes(app: ZApp, { services, ctx }: Deps): void {
+  const RESTRICTION_WRITE_LIMIT = {
+    max: ctx.config.rateLimit.restrictionMax,
+    timeWindow: '1 minute',
+  };
   const { tenants, roleBindings, roleRestrictions } = services;
   /**
    * The node limits (budget, secret references) stay hidden from a caller whose bindings are all
@@ -387,7 +395,7 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
   app.put(
     '/v1/tenants/:id/role-restrictions',
     {
-      config: { access: 'authenticated' },
+      config: { access: 'authenticated', rateLimit: RESTRICTION_WRITE_LIMIT },
       schema: {
         tags: ['role-restrictions'],
         summary: 'Remove permissions from a role for the bindings at a tenant and below',
@@ -423,7 +431,7 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
   app.delete(
     '/v1/tenants/:id/role-restrictions',
     {
-      config: { access: 'authenticated' },
+      config: { access: 'authenticated', rateLimit: RESTRICTION_WRITE_LIMIT },
       schema: {
         tags: ['role-restrictions'],
         summary: 'Lift the restrictions of a role on a tenant',

@@ -71,6 +71,7 @@ export class Metrics {
   /** Counters of the tracing pipeline itself (ADR 0015 section 8); label values are closed sets. */
   readonly otel: TelemetryStats;
   readonly roleBindingsShadow: Counter<'outcome' | 'authoritative'>;
+  readonly unenforcedRestrictions: Gauge<string>;
   readonly authzEpochRejected: Counter<'reason'>;
   /** Stored tenant stdio MCP connections that break the ADR 0016 S0 rules (no tenant labels). */
   readonly mcpStdioViolations: Gauge<string>;
@@ -112,6 +113,13 @@ export class Metrics {
         'Ingested events by source kind (webhook, mail, kafka, cron) and outcome; the event ' +
         'source name is tenant-chosen and is not a label (ADR 0015 S5)',
       labelNames: ['kind', 'outcome'],
+      registers: [this.registry],
+    });
+    this.unenforcedRestrictions = new Gauge({
+      name: `${prefix}unenforced_role_restrictions`,
+      help:
+        'Stored role restrictions that the running read path does not enforce (ADR 0014 S9): ' +
+        'non-zero while OAX_ROLE_BINDINGS_READ=legacy and tenant_role_restrictions is not empty',
       registers: [this.registry],
     });
     this.roleBindingsShadow = new Counter({

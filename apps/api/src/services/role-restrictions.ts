@@ -138,6 +138,16 @@ export class RoleRestrictionsService {
     await lockBindings(tx, rootId);
   }
 
+  /**
+   * Restrictions that exist but are not enforced because the read path is `legacy` (they are the
+   * only grant data whose loss widens access, so this must be loud). 0 on the resolver path.
+   */
+  async countUnenforced(): Promise<number> {
+    if (this.enforced) return 0;
+    const [r] = await this.ctx.db.select({ n: count() }).from(tenantRoleRestrictions);
+    return Number(r?.n ?? 0);
+  }
+
   // ------------------------------------------------------------------ read
 
   /** `users:read` on the node (rule 1 for reads); the restrictions set on this node itself. */
@@ -217,6 +227,20 @@ export class RoleRestrictionsService {
           .select({ n: count() })
           .from(tenantRoleRestrictions)
           .where(eq(tenantRoleRestrictions.tenantId, node.id));
+        const [org] = await tx
+          .select({ n: count() })
+          .from(tenantRoleRestrictions)
+          .innerJoin(tenants, eq(tenants.id, tenantRoleRestrictions.tenantId))
+          .where(eq(tenants.rootId, node.rootId));
+        if (
+          Number(org?.n ?? 0) - remove.length + add.length >
+          this.ctx.config.tenancy.maxRoleRestrictionsPerOrg
+        )
+          throw new HttpError(
+            422,
+            'restriction_limit_exceeded',
+            `an organisation can carry at most ${this.ctx.config.tenancy.maxRoleRestrictionsPerOrg} role restrictions`,
+          );
         if (Number(total?.n ?? 0) - remove.length + add.length > max)
           throw new HttpError(
             422,
