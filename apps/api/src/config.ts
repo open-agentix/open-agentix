@@ -116,7 +116,7 @@ export const EnvSchema = z.object({
    * What rule A4 does with a binding whose grantor is unknown (rows from before the grantor was
    * recorded that the audit chain could not attribute, mirror rows the reconcile re-created) or
    * whose grant chain is longer than can be followed: `refuse` (default, fail closed) or `allow`
-   * (accept the risk until the bindings have been granted again by an administrator).
+   * (accept the risk until an administrator has removed and added the bindings again).
    */
   OAX_LIFECYCLE_UNKNOWN_GRANTOR: z.enum(['refuse', 'allow']).default('refuse'),
   OAX_LIFECYCLE_MIN_APPROVALS: z.coerce.number().int().min(1).max(5).default(1),

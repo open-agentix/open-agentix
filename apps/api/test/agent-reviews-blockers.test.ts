@@ -157,12 +157,19 @@ describe('finding 1: the grant chain of rule A4', () => {
     expect(ok.statusCode, ok.body).toBe(201);
   });
 
-  it('follows the chain through the grantor even when the reviewer account was made by somebody clean', async () => {
-    // X is made by the clean administrator without roles; D (an admin made by the contributor C)
-    // grants X the maintainer role through the role-binding API. Only the walk up D's own admin
-    // binding reaches C.
+  it('follows the chain through the roles that let the grantor grant, when every account was made by a clean administrator', async () => {
+    // X and D are both made by the clean administrator without roles. The contributor C then grants
+    // D the admin role through the role-binding API, and D grants X the maintainer role. Neither
+    // created_by nor the direct grantor reaches C: only the walk over D's own admin binding does.
     await mkUser('plain-x', []);
-    await mkUser('plain-d', ['admin'], tok['admin2']!);
+    await mkUser('plain-d', []);
+    const adminGrant = await req(tok['admin2']!, 'POST', `/v1/tenants/${orgA}/role-bindings`, {
+      userId: uid['plain-d'],
+      role: 'admin',
+      inherit: false,
+    });
+    expect(adminGrant.statusCode, adminGrant.body).toBe(201);
+    tok['plain-d'] = await n.login('plain-d@org-a.example.org', PW);
     const granted = await req(tok['plain-d']!, 'POST', `/v1/tenants/${orgA}/role-bindings`, {
       userId: uid['plain-x'],
       role: 'agent-maintainer',
@@ -546,3 +553,94 @@ async function staleAdminCannotWithdraw() {
   // the current administrator still can
   expect((await req(adminA, 'POST', `/v1/reviews/${review.id}/withdraw`)).statusCode).toBe(200);
 }
+
+describe('widening a binding keeps its grantor (review of #354)', () => {
+  const rowOf = async (id: string) =>
+    (await n.ctx.db.select().from(tenantRoleBindings).where(eq(tenantRoleBindings.id, id)))[0]!;
+  const day = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString();
+  const rbUrl = () => `/v1/tenants/${orgA}/role-bindings`;
+  const grant = async (key: string, by: string) => {
+    await mkUser(key, []);
+    const res = await req(by, 'POST', rbUrl(), {
+      userId: uid[key],
+      role: 'agent-maintainer',
+      inherit: false,
+      expiresAt: day(1),
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    return j(res).id as string;
+  };
+  const adminAId = async () =>
+    (await n.ctx.db.select().from(users).where(eq(users.email, 'admin@org-a.example.org')))[0]!.id;
+
+  it('does not replace the grantor when somebody else extends the expiry, nor clear an unknown one', async () => {
+    const id = await grant('ext-1', adminA);
+    const patch = (by: string, days: number) =>
+      req(by, 'PATCH', `${rbUrl()}/${id}`, { expiresAt: day(days) });
+    expect((await patch(tok['admin2']!, 3)).statusCode).toBe(200);
+    expect(await rowOf(id)).toMatchObject({ grantedBy: await adminAId(), grantorUnknown: false });
+    // an unknown grantor stays unknown and is not given to the person who widens
+    await n.ctx.db
+      .update(tenantRoleBindings)
+      .set({ grantedBy: null, grantorUnknown: true })
+      .where(eq(tenantRoleBindings.id, id));
+    expect((await patch(adminA, 6)).statusCode).toBe(200);
+    expect(await rowOf(id)).toMatchObject({ grantedBy: null, grantorUnknown: true });
+    // a row that nobody granted is now granted by the person who widened it
+    await n.ctx.db
+      .update(tenantRoleBindings)
+      .set({ grantedBy: null, grantorUnknown: false })
+      .where(eq(tenantRoleBindings.id, id));
+    expect((await patch(tok['admin2']!, 9)).statusCode).toBe(200);
+    expect(await rowOf(id)).toMatchObject({ grantedBy: uid['admin2'], grantorUnknown: false });
+  });
+
+  it('keeps grantor and unknown mark through the organisation-wide opt-in (last: it widens every binding)', async () => {
+    const known = await grant('ext-known', tok['admin2']!);
+    const unknown = await grant('ext-unknown', adminA);
+    await n.ctx.db
+      .update(tenantRoleBindings)
+      .set({ grantedBy: null, grantorUnknown: true })
+      .where(eq(tenantRoleBindings.id, unknown));
+    const res = await n.req({
+      method: 'POST',
+      url: `${rbUrl()}/enable-inheritance`,
+      payload: { roles: ['agent-maintainer'], dryRun: false },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await rowOf(known)).toMatchObject({ inherit: true, grantedBy: uid['admin2'] });
+    expect(await rowOf(unknown)).toMatchObject({
+      inherit: true,
+      grantedBy: null,
+      grantorUnknown: true,
+    });
+  });
+});
+
+describe('clearing an unknown grantor takes two steps (review of #354)', () => {
+  it('re-listing the role keeps the unknown mark; removing it and adding it again clears it', async () => {
+    await mkUser('clear-me', ['agent-maintainer']);
+    const mirror = () =>
+      n.ctx.db
+        .select()
+        .from(tenantRoleBindings)
+        .where(
+          and(
+            eq(tenantRoleBindings.userId, uid['clear-me']!),
+            eq(tenantRoleBindings.source, 'mirror'),
+          ),
+        );
+    await n.ctx.db
+      .update(tenantRoleBindings)
+      .set({ grantedBy: null, grantorUnknown: true })
+      .where(eq(tenantRoleBindings.userId, uid['clear-me']!));
+    const patch = (roles: string[]) =>
+      req(adminA, 'PATCH', `/v1/users/${uid['clear-me']}`, { globalRoles: roles });
+    expect((await patch(['agent-maintainer'])).statusCode).toBe(200);
+    expect((await mirror())[0]).toMatchObject({ grantedBy: null, grantorUnknown: true });
+    expect((await patch([])).statusCode).toBe(200);
+    expect((await patch(['agent-maintainer'])).statusCode).toBe(200);
+    expect((await mirror())[0]).toMatchObject({ grantorUnknown: false });
+    expect((await mirror())[0]!.grantedBy).not.toBeNull();
+  });
+});

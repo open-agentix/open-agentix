@@ -1226,7 +1226,7 @@
         "self_approval": "You edited this draft or opened this review, so you cannot decide it. This is not configurable.",
         "not_eligible": "Your role is not an approver role for this agent in this tenant.",
         "binding_granted_by_contributor": "The only bindings that make you an approver were granted by somebody who contributed to this review.",
-        "binding_grantor_unknown": "Nobody can say who granted the bindings that make you an approver. An administrator has to grant them again.",
+        "binding_grantor_unknown": "Nobody can say who granted the bindings that make you an approver. An administrator has to remove and add them again.",
         "token_approval_disabled": "Decisions with an API token are not allowed in this tenant. Sign in as a person.",
         "actor_not_human": "Only a person can decide a review.",
         "identity_source_not_allowed": "Accounts of your identity source cannot decide reviews in this tenant.",

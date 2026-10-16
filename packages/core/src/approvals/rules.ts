@@ -98,7 +98,7 @@ export interface ApprovalContext {
   /**
    * What to do with a binding whose grantor is unknown, or whose grant chain cannot be followed to a
    * known end: `refuse` (default; fail closed) or `allow` (the installation accepts the risk until
-   * the bindings have been granted again). Not a tenant policy key.
+   * the bindings have been removed and added again). Not a tenant policy key.
    */
   unknownGrantor?: 'refuse' | 'allow' | undefined;
   /** A10: what the reviewer says they saw and what the revision is now. */
@@ -141,7 +141,7 @@ const MESSAGES: Readonly<Record<RefusalCode, string>> = {
   binding_granted_by_contributor:
     'the only bindings that make you an approver were granted by a contributor of this review',
   binding_grantor_unknown:
-    'who granted the bindings that make you an approver cannot be established; an administrator has to grant them again',
+    'who granted the bindings that make you an approver cannot be established; an administrator has to remove and add them again',
   approver_scope: 'the tenant policy does not let you decide for this agent (approver scope)',
   stale_view: 'the draft changed since you loaded it',
 };

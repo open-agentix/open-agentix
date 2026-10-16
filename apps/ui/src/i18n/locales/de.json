@@ -1237,7 +1237,7 @@
         "self_approval": "Du hast diesen Entwurf bearbeitet oder das Review geöffnet und kannst es deshalb nicht entscheiden. Das ist nicht einstellbar.",
         "not_eligible": "Deine Rolle ist in diesem Tenant keine Freigabe-Rolle für diesen Agenten.",
         "binding_granted_by_contributor": "Die einzigen Zuweisungen, die dich zum Freigeber machen, hat jemand vergeben, der an diesem Review beteiligt war.",
-        "binding_grantor_unknown": "Es lässt sich nicht feststellen, wer die Zuweisungen vergeben hat, die dich zum Freigeber machen. Ein Administrator muss sie neu vergeben.",
+        "binding_grantor_unknown": "Es lässt sich nicht feststellen, wer die Zuweisungen vergeben hat, die dich zum Freigeber machen. Ein Administrator muss sie entfernen und erneut hinzufügen.",
         "token_approval_disabled": "Entscheidungen mit einem API-Token sind in diesem Tenant nicht erlaubt. Melde dich als Person an.",
         "actor_not_human": "Nur eine Person kann ein Review entscheiden.",
         "identity_source_not_allowed": "Konten deiner Identitätsquelle dürfen in diesem Tenant keine Reviews entscheiden.",

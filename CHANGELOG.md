@@ -38,12 +38,29 @@ All notable changes to this project are documented here. The format follows
   `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow`. (6) Every non-user revision author kind counts as an unknown
   author (a `repo` author with an id no longer fails open). (8) Withdrawing a review checks
   administrator rights from the database at the agent's node. **Upgrade note:** after the migration,
-  bindings that could not be attributed stop making approvers; grant them again or set
+  bindings that could not be attributed stop making approvers; remove each affected binding or role and add it again in a second step (saving the same list again keeps the mark), or set
   `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow` temporarily. Prefer `approverIdentitySources: [oidc, ldap]`.
   Revert with `apps/api/drizzle/down/0036_grantor_unknown.down.sql`. Still open from #343: items 7 and
   9 to 12.
 
 ### Added
+
+- **Move a tenant and its subtree inside an organisation (ADR 0014 S10, #195, with W13-11)**:
+  `POST /v1/tenants/{id}/move { parentId, dryRun }`. Needs an inheriting `admin` (no use case) that
+  covers the tenant, its old parent and the new parent, or a platform operator, so the mover gains no
+  coverage; both tenants must be visible (the same `404` as for an unknown id). The depth limit is
+  re-checked, a cycle, the current parent, an organisation root and another organisation are refused
+  (cross-organisation moves stay with W13-15), a tenant admin cannot move below a capped node, and
+  leaving a node whose role restrictions (any role) narrow bindings inside the subtree, or whose agent
+  lifecycle policy (ADR 0017) would loosen inside it, needs the authority to lift them. Bindings on moved tenants move with them, bindings inherited from the old ancestors stop
+  and those inheriting from the new ancestors start; the tenant is detached from its use case. The dry
+  run lists, from the same resolver as every request, the users the caller may see who gain or lose
+  permissions, and the restrictions that stop or start applying. The applied move runs under the
+  exclusive tree lock, bumps the authz epoch (cached principals are rebuilt) and is audited as
+  `tenant.moved` in the partitions of the tenant and both parents (ids only). Needs
+  `OAX_ROLE_BINDINGS_READ=bindings` (`409 role_bindings_read_required`). Migration `0035_tenant_move`
+  lets the tree guard accept a declared move inside one organisation and verifies the final placement
+  at commit. See [docs/tenancy.md](docs/tenancy.md#moving-a-tenant-adr-0014-slice-s10).
 
 - **Review comment threads, the Review tab, decision bar, status badges and inbox (ADR 0017 S2, #245)**:
   threads and comments on a review (`/v1/reviews/{id}/threads`, permission `agents:review`; viewer and

@@ -18,16 +18,16 @@ const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta/_journal.j
 };
 
 describe('migration 0036 files', () => {
-  it('is strictly newer than 0034, chains its snapshot and has a down path', () => {
+  it('is strictly newer than 0035, chains its snapshot and has a down path', () => {
     const at = journal.entries.findIndex((e) => e.tag === TAG);
     expect(at).toBeGreaterThan(0);
-    expect(journal.entries[at - 1]!.tag).toBe('0034_review_threads');
+    expect(journal.entries[at - 1]!.tag).toBe('0035_tenant_move');
     const whens = journal.entries.map((e) => e.when);
     expect([...whens].sort((a, b) => a - b)).toEqual(whens);
     expect(new Set(whens).size).toBe(whens.length);
     const read = (n: string) =>
       JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, `meta/${n}_snapshot.json`), 'utf8'));
-    expect(read('0036').prevId).toBe(read('0034').id);
+    expect(read('0036').prevId).toBe(read('0035').id);
     expect(read('0036').tables['public.users'].columns.created_by).toBeDefined();
     for (const t of ['tenant_role_bindings', 'team_members', 'agent_role_bindings'])
       expect(read('0036').tables[`public.${t}`].columns.grantor_unknown.notNull).toBe(true);

@@ -116,6 +116,19 @@ function pgCode(e: unknown): string | undefined {
 
 const deny = (code: string, message: string) => new HttpError(403, code, message);
 
+/**
+ * The grantor after a binding was made wider (rule A4 of ADR 0017). A row that had nobody as grantor
+ * (an identity provider, the bootstrap) is now granted by the person who widened it. A row that
+ * already has a grantor, or whose grantor is unknown, **keeps it**: replacing it with the person who
+ * widened the binding would hide who granted the binding in the first place (a clean administrator
+ * extending an expiry must not launder a binding a contributor granted) and would clear an unknown
+ * grantor as a side effect. `grantor_unknown` is never touched here.
+ */
+const widenedGrantor = (actorId: string) =>
+  sql<
+    string | null
+  >`case when ${tenantRoleBindings.grantedBy} is null and not ${tenantRoleBindings.grantorUnknown} then (select id from users where id = ${actorId}) else ${tenantRoleBindings.grantedBy} end`;
+
 export class TenantRoleBindingsService {
   private readonly access: TenantAccess;
   private readonly tree: TenantTree;
@@ -631,12 +644,7 @@ export class TenantRoleBindingsService {
             role: next.role,
             inherit: next.inherit,
             expiresAt: next.expiresAt,
-            ...(widened
-              ? {
-                  grantedBy: sql<string | null>`(select id from users where id = ${actor.userId})`,
-                  grantorUnknown: false,
-                }
-              : {}),
+            ...(widened ? { grantedBy: widenedGrantor(actor.userId) } : {}),
             ...(expiryChanged
               ? {
                   expiryWarnedAt:
@@ -837,8 +845,7 @@ export class TenantRoleBindingsService {
         // Wider reach is a new grant by the operator (ADR 0017 rule A4).
         .set({
           inherit: true,
-          grantedBy: sql<string | null>`(select id from users where id = ${p.userId})`,
-          grantorUnknown: false,
+          grantedBy: widenedGrantor(p.userId),
         })
         .where(
           inArray(

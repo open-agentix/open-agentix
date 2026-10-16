@@ -124,6 +124,18 @@ export function subtreePrefix(path: string): string {
   return `${path}%`;
 }
 
+/**
+ * The path a node below `fromPath` has after the subtree rooted at `fromPath` moved to `toPath`
+ * (both are the paths of the moved node, before and after). The node itself maps to `toPath`.
+ * Refuses a path that is not inside the moved subtree.
+ */
+export function rebasePath(path: string, fromPath: string, toPath: string): string {
+  if (!isValidPath(path) || !isValidPath(fromPath) || !isValidPath(toPath))
+    invalid('malformed tenant path');
+  if (!path.startsWith(fromPath)) invalid('path is not inside the moved subtree');
+  return `${toPath}${path.slice(fromPath.length)}`;
+}
+
 /** Splits an `acme/div-a/team-a` slug path into validated segments. */
 export function parseSlugPath(input: string): string[] {
   const parts = input.split('/');

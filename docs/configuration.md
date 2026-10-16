@@ -118,7 +118,7 @@ Installation defaults of the tenant policy `settings.agentLifecycle` ([agent-lif
 | `OAX_LIFECYCLE_ALLOWED_APPROVER_ROLES` | `admin,agent-maintainer` | Comma separated, from `admin`, `agent-maintainer`, `agent-developer`, `operator`. Anything else refuses to start. |
 | `OAX_LIFECYCLE_APPROVAL_EXPIRY_HOURS` | `168` | How long an approval counts, 1 to 720. |
 | `OAX_LIFECYCLE_ALLOW_TOKEN_APPROVALS` | `false` | Whether API tokens may decide reviews. A contributor can never approve, with a token either. |
-| `OAX_LIFECYCLE_UNKNOWN_GRANTOR` | `refuse` | `refuse` or `allow`. Whether a binding whose grantor is unknown (rows from before the grantor was recorded that the audit chain could not attribute, mirror rows the reconcile re-created) or whose grant chain is longer than six hops can make a reviewer an approver (rule A4). Keep `refuse`; use `allow` only while an administrator grants the bindings again. Prefer `approverIdentitySources: [oidc, ldap]`. |
+| `OAX_LIFECYCLE_UNKNOWN_GRANTOR` | `refuse` | `refuse` or `allow`. Whether a binding whose grantor is unknown (rows from before the grantor was recorded that the audit chain could not attribute, mirror rows the reconcile re-created) or whose grant chain is longer than six hops can make a reviewer an approver (rule A4). Keep `refuse`; use `allow` only while an administrator removes and adds the affected bindings again (two steps: saving the same list keeps the unknown mark). Prefer `approverIdentitySources: [oidc, ldap]`. |
 
 
 Roles: `admin`, `agent-developer`, `agent-maintainer`, `integrator`, `operator`, `auditor`, `viewer`

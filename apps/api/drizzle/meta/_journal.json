@@ -208,6 +208,13 @@
     {
       "idx": 29,
       "version": "7",
+      "when": 1792700000004,
+      "tag": "0035_tenant_move",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
       "when": 1792700000005,
       "tag": "0036_grantor_unknown",
       "breakpoints": true
