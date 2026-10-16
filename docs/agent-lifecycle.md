@@ -142,7 +142,9 @@ console numbers them (the source split on `\n`); trailing blanks do not count fo
   (`409 comment_limit_reached`), and `OAX_RATE_LIMIT_COMMENT_MAX` (default 30) new comments per user and
   minute (`429 rate_limited`), counted in the database over every session and token of the user,
   deleted comments included. A comment on a closed review is `409 review_closed`.
-- **Concurrency.** Every write takes the row lock of the review, as a decision does. A comment that
+- **Concurrency.** Every write locks the agent row `FOR KEY SHARE` and then the review row `FOR UPDATE`, the
+  order a decision uses (it holds the agent row `FOR UPDATE` first), so the two cannot deadlock; inserting a
+  thread takes that agent lock anyway through its foreign key. A comment that
   races a rejecting decision either lands first or is refused with `409 review_closed`; the thread and
   rate limits are counted after every earlier write committed. Comments never change the state of a
   review.

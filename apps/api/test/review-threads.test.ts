@@ -535,7 +535,7 @@ describe('closed reviews and the race with a decision', () => {
   });
 
   it('serialises a comment with a rejecting decision: either the comment comes first or it is refused', async () => {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 6; i++) {
       const { review } = await reviewed();
       const [comment, decision] = await Promise.all([
         startThread(tok['rev2']!, review.id, { body: `race ${i}` }),
@@ -546,7 +546,7 @@ describe('closed reviews and the race with a decision', () => {
         }),
       ]);
       expect(decision.statusCode, decision.body).toBe(201);
-      expect([201, 409]).toContain(comment.statusCode);
+      expect([201, 409], comment.body).toContain(comment.statusCode);
       const after = await startThread(tok['rev2']!, review.id, { body: 'after' });
       expect(after.statusCode).toBe(409);
     }

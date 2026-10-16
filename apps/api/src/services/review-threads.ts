@@ -17,6 +17,7 @@ import {
   agentReviewThreads,
   agentReviews,
   agentVersions,
+  agents,
   users,
 } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
@@ -34,9 +35,10 @@ import type { AuditService } from './audit.js';
  * 2. the review belongs to the acting tenant and the agent is readable by the caller, otherwise the
  *    same 404 as an unknown id (`AgentReviewsService.loadReview`); a thread or comment id of another
  *    review is the same 404;
- * 3. writes take the review row lock, so they are serialised with a decision (which holds the same
- *    lock): a reject that wins makes a later comment `409 review_closed`, and the thread and rate
- *    limits are counted after every earlier write committed;
+ * 3. writes lock the agent row (key share) and then the review row, in the order a decision takes
+ *    them, so they are serialised with a decision without deadlocking: a reject that wins makes a
+ *    later comment `409 review_closed`, and the thread and rate limits are counted after every
+ *    earlier write committed;
  * 4. the comment text is stored and returned, and goes nowhere else: the audit chain gets ids and
  *    lengths, never text, and no code path reads a comment into a model request or a span.
  */
@@ -125,17 +127,27 @@ export class ReviewThreadsService {
     return { review, agent };
   }
 
-  /** Locks the review row for the rest of the transaction; writes need it open unless `closedOk`. */
-  private async lockReview(tx: Db, p: Principal, reviewId: string, closedOk = false) {
-    const [review] = await tx
+  /**
+   * Locks the review row for the rest of the transaction; writes need it open unless `closedOk`.
+   * The agent row is locked first, `FOR KEY SHARE`, because inserting a thread or a comment takes
+   * that lock anyway (foreign key) and a decision holds the agent row `FOR UPDATE` before it takes
+   * the review row: taking them in the same order here is what keeps the two from deadlocking.
+   */
+  private async lockReview(tx: Db, p: Principal, review: ReviewRow, closedOk = false) {
+    await tx
+      .select({ id: agents.id })
+      .from(agents)
+      .where(eq(agents.id, review.agentId))
+      .for('key share');
+    const [locked] = await tx
       .select()
       .from(agentReviews)
-      .where(eq(agentReviews.id, reviewId))
+      .where(eq(agentReviews.id, review.id))
       .for('update');
-    if (!review || review.tenantId !== p.tenantId) throw notFound('review');
-    if (!closedOk && review.status !== 'open')
-      throw new HttpError(409, 'review_closed', `the review is ${review.status}`);
-    return review;
+    if (!locked || locked.tenantId !== p.tenantId) throw notFound('review');
+    if (!closedOk && locked.status !== 'open')
+      throw new HttpError(409, 'review_closed', `the review is ${locked.status}`);
+    return locked;
   }
 
   private async loadThread(tx: Db, review: ReviewRow, threadId: string): Promise<ThreadRow> {
@@ -223,11 +235,11 @@ export class ReviewThreadsService {
     reviewId: string,
     input: { body: string; anchor?: AnchorInput | undefined },
   ): Promise<ThreadView> {
-    const { agent } = await this.open(p, reviewId);
+    const { agent, review: found } = await this.open(p, reviewId);
     const body = cleanCommentText(input.body);
     const threadId = await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
-      const review = await this.lockReview(tx, p, reviewId);
+      const review = await this.lockReview(tx, p, found);
       await this.assertRate(tx, p.userId);
       const [existing] = await tx
         .select({ n: count() })
@@ -277,11 +289,11 @@ export class ReviewThreadsService {
     threadId: string,
     input: { body: string },
   ): Promise<ThreadView> {
-    await this.open(p, reviewId);
+    const { review: found } = await this.open(p, reviewId);
     const body = cleanCommentText(input.body);
     await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
-      const review = await this.lockReview(tx, p, reviewId);
+      const review = await this.lockReview(tx, p, found);
       const thread = await this.loadThread(tx, review, threadId);
       await this.assertRate(tx, p.userId);
       const [existing] = await tx
@@ -317,11 +329,11 @@ export class ReviewThreadsService {
     commentId: string,
     input: { body: string },
   ): Promise<ThreadView> {
-    await this.open(p, reviewId);
+    const { review: found } = await this.open(p, reviewId);
     const body = cleanCommentText(input.body);
     await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
-      const review = await this.lockReview(tx, p, reviewId);
+      const review = await this.lockReview(tx, p, found);
       const thread = await this.loadThread(tx, review, threadId);
       const comment = await this.ownComment(tx, p, thread, commentId, 'edit');
       if (comment.deletedAt) throw new HttpError(409, 'comment_deleted', 'the comment was deleted');
@@ -344,10 +356,10 @@ export class ReviewThreadsService {
     threadId: string,
     commentId: string,
   ): Promise<ThreadView> {
-    await this.open(p, reviewId);
+    const { review: found } = await this.open(p, reviewId);
     await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
-      const review = await this.lockReview(tx, p, reviewId, true);
+      const review = await this.lockReview(tx, p, found, true);
       const thread = await this.loadThread(tx, review, threadId);
       const comment = await this.ownComment(tx, p, thread, commentId, 'delete');
       if (comment.deletedAt) return;
@@ -387,10 +399,10 @@ export class ReviewThreadsService {
     threadId: string,
     resolved: boolean,
   ): Promise<ThreadView> {
-    const { agent } = await this.open(p, reviewId);
+    const { agent, review: found } = await this.open(p, reviewId);
     await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
-      const review = await this.lockReview(tx, p, reviewId);
+      const review = await this.lockReview(tx, p, found);
       const thread = await this.loadThread(tx, review, threadId);
       const head = await reviewHead(tx, agent, review);
       const { set } = await this.reviews.contributorsOf(tx, agent, review, head);
