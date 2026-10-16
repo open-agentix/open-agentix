@@ -5,8 +5,9 @@
   The owner also answered the eight follow-up questions of the accepted version on 2026-10-10, see
   "Owner decisions on the follow-up questions (2026-10-10)"; one answer opened the separate design
   direction of [ADR 0018](0018-tenant-structure-as-code.md), which is Proposed).
-  **Not implemented**: every slice is planned, nothing of this ADR is built (see "Implementation
-  status" in section 17).
+  **Partly implemented**: S10 (roles) and S1 (lifecycle policy, draft revisions, reviews and
+  approval records, API only and not enforced) are built in their pull requests; every other slice
+  is planned (see "Implementation status" in section 17).
 - Date: 2026-10-10
 - Plan items: new wave W14 (this ADR, slices S1 to S13, issues #244 to #252 and #290 to #293);
   updates W6-3 (#51, version approval bound to digest, model, eval set and policy), W7-2 (#54,
@@ -1145,13 +1146,31 @@ adds its `[Unreleased]` changelog line.
 
 #### Implementation status
 
-**S10 is implemented in its pull request (roles and the rename, permissions only); nothing else of this
-ADR is.** Every other slice below is **planned**; no code, migration or endpoint of S1 to S9 and S11 to
-S13 exists on `main` (2026-10-10). This table is updated by each slice's PR.
+**S10 is implemented (roles and the rename, permissions only) and S1 is implemented in its pull
+request (API only, shadow mode: publish reports what it would be refused for and refuses nothing).**
+Every other slice below is **planned**; no code, migration or endpoint of S2 to S9 and S11 to S13
+exists on `main`. This table is updated by each slice's PR.
+
+S1 decisions taken in its pull request (the ADR text above is unchanged except where noted):
+
+- `USE_CASE_PERMISSIONS` deliberately excludes `agents:review`, `agents:approve` and `agents:rules`
+  (follow-up #336 item 7): a maintainer bound to a use case only cannot decide a review (fail
+  closed). Granting them per use case needs a decision of its own, together with S8.
+- A4 needs a grantor for every binding source. `team_members` and `agent_role_bindings` gain
+  `granted_by` (migration `0032`); `NULL` (rows from before it, identity provider, bootstrap) is not a
+  contributor. A change that widens a role binding (another role, `inherit`, a later expiry) or the
+  bulk opt-in makes the person who made it the grantor.
+- The policy lives in `tenants.settings` (W13-2 has not landed) with the resolver in
+  `packages/core/src/tenancy/lifecycle-policy.ts`; the root of an organisation chooses freely, nodes
+  below only narrow, a stored widening is clamped when resolved. `OAX_LIFECYCLE_REQUIRE_APPROVAL=auto`
+  is `on` with more than one tenant, `off` otherwise.
+- The revision of an agent from before the migration (author unknown) is created by the application
+  at start-up, not by the migration, because its digest is the digest of the normalised source.
+- Documentation: [agent-lifecycle.md](../agent-lifecycle.md).
 
 | # | Slice | State | Content | Depends on | Security review |
 | --- | --- | --- | --- | --- | --- |
-| S1 (#244) | Lifecycle policy, revisions, reviews and approval records (API only, not enforced) | planned | `agent_draft_revisions`, `agent_reviews`, `agent_review_decisions`; `tenants.settings` (or reuse W13-2) and the lifecycle policy resolver; rule module A1 to A8 and A10; permissions `agents:review`, `agents:approve`; endpoints to open, decide, withdraw; binding of digest, expansion digest, resolution digest (placeholder until S4) and policy digest; publish reports "would be refused" in the response and audit (shadow mode) | S10 | yes: A1/A2 cannot be bypassed by role, token or platform admin; binding fields complete |
+| S1 (#244) | Lifecycle policy, revisions, reviews and approval records (API only, not enforced) | implemented (PR; migration `0032_agent_lifecycle_reviews`, shadow mode) | `agent_draft_revisions`, `agent_reviews`, `agent_review_decisions`; `tenants.settings` (or reuse W13-2) and the lifecycle policy resolver; rule module A1 to A8 and A10; permissions `agents:review`, `agents:approve`; endpoints to open, decide, withdraw; binding of digest, expansion digest, resolution digest (placeholder until S4) and policy digest; publish reports "would be refused" in the response and audit (shadow mode) | S10 | yes: A1/A2 cannot be bypassed by role, token or platform admin; binding fields complete |
 | S2 (#245) | Comment threads and review UI | planned | threads and comments API, outdated anchors, Review tab with rule requirements, decision bar, status badges, inbox `GET /v1/me/reviews`, i18n en/de | S1 | yes: rendering without HTML; comment content out of audit and model context |
 | S3 (#246) | Enforcement at publish, deprecation and rollback, audit | planned | publish with `reviewId` and `expectedDigest` under row lock, re-checks of section 4.3, no publish path without approval (no break-glass), version deprecation with rollback to approved versions, audit events of section 11 | S1 | yes: TOCTOU tests; no publish path without approval when required |
 | S4 (#247) | Secret scopes, inheritance and encrypted store | planned | key service (shared with ADR 0016 S5 #235), `secrets` table, scoped references, top-down inheritance with override, `allowOverride` (default `false` on root nodes, F4), `blockInherited` and pinned resolution, secrets API without read, broker checks, rotation and revocation, leak canaries, migration helper for env pointers | – (coordinates with #235) | yes: no plaintext at rest, AAD binding, no value in any response, shadowing cannot change a published agent's credential |

@@ -2115,6 +2115,7 @@ paths:
       summary: Publish the draft as an immutable version
       tags:
         - agents
+      description: "Needs `agents:publish`. Not yet refused without an approval: `shadow` reports whether publish would have been refused (ADR 0017 S1 shadow mode); the same report is in the audit entry `agent.published`."
       parameters:
         - schema:
             type: string
@@ -2167,6 +2168,51 @@ paths:
                     additionalProperties: false
                   created:
                     type: boolean
+                  shadow:
+                    description: "shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed"
+                    type: object
+                    properties:
+                      enforced:
+                        type: boolean
+                        description: this version only reports; publish is not refused
+                        enum:
+                          - false
+                      approvalRequired:
+                        type: boolean
+                      wouldRefuse:
+                        type: boolean
+                        description: publish would have been refused if approvals were enforced (ADR 0017 S1)
+                      reviewId:
+                        anyOf:
+                          - type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          - type: "null"
+                      state:
+                        type:
+                          - string
+                          - "null"
+                      reasons:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            code:
+                              type: string
+                            message:
+                              type: string
+                          required:
+                            - code
+                            - message
+                          additionalProperties: false
+                    required:
+                      - enforced
+                      - approvalRequired
+                      - wouldRefuse
+                      - reviewId
+                      - state
+                      - reasons
+                    additionalProperties: false
                 required:
                   - version
                   - created
@@ -2212,6 +2258,51 @@ paths:
                     additionalProperties: false
                   created:
                     type: boolean
+                  shadow:
+                    description: "shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed"
+                    type: object
+                    properties:
+                      enforced:
+                        type: boolean
+                        description: this version only reports; publish is not refused
+                        enum:
+                          - false
+                      approvalRequired:
+                        type: boolean
+                      wouldRefuse:
+                        type: boolean
+                        description: publish would have been refused if approvals were enforced (ADR 0017 S1)
+                      reviewId:
+                        anyOf:
+                          - type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          - type: "null"
+                      state:
+                        type:
+                          - string
+                          - "null"
+                      reasons:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            code:
+                              type: string
+                            message:
+                              type: string
+                          required:
+                            - code
+                            - message
+                          additionalProperties: false
+                    required:
+                      - enforced
+                      - approvalRequired
+                      - wouldRefuse
+                      - reviewId
+                      - state
+                      - reasons
+                    additionalProperties: false
                 required:
                   - version
                   - created
@@ -3466,6 +3557,2800 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/agents/{id}/revisions:
+    get:
+      summary: List the draft revisions of an agent, newest first
+      tags:
+        - lifecycle
+      description: Every save of the draft that changes its normalised content is an immutable revision with its author (ADR 0017 section 4.1). Identical content creates none. Needs `agents:read` on the agent; an agent the caller cannot read is 404.
+      parameters:
+        - schema:
+            default: 50
+            type: integer
+            minimum: 1
+            maximum: 200
+          in: query
+          name: limit
+          required: false
+        - schema:
+            type: string
+            maxLength: 40
+          in: query
+          name: cursor
+          required: false
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        agentId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        seq:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                          description: 1 for the first revision of the draft; grows by one per change
+                        digest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256 of the normalised source, as `agent_versions.digest`
+                        authorId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                          description: null for the upgrade revision (author unknown) and Git commits
+                        authorKind:
+                          type: string
+                          enum:
+                            - user
+                            - repo
+                            - system
+                        parentId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                        sourceCommit:
+                          type:
+                            - string
+                            - "null"
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                      required:
+                        - id
+                        - agentId
+                        - seq
+                        - digest
+                        - authorId
+                        - authorKind
+                        - parentId
+                        - sourceCommit
+                        - createdAt
+                      additionalProperties: false
+                  nextCursor:
+                    type:
+                      - string
+                      - "null"
+                  head:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the newest revision, the one the draft is
+                required:
+                  - items
+                  - nextCursor
+                  - head
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/agents/{id}/revisions/{seq}:
+    get:
+      summary: Get one draft revision with its source
+      tags:
+        - lifecycle
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 9007199254740991
+          in: path
+          name: seq
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  agentId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  seq:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                    description: 1 for the first revision of the draft; grows by one per change
+                  digest:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+                    description: SHA-256 of the normalised source, as `agent_versions.digest`
+                  authorId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: null for the upgrade revision (author unknown) and Git commits
+                  authorKind:
+                    type: string
+                    enum:
+                      - user
+                      - repo
+                      - system
+                  parentId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  sourceCommit:
+                    type:
+                      - string
+                      - "null"
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  source:
+                    type: string
+                required:
+                  - id
+                  - agentId
+                  - seq
+                  - digest
+                  - authorId
+                  - authorKind
+                  - parentId
+                  - sourceCommit
+                  - createdAt
+                  - source
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/agents/{id}/reviews:
+    post:
+      summary: Open a review of the current draft
+      tags:
+        - lifecycle
+      description: "Needs `agents:write` on the agent. One review per agent at a time (`409 review_open`); a draft equal to the latest published version has nothing to review (`409 nothing_to_review`). The review follows the draft: a new revision makes every earlier decision stale. Records the digests an approval binds to (revision, profile expansion, secret resolution, policy) and the required number of approvals. In this version publishing is not yet refused without an approval (shadow mode): the publish response reports what it would have been refused for."
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "201":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  agentId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  status:
+                    type: string
+                    enum:
+                      - open
+                      - withdrawn
+                      - rejected
+                      - published
+                  state:
+                    type: string
+                    enum:
+                      - review_requested
+                      - changes_requested
+                      - approved
+                      - withdrawn
+                      - rejected
+                      - published
+                  openedBy:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  openedAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  openedRevisionId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  closedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  closedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  baseVersion:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          version:
+                            type: string
+                          digest:
+                            type: string
+                            pattern: ^[0-9a-f]{64}$
+                            description: SHA-256, lower-case hex
+                        required:
+                          - id
+                          - version
+                          - digest
+                        additionalProperties: false
+                      - type: "null"
+                    description: "what the diff is computed against: the latest published version when it was opened"
+                  revision:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      seq:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      digest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      authorId:
+                        anyOf:
+                          - type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          - type: "null"
+                      authorKind:
+                        type: string
+                      createdAt:
+                        type: string
+                        description: ISO 8601 timestamp
+                    required:
+                      - id
+                      - seq
+                      - digest
+                      - authorId
+                      - authorKind
+                      - createdAt
+                    additionalProperties: false
+                  requiredApprovals:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  approvalRequired:
+                    type: boolean
+                    description: whether the tenant policy requires an approval to publish this agent
+                  digests:
+                    type: object
+                    properties:
+                      digest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      expansionDigest:
+                        type: string
+                      resolutionDigest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      policyDigest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                    required:
+                      - digest
+                      - expansionDigest
+                      - resolutionDigest
+                      - policyDigest
+                    additionalProperties: false
+                  contributors:
+                    type: array
+                    items:
+                      type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    description: everybody who can never approve this review
+                  unknownAuthor:
+                    type: boolean
+                    description: a revision of the window has no known author; the audit chain stands in for it
+                  approvals:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        reviewerId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        decision:
+                          type: string
+                          enum:
+                            - approve
+                            - request_changes
+                            - reject
+                        revisionId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        digest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256, lower-case hex
+                        expansionDigest:
+                          type: string
+                        resolutionDigest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256, lower-case hex
+                        baseVersionId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                        policyDigest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256, lower-case hex
+                        reviewerAuth:
+                          type: string
+                          description: "`session` or `token:<id>`"
+                        actingTenantId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        bindingRefs:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                              role:
+                                type: string
+                              source:
+                                type: string
+                                description: "`mirror`, `grant`, `directory`, `team`, `agent` or `platform`"
+                              grantedBy:
+                                anyOf:
+                                  - type: string
+                                    format: uuid
+                                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                  - type: "null"
+                            required:
+                              - id
+                              - role
+                              - source
+                              - grantedBy
+                            additionalProperties: false
+                        comment:
+                          type:
+                            - string
+                            - "null"
+                        decidedAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        expiresAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        current:
+                          type: boolean
+                          description: the reviewer's latest decision on the head revision
+                        counted:
+                          type: boolean
+                          description: counts towards the required approvals now
+                        reasons:
+                          type: array
+                          items:
+                            type: string
+                          description: "why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible)"
+                      required:
+                        - id
+                        - reviewerId
+                        - decision
+                        - revisionId
+                        - digest
+                        - expansionDigest
+                        - resolutionDigest
+                        - baseVersionId
+                        - policyDigest
+                        - reviewerAuth
+                        - actingTenantId
+                        - bindingRefs
+                        - comment
+                        - decidedAt
+                        - expiresAt
+                        - current
+                        - counted
+                        - reasons
+                      additionalProperties: false
+                  you:
+                    type: object
+                    properties:
+                      eligible:
+                        type: boolean
+                      code:
+                        type:
+                          - string
+                          - "null"
+                      message:
+                        type:
+                          - string
+                          - "null"
+                    required:
+                      - eligible
+                      - code
+                      - message
+                    additionalProperties: false
+                required:
+                  - id
+                  - agentId
+                  - status
+                  - state
+                  - openedBy
+                  - openedAt
+                  - openedRevisionId
+                  - closedAt
+                  - closedBy
+                  - baseVersion
+                  - revision
+                  - requiredApprovals
+                  - approvalRequired
+                  - digests
+                  - contributors
+                  - unknownAuthor
+                  - approvals
+                  - you
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    get:
+      summary: List the reviews of an agent, newest first
+      tags:
+        - lifecycle
+      parameters:
+        - schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 50
+          in: query
+          name: limit
+          required: false
+        - schema:
+            type: string
+            maxLength: 100
+          in: query
+          name: cursor
+          required: false
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        agentId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        status:
+                          type: string
+                          enum:
+                            - open
+                            - withdrawn
+                            - rejected
+                            - published
+                        state:
+                          type: string
+                          enum:
+                            - review_requested
+                            - changes_requested
+                            - approved
+                            - withdrawn
+                            - rejected
+                            - published
+                        openedBy:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        openedAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        openedRevisionId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        closedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        closedBy:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                        baseVersion:
+                          anyOf:
+                            - type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                version:
+                                  type: string
+                                digest:
+                                  type: string
+                                  pattern: ^[0-9a-f]{64}$
+                                  description: SHA-256, lower-case hex
+                              required:
+                                - id
+                                - version
+                                - digest
+                              additionalProperties: false
+                            - type: "null"
+                          description: "what the diff is computed against: the latest published version when it was opened"
+                        revision:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            seq:
+                              type: integer
+                              minimum: -9007199254740991
+                              maximum: 9007199254740991
+                            digest:
+                              type: string
+                              pattern: ^[0-9a-f]{64}$
+                              description: SHA-256, lower-case hex
+                            authorId:
+                              anyOf:
+                                - type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                - type: "null"
+                            authorKind:
+                              type: string
+                            createdAt:
+                              type: string
+                              description: ISO 8601 timestamp
+                          required:
+                            - id
+                            - seq
+                            - digest
+                            - authorId
+                            - authorKind
+                            - createdAt
+                          additionalProperties: false
+                        requiredApprovals:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                        approvalRequired:
+                          type: boolean
+                          description: whether the tenant policy requires an approval to publish this agent
+                        digests:
+                          type: object
+                          properties:
+                            digest:
+                              type: string
+                              pattern: ^[0-9a-f]{64}$
+                              description: SHA-256, lower-case hex
+                            expansionDigest:
+                              type: string
+                            resolutionDigest:
+                              type: string
+                              pattern: ^[0-9a-f]{64}$
+                              description: SHA-256, lower-case hex
+                            policyDigest:
+                              type: string
+                              pattern: ^[0-9a-f]{64}$
+                              description: SHA-256, lower-case hex
+                          required:
+                            - digest
+                            - expansionDigest
+                            - resolutionDigest
+                            - policyDigest
+                          additionalProperties: false
+                        contributors:
+                          type: array
+                          items:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          description: everybody who can never approve this review
+                        unknownAuthor:
+                          type: boolean
+                          description: a revision of the window has no known author; the audit chain stands in for it
+                        approvals:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              reviewerId:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              decision:
+                                type: string
+                                enum:
+                                  - approve
+                                  - request_changes
+                                  - reject
+                              revisionId:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              digest:
+                                type: string
+                                pattern: ^[0-9a-f]{64}$
+                                description: SHA-256, lower-case hex
+                              expansionDigest:
+                                type: string
+                              resolutionDigest:
+                                type: string
+                                pattern: ^[0-9a-f]{64}$
+                                description: SHA-256, lower-case hex
+                              baseVersionId:
+                                anyOf:
+                                  - type: string
+                                    format: uuid
+                                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                  - type: "null"
+                              policyDigest:
+                                type: string
+                                pattern: ^[0-9a-f]{64}$
+                                description: SHA-256, lower-case hex
+                              reviewerAuth:
+                                type: string
+                                description: "`session` or `token:<id>`"
+                              actingTenantId:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              bindingRefs:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                    role:
+                                      type: string
+                                    source:
+                                      type: string
+                                      description: "`mirror`, `grant`, `directory`, `team`, `agent` or `platform`"
+                                    grantedBy:
+                                      anyOf:
+                                        - type: string
+                                          format: uuid
+                                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                        - type: "null"
+                                  required:
+                                    - id
+                                    - role
+                                    - source
+                                    - grantedBy
+                                  additionalProperties: false
+                              comment:
+                                type:
+                                  - string
+                                  - "null"
+                              decidedAt:
+                                type: string
+                                description: ISO 8601 timestamp
+                              expiresAt:
+                                anyOf:
+                                  - type: string
+                                    description: ISO 8601 timestamp
+                                  - type: "null"
+                              current:
+                                type: boolean
+                                description: the reviewer's latest decision on the head revision
+                              counted:
+                                type: boolean
+                                description: counts towards the required approvals now
+                              reasons:
+                                type: array
+                                items:
+                                  type: string
+                                description: "why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible)"
+                            required:
+                              - id
+                              - reviewerId
+                              - decision
+                              - revisionId
+                              - digest
+                              - expansionDigest
+                              - resolutionDigest
+                              - baseVersionId
+                              - policyDigest
+                              - reviewerAuth
+                              - actingTenantId
+                              - bindingRefs
+                              - comment
+                              - decidedAt
+                              - expiresAt
+                              - current
+                              - counted
+                              - reasons
+                            additionalProperties: false
+                        you:
+                          type: object
+                          properties:
+                            eligible:
+                              type: boolean
+                            code:
+                              type:
+                                - string
+                                - "null"
+                            message:
+                              type:
+                                - string
+                                - "null"
+                          required:
+                            - eligible
+                            - code
+                            - message
+                          additionalProperties: false
+                      required:
+                        - id
+                        - agentId
+                        - status
+                        - state
+                        - openedBy
+                        - openedAt
+                        - openedRevisionId
+                        - closedAt
+                        - closedBy
+                        - baseVersion
+                        - revision
+                        - requiredApprovals
+                        - approvalRequired
+                        - digests
+                        - contributors
+                        - unknownAuthor
+                        - approvals
+                        - you
+                      additionalProperties: false
+                  nextCursor:
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - items
+                  - nextCursor
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/reviews/{id}:
+    get:
+      summary: Get a review with its state, approvals and what you may do
+      tags:
+        - lifecycle
+      description: "Every approval is re-checked against the bindings, policy and digests of now: `counted` says whether it counts and `reasons` why not. `you` tells whether the caller could decide the review (rules A1 to A7). A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id."
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  agentId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  status:
+                    type: string
+                    enum:
+                      - open
+                      - withdrawn
+                      - rejected
+                      - published
+                  state:
+                    type: string
+                    enum:
+                      - review_requested
+                      - changes_requested
+                      - approved
+                      - withdrawn
+                      - rejected
+                      - published
+                  openedBy:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  openedAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  openedRevisionId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  closedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  closedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  baseVersion:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          version:
+                            type: string
+                          digest:
+                            type: string
+                            pattern: ^[0-9a-f]{64}$
+                            description: SHA-256, lower-case hex
+                        required:
+                          - id
+                          - version
+                          - digest
+                        additionalProperties: false
+                      - type: "null"
+                    description: "what the diff is computed against: the latest published version when it was opened"
+                  revision:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      seq:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      digest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      authorId:
+                        anyOf:
+                          - type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          - type: "null"
+                      authorKind:
+                        type: string
+                      createdAt:
+                        type: string
+                        description: ISO 8601 timestamp
+                    required:
+                      - id
+                      - seq
+                      - digest
+                      - authorId
+                      - authorKind
+                      - createdAt
+                    additionalProperties: false
+                  requiredApprovals:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  approvalRequired:
+                    type: boolean
+                    description: whether the tenant policy requires an approval to publish this agent
+                  digests:
+                    type: object
+                    properties:
+                      digest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      expansionDigest:
+                        type: string
+                      resolutionDigest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      policyDigest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                    required:
+                      - digest
+                      - expansionDigest
+                      - resolutionDigest
+                      - policyDigest
+                    additionalProperties: false
+                  contributors:
+                    type: array
+                    items:
+                      type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    description: everybody who can never approve this review
+                  unknownAuthor:
+                    type: boolean
+                    description: a revision of the window has no known author; the audit chain stands in for it
+                  approvals:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        reviewerId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        decision:
+                          type: string
+                          enum:
+                            - approve
+                            - request_changes
+                            - reject
+                        revisionId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        digest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256, lower-case hex
+                        expansionDigest:
+                          type: string
+                        resolutionDigest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256, lower-case hex
+                        baseVersionId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                        policyDigest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256, lower-case hex
+                        reviewerAuth:
+                          type: string
+                          description: "`session` or `token:<id>`"
+                        actingTenantId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        bindingRefs:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                              role:
+                                type: string
+                              source:
+                                type: string
+                                description: "`mirror`, `grant`, `directory`, `team`, `agent` or `platform`"
+                              grantedBy:
+                                anyOf:
+                                  - type: string
+                                    format: uuid
+                                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                  - type: "null"
+                            required:
+                              - id
+                              - role
+                              - source
+                              - grantedBy
+                            additionalProperties: false
+                        comment:
+                          type:
+                            - string
+                            - "null"
+                        decidedAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        expiresAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        current:
+                          type: boolean
+                          description: the reviewer's latest decision on the head revision
+                        counted:
+                          type: boolean
+                          description: counts towards the required approvals now
+                        reasons:
+                          type: array
+                          items:
+                            type: string
+                          description: "why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible)"
+                      required:
+                        - id
+                        - reviewerId
+                        - decision
+                        - revisionId
+                        - digest
+                        - expansionDigest
+                        - resolutionDigest
+                        - baseVersionId
+                        - policyDigest
+                        - reviewerAuth
+                        - actingTenantId
+                        - bindingRefs
+                        - comment
+                        - decidedAt
+                        - expiresAt
+                        - current
+                        - counted
+                        - reasons
+                      additionalProperties: false
+                  you:
+                    type: object
+                    properties:
+                      eligible:
+                        type: boolean
+                      code:
+                        type:
+                          - string
+                          - "null"
+                      message:
+                        type:
+                          - string
+                          - "null"
+                    required:
+                      - eligible
+                      - code
+                      - message
+                    additionalProperties: false
+                required:
+                  - id
+                  - agentId
+                  - status
+                  - state
+                  - openedBy
+                  - openedAt
+                  - openedRevisionId
+                  - closedAt
+                  - closedBy
+                  - baseVersion
+                  - revision
+                  - requiredApprovals
+                  - approvalRequired
+                  - digests
+                  - contributors
+                  - unknownAuthor
+                  - approvals
+                  - you
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/reviews/{id}/decisions:
+    post:
+      summary: Approve, request changes on, or reject a review
+      tags:
+        - lifecycle
+      description: "Needs `agents:approve` on the agent through a role the tenant lists in `allowedApproverRoles` (default `admin`, `agent-maintainer`), with a binding that no contributor of the review granted. Refusals: `403 self_approval` (the caller is an author since the base version or the opener, in any role, with any token, platform administrators included), `403 actor_not_human`, `403 token_approval_disabled` (API tokens decide only when the tenant sets `allowTokenApprovals`), `403 identity_source_not_allowed`, `403 not_eligible`, `403 binding_granted_by_contributor`, `403 approver_scope`, `409 stale_view` (the digest you looked at is not the digest of the revision now; reload), `409 review_closed`. `expectedDigest` is required; the optional expected digests bind the decision to the expansion, secret resolution and policy you saw. Use-case bindings never carry `agents:approve` (fail closed). A comment is required to request changes or reject, is limited to 10 000 characters and never copied to the audit chain. A reject closes the review."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                decision:
+                  type: string
+                  enum:
+                    - approve
+                    - request_changes
+                    - reject
+                expectedDigest:
+                  type: string
+                  pattern: ^[0-9a-f]{64}$
+                  description: the digest of the revision you looked at (`revision.digest`)
+                expectedExpansionDigest:
+                  type: string
+                  maxLength: 64
+                expectedResolutionDigest:
+                  type: string
+                  pattern: ^[0-9a-f]{64}$
+                  description: SHA-256, lower-case hex
+                expectedPolicyDigest:
+                  type: string
+                  pattern: ^[0-9a-f]{64}$
+                  description: SHA-256, lower-case hex
+                comment:
+                  description: required for `request_changes` and `reject`; never copied to the audit chain
+                  type: string
+                  maxLength: 10000
+              required:
+                - decision
+                - expectedDigest
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "201":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  review:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      agentId:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      status:
+                        type: string
+                        enum:
+                          - open
+                          - withdrawn
+                          - rejected
+                          - published
+                      state:
+                        type: string
+                        enum:
+                          - review_requested
+                          - changes_requested
+                          - approved
+                          - withdrawn
+                          - rejected
+                          - published
+                      openedBy:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      openedAt:
+                        type: string
+                        description: ISO 8601 timestamp
+                      openedRevisionId:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      closedAt:
+                        anyOf:
+                          - type: string
+                            description: ISO 8601 timestamp
+                          - type: "null"
+                      closedBy:
+                        anyOf:
+                          - type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          - type: "null"
+                      baseVersion:
+                        anyOf:
+                          - type: object
+                            properties:
+                              id:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              version:
+                                type: string
+                              digest:
+                                type: string
+                                pattern: ^[0-9a-f]{64}$
+                                description: SHA-256, lower-case hex
+                            required:
+                              - id
+                              - version
+                              - digest
+                            additionalProperties: false
+                          - type: "null"
+                        description: "what the diff is computed against: the latest published version when it was opened"
+                      revision:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          seq:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          digest:
+                            type: string
+                            pattern: ^[0-9a-f]{64}$
+                            description: SHA-256, lower-case hex
+                          authorId:
+                            anyOf:
+                              - type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              - type: "null"
+                          authorKind:
+                            type: string
+                          createdAt:
+                            type: string
+                            description: ISO 8601 timestamp
+                        required:
+                          - id
+                          - seq
+                          - digest
+                          - authorId
+                          - authorKind
+                          - createdAt
+                        additionalProperties: false
+                      requiredApprovals:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      approvalRequired:
+                        type: boolean
+                        description: whether the tenant policy requires an approval to publish this agent
+                      digests:
+                        type: object
+                        properties:
+                          digest:
+                            type: string
+                            pattern: ^[0-9a-f]{64}$
+                            description: SHA-256, lower-case hex
+                          expansionDigest:
+                            type: string
+                          resolutionDigest:
+                            type: string
+                            pattern: ^[0-9a-f]{64}$
+                            description: SHA-256, lower-case hex
+                          policyDigest:
+                            type: string
+                            pattern: ^[0-9a-f]{64}$
+                            description: SHA-256, lower-case hex
+                        required:
+                          - digest
+                          - expansionDigest
+                          - resolutionDigest
+                          - policyDigest
+                        additionalProperties: false
+                      contributors:
+                        type: array
+                        items:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        description: everybody who can never approve this review
+                      unknownAuthor:
+                        type: boolean
+                        description: a revision of the window has no known author; the audit chain stands in for it
+                      approvals:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            reviewerId:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            decision:
+                              type: string
+                              enum:
+                                - approve
+                                - request_changes
+                                - reject
+                            revisionId:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            digest:
+                              type: string
+                              pattern: ^[0-9a-f]{64}$
+                              description: SHA-256, lower-case hex
+                            expansionDigest:
+                              type: string
+                            resolutionDigest:
+                              type: string
+                              pattern: ^[0-9a-f]{64}$
+                              description: SHA-256, lower-case hex
+                            baseVersionId:
+                              anyOf:
+                                - type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                - type: "null"
+                            policyDigest:
+                              type: string
+                              pattern: ^[0-9a-f]{64}$
+                              description: SHA-256, lower-case hex
+                            reviewerAuth:
+                              type: string
+                              description: "`session` or `token:<id>`"
+                            actingTenantId:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            bindingRefs:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  id:
+                                    type: string
+                                  role:
+                                    type: string
+                                  source:
+                                    type: string
+                                    description: "`mirror`, `grant`, `directory`, `team`, `agent` or `platform`"
+                                  grantedBy:
+                                    anyOf:
+                                      - type: string
+                                        format: uuid
+                                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                      - type: "null"
+                                required:
+                                  - id
+                                  - role
+                                  - source
+                                  - grantedBy
+                                additionalProperties: false
+                            comment:
+                              type:
+                                - string
+                                - "null"
+                            decidedAt:
+                              type: string
+                              description: ISO 8601 timestamp
+                            expiresAt:
+                              anyOf:
+                                - type: string
+                                  description: ISO 8601 timestamp
+                                - type: "null"
+                            current:
+                              type: boolean
+                              description: the reviewer's latest decision on the head revision
+                            counted:
+                              type: boolean
+                              description: counts towards the required approvals now
+                            reasons:
+                              type: array
+                              items:
+                                type: string
+                              description: "why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible)"
+                          required:
+                            - id
+                            - reviewerId
+                            - decision
+                            - revisionId
+                            - digest
+                            - expansionDigest
+                            - resolutionDigest
+                            - baseVersionId
+                            - policyDigest
+                            - reviewerAuth
+                            - actingTenantId
+                            - bindingRefs
+                            - comment
+                            - decidedAt
+                            - expiresAt
+                            - current
+                            - counted
+                            - reasons
+                          additionalProperties: false
+                      you:
+                        type: object
+                        properties:
+                          eligible:
+                            type: boolean
+                          code:
+                            type:
+                              - string
+                              - "null"
+                          message:
+                            type:
+                              - string
+                              - "null"
+                        required:
+                          - eligible
+                          - code
+                          - message
+                        additionalProperties: false
+                    required:
+                      - id
+                      - agentId
+                      - status
+                      - state
+                      - openedBy
+                      - openedAt
+                      - openedRevisionId
+                      - closedAt
+                      - closedBy
+                      - baseVersion
+                      - revision
+                      - requiredApprovals
+                      - approvalRequired
+                      - digests
+                      - contributors
+                      - unknownAuthor
+                      - approvals
+                      - you
+                    additionalProperties: false
+                  decision:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      reviewerId:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      decision:
+                        type: string
+                        enum:
+                          - approve
+                          - request_changes
+                          - reject
+                      revisionId:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      digest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      expansionDigest:
+                        type: string
+                      resolutionDigest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      baseVersionId:
+                        anyOf:
+                          - type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          - type: "null"
+                      policyDigest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      reviewerAuth:
+                        type: string
+                        description: "`session` or `token:<id>`"
+                      actingTenantId:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      bindingRefs:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            role:
+                              type: string
+                            source:
+                              type: string
+                              description: "`mirror`, `grant`, `directory`, `team`, `agent` or `platform`"
+                            grantedBy:
+                              anyOf:
+                                - type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                - type: "null"
+                          required:
+                            - id
+                            - role
+                            - source
+                            - grantedBy
+                          additionalProperties: false
+                      comment:
+                        type:
+                          - string
+                          - "null"
+                      decidedAt:
+                        type: string
+                        description: ISO 8601 timestamp
+                      expiresAt:
+                        anyOf:
+                          - type: string
+                            description: ISO 8601 timestamp
+                          - type: "null"
+                      current:
+                        type: boolean
+                        description: the reviewer's latest decision on the head revision
+                      counted:
+                        type: boolean
+                        description: counts towards the required approvals now
+                      reasons:
+                        type: array
+                        items:
+                          type: string
+                        description: "why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible)"
+                    required:
+                      - id
+                      - reviewerId
+                      - decision
+                      - revisionId
+                      - digest
+                      - expansionDigest
+                      - resolutionDigest
+                      - baseVersionId
+                      - policyDigest
+                      - reviewerAuth
+                      - actingTenantId
+                      - bindingRefs
+                      - comment
+                      - decidedAt
+                      - expiresAt
+                      - current
+                      - counted
+                      - reasons
+                    additionalProperties: false
+                required:
+                  - review
+                  - decision
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/reviews/{id}/withdraw:
+    post:
+      summary: Withdraw an open review
+      tags:
+        - lifecycle
+      description: The person who opened the review or an administrator; the agent returns to development. A closed review is `409 review_closed`.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  agentId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  status:
+                    type: string
+                    enum:
+                      - open
+                      - withdrawn
+                      - rejected
+                      - published
+                  state:
+                    type: string
+                    enum:
+                      - review_requested
+                      - changes_requested
+                      - approved
+                      - withdrawn
+                      - rejected
+                      - published
+                  openedBy:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  openedAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  openedRevisionId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  closedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  closedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  baseVersion:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          version:
+                            type: string
+                          digest:
+                            type: string
+                            pattern: ^[0-9a-f]{64}$
+                            description: SHA-256, lower-case hex
+                        required:
+                          - id
+                          - version
+                          - digest
+                        additionalProperties: false
+                      - type: "null"
+                    description: "what the diff is computed against: the latest published version when it was opened"
+                  revision:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      seq:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      digest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      authorId:
+                        anyOf:
+                          - type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          - type: "null"
+                      authorKind:
+                        type: string
+                      createdAt:
+                        type: string
+                        description: ISO 8601 timestamp
+                    required:
+                      - id
+                      - seq
+                      - digest
+                      - authorId
+                      - authorKind
+                      - createdAt
+                    additionalProperties: false
+                  requiredApprovals:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  approvalRequired:
+                    type: boolean
+                    description: whether the tenant policy requires an approval to publish this agent
+                  digests:
+                    type: object
+                    properties:
+                      digest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      expansionDigest:
+                        type: string
+                      resolutionDigest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                      policyDigest:
+                        type: string
+                        pattern: ^[0-9a-f]{64}$
+                        description: SHA-256, lower-case hex
+                    required:
+                      - digest
+                      - expansionDigest
+                      - resolutionDigest
+                      - policyDigest
+                    additionalProperties: false
+                  contributors:
+                    type: array
+                    items:
+                      type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    description: everybody who can never approve this review
+                  unknownAuthor:
+                    type: boolean
+                    description: a revision of the window has no known author; the audit chain stands in for it
+                  approvals:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        reviewerId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        decision:
+                          type: string
+                          enum:
+                            - approve
+                            - request_changes
+                            - reject
+                        revisionId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        digest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256, lower-case hex
+                        expansionDigest:
+                          type: string
+                        resolutionDigest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256, lower-case hex
+                        baseVersionId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                        policyDigest:
+                          type: string
+                          pattern: ^[0-9a-f]{64}$
+                          description: SHA-256, lower-case hex
+                        reviewerAuth:
+                          type: string
+                          description: "`session` or `token:<id>`"
+                        actingTenantId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        bindingRefs:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                              role:
+                                type: string
+                              source:
+                                type: string
+                                description: "`mirror`, `grant`, `directory`, `team`, `agent` or `platform`"
+                              grantedBy:
+                                anyOf:
+                                  - type: string
+                                    format: uuid
+                                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                  - type: "null"
+                            required:
+                              - id
+                              - role
+                              - source
+                              - grantedBy
+                            additionalProperties: false
+                        comment:
+                          type:
+                            - string
+                            - "null"
+                        decidedAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        expiresAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        current:
+                          type: boolean
+                          description: the reviewer's latest decision on the head revision
+                        counted:
+                          type: boolean
+                          description: counts towards the required approvals now
+                        reasons:
+                          type: array
+                          items:
+                            type: string
+                          description: "why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible)"
+                      required:
+                        - id
+                        - reviewerId
+                        - decision
+                        - revisionId
+                        - digest
+                        - expansionDigest
+                        - resolutionDigest
+                        - baseVersionId
+                        - policyDigest
+                        - reviewerAuth
+                        - actingTenantId
+                        - bindingRefs
+                        - comment
+                        - decidedAt
+                        - expiresAt
+                        - current
+                        - counted
+                        - reasons
+                      additionalProperties: false
+                  you:
+                    type: object
+                    properties:
+                      eligible:
+                        type: boolean
+                      code:
+                        type:
+                          - string
+                          - "null"
+                      message:
+                        type:
+                          - string
+                          - "null"
+                    required:
+                      - eligible
+                      - code
+                      - message
+                    additionalProperties: false
+                required:
+                  - id
+                  - agentId
+                  - status
+                  - state
+                  - openedBy
+                  - openedAt
+                  - openedRevisionId
+                  - closedAt
+                  - closedBy
+                  - baseVersion
+                  - revision
+                  - requiredApprovals
+                  - approvalRequired
+                  - digests
+                  - contributors
+                  - unknownAuthor
+                  - approvals
+                  - you
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/tenants/{id}/settings/agent-lifecycle:
+    get:
+      summary: Read the agent lifecycle policy of a tenant
+      tags:
+        - lifecycle
+      description: The values the node stores itself (`own`) and the effective policy (`effective`) with its digest. Needs `settings:read` on the node; a node the caller cannot see is 404.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  own:
+                    type: object
+                    properties:
+                      requireApprovalForPublish:
+                        type: string
+                        enum:
+                          - off
+                          - production-only
+                          - on
+                      productionUseCases:
+                        type: array
+                        items:
+                          type: string
+                      selfApproval:
+                        type: string
+                        enum:
+                          - never
+                      minApprovals:
+                        type: integer
+                        minimum: 1
+                        maximum: 5
+                      allowedApproverRoles:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            - admin
+                            - agent-maintainer
+                            - agent-developer
+                            - operator
+                      approverScope:
+                        type: string
+                        enum:
+                          - tenant
+                          - team
+                          - other-team
+                      approvalExpiryHours:
+                        type: integer
+                        minimum: 1
+                        maximum: 720
+                      allowTokenApprovals:
+                        type: boolean
+                      approverIdentitySources:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            - local
+                            - oidc
+                            - ldap
+                      publishBy:
+                        type: string
+                        enum:
+                          - any-publisher
+                          - approver-only
+                      allowDraftRuns:
+                        type: string
+                        enum:
+                          - off
+                          - development-credentials
+                          - on
+                      allowPersonalSecretsInDevRuns:
+                        type: boolean
+                      allowPersonalSecretsInPublishedAgents:
+                        type: string
+                        enum:
+                          - never
+                          - with-approval
+                      allowProductionSecretsInDraftRuns:
+                        type: boolean
+                      gitUnsignedContributors:
+                        type: string
+                        enum:
+                          - declared-non-production
+                          - refuse
+                    additionalProperties: false
+                    description: the values this node stores itself
+                  effective:
+                    type: object
+                    properties:
+                      requireApprovalForPublish:
+                        type: string
+                        enum:
+                          - off
+                          - production-only
+                          - on
+                      productionUseCases:
+                        type: array
+                        items:
+                          type: string
+                      selfApproval:
+                        type: string
+                        enum:
+                          - never
+                      minApprovals:
+                        type: integer
+                        minimum: 1
+                        maximum: 5
+                      allowedApproverRoles:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            - admin
+                            - agent-maintainer
+                            - agent-developer
+                            - operator
+                      approverScope:
+                        type: string
+                        enum:
+                          - tenant
+                          - team
+                          - other-team
+                      approvalExpiryHours:
+                        type: integer
+                        minimum: 1
+                        maximum: 720
+                      allowTokenApprovals:
+                        type: boolean
+                      approverIdentitySources:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            - local
+                            - oidc
+                            - ldap
+                      publishBy:
+                        type: string
+                        enum:
+                          - any-publisher
+                          - approver-only
+                      allowDraftRuns:
+                        type: string
+                        enum:
+                          - off
+                          - development-credentials
+                          - on
+                      allowPersonalSecretsInDevRuns:
+                        type: boolean
+                      allowPersonalSecretsInPublishedAgents:
+                        type: string
+                        enum:
+                          - never
+                          - with-approval
+                      allowProductionSecretsInDraftRuns:
+                        type: boolean
+                      gitUnsignedContributors:
+                        type: string
+                        enum:
+                          - declared-non-production
+                          - refuse
+                    required:
+                      - requireApprovalForPublish
+                      - productionUseCases
+                      - selfApproval
+                      - minApprovals
+                      - allowedApproverRoles
+                      - approverScope
+                      - approvalExpiryHours
+                      - allowTokenApprovals
+                      - approverIdentitySources
+                      - publishBy
+                      - allowDraftRuns
+                      - allowPersonalSecretsInDevRuns
+                      - allowPersonalSecretsInPublishedAgents
+                      - allowProductionSecretsInDraftRuns
+                      - gitUnsignedContributors
+                    additionalProperties: false
+                    description: "what applies at this node: the chain resolved, never looser than the parent"
+                  policyDigest:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+                    description: SHA-256, lower-case hex
+                required:
+                  - tenantId
+                  - own
+                  - effective
+                  - policyDigest
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    patch:
+      summary: Change the agent lifecycle policy of a tenant
+      tags:
+        - lifecycle
+      description: "Send the keys to change; `null` removes a value (the node then inherits). Needs `settings:write` on the node. Narrowing only: below a parent a value that would make the effective policy looser than the parent's is refused with `422 not_narrowing` and the keys named (the root of an organisation chooses freely). Keys that do not exist, `breakGlass*` and `approverBindingMinAgeHours` included, are 400. Audited as `tenant.lifecycle_policy_changed`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              propertyNames:
+                type: string
+              additionalProperties: {}
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenantId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  own:
+                    type: object
+                    properties:
+                      requireApprovalForPublish:
+                        type: string
+                        enum:
+                          - off
+                          - production-only
+                          - on
+                      productionUseCases:
+                        type: array
+                        items:
+                          type: string
+                      selfApproval:
+                        type: string
+                        enum:
+                          - never
+                      minApprovals:
+                        type: integer
+                        minimum: 1
+                        maximum: 5
+                      allowedApproverRoles:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            - admin
+                            - agent-maintainer
+                            - agent-developer
+                            - operator
+                      approverScope:
+                        type: string
+                        enum:
+                          - tenant
+                          - team
+                          - other-team
+                      approvalExpiryHours:
+                        type: integer
+                        minimum: 1
+                        maximum: 720
+                      allowTokenApprovals:
+                        type: boolean
+                      approverIdentitySources:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            - local
+                            - oidc
+                            - ldap
+                      publishBy:
+                        type: string
+                        enum:
+                          - any-publisher
+                          - approver-only
+                      allowDraftRuns:
+                        type: string
+                        enum:
+                          - off
+                          - development-credentials
+                          - on
+                      allowPersonalSecretsInDevRuns:
+                        type: boolean
+                      allowPersonalSecretsInPublishedAgents:
+                        type: string
+                        enum:
+                          - never
+                          - with-approval
+                      allowProductionSecretsInDraftRuns:
+                        type: boolean
+                      gitUnsignedContributors:
+                        type: string
+                        enum:
+                          - declared-non-production
+                          - refuse
+                    additionalProperties: false
+                    description: the values this node stores itself
+                  effective:
+                    type: object
+                    properties:
+                      requireApprovalForPublish:
+                        type: string
+                        enum:
+                          - off
+                          - production-only
+                          - on
+                      productionUseCases:
+                        type: array
+                        items:
+                          type: string
+                      selfApproval:
+                        type: string
+                        enum:
+                          - never
+                      minApprovals:
+                        type: integer
+                        minimum: 1
+                        maximum: 5
+                      allowedApproverRoles:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            - admin
+                            - agent-maintainer
+                            - agent-developer
+                            - operator
+                      approverScope:
+                        type: string
+                        enum:
+                          - tenant
+                          - team
+                          - other-team
+                      approvalExpiryHours:
+                        type: integer
+                        minimum: 1
+                        maximum: 720
+                      allowTokenApprovals:
+                        type: boolean
+                      approverIdentitySources:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            - local
+                            - oidc
+                            - ldap
+                      publishBy:
+                        type: string
+                        enum:
+                          - any-publisher
+                          - approver-only
+                      allowDraftRuns:
+                        type: string
+                        enum:
+                          - off
+                          - development-credentials
+                          - on
+                      allowPersonalSecretsInDevRuns:
+                        type: boolean
+                      allowPersonalSecretsInPublishedAgents:
+                        type: string
+                        enum:
+                          - never
+                          - with-approval
+                      allowProductionSecretsInDraftRuns:
+                        type: boolean
+                      gitUnsignedContributors:
+                        type: string
+                        enum:
+                          - declared-non-production
+                          - refuse
+                    required:
+                      - requireApprovalForPublish
+                      - productionUseCases
+                      - selfApproval
+                      - minApprovals
+                      - allowedApproverRoles
+                      - approverScope
+                      - approvalExpiryHours
+                      - allowTokenApprovals
+                      - approverIdentitySources
+                      - publishBy
+                      - allowDraftRuns
+                      - allowPersonalSecretsInDevRuns
+                      - allowPersonalSecretsInPublishedAgents
+                      - allowProductionSecretsInDraftRuns
+                      - gitUnsignedContributors
+                    additionalProperties: false
+                    description: "what applies at this node: the chain resolved, never looser than the parent"
+                  policyDigest:
+                    type: string
+                    pattern: ^[0-9a-f]{64}$
+                    description: SHA-256, lower-case hex
+                required:
+                  - tenantId
+                  - own
+                  - effective
+                  - policyDigest
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/event-sources:
     get:
       summary: List event sources

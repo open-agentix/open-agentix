@@ -124,8 +124,10 @@ mapping (`role` or `role@team-slug`). The console shows the display names in Eng
 | `viewer` | Viewer | the read basics only |
 | `pentest` | Pentest | read-only, time-boxed (see below) |
 
-- `agents:review`, `agents:approve` and `agents:rules` are **permissions only** in this slice. Nothing
-  enforces a review or an approval yet (that comes with ADR 0017 S1 and S3); publishing behaves as before.
+- `agents:review`, `agents:approve` and `agents:rules` are permissions. Since ADR 0017 S1 reviews and
+  decisions exist ([agent-lifecycle.md](agent-lifecycle.md)), but nothing refuses a publish without an
+  approval yet (slice S3, shadow mode only). They are deliberately **not** use-case permissions: a
+  binding limited to a use case never carries them (fail closed, #336 item 7).
   An Agent Developer cannot publish (`agents:publish`), an Agent Maintainer can. Neither role holds
   `users:write`, `settings:write`, `connections:write`, `sources:write`, `policies:write` or any audit
   permission, so neither can grant a role or change settings. The grant rules of ADR 0014 (a grant needs
@@ -380,6 +382,12 @@ still decides from `users.global_roles`, teams and agent bindings, and the shado
 difference. The role-binding API itself always reads grants from `tenant_role_bindings`, in both modes:
 a grantor acts on the bindings it holds there (mirror rows and earlier grants) whatever the read path.
 A role cannot be bound to a disabled user (`422 grantee_disabled`, checked after grantee visibility).
+
+**Who granted a binding (ADR 0017 rule A4).** `granted_by` is also recorded for team members and agent
+members (migration `0032`; unchanged memberships keep their grantor, `NULL` = not recorded). A `PATCH`
+that gives a binding more (another role, `inherit` turned on, a later or removed expiry) and the bulk
+opt-in below make the person who did it the grantor: a contributor of a review cannot widen a clean
+binding into an approver binding and keep its original grantor.
 
 **Bulk opt-in.** `enable-inheritance` makes the plain (non-inheriting, unexpired, no use case) bindings
 of the listed roles in one organisation inheriting, mirror rows included. `dryRun` defaults to `true`

@@ -22,6 +22,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Lifecycle policy, draft revisions, reviews and approval records, in shadow mode (ADR 0017 S1, #244)**:
+  every draft save that changes the normalised content creates an immutable revision with its author
+  (`GET /v1/agents/{id}/revisions`); reviews can be opened, decided (approve, request changes, reject) and
+  withdrawn (`/v1/agents/{id}/reviews`, `/v1/reviews/{id}`); an approval is bound to the revision digest, the
+  profile-expansion digest, the secret-resolution digest (names only until S4), the base version and the
+  policy digest, and records the bindings that made the reviewer eligible. A contributor (any author since the
+  base version, or the opener) can never decide, in any role, with any token, platform administrators
+  included (`403 self_approval`); bindings granted by a contributor do not make a reviewer eligible; API
+  tokens decide only when the tenant allows it; the default approvers are `admin` and `agent-maintainer`. The
+  tenant policy `settings.agentLifecycle` (`GET/PATCH /v1/tenants/{id}/settings/agent-lifecycle`, installation
+  defaults `OAX_LIFECYCLE_*`) is narrowing only (`422 not_narrowing`). **Publish is not refused yet**: its
+  response and audit entry carry a `shadow` report of what it would have been refused for. New audit events
+  `agent.revision.created`, `agent.review.*` and `tenant.lifecycle_policy_changed`. Migration
+  `0032_agent_lifecycle_reviews` (additive; adds `granted_by` to team and agent bindings). Role-binding
+  changes that widen a binding now make the person who made them its grantor. See
+  [docs/agent-lifecycle.md](docs/agent-lifecycle.md).
 - **Agent Developer and Agent Maintainer roles (ADR 0017 S10, #290)**: the fixed roles `agent-developer`
   (write drafts, review, comment, run; cannot publish) and `agent-maintainer` (everything of the developer
   plus `agents:publish` and `agents:rules`), grantable on nodes (with and without `inherit`), teams, agents,

@@ -38,3 +38,6 @@ export * from './telemetry/index.js';
 export * from './tenancy/roles.js';
 export * from './tenancy/grants-codec.js';
 export * from './tenancy/use-case.js';
+export * from './tenancy/lifecycle-policy.js';
+export * from './approvals/rules.js';
+export * from './approvals/digests.js';
