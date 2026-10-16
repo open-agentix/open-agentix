@@ -504,6 +504,12 @@ export class IdentityService {
   async authenticate(bearer: string): Promise<Principal> {
     const parsed = parseToken(bearer);
     if (!parsed) throw unauthenticated('invalid token');
+    // The id of the token travels with the principal (never in the cache entry, which is keyed by
+    // it): approval records name the credential a decision was made with (ADR 0017 section 4.2).
+    return { ...(await this.authenticateParsed(parsed)), tokenId: parsed.id };
+  }
+
+  private async authenticateParsed(parsed: { id: string; secret: string }): Promise<Principal> {
     const key = `auth:${parsed.id}`;
     const now = this.ctx.now().getTime();
     const hit = await this.ctx.cache.get<CachedPrincipal>(key);
