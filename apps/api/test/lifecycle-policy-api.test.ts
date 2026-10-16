@@ -16,7 +16,6 @@ let db: Sql;
 let root: string;
 let child: string;
 let grandchild: string;
-let other: string;
 let adminRoot: string;
 let adminChild: string;
 let adminOther: string;
@@ -56,7 +55,6 @@ beforeAll(async () => {
   const c = await mkTenant('pol-grand', child);
   grandchild = c.id;
   const o = await mkTenant('pol-other');
-  other = o.id;
   adminOther = o.token;
   for (const [key, roles] of [
     ['auditor', ['auditor']],

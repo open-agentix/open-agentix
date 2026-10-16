@@ -1,10 +1,9 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 import type { ApprovalView, ReviewView } from '../../services/agent-reviews.js';
 import type { RevisionRow } from '../../services/agent-revisions.js';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import {
-  ApprovalSchema,
   DecisionBody,
   DecisionResultSchema,
   LifecyclePatchBody,
@@ -17,6 +16,7 @@ import {
   RevisionListSchema,
   RevisionParams,
 } from '../lifecycle-schemas.js';
+import type { ApprovalSchema } from '../lifecycle-schemas.js';
 import { ErrorSchema, IdParams } from '../schemas.js';
 import type { ZApp } from '../zapp.js';
 

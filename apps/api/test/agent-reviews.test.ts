@@ -8,7 +8,6 @@ import {
   agentVersions,
   agents,
   auditLog,
-  tenantRoleBindings,
 } from '../src/db/schema.js';
 import { agentSource } from './fixtures.js';
 import { PG_URL, openPglite, openPostgres, type Sql } from './db-targets.js';

@@ -13,9 +13,9 @@ import {
 } from '@openagentix/core';
 import { and, eq, gt, isNull, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
+import type { agents } from '../db/schema.js';
 import {
   agentRoleBindings,
-  agents,
   teamMembers,
   teams,
   tenantRoleBindings,

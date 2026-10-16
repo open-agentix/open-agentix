@@ -34,7 +34,7 @@ import {
   auditLog,
   tenants,
 } from '../db/schema.js';
-import { HttpError, conflict, forbidden, notFound } from '../errors.js';
+import { HttpError, forbidden, notFound } from '../errors.js';
 import {
   agentsWithoutRevision,
   ensureHead,
@@ -748,7 +748,7 @@ export class AgentReviewsService {
     reviewId: string,
     input: DecisionInput,
   ): Promise<{ review: ReviewView; decision: ApprovalView }> {
-    const { review: found, agent: foundAgent } = await this.loadReview(p, reviewId);
+    const { agent: foundAgent } = await this.loadReview(p, reviewId);
     await this.agents.assertAccess(p, foundAgent, 'agents:approve').catch((e: unknown) => {
       throw e instanceof HttpError && e.statusCode === 404 ? notFound('review') : e;
     });
