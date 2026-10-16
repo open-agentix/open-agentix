@@ -163,12 +163,12 @@ describe.skipIf(!PG_URL)('renewal races on a real PostgreSQL', () => {
     // after a re-authorization (the first answer) has stored new tokens
     let answered = 0;
     as.nextToken = () => (++answered === 2 ? json({ error: 'invalid_client' }, 401) : undefined);
-    as.latency = 500;
+    as.latency = 3000;
     const renewing = n.services.mcpOauthFlows.refresh(ref).then(
       () => 'ok',
       (e: { code: string }) => e.code,
     );
-    await sleep(150); // the renewal holds the lock and waits for the server
+    await sleep(300); // the renewal holds the lock and waits for the server
     as.latency = 0;
     clock = new Date(clock.getTime() + 1_000);
     expect(
@@ -189,12 +189,12 @@ describe.skipIf(!PG_URL)('renewal races on a real PostgreSQL', () => {
     const before = as.tokenRequests.length;
     const revoked = as.revoked.length;
     const stale = (await rows(id))[0]!;
-    as.latency = 400;
+    as.latency = 1500;
     const renewing = n.services.mcpOauthFlows.refresh(ref).then(
       () => 'ok',
       (e: { code: string }) => e.code,
     );
-    await sleep(150);
+    await sleep(300);
     as.latency = 0;
     // a writer that does not take the credential lock (a status write) rewrites the row
     clock = new Date(clock.getTime() + 1_000);
@@ -256,12 +256,12 @@ describe.skipIf(!PG_URL)('renewal races on a real PostgreSQL', () => {
     const tokens = n.services.mcpOauth.tokens;
     const stored = (await tokens.open(ref.tenantId, id, 1))!;
     const revoked = as.revoked.length;
-    as.latency = 400;
+    as.latency = 1500;
     const renewing = n.services.mcpOauthFlows.refresh(ref).then(
       () => 'ok',
       (e: { code: string }) => e.code,
     );
-    await sleep(150);
+    await sleep(300);
     as.latency = 0;
     tick();
     // a 403 insufficient_scope: written without the credential lock
@@ -284,12 +284,12 @@ describe.skipIf(!PG_URL)('renewal races on a real PostgreSQL', () => {
     const before = as.tokenRequests.length;
     const revoked = as.revoked.length;
     const old = (await tokens.open(ref.tenantId, id, 1))!;
-    as.latency = 400;
+    as.latency = 1500;
     const renewing = n.services.mcpOauthFlows.refresh(ref).then(
       () => 'ok',
       (e: { code: string }) => e.code,
     );
-    await sleep(150);
+    await sleep(300);
     as.latency = 0;
     tick();
     await tokens.setStatus(ref.tenantId, id, 1, 'active'); // a status-only writer, no lock
