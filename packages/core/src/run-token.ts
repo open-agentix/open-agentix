@@ -71,7 +71,13 @@ export function verifyRunToken(
   const [, payload = '', sig = ''] = parts;
   const expected = mac(secret, payload);
   const given = Buffer.from(sig, 'base64url');
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+  // Reject non-canonical encodings: Node's base64url decoder ignores the unused trailing bits and
+  // stray characters, so several distinct strings would otherwise decode to the same signature.
+  if (
+    given.toString('base64url') !== sig ||
+    given.length !== expected.length ||
+    !timingSafeEqual(given, expected)
+  ) {
     throw new OaxError('run_token_invalid', 'run token signature is invalid');
   }
   let claims: RunTokenClaims;
