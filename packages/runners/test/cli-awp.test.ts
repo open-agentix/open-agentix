@@ -89,3 +89,47 @@ describe('oax awp export <agent-id>@<version>', () => {
     expect(a.out).toEqual([]);
   });
 });
+
+describe('oax validate with AWP manifests', () => {
+  it('accepts AWP front matter, prints codes and paths of warnings and the digest', async () => {
+    const a = io();
+    expect(await runCli(['validate', 'examples/awp/ticket-updater.awp.md'], a.cli)).toBe(0);
+    expect(a.out.join('\n')).toMatch(
+      /^valid: ticket-updater@2\.0\.0 sha256:[0-9a-f]{64} \(AWP draft/,
+    );
+    expect(a.err.join('\n')).toContain(
+      'warning extension.critical-not-declared /spec/agents/0/permissions/tools/tickets.get_ticket/x-openagentix-args',
+    );
+  });
+
+  it('reads a plain .awp.json file and prints the same digest as the exporter wrote', async () => {
+    const a = io();
+    expect(await runCli(['validate', 'examples/awp/log-reader.awp.json'], a.cli)).toBe(0);
+    const golden = JSON.parse(
+      await readFile(`${root}examples/awp/log-reader.awp.json`, 'utf8'),
+    ) as {
+      metadata: { integrity: { digest: string } };
+    };
+    expect(a.out.join('\n')).toContain(golden.metadata.integrity.digest);
+  });
+
+  it('keeps the output of a legacy agents.md', async () => {
+    const a = io();
+    expect(await runCli(['validate', 'examples/cve-triage.agents.md'], a.cli)).toBe(0);
+    expect(a.out).toEqual(['valid: cve-triage@1.0.0']);
+  });
+
+  it('exits 1 with the AWP code and path of every error', async () => {
+    const a = io();
+    a.cli.readFile = async () =>
+      JSON.stringify({
+        apiVersion: 'awp.agenticworkflowprotocol.org/v1alpha1',
+        kind: 'Workflow',
+        metadata: { name: 'p', version: '1.0.0', owner: 't', classification: 'internal', extra: 1 },
+        spec: { agents: [], workflow: [] },
+      });
+    expect(await runCli(['validate', 'broken.awp.json'], a.cli)).toBe(1);
+    expect(a.err.join('\n')).toContain('error   schema.additionalProperties /metadata/extra');
+    expect(a.out).toEqual(['invalid']);
+  });
+});

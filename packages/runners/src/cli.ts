@@ -2,7 +2,13 @@
 import { readFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { PolicyBundleSchema, PriceTableSchema, validateAgentSource } from '@openagentix/core';
+import {
+  PolicyBundleSchema,
+  PriceTableSchema,
+  manifestIssues,
+  validateAgentSource,
+  validateManifestSource,
+} from '@openagentix/core';
 import { parseProviderConfigs } from '@openagentix/providers';
 import { AWP_USAGE, runAwpCommand } from './cli-awp.js';
 import { PLAN_USAGE, runPlanCommand } from './cli-plan.js';
@@ -23,7 +29,7 @@ const USAGE = `oax ${CLI_VERSION} - run openagentix agents locally
 
 Usage:
   oax run <agents.md> --event <event.json> [options]
-  oax validate <agents.md>
+  oax validate <agents.md | manifest.awp.yaml | manifest.awp.json>
   oax plan check|generate <plan.yaml> (see "oax plan --help")
   oax awp export <agents.md> (see "oax awp --help")
   oax --version
@@ -100,7 +106,24 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
   try {
     if (cmd === 'validate') {
       if (!file) throw new Error('missing <agents.md>');
-      const r = validateAgentSource(await io.readFile(file));
+      const text = await io.readFile(file);
+      // *.awp.yaml, *.awp.json and plain .yaml/.yml/.json files are AWP manifests; any other file
+      // is an agents.md whose front matter is read as AWP only when its apiVersion says so.
+      const awp = validateManifestSource(text, {
+        layout: /\.(?:ya?ml|json)$/i.test(file) ? 'document' : 'auto',
+      });
+      if (awp) {
+        const { errors, warnings } = manifestIssues(awp);
+        for (const e of errors) io.err(`error   ${e.code} ${e.path || '-'}: ${e.message}`);
+        for (const w of warnings) io.err(`warning ${w.code} ${w.path || '-'}: ${w.message}`);
+        io.out(
+          awp.valid
+            ? `valid: ${awp.documents.length === 1 ? `${awp.name}@${awp.version} ${awp.digest}` : `${awp.documents.length} documents`} (AWP draft v1alpha1, built to the schema, conformance in progress)`
+            : 'invalid',
+        );
+        return awp.valid ? 0 : 1;
+      }
+      const r = validateAgentSource(text);
       for (const e of r.errors) io.err(`error   ${e.path}: ${e.message}`);
       for (const w of r.warnings) io.err(`warning ${w.path}: ${w.message}`);
       io.out(r.valid ? `valid: ${r.definition?.name}@${r.definition?.version}` : 'invalid');
