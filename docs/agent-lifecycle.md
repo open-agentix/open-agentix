@@ -85,7 +85,8 @@ longer eligible stops counting, with the reason):
 | A8 | `minApprovals` distinct approvals (default 1, at most 5). | state stays `review_requested` |
 | A10 | The reviewer can read the agent and decided on the digest of the current revision. A reviewer who cannot read the agent gets 404; the stale check comes last, so an ineligible caller never learns that the digest is stale. | `404`, `409 stale_view` |
 
-A9 (agent rules) arrives with slice S8. A platform operator is an approver under the same rules, as a
+The review lists its `contributors` (user ids) to everybody who can read the agent, so the console can
+say why somebody may not decide. A9 (agent rules) arrives with slice S8. A platform operator is an approver under the same rules, as a
 distinct person; acting in another organisation they keep the roles of their home tenant (source
 `platform`, nobody as grantor).
 
@@ -113,7 +114,10 @@ Draft saves, withdrawals, publishes and other decisions of the same agent are se
   `409 stale_view`; an approval is never bound to a revision the reviewer did not see;
 - a withdrawal and a decision race: whichever comes second sees the other (`409 review_closed`);
 - two reviewers deciding at once are both recorded;
-- the eligibility of the reviewer is read inside the transaction, never from a cached principal.
+- the eligibility of the reviewer is read inside the transaction, never from a cached principal;
+- the connection catalog behind the expansion digest is read just before the locks are taken (a
+  connection change is not serialised with reviews); it can only make an approval stale at publish,
+  where the expansion is computed again (slice S3), never let a wrong one through.
 
 ## Policy
 
