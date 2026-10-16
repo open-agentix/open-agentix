@@ -1203,7 +1203,6 @@
       "title": "Entscheidungen",
       "counted": "Zählt",
       "notCounted": "Zählt nicht",
-      "hasComment": "Mit Kommentar.",
       "decision": {
         "approve": "Freigegeben",
         "request_changes": "Änderungen gewünscht",

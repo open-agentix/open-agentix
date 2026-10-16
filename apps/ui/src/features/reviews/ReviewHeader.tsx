@@ -4,6 +4,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Badge, Button, KeyValue, Section } from '../../components/ui';
 import { useI18n, type TKey } from '../../i18n/i18n';
 import { LifecycleBadge } from './LifecycleBadge';
+import { Markdown } from './Markdown';
 import type { ReviewActions } from './reviewActions';
 
 const STALE_KEYS: Record<string, TKey> = {
@@ -29,7 +30,7 @@ function ApprovalRow({ a, name }: { a: ReviewApproval; name: string }) {
         )
       ) : null}
       {reasons.length ? <span className="muted"> {reasons.join(', ')}</span> : null}
-      {a.comment ? <p className="muted">{t('reviews.approvals.hasComment')}</p> : null}
+      {a.comment ? <Markdown source={a.comment} /> : null}
     </li>
   );
 }

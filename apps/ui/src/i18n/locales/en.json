@@ -1192,7 +1192,6 @@
       "title": "Decisions",
       "counted": "Counts",
       "notCounted": "Does not count",
-      "hasComment": "With a comment.",
       "decision": {
         "approve": "Approved",
         "request_changes": "Requested changes",

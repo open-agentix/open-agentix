@@ -136,7 +136,7 @@ describe('the Review tab', () => {
             reviewerAuth: 'session',
             actingTenantId: r.rid.other,
             bindingRefs: [],
-            comment: null,
+            comment: 'Please **narrow** the egress',
             decidedAt: new Date().toISOString(),
             expiresAt: null,
             current: true,
@@ -155,6 +155,8 @@ describe('the Review tab', () => {
     expect(within(header).getByText('0 of 1')).toBeInTheDocument();
     expect(within(header).getByText('Does not count')).toBeInTheDocument();
     expect(within(header).getByText(/expired/)).toBeInTheDocument();
+    // the reviewer's comment is shown, rendered as Markdown
+    expect(within(header).getByText('narrow').tagName).toBe('STRONG');
     expect(within(header).getByText(/You · Approved|Approved/)).toBeInTheDocument();
   });
 
