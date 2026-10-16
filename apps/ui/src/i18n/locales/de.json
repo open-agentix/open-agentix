@@ -195,6 +195,7 @@
     "wizard": "Workflow-Assistent",
     "plans": "Agent-Pläne",
     "agents": "Agenten",
+    "reviews": "Reviews",
     "connections": "Verbindungen",
     "events": "Ereignisse & Quellen",
     "runs": "Runs",
@@ -307,6 +308,7 @@
       "editor": "agents.md",
       "versions": "Versionen",
       "diff": "Vergleichen",
+      "review": "Review",
       "test": "Test-Run"
     },
     "overview": {
@@ -1156,5 +1158,199 @@
     "openEditor": "Im Editor für neue Agenten öffnen",
     "noDraft": "Es wurde kein Entwurf erzeugt",
     "noDraftText": "Der Plan hat Fehler-Befunde. Behebe sie und erzeuge den Entwurf erneut."
+  },
+  "reviews": {
+    "status": {
+      "in_development": "In Entwicklung",
+      "review_requested": "Review angefragt",
+      "changes_requested": "Änderungen gewünscht",
+      "approved": "Freigegeben",
+      "published": "Veröffentlicht"
+    },
+    "closed": {
+      "withdrawn": "Zurückgezogen",
+      "rejected": "Abgelehnt",
+      "published": "Veröffentlicht"
+    },
+    "person": {
+      "you": "Du",
+      "unknown": "Unbekannt",
+      "other": "Benutzer {id}"
+    },
+    "none": {
+      "title": "Noch kein Review",
+      "text": "Frage ein Review an, wenn der Entwurf fertig ist. Eine andere Person muss ihn ansehen, bevor er dort veröffentlicht werden kann, wo der Tenant eine Freigabe verlangt.",
+      "nothingToReview": "Der Entwurf entspricht der veröffentlichten Version, es gibt nichts zu prüfen.",
+      "request": "Review anfragen"
+    },
+    "header": {
+      "title": "Review",
+      "requestedBy": "Angefragt von",
+      "base": "Verglichen mit",
+      "noBase": "nichts (erste Version)",
+      "revision": "Geprüfte Revision",
+      "approvals": "Freigaben",
+      "approvalsOf": "{count} von {required}",
+      "required": "Freigabe zum Veröffentlichen nötig",
+      "requiredYes": "Ja, nach der Policy dieses Tenants",
+      "requiredNo": "Nein, das Review ist beratend",
+      "unknownAuthor": "Mindestens eine Revision hat einen unbekannten Autor. Als Autor zählt, wer laut Audit-Protokoll diesen Entwurf bearbeitet hat.",
+      "withdraw": "Review zurückziehen",
+      "withdrawTitle": "Dieses Review zurückziehen?",
+      "withdrawText": "Der Agent geht zurück in die Entwicklung. Kommentare bleiben am geschlossenen Review."
+    },
+    "approvals": {
+      "title": "Entscheidungen",
+      "counted": "Zählt",
+      "notCounted": "Zählt nicht",
+      "hasComment": "Mit Kommentar.",
+      "decision": {
+        "approve": "Freigegeben",
+        "request_changes": "Änderungen gewünscht",
+        "reject": "Abgelehnt"
+      },
+      "stale": {
+        "revision_changed": "für eine frühere Revision abgegeben",
+        "superseded": "durch eine spätere Entscheidung ersetzt",
+        "expired": "abgelaufen",
+        "expansion_changed": "die gewährten Tools haben sich seither geändert",
+        "secret_resolution_changed": "die Secret-Referenzen haben sich seither geändert",
+        "not_eligible": "darf nicht mehr freigeben"
+      }
+    },
+    "decision": {
+      "title": "Deine Entscheidung",
+      "comment": "Kommentar",
+      "commentHint": "Pflicht bei „Änderungen wünschen“ und „Ablehnen“. Markdown-Teilmenge, kein HTML.",
+      "approve": "Freigeben",
+      "requestChanges": "Änderungen wünschen",
+      "reject": "Ablehnen",
+      "thisTeam": "diesem Team",
+      "scopeTeam": "Diese Regel verlangt ein Mitglied des Teams {team}.",
+      "scopeOtherTeam": "Diese Regel verlangt eine Person, die nicht zum Team {team} gehört.",
+      "done": {
+        "approve": "Deine Freigabe ist gespeichert.",
+        "request_changes": "Dein Änderungswunsch ist gespeichert.",
+        "reject": "Das Review ist abgelehnt."
+      },
+      "reasons": {
+        "closed": "Dieses Review ist geschlossen.",
+        "self_approval": "Du hast diesen Entwurf bearbeitet oder das Review geöffnet und kannst es deshalb nicht entscheiden. Das ist nicht einstellbar.",
+        "not_eligible": "Deine Rolle ist in diesem Tenant keine Freigabe-Rolle für diesen Agenten.",
+        "binding_granted_by_contributor": "Die einzigen Zuweisungen, die dich zum Freigeber machen, hat jemand vergeben, der an diesem Review beteiligt war.",
+        "token_approval_disabled": "Entscheidungen mit einem API-Token sind in diesem Tenant nicht erlaubt. Melde dich als Person an.",
+        "actor_not_human": "Nur eine Person kann ein Review entscheiden.",
+        "identity_source_not_allowed": "Konten deiner Identitätsquelle dürfen in diesem Tenant keine Reviews entscheiden.",
+        "approver_scope": "Der Freigabe-Bereich dieses Tenants erlaubt dir keine Entscheidung für diesen Agenten.",
+        "cannot_read": "Du darfst diesen Agenten nicht lesen.",
+        "unknown": "Du kannst dieses Review nicht entscheiden."
+      }
+    },
+    "summary": {
+      "title": "Was sich ändert",
+      "tools": "Tools und gewährter Zugriff",
+      "tool": "Tool",
+      "accessClass": "Zugriffsklasse",
+      "approval": "Genehmigung",
+      "approvalRequired": "Bei jedem Aufruf nötig",
+      "approvalNone": "Keine",
+      "origin": "Gewährt",
+      "viaProfile": "über Profil {profile}",
+      "direct": "direkt",
+      "change": "Änderung",
+      "noTools": "Der Agent hat keine Tools.",
+      "access": {
+        "read": "Lesen",
+        "write": "Schreiben",
+        "unclassified": "Nicht klassifiziert (zählt als Schreiben)"
+      },
+      "mark": {
+        "added": "Neu",
+        "removed": "Entfernt",
+        "changed": "Geändert"
+      },
+      "egress": "Netzwerkzugriff (Egress)",
+      "noEgress": "Keine Hosts außer dem Control-Knoten.",
+      "secrets": "Secret-Referenzen",
+      "noSecrets": "Keine Secret-Referenzen.",
+      "scopeLegacy": "Bereich: Legacy (Betreiber- oder Tenant-Secret)",
+      "ownerNode": "besitzender Knoten",
+      "budget": "Budget",
+      "unlimited": "unbegrenzt",
+      "budgetKeys": {
+        "maxTokens": "Tokens",
+        "maxCostUsd": "Kosten (USD)",
+        "maxSteps": "Schritte",
+        "maxToolCalls": "Tool-Aufrufe",
+        "timeoutSeconds": "Zeitlimit (Sekunden)"
+      },
+      "general": "Klassifizierung, Laufzeit und Eigentümer",
+      "classification": "Klassifizierung",
+      "runtime": "Laufzeit",
+      "owner": "Eigentümer",
+      "useCase": "Anwendungsfall",
+      "rules": "Agent-Regeln",
+      "rulesUnavailable": "Agent-Regeln gibt es in dieser Version nicht, deshalb stellt keine Regel zusätzliche Anforderungen. Es gilt die Policy des Tenants."
+    },
+    "diff": {
+      "title": "Änderungen in Revision #{revision}",
+      "label": "Geänderte Zeilen von agents.md",
+      "comment": "Kommentar",
+      "commentOnAdded": "Hinzugefügte Zeile {line} kommentieren",
+      "commentOnRemoved": "Entfernte Zeile {line} kommentieren",
+      "startThread": "Thread starten"
+    },
+    "thread": {
+      "label": "Thread: {context}",
+      "line": "Zeile {line}",
+      "lineOfRevision": "Zeile {line} in Revision #{revision}",
+      "review": "Ganzes Review",
+      "outdated": "Veraltet",
+      "resolvedBy": "Erledigt von {name}",
+      "reply": "Antworten",
+      "replyLabel": "Deine Antwort",
+      "resolve": "Erledigen",
+      "reopen": "Wieder öffnen"
+    },
+    "threads": {
+      "general": "Diskussion",
+      "noGeneral": "Noch keine Diskussion über das ganze Review.",
+      "startLabel": "Diskussion beginnen",
+      "start": "Diskussion starten",
+      "outdated": "Veraltete Threads",
+      "outdatedText": "Die Zeile dieser Threads hat sich nach dem Schreiben geändert. Die Threads bleiben erhalten, mit der Revision, auf der sie geschrieben wurden.",
+      "noAccess": "Kommentare stehen deiner Rolle nicht zur Verfügung."
+    },
+    "comment": {
+      "hint": "Markdown-Teilmenge: fett, kursiv, Code, Listen, Zitate und http(s)-Links. HTML und Bilder erscheinen als Text.",
+      "counter": "{count} von {max} Zeichen",
+      "edited": "(bearbeitet)",
+      "deleted": "Dieser Kommentar wurde gelöscht.",
+      "editLabel": "Kommentar bearbeiten",
+      "deleteTitle": "Diesen Kommentar löschen?",
+      "deleteText": "Der Text wird für alle entfernt. Der Thread behält seinen Platz."
+    },
+    "markdown": {
+      "truncated": "Der Rest dieses Kommentars wird nicht angezeigt."
+    },
+    "errors": {
+      "stale_view": "Der Entwurf hat sich geändert, seit du diese Seite geöffnet hast. Lade neu und sieh ihn dir noch einmal an, bevor du entscheidest.",
+      "review_closed": "Dieses Review ist geschlossen.",
+      "thread_limit_reached": "Dieses Review hat die höchste Zahl an Threads. Antworte in einem bestehenden Thread.",
+      "comment_limit_reached": "Dieser Thread hat die höchste Zahl an Kommentaren.",
+      "comment_too_long": "Ein Kommentar darf höchstens 10.000 Zeichen haben.",
+      "rate_limited": "Du kommentierst zu schnell. Warte eine Minute und versuche es noch einmal.",
+      "anchor_invalid": "Diese Zeile gibt es in der Revision nicht.",
+      "comment_deleted": "Dieser Kommentar wurde gelöscht.",
+      "review_open": "Für diesen Agenten gibt es schon ein offenes Review.",
+      "nothing_to_review": "Der Entwurf entspricht der veröffentlichten Version."
+    },
+    "inbox": {
+      "title": "Reviews",
+      "subtitle": "Offene Reviews, die du jetzt entscheiden könntest.",
+      "empty": "Nichts wartet auf dich",
+      "emptyText": "Reviews, die du selbst geschrieben hast oder nicht entscheiden darfst, stehen hier nicht.",
+      "meta": "Revision #{revision} · {count} von {required} Freigaben · geöffnet {when}"
+    }
   }
 }

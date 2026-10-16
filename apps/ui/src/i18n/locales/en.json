@@ -195,6 +195,7 @@
     "wizard": "Workflow wizard",
     "plans": "Agent plans",
     "agents": "Agents",
+    "reviews": "Reviews",
     "connections": "Connections",
     "events": "Events & sources",
     "runs": "Runs",
@@ -307,6 +308,7 @@
       "editor": "agents.md",
       "versions": "Versions",
       "diff": "Compare",
+      "review": "Review",
       "test": "Test run"
     },
     "overview": {
@@ -1144,6 +1146,200 @@
     "origin": {
       "lint": "Lint",
       "model": "Model"
+    }
+  },
+  "reviews": {
+    "status": {
+      "in_development": "In development",
+      "review_requested": "Review requested",
+      "changes_requested": "Changes requested",
+      "approved": "Approved",
+      "published": "Published"
+    },
+    "closed": {
+      "withdrawn": "Withdrawn",
+      "rejected": "Rejected",
+      "published": "Published"
+    },
+    "person": {
+      "you": "You",
+      "unknown": "Unknown",
+      "other": "User {id}"
+    },
+    "none": {
+      "title": "No review yet",
+      "text": "Ask for a review when the draft is ready. Another person has to look at it before it can be published where the tenant requires approval.",
+      "nothingToReview": "The draft equals the published version, so there is nothing to review.",
+      "request": "Request review"
+    },
+    "header": {
+      "title": "Review",
+      "requestedBy": "Requested by",
+      "base": "Compared with",
+      "noBase": "nothing (first version)",
+      "revision": "Reviewed revision",
+      "approvals": "Approvals",
+      "approvalsOf": "{count} of {required}",
+      "required": "Approval needed to publish",
+      "requiredYes": "Yes, under the policy of this tenant",
+      "requiredNo": "No, the review is advisory",
+      "unknownAuthor": "At least one revision has an unknown author. Everybody the audit trail shows editing this draft counts as an author.",
+      "withdraw": "Withdraw review",
+      "withdrawTitle": "Withdraw this review?",
+      "withdrawText": "The agent goes back to development. Comments stay with the closed review."
+    },
+    "approvals": {
+      "title": "Decisions",
+      "counted": "Counts",
+      "notCounted": "Does not count",
+      "hasComment": "With a comment.",
+      "decision": {
+        "approve": "Approved",
+        "request_changes": "Requested changes",
+        "reject": "Rejected"
+      },
+      "stale": {
+        "revision_changed": "written for an earlier revision",
+        "superseded": "replaced by a later decision",
+        "expired": "expired",
+        "expansion_changed": "the granted tools changed since",
+        "secret_resolution_changed": "the secret references changed since",
+        "not_eligible": "no longer allowed to approve"
+      }
+    },
+    "decision": {
+      "title": "Your decision",
+      "comment": "Comment",
+      "commentHint": "Required to request changes or reject. Markdown subset, no HTML.",
+      "approve": "Approve",
+      "requestChanges": "Request changes",
+      "reject": "Reject",
+      "thisTeam": "this team",
+      "scopeTeam": "This rule needs a member of team {team}.",
+      "scopeOtherTeam": "This rule needs a reviewer who is not a member of team {team}.",
+      "done": {
+        "approve": "Your approval is recorded.",
+        "request_changes": "Your request for changes is recorded.",
+        "reject": "The review is rejected."
+      },
+      "reasons": {
+        "closed": "This review is closed.",
+        "self_approval": "You edited this draft or opened this review, so you cannot decide it. This is not configurable.",
+        "not_eligible": "Your role is not an approver role for this agent in this tenant.",
+        "binding_granted_by_contributor": "The only bindings that make you an approver were granted by somebody who contributed to this review.",
+        "token_approval_disabled": "Decisions with an API token are not allowed in this tenant. Sign in as a person.",
+        "actor_not_human": "Only a person can decide a review.",
+        "identity_source_not_allowed": "Accounts of your identity source cannot decide reviews in this tenant.",
+        "approver_scope": "The approver scope of this tenant does not let you decide for this agent.",
+        "cannot_read": "You cannot read this agent.",
+        "unknown": "You cannot decide this review."
+      }
+    },
+    "summary": {
+      "title": "What changes",
+      "tools": "Tools and granted access",
+      "tool": "Tool",
+      "accessClass": "Access class",
+      "approval": "Approval",
+      "approvalRequired": "Required per call",
+      "approvalNone": "None",
+      "origin": "Granted",
+      "viaProfile": "by profile {profile}",
+      "direct": "directly",
+      "change": "Change",
+      "noTools": "The agent has no tools.",
+      "access": {
+        "read": "Read",
+        "write": "Write",
+        "unclassified": "Unclassified (treated as write)"
+      },
+      "mark": {
+        "added": "Added",
+        "removed": "Removed",
+        "changed": "Changed"
+      },
+      "egress": "Network access (egress)",
+      "noEgress": "No hosts beyond the control node.",
+      "secrets": "Secret references",
+      "noSecrets": "No secret references.",
+      "scopeLegacy": "scope: legacy (operator or tenant secret)",
+      "ownerNode": "owning node",
+      "budget": "Budget",
+      "unlimited": "no limit",
+      "budgetKeys": {
+        "maxTokens": "Tokens",
+        "maxCostUsd": "Cost (USD)",
+        "maxSteps": "Steps",
+        "maxToolCalls": "Tool calls",
+        "timeoutSeconds": "Timeout (seconds)"
+      },
+      "general": "Classification, runtime and owner",
+      "classification": "Classification",
+      "runtime": "Runtime",
+      "owner": "Owner",
+      "useCase": "Use case",
+      "rules": "Agent rules",
+      "rulesUnavailable": "Agent rules are not available in this version, so no rule adds requirements. The tenant policy applies."
+    },
+    "diff": {
+      "title": "Changes in revision #{revision}",
+      "label": "Changed lines of agents.md",
+      "comment": "Comment",
+      "commentOnAdded": "Comment on added line {line}",
+      "commentOnRemoved": "Comment on removed line {line}",
+      "startThread": "Start thread"
+    },
+    "thread": {
+      "label": "Thread: {context}",
+      "line": "Line {line}",
+      "lineOfRevision": "Line {line} of revision #{revision}",
+      "review": "Whole review",
+      "outdated": "Outdated",
+      "resolvedBy": "Resolved by {name}",
+      "reply": "Reply",
+      "replyLabel": "Your reply",
+      "resolve": "Resolve",
+      "reopen": "Reopen"
+    },
+    "threads": {
+      "general": "Discussion",
+      "noGeneral": "No discussion about the review as a whole yet.",
+      "startLabel": "Start a discussion",
+      "start": "Start discussion",
+      "outdated": "Outdated threads",
+      "outdatedText": "The line of these threads changed after they were written. They are kept, with the revision they were written on.",
+      "noAccess": "Comments are not available to your role."
+    },
+    "comment": {
+      "hint": "Markdown subset: bold, italic, code, lists, quotes and http(s) links. HTML and images are shown as text.",
+      "counter": "{count} of {max} characters",
+      "edited": "(edited)",
+      "deleted": "This comment was deleted.",
+      "editLabel": "Edit your comment",
+      "deleteTitle": "Delete this comment?",
+      "deleteText": "The text is removed for everybody. The thread keeps its place."
+    },
+    "markdown": {
+      "truncated": "The rest of this comment is not shown."
+    },
+    "errors": {
+      "stale_view": "The draft changed since you opened this page. Reload and look at it again before you decide.",
+      "review_closed": "This review is closed.",
+      "thread_limit_reached": "This review has the most threads it can have. Reply in an existing thread.",
+      "comment_limit_reached": "This thread has the most comments it can have.",
+      "comment_too_long": "A comment can have at most 10,000 characters.",
+      "rate_limited": "You are commenting too fast. Wait a minute and try again.",
+      "anchor_invalid": "That line does not exist in the revision.",
+      "comment_deleted": "This comment was deleted.",
+      "review_open": "There is already an open review for this agent.",
+      "nothing_to_review": "The draft equals the published version."
+    },
+    "inbox": {
+      "title": "Reviews",
+      "subtitle": "Open reviews you could decide right now.",
+      "empty": "Nothing waits for you",
+      "emptyText": "Reviews you wrote yourself, or may not decide, are not listed.",
+      "meta": "revision #{revision} · {count} of {required} approvals · opened {when}"
     }
   }
 }
