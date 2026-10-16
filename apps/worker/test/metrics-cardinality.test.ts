@@ -159,6 +159,7 @@ const ALLOWED: Record<string, Record<string, Set<string> | RegExp>> = {
     ),
   },
   role_bindings_shadow_total: { outcome: slug, authoritative: oneOf('legacy', 'bindings') },
+  unenforced_role_restrictions: {},
   authz_epoch_rejected_total: { reason: oneOf('stale', 'invalid') },
   mcp_stdio_violations: {},
   mcp_stdio_refused_total: { code: slug },
