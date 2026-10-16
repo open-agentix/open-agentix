@@ -44,6 +44,7 @@ const SCOPED = [
   'POST /v1/agents/:id/reviews',
   'GET /v1/agents/:id/reviews',
   'GET /v1/reviews/:id',
+  'GET /v1/reviews/:id/changes',
   'POST /v1/reviews/:id/withdraw',
   'GET /v1/agents/:id/members',
   'POST /v1/agents/:id/dry-run',
@@ -156,6 +157,15 @@ const DENIED = [
   'POST /v1/reviews/:id/decisions',
   'GET /v1/tenants/:id/settings/agent-lifecycle',
   'PATCH /v1/tenants/:id/settings/agent-lifecycle',
+  // ADR 0017 S2: comment threads need `agents:review`, which no use-case binding carries either, and
+  // the inbox lists reviews the caller could decide (agents:approve, same reason)
+  'GET /v1/reviews/:id/threads',
+  'POST /v1/reviews/:id/threads',
+  'POST /v1/reviews/:id/threads/:tid/comments',
+  'PATCH /v1/reviews/:id/threads/:tid',
+  'PATCH /v1/reviews/:id/threads/:tid/comments/:cid',
+  'DELETE /v1/reviews/:id/threads/:tid/comments/:cid',
+  'GET /v1/me/reviews',
 ] as const;
 
 export const USE_CASE_POLICY: Readonly<Record<string, UseCasePolicy>> = Object.freeze({
