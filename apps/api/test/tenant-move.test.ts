@@ -405,6 +405,77 @@ describe.each(sqlTargets)('tenant moves (%s)', (_kind, enabled, open) => {
       });
     });
 
+    it('refuses to leave a restriction for a role nobody holds inside yet', async () => {
+      await mkUser('np-admin', 'sub-1');
+      await bind('np-admin', 'team-1', 'admin', true);
+      await bind('np-admin', 'div-2', 'admin', true);
+      const put = await n.req({
+        method: 'PUT',
+        url: `/v1/tenants/${id['div-1']}/role-restrictions`,
+        payload: { role: 'integrator', permissions: ['connections:write'] },
+        token: tok['root-admin']!,
+      });
+      expect(put.statusCode, put.body).toBe(200);
+      try {
+        // no integrator is bound inside sub-1, but one could be granted there tomorrow
+        const r = await move('np-admin', 'sub-1', 'div-2');
+        expect(r.statusCode, r.body).toBe(403);
+        expect(r.json().error).toBe('restriction_removal_forbidden');
+        expect((await row('sub-1')).parentId).toBe(id['team-1']);
+        // an operator moves, and the dry run reports nothing that matters today
+        const dry = await move('platform', 'sub-1', 'div-2', true);
+        expect(dry.json().restrictionsDropped).toEqual([]);
+      } finally {
+        await n.req({
+          method: 'DELETE',
+          url: `/v1/tenants/${id['div-1']}/role-restrictions?role=integrator`,
+          token: tok['root-admin']!,
+        });
+      }
+    });
+
+    it('refuses to loosen the agent lifecycle policy of the subtree, and says which keys', async () => {
+      const set = (v: number | null) =>
+        n.req({
+          method: 'PATCH',
+          url: `/v1/tenants/${id['div-1']}/settings/agent-lifecycle`,
+          payload: { minApprovals: v },
+          token: tok['root-admin']!,
+        });
+      expect((await set(3)).statusCode).toBe(200);
+      try {
+        // np-admin administers sub-1's old parent and the new parent, but not div-1 which sets it
+        const refused = await move('np-admin', 'sub-1', 'div-2');
+        expect(refused.statusCode, refused.body).toBe(403);
+        expect(refused.json().error).toBe('policy_widening_forbidden');
+        expect((await move('np-admin', 'sub-1', 'div-2', true)).statusCode).toBe(403);
+        // an administrator of div-1 sees the keys in the dry run and may move
+        const dry = await move('root-admin', 'sub-1', 'div-2', true);
+        expect(dry.json().policiesWidened).toEqual(['minApprovals']);
+        const moves = (await audit('tenant.moved', 'sub-1')).length;
+        expect((await move('root-admin', 'sub-1', 'div-2')).statusCode).toBe(200);
+        expect((await audit('tenant.moved', 'sub-1')).at(-1)?.payload).toMatchObject({
+          policiesWidened: 1,
+        });
+        expect((await audit('tenant.moved', 'sub-1')).length).toBe(moves + 1);
+        // moving between nodes under the same policy loosens nothing
+        const same = await move('root-admin', 'team-2', 'team-1', true);
+        expect(same.json().policiesWidened).toEqual([]);
+      } finally {
+        await set(null);
+      }
+    });
+
+    it('needs authority over the old parent too', async () => {
+      await mkUser('node-admin', 'sub-1');
+      await bind('node-admin', 'sub-1', 'admin', true);
+      await bind('node-admin', 'div-2', 'admin', true);
+      // inheriting admin of the node and of the new parent, but not of its old parent team-1
+      const r = await move('node-admin', 'sub-1', 'div-2');
+      expect(r.statusCode, r.body).toBe(403);
+      expect((await row('sub-1')).parentId).toBe(id['team-1']);
+    });
+
     it('detaches the node from its use case and audits it', async () => {
       await mkUser('sec-admin', 'div-1');
       await bind('sec-admin', 'div-1', 'admin', true, 'security');
@@ -503,6 +574,8 @@ describe.each(sqlTargets)('tenant moves (%s)', (_kind, enabled, open) => {
           toParentId: id['div-2'],
           nodes: 2,
           depthChange: 0,
+          restrictionsDropped: 0,
+          policiesWidened: 0,
           authority: 'inheriting_admin',
         });
         expect(e!.actor).toBe(uid['root-admin']);

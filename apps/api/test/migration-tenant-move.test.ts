@@ -55,9 +55,11 @@ describe.each(sqlTargets)('migration 0034 on a database (%s)', (_kind, enabled, 
       )
     ).rows[0]!;
   /** A transaction that declares a move of the organisation `root`, then runs `body`. */
-  const move = (root: string | null, body: string) =>
+  const move = (root: string | null, body: string, lock = true) =>
     c.script(
-      `begin;${root ? `select set_config('oax.tenant_move_root', '${root}', true);` : ''}${body}commit;`,
+      `begin;${root ? `select set_config('oax.tenant_move_root', '${root}', true);` : ''}${
+        root && lock ? `select pg_advisory_xact_lock(734210, hashtext('${root}'));` : ''
+      }${body}commit;`,
     );
   const resetTree = async () => {
     await move(
@@ -124,6 +126,12 @@ describe.each(sqlTargets)('migration 0034 on a database (%s)', (_kind, enabled, 
     expect(await failure(move(null, sql))).toMatch(/immutable/);
     expect(await failure(move(r2!, sql))).toMatch(/immutable/);
     expect(await placement(a!)).toMatchObject({ parent_id: r1, path: `/${r1}/${a}/` });
+  });
+
+  it('refuses a declared move that does not hold the exclusive tree lock', async () => {
+    const sql = `update tenants set parent_id = '${b}', path = '/${r1}/${b}/${a}/', depth = 2 where id = '${a}';`;
+    expect(await failure(move(r1!, sql, false))).toMatch(/immutable/);
+    expect(await placement(a!)).toMatchObject({ parent_id: r1 });
   });
 
   it('refuses to move a root, to change the organisation, or to make a node a root', async () => {
