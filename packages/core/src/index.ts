@@ -41,3 +41,5 @@ export * from './tenancy/use-case.js';
 export * from './tenancy/lifecycle-policy.js';
 export * from './approvals/rules.js';
 export * from './approvals/digests.js';
+export * from './approvals/anchors.js';
+export * from './approvals/semantic-summary.js';
