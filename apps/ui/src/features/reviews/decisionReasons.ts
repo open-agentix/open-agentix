@@ -6,6 +6,7 @@ const REASON: Record<string, TKey> = {
   self_approval: 'reviews.decision.reasons.self_approval',
   not_eligible: 'reviews.decision.reasons.not_eligible',
   binding_granted_by_contributor: 'reviews.decision.reasons.binding_granted_by_contributor',
+  binding_grantor_unknown: 'reviews.decision.reasons.binding_grantor_unknown',
   token_approval_disabled: 'reviews.decision.reasons.token_approval_disabled',
   actor_not_human: 'reviews.decision.reasons.actor_not_human',
   identity_source_not_allowed: 'reviews.decision.reasons.identity_source_not_allowed',

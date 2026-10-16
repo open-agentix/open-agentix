@@ -309,6 +309,7 @@ describe('the decision bar', () => {
     ['self_approval', /You edited this draft or opened this review/],
     ['not_eligible', /Your role is not an approver role for this agent in this tenant/],
     ['binding_granted_by_contributor', /granted by somebody who contributed/],
+    ['binding_grantor_unknown', /Nobody can say who granted/],
     ['token_approval_disabled', /API token are not allowed/],
     ['actor_not_human', /Only a person can decide/],
     ['identity_source_not_allowed', /identity source cannot decide/],
