@@ -988,6 +988,11 @@ export const TenantMoveSchema = z.object({
     .describe(
       'restrictions of ancestors the node joins: they start narrowing bindings bound inside',
     ),
+  policiesWidened: z
+    .array(z.string())
+    .describe(
+      'agent lifecycle policy keys (ADR 0017) that become looser inside the subtree because the ancestors that set them are left behind',
+    ),
   principals: z
     .array(
       z.object({

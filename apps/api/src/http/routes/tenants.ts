@@ -246,7 +246,10 @@ export function registerTenantRoutes(app: ZApp, { services, ctx }: Deps): void {
           'limit (422 `tenant_depth_exceeded`), a parent below a node with a monthly budget (403 ' +
           '`budget_capped`, operators excepted), leaving a node whose role restrictions narrow ' +
           'bindings inside the subtree without the authority to lift them (403 ' +
-          '`restriction_removal_forbidden`). Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 ' +
+          '`restriction_removal_forbidden`, whatever the role: also for a role nobody holds yet), or ' +
+          'loosening the agent lifecycle policy (ADR 0017) that applies inside the subtree because ' +
+          'the ancestors that set it are left behind (403 `policy_widening_forbidden`; the ' +
+          'widened keys are listed as `policiesWidened`). Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 ' +
           '`role_bindings_read_required`). Bindings on the moved tenants move with them; bindings ' +
           'inherited from the old ancestors stop, those inheriting from the new ancestors start; ' +
           'restrictions of the old ancestors stop narrowing the bindings inside, those of the new ' +

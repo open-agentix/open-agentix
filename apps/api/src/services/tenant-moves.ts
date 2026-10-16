@@ -1,9 +1,13 @@
 import {
+  LIFECYCLE_KEYS,
   OaxError,
   appliedAt,
   hasPermission,
   isRole,
   pathIds,
+  resolveLifecyclePolicy,
+  wideningKeys,
+  type LifecycleKey,
   rebasePath,
   subtreePrefix,
   type Permission,
@@ -28,6 +32,7 @@ import { HttpError, forbidden, notFound } from '../errors.js';
 import type { AuditService } from './audit.js';
 import { assertNoCapAbove } from './budget-cap-guard.js';
 import {
+  NIL_UUID as NIL,
   isInheritingAdminAt,
   loadActor,
   mayManageRestrictions,
@@ -36,6 +41,7 @@ import {
   type Actor,
 } from './grant-authority.js';
 import type { TenantRow } from './identity.js';
+import { LifecyclePolicyService, storedOf } from './lifecycle-policy.js';
 import { loadRawGrants } from './role-bindings.js';
 import { TenantAccess, type TenantReach } from './tenant-access.js';
 import { TenantTree } from './tenant-tree.js';
@@ -83,8 +89,12 @@ import { lockBindings, lockTreeExclusive, lockTreeShared } from './tree-lock.js'
  * may see (ADR 0014 section 7 rule 4) and bounded.
  */
 
-/** Most principals evaluated and listed by a dry run; more are reported as `truncated`. */
+/** Most changed principals a dry run lists; more are reported as `truncated`. */
 export const MOVE_REPORT_LIMIT = 100;
+/** Most candidates (users with a binding that can matter) a dry run evaluates; more: `truncated`. */
+export const MOVE_CANDIDATE_LIMIT = 1000;
+/** A dry run must not hold a connection for long. */
+const DRY_RUN_TIMEOUT_MS = 20_000;
 /** Most restriction entries listed per direction. */
 const RESTRICTION_LIST_LIMIT = 100;
 
@@ -121,6 +131,11 @@ export interface MoveReport {
   restrictionsDropped: MoveRestrictionChange[];
   /** Restrictions of ancestors the node joins: they start narrowing the bindings bound inside. */
   restrictionsApplied: MoveRestrictionChange[];
+  /**
+   * Agent lifecycle policy keys (ADR 0017) that become looser somewhere in the moved subtree because
+   * the ancestors that set them are left behind (the effective policy is resolved down the chain).
+   */
+  policiesWidened: string[];
   /** Dry run only; empty after an applied move. */
   principals: MovePrincipalChange[];
   /** More principals changed than are listed. */
@@ -133,12 +148,14 @@ const asNode = (n: Node): RoleNode => ({ id: n.id, rootId: n.rootId, path: n.pat
 
 export class TenantMoves {
   private readonly access: TenantAccess;
+  private readonly lifecycle: LifecyclePolicyService;
 
   constructor(
     private readonly ctx: AppContext,
     private readonly audit: AuditService,
   ) {
     this.access = new TenantAccess(ctx);
+    this.lifecycle = new LifecyclePolicyService(ctx, audit);
   }
 
   /** A node the caller may see; unknown and invisible nodes are the same `404 tenant`. */
@@ -159,7 +176,9 @@ export class TenantMoves {
         'role_bindings_read_required',
         'moving a tenant needs OAX_ROLE_BINDINGS_READ=bindings; with the legacy read path the effect on access cannot be shown or enforced',
       );
-    if (p.platformAdmin && !hasPermission(p, 'settings:write')) throw forbidden();
+    // A move changes the structure and who inherits what: both permissions, for every caller.
+    if (p.platformAdmin && !(hasPermission(p, 'settings:write') && hasPermission(p, 'users:write')))
+      throw forbidden();
     // Visibility first (404 parity): both nodes are named in the request, neither is the acting node.
     const reach = await this.access.reach(p);
     const node = await this.visible(reach, id);
@@ -167,98 +186,126 @@ export class TenantMoves {
     const now = this.ctx.now();
     const maxDepth = this.ctx.config.tenancy.maxDepth;
     let movedIds: string[] = [];
-    const report = await this.ctx.db.transaction(async (t) => {
-      const tx = t as unknown as Db;
-      // A dry run only reads: the shared lock keeps the tree still while it computes, but does not
-      // stop the organisation's other writers the way an applied move does.
-      if (input.dryRun) await lockTreeShared(tx, node.rootId);
-      else await lockTreeExclusive(tx, node.rootId);
-      await lockBindings(tx, node.rootId);
-      // Everything below is decided from the rows as they are now.
-      const [fresh] = await tx.select().from(tenants).where(eq(tenants.id, node.id));
-      const [newParent] = await tx.select().from(tenants).where(eq(tenants.id, target.id));
-      if (!fresh || !newParent) throw notFound('tenant');
-      const [oldParent] =
-        fresh.parentId === null
-          ? []
-          : await tx.select().from(tenants).where(eq(tenants.id, fresh.parentId));
+    const report = await this.ctx.db.transaction(
+      async (t) => {
+        const tx = t as unknown as Db;
+        // A dry run only reads: a read-only transaction under the shared tree lock keeps the tree
+        // still while it computes, but neither stops the organisation's other writers nor holds the
+        // binding lock (grants may change while it runs; the report is advice, the applied move
+        // decides again under the exclusive locks). An applied move takes both exclusively.
+        if (input.dryRun) {
+          await tx.execute(
+            sql`select set_config('lock_timeout', ${`${DRY_RUN_TIMEOUT_MS}ms`}, true)`,
+          );
+          await tx.execute(
+            sql`select set_config('statement_timeout', ${`${DRY_RUN_TIMEOUT_MS}ms`}, true)`,
+          );
+          await lockTreeShared(tx, node.rootId);
+        } else {
+          await lockTreeExclusive(tx, node.rootId);
+          await lockBindings(tx, node.rootId);
+        }
+        // Everything below is decided from the rows as they are now.
+        const [fresh] = await tx.select().from(tenants).where(eq(tenants.id, node.id));
+        const [newParent] = await tx.select().from(tenants).where(eq(tenants.id, target.id));
+        if (!fresh || !newParent) throw notFound('tenant');
+        const [oldParent] =
+          fresh.parentId === null
+            ? []
+            : await tx.select().from(tenants).where(eq(tenants.id, fresh.parentId));
 
-      const actor = p.platformAdmin ? undefined : await loadActor(tx, p);
-      if (actor) this.assertAuthority(actor, [fresh, oldParent, newParent], now);
-      // Structure, after authority: every node named here is visible to the caller by now.
-      if (fresh.parentId === null || !oldParent)
-        throw new HttpError(
-          p.platformAdmin ? 422 : 403,
-          p.platformAdmin ? 'move_not_supported' : 'move_not_allowed',
-          'an organisation (root) cannot be moved',
-        );
-      if (fresh.rootId !== newParent.rootId)
-        throw new HttpError(
-          422,
-          'move_not_supported',
-          'moving a tenant into another organisation is not available yet',
-        );
-      if (newParent.path.startsWith(fresh.path))
-        throw new HttpError(422, 'move_cycle', 'a tenant cannot be moved into its own subtree');
-      if (newParent.id === oldParent.id)
-        throw new HttpError(409, 'move_noop', 'the tenant is already below this parent');
+        const actor = p.platformAdmin ? undefined : await loadActor(tx, p);
+        if (actor) this.assertAuthority(actor, [fresh, oldParent, newParent], now);
+        // Structure, after authority: every node named here is visible to the caller by now.
+        if (fresh.parentId === null || !oldParent)
+          throw new HttpError(
+            p.platformAdmin ? 422 : 403,
+            p.platformAdmin ? 'move_not_supported' : 'move_not_allowed',
+            'an organisation (root) cannot be moved',
+          );
+        if (fresh.rootId !== newParent.rootId)
+          throw new HttpError(
+            422,
+            'move_not_supported',
+            'moving a tenant into another organisation is not available yet',
+          );
+        if (newParent.path.startsWith(fresh.path))
+          throw new HttpError(422, 'move_cycle', 'a tenant cannot be moved into its own subtree');
+        if (newParent.id === oldParent.id)
+          throw new HttpError(409, 'move_noop', 'the tenant is already below this parent');
 
-      // Structural lookups inside the transaction (same connection, same snapshot).
-      const tree = new TenantTree({ ...this.ctx, db: tx });
-      const subtree = await tree.subtree(fresh);
-      const deepest = subtree.reduce((m, n) => Math.max(m, n.depth), fresh.depth);
-      const newDepth = newParent.depth + 1;
-      if (deepest - fresh.depth + newDepth > maxDepth)
-        throw new OaxError(
-          'tenant_depth_exceeded',
-          `moving would put a tenant at depth ${deepest - fresh.depth + newDepth}, above ${maxDepth}`,
-        );
-      if (actor) await assertNoCapAbove(tx, newParent);
+        // Structural lookups inside the transaction (same connection, same snapshot).
+        const tree = new TenantTree({ ...this.ctx, db: tx });
+        const subtree = await tree.subtree(fresh);
+        const deepest = subtree.reduce((m, n) => Math.max(m, n.depth), fresh.depth);
+        const newDepth = newParent.depth + 1;
+        if (deepest - fresh.depth + newDepth > maxDepth)
+          throw new OaxError(
+            'tenant_depth_exceeded',
+            `moving would put a tenant at depth ${deepest - fresh.depth + newDepth}, above ${maxDepth}`,
+          );
+        if (actor) await assertNoCapAbove(tx, newParent);
 
-      const oldAncestors = pathIds(fresh.path).slice(0, -1);
-      const newChain = pathIds(newParent.path);
-      const lost = oldAncestors.filter((x) => !newChain.includes(x));
-      const gained = newChain.filter((x) => !oldAncestors.includes(x));
-      const roles = await this.rolesInSubtree(tx, fresh);
-      const dropped = await this.restrictionsOn(tx, lost, roles);
-      const applied = await this.restrictionsOn(tx, gained, roles);
-      if (actor) await this.assertMayDrop(tx, actor, dropped, now);
-
-      const newPath = `${newParent.path}${fresh.id}/`;
-      const slugs = await tree.slugPaths([fresh, newParent]);
-      const report: MoveReport = {
-        dryRun: input.dryRun,
-        nodeId: fresh.id,
-        fromParentId: oldParent.id,
-        toParentId: newParent.id,
-        nodes: subtree.length,
-        depthChange: newDepth - fresh.depth,
-        slugPath: { from: slugs.get(fresh.id)!, to: `${slugs.get(newParent.id)!}/${fresh.slug}` },
-        detachesUseCase: fresh.useCase,
-        restrictionsDropped: this.visibleRestrictions(reach, dropped),
-        restrictionsApplied: this.visibleRestrictions(reach, applied),
-        principals: [],
-        truncated: false,
-      };
-
-      if (input.dryRun) {
-        const changes = await this.principalChanges(tx, actor, {
+        const oldAncestors = pathIds(fresh.path).slice(0, -1);
+        const newChain = pathIds(newParent.path);
+        const lost = oldAncestors.filter((x) => !newChain.includes(x));
+        // Deepest ancestor both chains share: the attachment of its child towards the node changes.
+        const lca = newChain.filter((x) => oldAncestors.includes(x)).at(-1)!;
+        const gained = newChain.filter((x) => !oldAncestors.includes(x));
+        const roles = await this.rolesInSubtree(tx, fresh);
+        // The check covers every restriction of the nodes left behind, whoever holds the role today:
+        // a role granted inside the subtree tomorrow would otherwise escape it. The report lists
+        // the ones that matter now.
+        const droppedAll = await this.restrictionsOn(tx, lost);
+        const dropped = droppedAll.filter((d) => roles.has(d.role));
+        const applied = await this.restrictionsOn(tx, gained, roles);
+        if (actor) await this.assertMayDrop(tx, actor, droppedAll, now);
+        const widened = await this.widenedPolicies(tx, actor, {
           subtree,
           from: fresh.path,
-          to: newPath,
-          watched: [...new Set([...oldAncestors, ...newChain])],
+          to: `${newParent.path}${fresh.id}/`,
+          lost,
           now,
         });
-        report.principals = changes.items;
-        report.truncated = changes.truncated;
-        return report;
-      }
 
-      await this.apply(tx, fresh, newParent, newPath, newDepth - fresh.depth);
-      movedIds = subtree.map((n) => n.id);
-      await this.auditMove(tx, p, fresh, oldParent, newParent, report);
-      return report;
-    });
+        const newPath = `${newParent.path}${fresh.id}/`;
+        const slugs = await tree.slugPaths([fresh, newParent]);
+        const report: MoveReport = {
+          dryRun: input.dryRun,
+          nodeId: fresh.id,
+          fromParentId: oldParent.id,
+          toParentId: newParent.id,
+          nodes: subtree.length,
+          depthChange: newDepth - fresh.depth,
+          slugPath: { from: slugs.get(fresh.id)!, to: `${slugs.get(newParent.id)!}/${fresh.slug}` },
+          detachesUseCase: fresh.useCase,
+          restrictionsDropped: this.visibleRestrictions(reach, dropped),
+          restrictionsApplied: this.visibleRestrictions(reach, applied),
+          policiesWidened: widened,
+          principals: [],
+          truncated: false,
+        };
+
+        if (input.dryRun) {
+          const changes = await this.principalChanges(tx, actor, {
+            subtree,
+            from: fresh.path,
+            to: newPath,
+            watched: [...new Set([...lost, ...gained, lca])],
+            now,
+          });
+          report.principals = changes.items;
+          report.truncated = changes.truncated;
+          return report;
+        }
+
+        await this.apply(tx, fresh, newParent, newPath, newDepth - fresh.depth);
+        movedIds = subtree.map((n) => n.id);
+        await this.auditMove(tx, p, fresh, oldParent, newParent, report, droppedAll.length);
+        return report;
+      },
+      input.dryRun ? { accessMode: 'read only' } : undefined,
+    );
     // After the commit: the cached slug paths of the moved nodes are stale (30 s TTL otherwise).
     for (const moved of movedIds) await this.ctx.cache.del(`tenant-slug-path:${moved}`);
     return report;
@@ -310,16 +357,16 @@ export class TenantMoves {
   private async restrictionsOn(
     tx: Db,
     nodeIds: readonly string[],
-    roles: ReadonlySet<string>,
+    roles?: ReadonlySet<string>,
   ): Promise<MoveRestrictionChange[]> {
-    if (nodeIds.length === 0 || roles.size === 0) return [];
+    if (nodeIds.length === 0 || roles?.size === 0) return [];
     const rows = await tx
       .select()
       .from(tenantRoleRestrictions)
       .where(
         and(
           inArray(tenantRoleRestrictions.tenantId, [...nodeIds]),
-          inArray(tenantRoleRestrictions.role, [...roles]),
+          roles ? inArray(tenantRoleRestrictions.role, [...roles]) : undefined,
         ),
       )
       .orderBy(
@@ -371,6 +418,63 @@ export class TenantMoves {
           'restriction_removal_forbidden',
           'moving this tenant out from under a role restriction needs an inheriting administrator binding on the tenant that sets it',
         );
+  }
+
+  /**
+   * The agent lifecycle policy keys (ADR 0017) that become looser at some node of the moved subtree.
+   * The effective policy is resolved live down the chain and clamped to the parent, so leaving an
+   * ancestor that sets a stricter value drops it for the whole subtree. Computed with the pure
+   * resolver on the chain before and after. A tenant admin needs an inheriting administrator
+   * binding (`settings:write`) on every left-behind ancestor that sets one of the widened keys,
+   * otherwise `403 policy_widening_forbidden`; platform operators are exempt and see the keys.
+   */
+  private async widenedPolicies(
+    tx: Db,
+    actor: Actor | undefined,
+    q: {
+      subtree: readonly TenantRow[];
+      from: string;
+      to: string;
+      lost: readonly string[];
+      now: Date;
+    },
+  ): Promise<string[]> {
+    const ids = new Set<string>(q.subtree.map((n) => n.id));
+    for (const id of [...pathIds(q.from), ...pathIds(q.to)]) ids.add(id);
+    const rows = await tx
+      .select()
+      .from(tenants)
+      .where(inArray(tenants.id, [...ids]));
+    const stored = new Map(rows.map((r) => [r.id, storedOf(r)]));
+    const defaults = await this.lifecycle.installationDefaults(tx);
+    const effective = (path: string) =>
+      resolveLifecyclePolicy(
+        defaults,
+        pathIds(path).map((id) => stored.get(id)),
+      );
+    const widened = new Set<LifecycleKey>();
+    for (const n of q.subtree) {
+      const before = effective(n.path);
+      const after = effective(rebasePath(n.path, q.from, q.to));
+      for (const k of wideningKeys(before, after)) widened.add(k);
+    }
+    if (widened.size === 0) return [];
+    if (actor) {
+      const setters = q.lost.filter((id) =>
+        [...widened].some((k) => stored.get(id)?.[k] !== undefined),
+      );
+      const nodes = await tx
+        .select()
+        .from(tenants)
+        .where(inArray(tenants.id, setters.length > 0 ? setters : [NIL]));
+      if (setters.length === 0 || nodes.some((n) => !isInheritingAdminAt(actor, n, q.now)))
+        throw new HttpError(
+          403,
+          'policy_widening_forbidden',
+          'moving this tenant would loosen the agent lifecycle policy that applies inside it; that needs an inheriting administrator binding on the tenant that sets it',
+        );
+    }
+    return LIFECYCLE_KEYS.filter((k) => widened.has(k));
   }
 
   /**
@@ -459,7 +563,7 @@ export class TenantMoves {
           covered.has(u.tenantId) ||
           [...(nodesOf.get(u.id) ?? [])].some((n) => covered.has(n))),
     );
-    const truncated = candidates.length > MOVE_REPORT_LIMIT;
+    let truncated = candidates.length > MOVE_CANDIDATE_LIMIT;
     const restrictions: RoleRestriction[] = (
       await tx
         .select({
@@ -484,7 +588,7 @@ export class TenantMoves {
       path: rebasePath(n.path, q.from, q.to),
     }));
     const items: MovePrincipalChange[] = [];
-    for (const u of candidates.slice(0, MOVE_REPORT_LIMIT)) {
+    for (const u of candidates.slice(0, MOVE_CANDIDATE_LIMIT)) {
       const loaded = await loadRawGrants(tx, {
         id: u.id,
         tenantId: u.tenantId,
@@ -518,6 +622,10 @@ export class TenantMoves {
         if (loss) lostNodes++;
       }
       if (gainedNodes === 0 && lostNodes === 0) continue;
+      if (items.length >= MOVE_REPORT_LIMIT) {
+        truncated = true;
+        break;
+      }
       items.push({
         userId: u.id,
         gainedNodes,
@@ -568,6 +676,7 @@ export class TenantMoves {
     oldParent: TenantRow,
     newParent: TenantRow,
     report: MoveReport,
+    restrictionsDropped: number,
   ): Promise<void> {
     const authority = p.platformAdmin ? ('platform' as const) : ('inheriting_admin' as const);
     const partitions = [...new Set([node.id, oldParent.id, newParent.id])];
@@ -584,6 +693,8 @@ export class TenantMoves {
             toParentId: newParent.id,
             nodes: report.nodes,
             depthChange: report.depthChange,
+            restrictionsDropped,
+            policiesWidened: report.policiesWidened.length,
             authority,
           },
         },

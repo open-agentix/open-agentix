@@ -44,7 +44,7 @@ export interface PolicyView {
 /** `null` removes a value the node stored (the node then inherits). */
 export type PolicyPatch = Partial<Record<LifecycleKey, unknown>>;
 
-const storedOf = (row: Pick<TenantRow, 'settings'>): LifecyclePolicyInput => {
+export const storedOf = (row: Pick<TenantRow, 'settings'>): LifecyclePolicyInput => {
   const raw = (row.settings as Record<string, unknown> | null)?.['agentLifecycle'];
   const parsed = parseLifecycleInput(raw ?? {});
   // A stored object that no longer parses (hand-edited, from a future version) contributes nothing:
