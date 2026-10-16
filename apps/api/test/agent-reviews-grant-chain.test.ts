@@ -259,6 +259,44 @@ describe('finding 1: the stored chain survives the removal of a link', () => {
   });
 });
 
+describe('finding 4 (second bullet): the identity-provider login keeps who granted a membership', () => {
+  it('rewrites the memberships from the group mapping without erasing the grantor of one that stays', async () => {
+    const team = j(await req(adminA, 'POST', '/v1/teams', { slug: 'idp-team', name: 'I' })).id;
+    const other = j(await req(adminA, 'POST', '/v1/teams', { slug: 'idp-other', name: 'O' })).id;
+    const login = () =>
+      n.services.identity.upsertExternalUser(
+        'ldap',
+        'cn=idp-user',
+        'idp-user@chain.example.org',
+        'I',
+        [
+          { role: 'agent-maintainer', teamSlug: 'idp-team' },
+          { role: 'viewer', teamSlug: 'idp-other' },
+        ],
+      );
+    // the first login lands in the default tenant; move the teams' memberships by hand
+    const user = await login();
+    await n.ctx.db.update(users).set({ tenantId: orgA }).where(eq(users.id, user.id));
+    await n.ctx.db.delete(teamMembers).where(eq(teamMembers.userId, user.id));
+    await n.ctx.db.insert(teamMembers).values({
+      teamId: team,
+      userId: user.id,
+      role: 'agent-maintainer',
+      grantedBy: uid['c']!,
+      grantChain: [uid['c']!, uid['adminA']!],
+    });
+    await login();
+    const rows = await n.ctx.db.select().from(teamMembers).where(eq(teamMembers.userId, user.id));
+    const kept = rows.find((r) => r.teamId === team);
+    const added = rows.find((r) => r.teamId === other);
+    expect(kept).toMatchObject({ grantedBy: uid['c'], grantChain: [uid['c'], uid['adminA']] });
+    // a membership the mapping adds is nobody's
+    expect(added).toMatchObject({ grantedBy: null, grantorUnknown: false, grantChain: null });
+    await n.ctx.db.delete(teams).where(eq(teams.id, team));
+    await n.ctx.db.delete(teams).where(eq(teams.id, other));
+  });
+});
+
 describe('finding 1: a missing chain is unknown', () => {
   it('fails closed on a grantor without a stored chain, and on an unknown creator, unless allowed', async () => {
     await mkUser('nochain', []);

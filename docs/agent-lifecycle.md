@@ -84,21 +84,39 @@ longer eligible stops counting, with the reason):
 | A1 | A **contributor never decides**: every author of a revision since the base version and the user who opened the review. In no role, with no token, platform administrators included. Not configurable. | `403 self_approval` |
 | A2 | Distinct users: one reviewer counts once whatever roles they hold. | n/a |
 | A3 | The reviewer holds `agents:approve` on the agent through a binding whose role is in the effective `allowedApproverRoles` (default `admin`, `agent-maintainer`; `agent-developer` and `operator` only when the tenant adds them). The binding covers the agent: node binding (with inheritance), team binding of the agent's team, or a binding on the agent. | `403 not_eligible` |
-| A4 | The qualifying binding was **not granted by a contributor**, **anywhere up its grant chain**, and the reviewer's account was **not made by a contributor** (`granted_by`; for a directory mapping the creator of the mapping). The chain is followed transitively, six hops deep: the grantor, the account that created the grantor (`users.created_by`), and whoever granted the grantor the roles that allow granting (`users:write`), and so on. A contributor who makes a second administrator account and lets it create the approver therefore does not get an approver. A grantor that is **unknown** (see below), or a chain longer than six hops, is refused as well unless the installation sets `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow`. There is no minimum age. A change that widens a binding (another role, `inherit`, a later expiry) makes the person who widened it the grantor only when nobody was; a recorded or unknown grantor is kept (replacing it would hide who granted the binding and would clear an unknown mark). Storing the full grantor chain on the row is tracked as a follow-up. | `403 binding_granted_by_contributor`, `403 binding_grantor_unknown` |
+| A4 | The qualifying binding was **not granted by a contributor**, **anywhere up its grant chain**, and the reviewer's account was **not made by a contributor** (`granted_by`; for a directory mapping the creator of the mapping). The chain is followed transitively, six hops deep: the grantor, the account that created the grantor (`users.created_by`), and whoever granted the grantor the roles that allow granting (`users:write`), and so on. A contributor who makes a second administrator account and lets it create the approver therefore does not get an approver. A grantor that is **unknown** (see below), or a chain longer than six hops, is refused as well unless the installation sets `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow`. There is no minimum age. The chain is **stored on the row** when the grant is made (`grant_chain uuid[]` on `tenant_role_bindings`, `team_members`, `agent_role_bindings` and on `users`, computed under the binding lock) and evaluated together with the live chain, so a link that is revoked, expires or is deleted afterwards (a contributor removes the administrator binding of the account they used, the account is deleted) does not launder the approver. A change that widens a binding (another role, `inherit`, a later expiry) keeps the first grantor in `granted_by` (replacing it would hide who granted the binding and would clear an unknown mark) and **adds the chain of whoever widened it** to `grant_chain`; every grantor stays recorded. A row with a grantor but no stored chain is unknown. | `403 binding_granted_by_contributor`, `403 binding_grantor_unknown` |
 | A5 | A person with an interactive session. API tokens only when the tenant sets `allowTokenApprovals`. Non-human actors (`repo:*`, `node:*`, guests, the system) never. | `403 token_approval_disabled`, `403 actor_not_human` |
 | A6 | `approverIdentitySources` limits which accounts count (`local`, `oidc`, `ldap`). | `403 identity_source_not_allowed` |
 | A7 | `approverScope`: `tenant`, `team` (members of the agent's team only) or `other-team` (not members). | `403 approver_scope` |
 | A8 | `minApprovals` distinct approvals (default 1, at most 5). | state stays `review_requested` |
 | A10 | The reviewer can read the agent and decided on the digest of the current revision. A reviewer who cannot read the agent gets 404; the stale check comes last, so an ineligible caller never learns that the digest is stale. A decision must carry `expectedExpansionDigest`, `expectedResolutionDigest` and `expectedPolicyDigest` as well whenever it is an approval or approval is required (`400 validation_failed` otherwise), so an approval never binds to an expansion the reviewer did not see. | `404`, `409 stale_view` |
 
-**Grantor: nobody versus unknown.** `granted_by IS NULL` with `grantor_unknown = false` means nobody
-granted the row (an identity provider, the bootstrap administrator, the platform operator flag) and is
-never contributor-made. `grantor_unknown = true` means somebody did and we cannot say who: rows from
+**Grantor: nobody versus unknown.** `granted_by IS NULL` with `grantor_unknown = false` and no
+`grant_chain` means nobody granted the row (an identity provider, the bootstrap administrator, the
+platform operator flag) and is never contributor-made. `granted_by` set with `grant_chain IS NULL`
+(the chain was never recorded) is unknown as well. The same holds for accounts: `users.created_by`
+with no `users.grant_chain`, or `users.creator_unknown = true` (a local account that nobody is shown
+to have made, or whose creator was deleted before a chain was stored), is an unknown creator and
+fails closed like an unknown grantor. A creator or grantor that is deleted later stays in the stored
+chain (plain ids, no foreign key), so the rows it granted and the accounts it made stay attributable. `grantor_unknown = true` means somebody did and we cannot say who: rows from
 before the grantor was recorded that the audit chain (`user.created`, `user.updated`,
 `team.members.set`, `agent.members.set`) could not attribute, mirror rows that the reconcile or the
 home-move trigger re-created, and rows whose grantor account was deleted. Migration `0036` attributes
-the rows it can and marks the rest unknown; rows of identity-provider accounts and of the bootstrap
-administrator stay "nobody". Unknown rows cannot make a reviewer an approver by default (the
+the rows it can and marks the rest unknown; migration `0037` re-checks every attribution with a
+stricter rule (below) and backfills the chain. Rows of identity-provider accounts and of the bootstrap
+administrator stay "nobody" unless the audit chain shows an administrator listing the role or
+membership before.
+
+**Attribution from the audit chain (migrations 0036 and 0037).** A role in `global_roles`, a team or
+an agent membership counts as granted by the actor of the earliest entry that lists it after the last
+entry that does not, **only when the chain shows it absent before**: the entry is `user.created`
+(for roles), or `team.created` / `agent.created` precedes it (for memberships), or an earlier entry
+lists the roles or members without it. A chain that starts mid-way, a role that was never absent,
+entries without `globalRoles` and an actor that is `system` or not an account (a script) cannot be
+told apart from lost data and make the row **unknown**, not clean. The distinction between a script
+and lost data is not kept: re-grant the row to clear it. An identity-provider login keeps the
+grantor of a team membership that stays (it rewrites the memberships from the group mapping, but must
+not erase who granted one). Unknown rows cannot make a reviewer an approver by default (the
 operator can set `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow` while the bindings are removed and added again; a
 membership that stays in a team or agent member list keeps its unknown grantor, so remove and add it to
 clear the mark). **Recommendation:** set `approverIdentitySources` to `[oidc, ldap]`. Accounts of an
@@ -242,8 +260,24 @@ policy now**, key by key (the same rule as narrowing: the larger `minApprovals`,
 intersection of the approver roles and identity sources, approval stays required). Loosening the policy,
 or switching approval off, therefore does not relax a review that is already open; tightening applies
 at once. The reviewer sees the digest of the policy that applies. A change that makes the effective
-policy of a node looser is refused with `403 policy_loosening_by_contributor` when the caller is a
-contributor of an open review in the subtree of that node; another administrator makes it. (Notifying
+policy of a node looser is refused with `403 policy_loosening_by_contributor` when the caller, or
+anybody the caller's authority comes from, is a contributor of an **unfinished** review in the subtree
+of that node; another administrator makes it. The rules, all fail closed (#356):
+
+- **The caller's chain counts.** The caller is the caller plus the creator chain and the grantors of
+  their administrator bindings (the same walk as rule A4, stored chains included). An account that a
+  contributor made, or whose administrator role a contributor granted, cannot loosen the policy for
+  them. A chain that cannot be followed counts as a contributor as soon as a review is unfinished.
+- **Withdrawing does not release.** A review is unfinished while it is open, and after it was
+  withdrawn or rejected as long as no version was published for that agent since it was opened.
+  Withdraw, loosen, reopen is therefore refused; publishing the change (by somebody else, under the
+  rules in force) or an administrator who is not a contributor ends the hold.
+- **A tenant move that widens the policy is a loosening.** Moving a node out from under the ancestors
+  that set a policy (`policiesWidened`) runs the same check on the moved subtree, also as a dry run.
+- **Every unfinished review is checked**, page by page; more than 20 000 are refused as unverifiable
+  instead of being ignored. A review whose head revision cannot be read is treated as a contributor.
+
+(Notifying
 the administrators of a node about loosening changes follows with the notification slice S13; the
 audit entry `tenant.lifecycle_policy_changed` lists the loosened keys.)
 
@@ -348,6 +382,12 @@ sources.
   divergence revisions of `system`, and `repo`, even with an author id) makes the contributor set
   include everybody the audit chain shows editing the draft and the creator of the agent, until the Git
   slice (S12) maps signers to accounts.
+- **Migration 0037 fails toward unknown.** After the upgrade, local accounts nobody is shown to have
+  made (not the bootstrap administrator) and role or membership rows that the audit chain cannot
+  prove are unknown creators or grantors: they cannot make an approver while
+  `OAX_LIFECYCLE_UNKNOWN_GRANTOR=refuse` (the default), and they cannot loosen the lifecycle policy of a
+  subtree that has an unfinished review. Remove and add the binding again (records the chain), or set
+  `allow` during the transition.
 - **Still open from the S1 review (#343):** the platform-operator binding across organisations carries
   no grantor (7), information exposure of `grantedBy` and token ids to readers of the agent (9), database
   hardening such as truncate triggers and missing foreign keys (10), the start-up backfill running

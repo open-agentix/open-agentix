@@ -42,6 +42,26 @@ All notable changes to this project are documented here. The format follows
   `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow` temporarily. Prefer `approverIdentitySources: [oidc, ldap]`.
   Revert with `apps/api/drizzle/down/0036_grantor_unknown.down.sql`. Still open from #343: items 7 and
   9 to 12.
+- **The S3 blockers of the review of #354 are resolved (ADR 0017, #356)**. (1) The grant chain of rule A4
+  is **stored on the row** when the grant is made, under the binding lock (`grant_chain uuid[]` on
+  `tenant_role_bindings`, `team_members`, `agent_role_bindings` and `users`; plain ids, no foreign key)
+  and evaluated together with the live chain, so a binding that is revoked, expires or whose account is
+  deleted after the fact no longer launders an approver; widening a binding adds the chain of whoever
+  widened it. A grantor without a stored chain is unknown. (2) New `users.creator_unknown`: an account
+  that lost its creator (deleted before a chain was stored) or that nobody is shown to have made is an
+  unknown creator, not a clean one. (3) `policy_loosening_by_contributor` can no longer be bypassed:
+  the caller's own chain counts (an account a contributor made, or whose administrator role a
+  contributor granted), a review that was withdrawn or rejected keeps the hold until a version is
+  published for the agent, a tenant move that widens the policy runs the same check (dry run too), all
+  unfinished reviews are checked page by page, and more than 20 000 are refused instead of ignored.
+  (4) Migration `0037` re-checks what `0036` attributed with a stricter rule (the audit chain must show
+  the role or membership absent before; entries without `globalRoles`, `system` and non-account actors
+  do not count) and turns the rest into unknown; identity-provider rows an administrator listed before
+  are no longer "nobody", and an identity-provider login keeps the grantor of a team membership that
+  stays. **Upgrade note:** local accounts nobody is shown to have made and rows the audit chain cannot
+  prove become unknown (they cannot approve and cannot loosen the policy while a review is unfinished);
+  remove and add the binding again, or set `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow` temporarily. Revert
+  with `apps/api/drizzle/down/0037_stored_grant_chain.down.sql`.
 
 ### Added
 
