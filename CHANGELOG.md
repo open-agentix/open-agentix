@@ -28,8 +28,8 @@ All notable changes to this project are documented here. The format follows
   coverage; both tenants must be visible (the same `404` as for an unknown id). The depth limit is
   re-checked, a cycle, the current parent, an organisation root and another organisation are refused
   (cross-organisation moves stay with W13-15), a tenant admin cannot move below a capped node, and
-  leaving a node whose role restrictions narrow bindings inside the subtree needs the authority to
-  lift them. Bindings on moved tenants move with them, bindings inherited from the old ancestors stop
+  leaving a node whose role restrictions (any role) narrow bindings inside the subtree, or whose agent
+  lifecycle policy (ADR 0017) would loosen inside it, needs the authority to lift them. Bindings on moved tenants move with them, bindings inherited from the old ancestors stop
   and those inheriting from the new ancestors start; the tenant is detached from its use case. The dry
   run lists, from the same resolver as every request, the users the caller may see who gain or lose
   permissions, and the restrictions that stop or start applying. The applied move runs under the

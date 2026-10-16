@@ -856,7 +856,8 @@ Decided from grants read inside the transaction, under the exclusive tree lock a
 (never from the cached principal), on the nodes named in the request, never on the acting node:
 
 - a platform operator (with `settings:write`), or
-- an **inheriting `admin`** (no use case, unexpired; a token needs `settings:write` and `users:write`)
+- an **inheriting `admin`** (no use case, unexpired), for every caller a token needs `settings:write`
+  and `users:write` (operators included)
   whose bindings cover the moved tenant, its **old parent** and the **new parent**. A direct admin
   of one of them gets `403 inheritance_required`, everybody else `403`.
 
@@ -883,9 +884,19 @@ Everything else refers to tenants by id and does not move. Grants are resolved f
 | `granted_by`, approver eligibility of reviews (ADR 0017), pentest bindings | unchanged: eligibility and `granted_by` are evaluated against the live tree at decision time |
 
 **Restrictions never widen silently.** Moving a subtree out from under a node that restricts a role
-held inside would widen those bindings. A tenant admin therefore also needs the authority to manage
-restrictions (an inheriting `admin` on that node or above) on every node whose restrictions for such
-a role stop applying: `403 restriction_removal_forbidden`. Moving under restrictions only narrows.
+would widen the bindings of that role inside, today or when it is granted there tomorrow. A tenant
+admin therefore also needs the authority to manage restrictions (an inheriting `admin` on that node
+or above) on every node left behind that holds **any** restriction, whatever the role:
+`403 restriction_removal_forbidden`. The dry run lists the restrictions that matter now
+(`restrictionsDropped`). Moving under restrictions only narrows.
+
+**Agent lifecycle policy never loosens silently (ADR 0017).** The effective policy is resolved live
+down the chain and clamped to the parent, so leaving an ancestor that sets a stricter value
+(`requireApprovalForPublish`, `allowedApproverRoles`, `minApprovals`, ...) drops it for the whole
+subtree. The effective policy of every moved node is computed before and after with the pure
+resolver; if any key becomes looser, a tenant admin needs an inheriting `admin` on every left-behind
+ancestor that sets one of those keys: `403 policy_widening_forbidden`. The dry run lists the keys
+(`policiesWidened`). Operators are exempt.
 
 Further refusals: `422 move_cycle` (the tenant or a descendant as parent), `409 move_noop`,
 `422 tenant_depth_exceeded` (the deepest moved node is re-checked), `403 move_not_allowed` / `422
@@ -901,14 +912,16 @@ tenant admin cannot move below a capped node, operators can), `409 role_bindings
   nodes where they gain and where they lose and the permissions concerned. Computed with the resolver
   (`appliedAt`) on the tree as it is and as it will be, with all restrictions of the organisation, for
   the users that hold a binding anchored in the subtree or an inheriting binding on a node the move
-  leaves or joins. **Only users the caller may see** (home node or a binding inside the nodes where
-  the caller holds `users:read`) are listed; nobody else, and no count of them, is revealed. At most
-  100 users are listed (`truncated`).
+  leaves or joins, or on the deepest ancestor both chains share (the attachment of its child
+  changes). Up to 1000 such users are evaluated; the first 100 that actually change are listed. **Only users the caller may see** (home node or a binding inside the nodes where
+  the caller holds `users:read`) are listed; nobody else, and no count of them, is revealed. `truncated` says that more users were found than evaluated or than listed.
 - `restrictionsDropped` / `restrictionsApplied`: the restrictions that stop or start narrowing
   bindings inside, only on nodes the caller may see.
 
-The dry run holds the tree lock shared; an applied move holds it exclusive and the grant, rename and
-child-creation paths wait for it (lock order: tree, binding, audit).
+The dry run runs in a read-only transaction with a statement and lock timeout under the shared tree
+lock and does not take the binding lock (grants may change while it runs; it is advice, the applied
+move decides again). An applied move holds the tree lock and the binding lock exclusive and the
+grant, rename and child-creation paths wait for it (lock order: tree, binding, audit).
 
 ### After the move
 
@@ -916,13 +929,14 @@ child-creation paths wait for it (lock order: tree, binding, audit).
   trigger for every row whose parent or path changes), so every cached principal and the cached tree
   snapshot are rebuilt on the next request. The cached slug path in `X-OAX-Acting-Tenant` is
   dropped.
-- `tenant.moved { nodeId, fromParentId, toParentId, nodes, depthChange, authority }` is written in the
+- `tenant.moved { nodeId, fromParentId, toParentId, nodes, depthChange, restrictionsDropped, policiesWidened, authority }` is written in the
   partitions of the tenant, the old and the new parent (ids and numbers only).
 - Open event streams keep the authorisation they were opened with until they end (as after any
   other revocation); new requests see the new tree.
 - Migration `0034_tenant_move` replaces the tree guard: a placement change is accepted only for a node
   with a parent before and after, inside one organisation, in a transaction that declared the move
-  (`set_config('oax.tenant_move_root', ...)`); a deferred constraint trigger verifies at commit that
+  (`set_config('oax.tenant_move_root', ...)`) and holds the organisation's exclusive tree advisory
+  lock (a guard against stray writes, not a security boundary); a deferred constraint trigger verifies at commit that
   every changed row matches its parent's final placement. A stray `UPDATE` of the placement (older
   application version, `psql`) is still refused. Down path: `drizzle/down/0034_tenant_move.down.sql`.
 
