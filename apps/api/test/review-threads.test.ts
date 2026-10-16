@@ -14,6 +14,9 @@ import { testNode, type TestNode } from './helpers.js';
  * The leak canaries (audit, logs, spans, metrics, model context) are in `review-threads-canary`.
  */
 const PW = 'long-password-123';
+// built from code points: invisible characters must not sit in the source
+const ZERO_WIDTH = String.fromCharCode(0x200b);
+const RLO = String.fromCharCode(0x202e);
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 let n: TestNode;
@@ -234,13 +237,15 @@ describe('limits', () => {
     expect(big.statusCode).toBe(400);
     const empty = await startThread(tok['rev1']!, review.id, { body: '   ' });
     expect(empty.statusCode).toBe(400);
-    const invisible = await startThread(tok['rev1']!, review.id, { body: '​‮' });
+    const invisible = await startThread(tok['rev1']!, review.id, { body: ZERO_WIDTH + RLO });
     expect(invisible.statusCode).toBe(400);
   });
 
   it('removes invisible and steering characters from the stored text', async () => {
     const { review } = await reviewed();
-    const t = j(await startThread(tok['rev1']!, review.id, { body: 'ig​nore‮ this' }));
+    const t = j(
+      await startThread(tok['rev1']!, review.id, { body: `ig${ZERO_WIDTH}nore${RLO} this` }),
+    );
     expect(t.comments[0].body).toBe('ignore this');
   });
 

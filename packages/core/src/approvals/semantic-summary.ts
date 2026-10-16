@@ -35,7 +35,8 @@ export interface SecretReferenceFact {
    * is until the scoped secret store exists (ADR 0017 S4). Scope and owning node follow with it.
    */
   scope: 'legacy';
-  ownerNode: null;
+  /** The node that owns the secret; `null` until the scoped secret store exists. */
+  ownerNode: string | null;
   env: string | null;
   steps: string[];
 }

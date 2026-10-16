@@ -98,7 +98,7 @@ const SecretReferenceFactSchema = z.object({
   scope: z
     .literal('legacy')
     .describe('scoped references arrive with the secret store (ADR 0017 S4)'),
-  ownerNode: z.null(),
+  ownerNode: z.string().nullable(),
   env: z.string().nullable(),
   steps: z.array(z.string()),
 });
