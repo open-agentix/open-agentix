@@ -1146,10 +1146,10 @@ adds its `[Unreleased]` changelog line.
 
 #### Implementation status
 
-**S10 is implemented (roles and the rename, permissions only) and S1 is implemented in its pull
-request (API only, shadow mode: publish reports what it would be refused for and refuses nothing).**
-Every other slice below is **planned**; no code, migration or endpoint of S2 to S9 and S11 to S13
-exists on `main`. This table is updated by each slice's PR.
+**S10 is implemented (roles and the rename, permissions only), S1 is implemented (API only, shadow
+mode: publish reports what it would be refused for and refuses nothing) and S2 is implemented in its
+pull request (comment threads, Review tab, decision bar, status badges, inbox).** Every other slice
+below is **planned**; no code, migration or endpoint of S3 to S9 and S11 to S13 exists on `main`. This table is updated by each slice's PR.
 
 S1 decisions taken in its pull request (the ADR text above is unchanged except where noted):
 
@@ -1168,10 +1168,25 @@ S1 decisions taken in its pull request (the ADR text above is unchanged except w
   at start-up, not by the migration, because its digest is the digest of the normalised source.
 - Documentation: [agent-lifecycle.md](../agent-lifecycle.md).
 
+S2 decisions taken in its pull request:
+
+- Threads need `agents:review`; `viewer` and `pentest` cannot read comment text (they read the review and
+  its changes). Use-case bindings do not carry `agents:review` (as for `agents:approve`).
+- A thread is resolved or reopened by the person who started it or by a contributor of the review; a
+  comment is edited and deleted by its author only; deleting keeps an empty tombstone and is allowed on a
+  closed review. Slice S8's `requireResolvedThreads` must not count a thread that a contributor resolved.
+- Outdated is derived when a thread is read (the line hash against the current head or base), not stored.
+- The comment rate limit is counted in the database per user (`OAX_RATE_LIMIT_COMMENT_MAX`, default 30
+  per minute) so that it holds across sessions, tokens and replicas.
+- Secret references show scope `legacy` and no owning node until S4; inherited and shadowed secrets are not
+  shown; agent rules are a stated placeholder until S8. The agent list shows no review states.
+- Migration `0033_review_threads`; audit events `agent.review.comment` (ids, operation, length) and
+  `agent.review.thread_resolved`.
+
 | # | Slice | State | Content | Depends on | Security review |
 | --- | --- | --- | --- | --- | --- |
 | S1 (#244) | Lifecycle policy, revisions, reviews and approval records (API only, not enforced) | implemented (PR; migration `0032_agent_lifecycle_reviews`, shadow mode) | `agent_draft_revisions`, `agent_reviews`, `agent_review_decisions`; `tenants.settings` (or reuse W13-2) and the lifecycle policy resolver; rule module A1 to A8 and A10; permissions `agents:review`, `agents:approve`; endpoints to open, decide, withdraw; binding of digest, expansion digest, resolution digest (placeholder until S4) and policy digest; publish reports "would be refused" in the response and audit (shadow mode) | S10 | yes: A1/A2 cannot be bypassed by role, token or platform admin; binding fields complete |
-| S2 (#245) | Comment threads and review UI | planned | threads and comments API, outdated anchors, Review tab with rule requirements, decision bar, status badges, inbox `GET /v1/me/reviews`, i18n en/de | S1 | yes: rendering without HTML; comment content out of audit and model context |
+| S2 (#245) | Comment threads and review UI | implemented (PR; migration `0033_review_threads`) | threads and comments API, outdated anchors, Review tab with rule requirements, decision bar, status badges, inbox `GET /v1/me/reviews`, i18n en/de | S1 | yes: rendering without HTML; comment content out of audit and model context |
 | S3 (#246) | Enforcement at publish, deprecation and rollback, audit | planned | publish with `reviewId` and `expectedDigest` under row lock, re-checks of section 4.3, no publish path without approval (no break-glass), version deprecation with rollback to approved versions, audit events of section 11 | S1 | yes: TOCTOU tests; no publish path without approval when required |
 | S4 (#247) | Secret scopes, inheritance and encrypted store | planned | key service (shared with ADR 0016 S5 #235), `secrets` table, scoped references, top-down inheritance with override, `allowOverride` (default `false` on root nodes, F4), `blockInherited` and pinned resolution, secrets API without read, broker checks, rotation and revocation, leak canaries, migration helper for env pointers | – (coordinates with #235) | yes: no plaintext at rest, AAD binding, no value in any response, shadowing cannot change a published agent's credential |
 | S5 (#248) | Personal secrets and development runs | planned | personal scope rules, draft runs of a revision (manual only, dev budget with 10 % default, `stage`), `allowDraftRuns`, `allowProductionSecretsInDraftRuns`, publish refusal and `with-approval` flag path | S3, S4 | yes: confused-deputy tests; personal secret never in a published version by default |

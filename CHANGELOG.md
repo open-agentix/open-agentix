@@ -22,6 +22,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Review comment threads, the Review tab, decision bar, status badges and inbox (ADR 0017 S2, #245)**:
+  threads and comments on a review (`/v1/reviews/{id}/threads`, permission `agents:review`; viewer and
+  pentest cannot read comment text, use-case bindings never carry it), anchored to a line of the diff
+  with a server-computed line hash and marked **outdated** when the line changed in a later revision;
+  resolve and reopen by the thread starter or a contributor; edit and delete by the author only; limits of
+  10,000 characters per comment, 200 threads per review and 30 new comments per user and minute
+  (`OAX_RATE_LIMIT_COMMENT_MAX`). Comment text never enters the audit chain (ids and lengths only),
+  logs, spans, metrics or any model context. `GET /v1/reviews/{id}/changes` returns the sources, a
+  semantic summary (tools with access class, egress, secret references by name, budget,
+  classification, runtime, owner) and the policy summary; `GET /v1/me/reviews` is the review inbox. The
+  console gets an agent tab "Review" with the diff and its threads, the decision bar that says why
+  somebody may not decide, status badges (In development, Review requested, Changes requested,
+  Approved, Published), a `/reviews` inbox, and a Markdown subset renderer without HTML, images or
+  unsafe links (English and German). Migration `0033_review_threads` (additive).
 - **Lifecycle policy, draft revisions, reviews and approval records, in shadow mode (ADR 0017 S1, #244)**:
   every draft save that changes the normalised content creates an immutable revision with its author
   (`GET /v1/agents/{id}/revisions`); reviews can be opened, decided (approve, request changes, reject) and

@@ -1,11 +1,12 @@
 # Agent lifecycle: revisions, reviews and approval records
 
-Design: [ADR 0017](adr/0017-agent-lifecycle-governance.md), slice S1 (#244). **Status: API only,
-shadow mode.** Drafts get revisions, reviews can be opened and decided, approval records bind a
-decision to exact content, and the tenant policy exists. **Publishing is not yet refused without an
-approval** (slice S3 enforces it); until then the publish response and the audit entry report what
-publish *would* have been refused for. The console, comment threads, agent rules, secret scopes and
-review via Git are later slices.
+Design: [ADR 0017](adr/0017-agent-lifecycle-governance.md), slices S1 (#244) and S2 (#245).
+**Status: shadow mode, with the console.** Drafts get revisions, reviews can be opened and decided,
+approval records bind a decision to exact content, the tenant policy exists, and the console has a
+Review tab with comment threads, a decision bar and status badges. **Publishing is not yet refused
+without an approval** (slice S3 enforces it); until then the publish response and the audit entry
+report what publish *would* have been refused for. Agent rules, secret scopes and review via Git are
+later slices.
 
 ## What exists
 
@@ -14,6 +15,11 @@ review via Git are later slices.
 | Immutable draft revisions with their author | `GET /v1/agents/{id}/revisions`, `GET .../revisions/{seq}` |
 | Reviews: open, read, decide, withdraw | `POST/GET /v1/agents/{id}/reviews`, `GET /v1/reviews/{id}`, `POST /v1/reviews/{id}/decisions`, `POST /v1/reviews/{id}/withdraw` |
 | Tenant lifecycle policy (narrowing only) | `GET/PATCH /v1/tenants/{id}/settings/agent-lifecycle` |
+| Comment threads, comments, resolve | `GET/POST /v1/reviews/{id}/threads`, `POST .../threads/{tid}/comments`, `PATCH .../threads/{tid}`, `PATCH/DELETE .../comments/{cid}` |
+| What a review changes (sources, semantic summary, policy summary) | `GET /v1/reviews/{id}/changes` |
+| Display names of the people of a review | `GET /v1/reviews/{id}/people` |
+| Your review inbox | `GET /v1/me/reviews` |
+| Review tab, status badges, decision bar, inbox page | console: agent page, tab "Review"; `/reviews` |
 | Shadow report of publish | `shadow` in the response of `POST /v1/agents/{id}/publish` and in the audit entry `agent.published` |
 | Rule module (A1 to A8, A10) | `packages/core/src/approvals/rules.ts` |
 | Policy resolver | `packages/core/src/tenancy/lifecycle-policy.ts` |
@@ -104,6 +110,104 @@ and, with slice S11, `directory`; and who granted each), the decision, the comme
 rules, empty until S8), `decided_at` and `expires_at` (approvals only, `approvalExpiryHours`). Decisions
 are append-only in the database.
 
+## Comment threads (slice S2)
+
+A thread belongs to a review and is about the review as a whole or about one line of the diff. A line
+thread stores the **side** (`head`: a revision of the draft, `base`: the base version), the line
+number and the SHA-256 of the line text; the server computes the hash from the stored source, so an
+anchor cannot name a line the source does not have (`400 anchor_invalid`). Lines are numbered as the
+console numbers them (the source split on `\n`); trailing blanks do not count for the hash.
+
+- **Outdated.** Threads survive new revisions. Whenever a thread is read, its anchor is compared with
+  the current head of the review (side `head`) or the base version (side `base`): if the line no
+  longer holds the same text at the same number, the thread is `outdated`. It is kept with the
+  revision it was written on and shown apart in the console; writing the old text back makes it
+  current again. Nothing is stored for this, so there is nothing to get out of step.
+- **Who may comment.** `agents:review` on the agent (admin, agent-maintainer, agent-developer,
+  integrator, operator, auditor). `viewer` and `pentest` cannot read or write comment text; they can
+  still read the review and its changes. Use-case bindings never carry `agents:review` (same decision
+  as for `agents:approve`: a caller bound to a use case only gets 403 on every thread route). A review of
+  another tenant, an unreadable agent, an unknown thread or a thread of another review all answer with
+  the same `404`.
+- **Who may change what.** A comment can be edited and deleted by its **author only** (an
+  administrator cannot edit someone else's words). Editing needs an open review. Deleting is also
+  possible on a closed review, so that someone can take back something pasted by mistake: the row stays
+  as an empty tombstone so that the thread keeps its shape. A thread is resolved or reopened by the
+  person who started it or by a **contributor** of the review (an author of a revision since the base
+  version, or the opener), as in Git hosts. Resolving does not decide anything; the later rule
+  `requireResolvedThreads` (slice S8) should not count a thread that a contributor resolved against the
+  reviewer's will.
+- **Limits.** At most 10,000 characters per comment (after invisible and steering characters are removed;
+  `400 comment_too_long`), 200 threads per review (`409 thread_limit_reached`), 200 comments per thread
+  (`409 comment_limit_reached`), and `OAX_RATE_LIMIT_COMMENT_MAX` (default 30) new comments per user and
+  minute (`429 rate_limited`), counted in the database over every session and token of the user,
+  deleted comments included. A comment on a closed review is `409 review_closed`.
+- **Concurrency.** Every write takes the row lock of the review, as a decision does. A comment that
+  races a rejecting decision either lands first or is refused with `409 review_closed`; the thread and
+  rate limits are counted after every earlier write committed. Comments never change the state of a
+  review.
+- **Mentions** are plain text: nothing is resolved and nothing is notified (notifications are slice S13).
+- **Text stays out of everything else.** The comment text is stored in `agent_review_comments` and
+  returned by the thread endpoints, and goes nowhere else. The audit entry `agent.review.comment`
+  carries the ids of the review, thread and comment, the operation (`created`, `edited`, `deleted`) and
+  the length; `agent.review.thread_resolved` carries ids and the new state. No span attribute, log line,
+  metric label, error body or model request contains it. Tests search the audit chain, logs, spans,
+  the metrics scrape and the other endpoints for a canary comment, and check that only the thread
+  service reads the two tables (`apps/api/test/review-threads-canary.test.ts`).
+
+### Safe rendering
+
+The console renders a comment as a **Markdown subset without HTML** (`apps/ui/src/features/reviews/markdown.ts`):
+paragraphs, bold, italic, inline code, code fences, bullet and numbered lists, block quotes and links.
+There is no `dangerouslySetInnerHTML` and no element is created from the text, so raw HTML shows as text.
+Links are rendered only for absolute `http://` and `https://` URLs without credentials; they open with
+`rel="noopener noreferrer nofollow"` and the host is shown next to the link text. `javascript:`,
+`data:`, `vbscript:`, `file:`, relative and protocol-relative URLs, URLs with whitespace or control
+characters and URLs over 2,000 characters stay plain text. Images are never rendered (the construct
+is shown as written). The parser moves forward only, looks for closing delimiters with `indexOf` and
+remembers a delimiter without a closer, uses no nested quantifiers, cuts the input at 10,000
+characters and limits nesting, blocks and list items; the tests render a list of hostile payloads into a
+real DOM and time adversarial inputs.
+
+## The Review tab
+
+The tab shows, for the agent's open review (or the latest closed one): the status badge, who asked, the
+base version, the reviewed revision, approvals counted of required and the decisions with the reason
+each one does not count; the **decision bar**; the **semantic summary**; the **diff** of the base
+version against the reviewed revision with the threads under their lines; the discussion about the
+review as a whole; and the outdated threads.
+
+- **Status badges**: `In development`, `Review requested`, `Changes requested`, `Approved`,
+  `Published` (text and icon, never colour alone, English and German). An open review decides; otherwise
+  a draft equal to the published version is `Published` and everything else is `In development`.
+  There is no break-glass badge because there is no break-glass. The badge is on the agent page; the
+  agent list does not show review states yet (it would need the state of every open review).
+- **Decision bar**: Approve, Request changes, Reject, with a comment (required for the last two).
+  When the caller may not decide, the buttons are disabled and the reason is written next to them
+  and linked with `aria-describedby`: you contributed (`self_approval`), your role is not an approver role,
+  the only bindings that make you one were granted by a contributor, API tokens may not decide, only a
+  person can decide, your identity source may not decide, or, for the approver scope, "This rule needs a
+  member of team X" (or, for `other-team`, a reviewer who is not a member of it). The decision carries
+  every digest on screen (`expectedDigest`, `expectedExpansionDigest`, `expectedResolutionDigest`,
+  `expectedPolicyDigest`); `409 stale_view` asks the reviewer to reload.
+- **Semantic summary** (`GET /v1/reviews/{id}/changes`): the tools of the head with their access class
+  (read, write or unclassified, which counts as write), the approval flag and the profile each grant
+  came from (the **expanded grants**), added, removed and changed tools marked in words, egress hosts,
+  secret references by name, budget, classification, runtime, owner and use case. **Secret references
+  carry the scope `legacy` and no owning node until the scoped secret store exists (slice S4)**;
+  inherited and shadowed secrets are not shown because no such data exists. **Agent rules** do not exist
+  yet (slice S8): the summary says so and lists no requirement. The head is expanded against the
+  connection catalog of now, as the expansion digest is; the base is what was stored when it was
+  published. The endpoint also returns the part of the effective policy that decides who may approve.
+- **Inbox**: `GET /v1/me/reviews` and the page `/reviews` list the newest open reviews of the acting
+  tenant that the caller could decide right now (rules A1 to A7), for agents they can read. Looking at
+  the newest 100 open reviews bounds the work.
+- Names: `GET /v1/reviews/{id}/people` resolves the identifiers of the review to display names of
+  accounts of the acting tenant, so the console shows people, not identifiers.
+
+None of the endpoints of this slice returns `grantedBy`, the binding references or a token identifier
+(finding 9 of #343); the S1 review view still does, for any reader of the agent, until that follow-up.
+
 ## Concurrency
 
 A decision runs in one transaction that takes, in the order of the lock rules (`tree-lock.ts`), the
@@ -174,13 +278,16 @@ while it was checking.
 
 `agent.revision.created`, `agent.review.opened`, `agent.review.decided`, `agent.review.refused`
 (rate-limited to one entry per review, user and code and minute), `agent.review.stale`,
+`agent.review.comment` (ids, operation and length), `agent.review.thread_resolved`,
 `agent.review.closed` (`withdrawn`, `rejected`), `tenant.lifecycle_policy_changed`, and the `shadow`
 and `revision` fields of `agent.published`. Names, ids and digests only: never comment text, never
 sources.
 
 ## Limits of this slice
 
-- Publish is not refused (slice S3); the console and comment threads are slice S2; agent rules are S8.
+- Publish is not refused (slice S3); agent rules are S8; notifications are S13.
+- Revert migration `0033_review_threads` before `0032_agent_lifecycle_reviews`: the thread tables
+  reference the review tables.
 - Directory-mapped bindings (S11) do not exist yet; the rule module already treats the mapping creator
   as the grantor, and rows of the other sources record who granted them. Bindings written before
   migration `0032` have no recorded grantor for teams and agents (`NULL`: not a contributor).
