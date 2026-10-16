@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse, stringify } from 'yaml';
 import {
@@ -85,7 +85,7 @@ describe('golden manifests', () => {
       const r = okOf(exportOf(load()));
       const file = `${EXAMPLES_DIR}${name}.awp.json`;
       // Regenerate with UPDATE_GOLDEN=1, then run prettier (the files are formatted like the repo).
-      if (process.env.UPDATE_GOLDEN === '1' || !existsSync(file))
+      if (process.env.UPDATE_GOLDEN === '1')
         writeFileSync(file, `${JSON.stringify(r.manifest, null, 2)}\n`);
       const golden = JSON.parse(readFileSync(file, 'utf8')) as JsonObject;
       expect(jcs(golden)).toBe(jcs(r.manifest));

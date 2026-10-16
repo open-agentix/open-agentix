@@ -248,7 +248,16 @@ const CATALOG: AccessCatalog = {
     tools: { get_a: 'read', get_b: 'read', put_c: 'write' },
     profiles: { read: ['get_a', 'get_b'] },
     version: 'v1',
+    pin: {
+      connectionId: 'c0',
+      snapshot: {
+        digest: 'e'.repeat(64),
+        tools: ['get_a', 'get_b', 'put_c'].map((name) => ({ name, inputSchema: {} })),
+      },
+    },
   },
+  /** Declared tools, but no pin: nothing bounds a prefix grant, so it is never enumerated. */
+  unpinned: { tools: { get_a: 'read' }, profiles: {}, version: 'v1' },
   pinned: {
     tools: { get_declared: 'read' },
     profiles: {},
@@ -276,7 +285,7 @@ const keysOf = (r: ExportResult): string[] => {
 };
 
 describe('wildcard grants (decision D4)', () => {
-  it('enumerates a prefix from the declared tools of the connection', () => {
+  it('enumerates a prefix from the approved snapshot of a pinned connection', () => {
     const def = expandProfiles(wildcard('logs', 'get_*'), CATALOG).definition;
     expect(keysOf(exportOf(def))).toEqual(['logs.get_a', 'logs.get_b']);
   });
@@ -316,6 +325,9 @@ describe('wildcard grants (decision D4)', () => {
     expect(codes(expandProfiles(wildcard('nowhere', 'get_*'), CATALOG).definition)).toEqual([
       'wildcard_expansion_missing',
     ]);
+    expect(codes(expandProfiles(wildcard('unpinned', 'get_*'), CATALOG).definition)).toEqual([
+      'wildcard_expansion_missing',
+    ]);
     expect(codes(expandProfiles(wildcard('logs', 'zzz_*'), CATALOG).definition)).toEqual([
       'wildcard_expansion_missing',
     ]);
@@ -330,13 +342,34 @@ describe('wildcard grants (decision D4)', () => {
 
   it('refuses an empty recorded list instead of exporting a grant of nothing', () => {
     const def = expandProfiles(wildcard('logs', 'get_*'), CATALOG).definition;
-    def.wildcardExpansion = { 'logs/get_*': { source: 'declared-tools', tools: [] } };
+    def.wildcardExpansion = { 'logs/get_*': { source: 'pinned-snapshot', tools: [] } };
+    expect(refused(exportOf(def)).map((f) => f.code)).toEqual(['wildcard_expansion_missing']);
+  });
+
+  it('re-filters a recorded list by the pattern and refuses a list that is all foreign', () => {
+    const def = expandProfiles(wildcard('logs', 'get_*'), CATALOG).definition;
+    def.wildcardExpansion = {
+      'logs/get_*': { source: 'pinned-snapshot', tools: ['get_a', 'put_c', 'purge'] },
+    };
+    expect(keysOf(exportOf(def))).toEqual(['logs.get_a']);
+    def.wildcardExpansion = { 'logs/get_*': { source: 'pinned-snapshot', tools: ['put_c'] } };
     expect(refused(exportOf(def)).map((f) => f.code)).toEqual(['wildcard_expansion_missing']);
   });
 
   it('refuses an enumerated name that is not an AWP action identifier', () => {
     const catalog: AccessCatalog = {
-      logs: { tools: { 'get_a*b': 'read', get_ok: 'read' }, profiles: {}, version: 'v1' },
+      logs: {
+        tools: {},
+        profiles: {},
+        version: 'v1',
+        pin: {
+          connectionId: 'c',
+          snapshot: {
+            digest: 'f'.repeat(64),
+            tools: ['get_a*b', 'get_ok'].map((name) => ({ name, inputSchema: {} })),
+          },
+        },
+      },
     };
     const def = expandProfiles(wildcard('logs', 'get_*'), catalog).definition;
     expect(refused(exportOf(def)).map((f) => f.code)).toEqual(['tool_name_not_representable']);
@@ -347,7 +380,7 @@ describe('wildcard grants (decision D4)', () => {
     const wild = expandProfiles(wildcard('logs', 'get_*'), CATALOG).definition;
     expect(plain.wildcardExpansion).toBeUndefined();
     expect(wild.wildcardExpansion).toEqual({
-      'logs/get_*': { source: 'declared-tools', tools: ['get_a', 'get_b'] },
+      'logs/get_*': { source: 'pinned-snapshot', tools: ['get_a', 'get_b'] },
     });
     const sameShape = expandProfiles(wildcard('logs', 'get_*'), { ...CATALOG }).definition;
     expect(sameShape.expansionDigest).toBe(wild.expansionDigest);
@@ -393,13 +426,38 @@ describe('other refusals', () => {
     ).toEqual(['agents.0.tools.0.rate']);
   });
 
-  it('refuses a cron schedule with a seconds field and warns about a defaulted time zone', () => {
-    const six = probe((o) => (o.triggers = [{ type: 'cron', schedule: '0 0 8 * * 1' }]));
+  it('refuses a cron schedule with a seconds field or without an explicit time zone', () => {
+    const six = probe(
+      (o) => (o.triggers = [{ type: 'cron', schedule: '0 0 8 * * 1', timezone: 'UTC' }]),
+    );
     expect(code(exportOf(six))).toEqual(['trigger_not_representable']);
-    const five = probe((o) => (o.triggers = [{ type: 'cron', schedule: '0 8 * * 1' }]));
+    const noZone = probe((o) => (o.triggers = [{ type: 'cron', schedule: '0 8 * * 1' }]));
+    expect(refused(exportOf(noZone)).map((f) => `${f.code} ${f.path}`)).toEqual([
+      'trigger_not_representable triggers.0.timezone',
+    ]);
+    const five = probe(
+      (o) => (o.triggers = [{ type: 'cron', schedule: '0 8 * * 1', timezone: 'Europe/Berlin' }]),
+    );
     const r = exported(exportOf(five));
-    expect(r.warnings.map((w) => w.code)).toEqual(['timezone_defaulted']);
-    expect(at(r.manifest, ['spec', 'triggers', 0, 'timezone'])).toBe('UTC');
+    expect(at(r.manifest, ['spec', 'triggers', 0])).toEqual({
+      type: 'schedule',
+      cron: '0 8 * * 1',
+      timezone: 'Europe/Berlin',
+    });
+  });
+
+  it('writes network only for plain egress hosts and refuses what AWP cannot express', () => {
+    const none = exported(exportOf(probe()));
+    expect(at(none.manifest, ['spec', 'agents', 0, 'permissions', 'network'])).toBeUndefined();
+    for (const host of ['10.0.0.0/8', '*.example.org', 'api.example.org:443', 'a b']) {
+      const def = probe((o) => (o.runtime = { egress: [host] }));
+      expect(
+        refused(exportOf(def)).map((f) => f.code),
+        host,
+      ).toEqual(['egress_not_representable']);
+    }
+    const step = probe((o) => (agent0(o).runtime = { egress: ['*.bad'] }));
+    expect(refused(exportOf(step)).map((f) => f.path)).toEqual(['agents.0.runtime.egress']);
   });
 
   it('maps webhook, mail and kafka triggers to events and hands the payload to the first step', () => {
@@ -461,13 +519,30 @@ describe('other refusals', () => {
     expect(code(exportOf(def))).toContain('duplicate_grant_conflict');
   });
 
-  it('merges a duplicate grant and requires approval if either asks for it', () => {
+  it('refuses overlapping grants that differ in approval (the exact grant wins at run time)', () => {
     const def = probe((o) => {
       const first = tool0(o);
       (agent0(o).tools as Obj[]).push({ ...first, approval: 'required' });
     });
+    expect(code(exportOf(def))).toEqual(['duplicate_grant_conflict']);
+    const overlap = expandProfiles(
+      probe((o) => {
+        agent0(o).tools = [
+          { server: 'logs', tool: 'get_a', allowAdditionalArgs: true, approval: 'required' },
+          { server: 'logs', tool: 'get_*', allowAdditionalArgs: true },
+        ];
+      }),
+      CATALOG,
+    ).definition;
+    expect(code(exportOf(overlap))).toEqual(['duplicate_grant_conflict']);
+  });
+
+  it('merges identical duplicate grants into one entry', () => {
+    const def = probe((o) => {
+      const first = tool0(o);
+      (agent0(o).tools as Obj[]).push({ ...first });
+    });
     const r = exported(exportOf(def));
-    expect(at(r.manifest, ['spec', 'approval', 'requiredFor'])).toEqual(['srv.do_it']);
     expect(at(r.manifest, ['spec', 'agents', 0, 'tools'])).toEqual([
       { type: 'mcp', server: 'srv', tools: ['do_it'] },
     ]);

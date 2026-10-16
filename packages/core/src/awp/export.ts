@@ -155,7 +155,6 @@ export function exportAwpManifest(def: PublishedDefinition, options: ExportOptio
   const refused = (more: typeof findings = []) => ({
     ok: false as const,
     findings: [...findings, ...more],
-    warnings: ctx.warnings,
   });
   if (findings.length > 0) return refused();
   const manifest: JsonObject = { apiVersion: AWP_API_VERSION, kind: 'Workflow', metadata, spec };
@@ -168,7 +167,6 @@ export function exportAwpManifest(def: PublishedDefinition, options: ExportOptio
       digest,
       sourceDigest: def.digest,
       profiles: profilesOf(spec),
-      warnings: ctx.warnings,
     };
   } catch (e) {
     if (!(e instanceof JcsError)) throw e;

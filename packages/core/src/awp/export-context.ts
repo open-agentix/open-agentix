@@ -2,7 +2,6 @@ import {
   EXTENSION_PREFIX,
   type ExportFinding,
   type ExportFindingCode,
-  type ExportWarning,
   type JsonObject,
   type JsonValue,
 } from './types.js';
@@ -33,21 +32,16 @@ interface CriticalUse {
 }
 
 /**
- * Collects what an export run learns: findings (refusals), warnings (mapping notes) and the
+ * Collects what an export run learns: findings (refusals) and the
  * critical extensions it had to write. Nothing is dropped silently: whatever cannot be carried is
- * either a finding or, for a restriction-neutral loss, a warning.
+ * a finding.
  */
 export class ExportContext {
   readonly findings: ExportFinding[] = [];
-  readonly warnings: ExportWarning[] = [];
   private readonly uses: CriticalUse[] = [];
 
   refuse(code: ExportFindingCode, path: string, message: string): void {
     this.findings.push({ code, path, message });
-  }
-
-  warn(code: string, path: string, message: string): void {
-    this.warnings.push({ code, path, message });
   }
 
   /** Writes a critical extension on `target` and records it for the refusal / required list. */

@@ -34,6 +34,13 @@ export const EXAMPLE_CATALOG: AccessCatalog = {
     tools: { get_lines: 'read', get_errors: 'read', purge: 'write' },
     profiles: {},
     version: 'v1',
+    pin: {
+      connectionId: 'logs-connection',
+      snapshot: {
+        digest: 'a'.repeat(64),
+        tools: ['get_lines', 'get_errors', 'purge'].map((name) => ({ name, inputSchema: {} })),
+      },
+    },
   },
   'cve-db': { tools: { lookup_cve: 'read' }, profiles: {}, version: 'v1' },
   'github-read': {

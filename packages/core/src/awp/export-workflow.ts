@@ -31,17 +31,16 @@ function exportTrigger(ctx: ExportContext, trigger: Trigger, path: string): Json
         );
         return null;
       }
-      if (trigger.timezone === undefined)
-        ctx.warn(
-          'timezone_defaulted',
+      if (trigger.timezone === undefined) {
+        // agents.md uses the process time zone, AWP defaults to UTC: no silent reinterpretation.
+        ctx.refuse(
+          'trigger_not_representable',
           `${path}.timezone`,
-          'no timezone set: agents.md uses the process time zone, the export says UTC',
+          'a schedule needs an explicit timezone (agents.md uses the process time zone)',
         );
-      return {
-        type: 'schedule',
-        cron: trigger.schedule.trim(),
-        timezone: trigger.timezone ?? 'UTC',
-      };
+        return null;
+      }
+      return { type: 'schedule', cron: trigger.schedule.trim(), timezone: trigger.timezone };
     }
     default:
       ctx.refuse('trigger_not_representable', path, 'unknown trigger type');

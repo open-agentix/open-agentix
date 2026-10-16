@@ -73,7 +73,6 @@ describe('GET /v1/agents/{id}/versions/{v}/awp', () => {
     expect(res.body).toBe(jcs(manifest));
     const detail = (await n.req({ method: 'GET', url: `/v1/agents/${id}/versions/1.0.0` })).json();
     expect(res.headers['x-oax-source-digest']).toBe(detail.digest);
-    expect(res.headers['x-oax-export-warnings']).toBeUndefined();
   });
 
   it('returns the same bytes on every call', async () => {
@@ -111,7 +110,7 @@ describe('GET /v1/agents/{id}/versions/{v}/awp', () => {
     ]);
   });
 
-  it('enumerates a wildcard grant from the reviewed tool list recorded at publish', async () => {
+  it('refuses a wildcard grant when no approved snapshot of a pinned connection was recorded', async () => {
     const created = await n.req({
       method: 'POST',
       url: '/v1/connections',
@@ -119,38 +118,38 @@ describe('GET /v1/agents/{id}/versions/{v}/awp', () => {
         name: 'logs',
         config: {
           transport: 'in-memory',
-          tools: {
-            get_lines: { access: 'read' },
-            get_errors: { access: 'read' },
-            purge: { access: 'write' },
-          },
+          tools: { get_lines: { access: 'read' }, get_errors: { access: 'read' } },
         },
       },
     });
     expect(created.statusCode).toBe(201);
     const id = await publish(LOG_READER);
-    const before = await awp(id, '1.0.0');
-    expect(before.statusCode).toBe(200);
-    const tools = Object.keys(
-      (JSON.parse(before.body) as { spec: { agents: { permissions: { tools: object } }[] } }).spec
-        .agents[0]!.permissions.tools,
-    );
-    expect(tools).toEqual(['logs.get_errors', 'logs.get_lines']);
-    expect(before.body).not.toContain('*');
+    const res = await awp(id, '1.0.0');
+    expect(res.statusCode).toBe(422);
+    expect(res.json().details.findings.map((f: { code: string }) => f.code)).toEqual([
+      'wildcard_expansion_missing',
+    ]);
+    expect(res.body).not.toContain('get_lines');
+  });
 
-    // The connection changes after publish: the published export must not.
-    const updated = await n.req({
-      method: 'PUT',
-      url: `/v1/connections/${created.json().id}`,
-      payload: {
-        config: {
-          transport: 'in-memory',
-          tools: { get_lines: { access: 'read' }, get_more: { access: 'read' } },
-        },
-      },
+  it('refuses an owner slug that is not the team of the agent (forged owner)', async () => {
+    const created = await n.req({
+      method: 'POST',
+      url: '/v1/agents',
+      payload: { source: agentSource('forged-owner-agent', 'team-docs') },
     });
-    expect(updated.statusCode).toBe(200);
-    expect((await awp(id, '1.0.0')).body).toBe(before.body);
+    const id = created.json().id as string;
+    const forged = agentSource('forged-owner-agent', 'team-security');
+    expect(
+      (await n.req({ method: 'PUT', url: `/v1/agents/${id}/draft`, payload: { source: forged } }))
+        .statusCode,
+    ).toBe(200);
+    expect((await n.req({ method: 'POST', url: `/v1/agents/${id}/publish` })).statusCode).toBe(201);
+    const res = await awp(id, '1.0.0');
+    expect(res.statusCode).toBe(422);
+    expect(res.json().details.findings.map((f: { code: string }) => f.code)).toEqual([
+      'owner_team_mismatch',
+    ]);
   });
 
   it('answers 404 for an unknown agent or version and hides agents of other teams', async () => {
@@ -178,8 +177,8 @@ describe('GET /v1/agents/{id}/versions/{v}/awp', () => {
     expect(op.description).toContain('not a conformance claim');
   });
 
-  it('keeps an unrelated example exportable-or-refused without throwing', async () => {
+  it('refuses a version with critical fields, deterministically', async () => {
     const id = await publish(CVE_TRIAGE.replace('name: cve-triage', 'name: cve-triage-awp'));
-    expect([200, 422]).toContain((await awp(id, '1.0.0')).statusCode);
+    expect((await awp(id, '1.0.0')).statusCode).toBe(422);
   });
 });

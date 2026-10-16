@@ -31,7 +31,7 @@ All notable changes to this project are documented here. The format follows
   `classification`, `access`, runner/toolbox, `guidelines`) refuse the export with one finding per field
   (`422 awp_export_refused`) until the pinned AWP version has `metadata.requiredExtensions`; an agent
   without a team is refused (`owner_team_required`). Publish now records the enumeration of wildcard grants
-  (`definition.wildcardExpansion`) from the reviewed tool list; exports never contain a wildcard, and a
+  (`definition.wildcardExpansion`) from the approved snapshot of a pinned connection; exports never contain a wildcard, and a
   wildcard without a recorded list is refused. See [docs/awp.md](docs/awp.md).
 
 - **Vendored AWP schema and conformance suite with an offline pin check (#254)**: `packages/awp/vendor/awp-v1alpha1/`

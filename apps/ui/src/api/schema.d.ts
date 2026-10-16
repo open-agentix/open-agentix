@@ -2072,7 +2072,7 @@ export interface paths {
         };
         /**
          * Export a published version as an AWP manifest
-         * @description The effective manifest of the stored version as an AWP v1alpha1 Workflow, built to the pinned AWP schema (a draft; this is a mapping, not a conformance claim). Computed from the stored definition, so every call returns the same bytes (RFC 8785 form, `metadata.integrity.digest` per AWP spec 9.1). The header `x-oax-source-digest` carries the digest of the agents.md source. Restrictions AWP v1alpha1 cannot express (argument constraints, call limits, conditions, handovers, runner, ...) refuse the export with 422 `awp_export_refused` and one finding per field; nothing is dropped silently. An agent without a team, and a wildcard grant without a recorded reviewed tool list, are refused too.
+         * @description The effective manifest of the stored version as an AWP v1alpha1 Workflow, built to the pinned AWP schema (a draft; this is a mapping, not a conformance claim). Computed from the stored definition, so every call returns the same bytes (RFC 8785 form, `metadata.integrity.digest` per AWP spec 9.1). The header `x-oax-source-digest` carries the digest of the agents.md source. Bytes are recomputed from the stored definition; a later exporter version may change them. Restrictions AWP v1alpha1 cannot express (argument constraints, call limits, conditions, handovers, runner, ...) refuse the export with 422 `awp_export_refused` and one finding per field; nothing is dropped silently. An agent without a team (or whose owner slug is not its team), and a wildcard grant without a recorded approved snapshot, are refused too.
          */
         get: {
             parameters: {
@@ -2148,11 +2148,6 @@ export interface paths {
                                     field?: string;
                                     /** @description critical_extension: the extension that would carry it */
                                     extension?: string;
-                                }[];
-                                warnings: {
-                                    code: string;
-                                    path: string;
-                                    message: string;
                                 }[];
                             };
                         };

@@ -116,16 +116,39 @@ function secretUses(agent: AgentSpec): SecretUse[] {
   }));
 }
 
-function agentPermissions(
+/** A plain DNS name: `host:port`, CIDR ranges and `*.suffix` patterns are not AWP host names. */
+const PLAIN_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
+
+/**
+ * `permissions.network` from the effective egress list. Only written for a non-empty list of plain
+ * host names: the in-process runner does not enforce egress, so an empty list is no claim, and an
+ * entry AWP cannot express is refused instead of being passed on with another meaning.
+ */
+function agentNetwork(
+  ctx: ExportContext,
   agent: AgentSpec,
   def: PublishedDefinition,
+  index: number,
+): JsonObject | undefined {
+  const egress = agent.runtime?.egress ?? def.runtime?.egress ?? [];
+  const path = agent.runtime?.egress ? `agents.${index}.runtime.egress` : 'runtime.egress';
+  for (const host of egress)
+    if (!PLAIN_HOST.test(host))
+      ctx.refuse(
+        'egress_not_representable',
+        path,
+        `"${host}" is not a plain host name (ports, CIDR ranges and wildcards have no AWP equivalent)`,
+      );
+  return egress.length > 0 ? { egress: 'deny', allowHosts: [...egress] } : undefined;
+}
+
+function agentPermissions(
+  network: JsonObject | undefined,
   permissionTools: JsonObject,
   secrets: SecretUse[],
 ): JsonObject {
-  const egress = agent.runtime?.egress ?? def.runtime?.egress ?? [];
-  const network: JsonObject = { egress: 'deny' };
-  if (egress.length > 0) network.allowHosts = [...egress];
-  const permissions: JsonObject = { default: 'deny', network };
+  const permissions: JsonObject = { default: 'deny' };
+  if (network) permissions.network = network;
   if (Object.keys(permissionTools).length > 0) permissions.tools = permissionTools;
   if (secrets.length > 0) permissions.secrets = [...new Set(secrets.map((s) => s.name))];
   return permissions;
@@ -147,7 +170,11 @@ export function exportAgent(
     instructions: agent.instructions,
   };
   if (tools.sources.length > 0) out.tools = tools.sources;
-  out.permissions = agentPermissions(agent, def, tools.permissionTools, secrets);
+  out.permissions = agentPermissions(
+    agentNetwork(ctx, agent, def, index),
+    tools.permissionTools,
+    secrets,
+  );
   const budget = exportBudget(agent.budget);
   if (budget) out.budget = budget;
   operationalExtensions(agent, out);

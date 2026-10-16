@@ -49,11 +49,12 @@ export interface ExpansionRecord {
 
 /**
  * A wildcard tool grant (`get_*`, `*`) as enumerated at publish (decision D4 of the AWP alignment:
- * exports carry explicit tool lists, never a wildcard). The list comes from the reviewed tool list
- * of the connection: the approved snapshot of a pinned connection, else its declared tools.
+ * exports carry explicit tool lists, never a wildcard). The list comes from the approved snapshot
+ * of a pinned connection only: at run time the pin check (`toolsDigest`) blocks a tool added later,
+ * whereas for an unpinned connection nothing bounds a prefix grant, so no list is recorded.
  */
 export interface WildcardExpansionRecord {
-  source: 'pinned-snapshot' | 'declared-tools';
+  source: 'pinned-snapshot';
   /** Sorted tool names the pattern matched at publish time. */
   tools: string[];
 }
@@ -248,7 +249,7 @@ function pinTools(
   return out;
 }
 
-/** Enumerates every wildcard grant from the reviewed tool list of its connection, if there is one. */
+/** Enumerates every wildcard grant from the approved snapshot of its pinned connection, if any. */
 function enumerateWildcards(
   agents: readonly AgentSpec[],
   catalog: AccessCatalog,
@@ -257,13 +258,11 @@ function enumerateWildcards(
   for (const a of agents)
     for (const t of a.tools) {
       const key = `${t.server}/${t.tool}`;
-      const conn = catalog[t.server];
-      if (!t.tool.includes('*') || !conn || key in out) continue;
-      const snapshot = conn.pin?.snapshot;
-      const source = snapshot ? 'pinned-snapshot' : 'declared-tools';
-      const names = snapshot ? snapshot.tools.map((p) => p.name) : Object.keys(conn.tools);
+      const snapshot = catalog[t.server]?.pin?.snapshot;
+      if (!t.tool.includes('*') || !snapshot || key in out) continue;
+      const names = snapshot.tools.map((p) => p.name);
       const tools = [...new Set(names.filter((n) => matchesGrant(t.tool, n)))].sort();
-      if (tools.length > 0) out[key] = { source, tools };
+      if (tools.length > 0) out[key] = { source: 'pinned-snapshot', tools };
     }
   return out;
 }

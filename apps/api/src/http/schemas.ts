@@ -232,7 +232,6 @@ export const AwpExportFindingSchema = z.object({
 export const AwpExportRefusalSchema = ErrorSchema.extend({
   details: z.object({
     findings: z.array(AwpExportFindingSchema),
-    warnings: z.array(z.object({ code: z.string(), path: z.string(), message: z.string() })),
   }),
 });
 export const PublishResultSchema = z.object({

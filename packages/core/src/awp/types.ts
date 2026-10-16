@@ -32,6 +32,8 @@ export type ExportFindingCode =
   | 'tool_name_not_representable'
   | 'duplicate_grant_conflict'
   | 'trigger_not_representable'
+  | 'egress_not_representable'
+  | 'owner_team_mismatch'
   | 'label_not_representable'
   | 'secret_not_representable'
   | 'pipeline_not_representable'
@@ -46,13 +48,6 @@ export interface ExportFinding {
   /** For `critical_extension`: the source field and the extension that would carry it. */
   field?: string;
   extension?: string;
-}
-
-/** A mapping note that does not block the export (a loss that is not a restriction). */
-export interface ExportWarning {
-  code: string;
-  path: string;
-  message: string;
 }
 
 export interface ExportOptions {
@@ -79,6 +74,5 @@ export type ExportResult =
       sourceDigest: string;
       /** Profiles a validator needs for the manifest (`core` plus `mcp` / `governance`). */
       profiles: string[];
-      warnings: ExportWarning[];
     }
-  | { ok: false; findings: ExportFinding[]; warnings: ExportWarning[] };
+  | { ok: false; findings: ExportFinding[] };

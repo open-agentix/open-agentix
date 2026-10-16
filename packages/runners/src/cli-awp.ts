@@ -1,10 +1,4 @@
-import {
-  exportAwpManifest,
-  jcs,
-  validateAgentSource,
-  type ExportFinding,
-  type ExportWarning,
-} from '@openagentix/core';
+import { exportAwpManifest, jcs, validateAgentSource, type ExportFinding } from '@openagentix/core';
 import type { CliIo } from './cli.js';
 
 export const AWP_USAGE = `
@@ -25,9 +19,8 @@ type Flags = Record<string, string | boolean>;
 /** `<agent-id>@<version>`: a published version, which only the control node can export. */
 const VERSIONED_AGENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@\S+$/i;
 
-function printReport(findings: ExportFinding[], warnings: ExportWarning[], io: CliIo): void {
+function printReport(findings: ExportFinding[], io: CliIo): void {
   for (const f of findings) io.err(`error   ${f.code} ${f.path}: ${f.message}`);
-  for (const w of warnings) io.err(`warning ${w.code} ${w.path}: ${w.message}`);
 }
 
 async function exportFile(file: string, flags: Flags, io: CliIo): Promise<number> {
@@ -39,7 +32,7 @@ async function exportFile(file: string, flags: Flags, io: CliIo): Promise<number
   }
   const team = typeof flags['owner-team'] === 'string' ? flags['owner-team'] : null;
   const result = exportAwpManifest(validated.definition, { ownerTeam: team });
-  printReport(result.ok ? [] : result.findings, result.warnings, io);
+  printReport(result.ok ? [] : result.findings, io);
   if (!result.ok) return 1;
   io.out(
     flags.canonical === true ? jcs(result.manifest) : JSON.stringify(result.manifest, null, 2),

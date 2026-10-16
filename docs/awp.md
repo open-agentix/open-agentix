@@ -127,6 +127,8 @@ All refusals fail closed and name the source path.
 
 | Code                         | Meaning                                                                                               |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `owner_team_mismatch`        | `owner` is not the team the agent belongs to (an author can write any slug; checked at export). |
+| `egress_not_representable`   | An egress entry that is not a plain host name (port, CIDR range, `*.suffix`).                        |
 | `owner_team_required`        | An AWP owner is a team (D15). The agent belongs to no team; assign one before exporting.              |
 | `wildcard_expansion_missing` | A wildcard grant (`get_*`, `*`) has no recorded tool list (see below).                                |
 | `profile_expansion_missing`  | A profile grant was never expanded (a file, not a published version).                                 |
@@ -137,19 +139,33 @@ All refusals fail closed and name the source path.
 | `unknown_field`              | A stored field the exporter does not know (for example from a newer build): never dropped silently.   |
 | `not_canonicalizable`        | A value outside the JSON data model (for example a lone surrogate).                                   |
 
-Warnings do not block: a cron trigger without `timezone` is exported as `UTC` (`agents.md` uses the process
-time zone).
+A cron trigger without an explicit `timezone` is refused too (`agents.md` uses the process time zone,
+AWP defaults to UTC, so exporting would silently change when it fires).
 
 ### Wildcards (D4)
 
-AWP v1alpha1 has no prefix wildcards in permissions, and an export must not widen when a server later adds
-a tool. Publish therefore enumerates every wildcard grant into `definition.wildcardExpansion` (key
-`server/pattern`) from the reviewed tool list of the connection: the approved snapshot of a pinned
-connection, else its declared tools. The export writes those tools explicitly; no `*` appears in any
-permission key or tool list (a bare `*` is enumerated the same way). Without a recorded list the export is
-refused. Versions published before this change have no record and are refused for wildcard grants
-(republish to get one). The record is not part of `expansionDigest` (it is a function of inputs that
+AWP v1alpha1 has no prefix wildcards in permissions. Publish enumerates every wildcard grant into
+`definition.wildcardExpansion` (key `server/pattern`), **only from the approved tool snapshot of a pinned
+connection**: at run time the pin check (`toolsDigest`) blocks a tool added later, so the explicit list
+is not narrower than what runs. For an unpinned connection nothing bounds a prefix grant (a tool added
+later would match), so no list is recorded and the export is refused. At export the recorded list is
+filtered again by the pattern, so a damaged record can only shrink the grant; an empty result is refused.
+The export writes the tools explicitly; no `*` appears in any permission key or tool list (a bare `*`
+is enumerated the same way). Versions published before this change have no record and are refused for
+wildcard grants (republish). The record is not part of `expansionDigest` (a function of inputs that
 digest already covers), so existing digests and review records do not change.
+
+Overlapping grants of one tool (an exact grant and a wildcard, or a duplicate) are merged only if they
+are identical in limits and approval; otherwise `duplicate_grant_conflict`, because at run time the exact
+grant wins and a union would claim a control that does not exist.
+
+### Egress
+
+`permissions.network` (`egress: deny` plus `allowHosts`) is written only for a non-empty egress list of
+plain host names. Egress is enforced by isolating runners; the in-process runner does not enforce it, so
+an empty list is no claim (an isolating runner is a critical field and refuses anyway). Entries with a
+port, a CIDR range or a `*.suffix` pattern are refused (`egress_not_representable`) instead of being
+passed on with a different meaning.
 
 ### Digest and bytes
 
@@ -162,8 +178,14 @@ The API sends the RFC 8785 bytes, so the body is exactly what the digest covers 
 same stored version always yields the same bytes. The digest of the `agents.md` **source** stays an
 OpenAgentix value (`agent_versions.digest`, header `x-oax-source-digest`); it is deliberately not written
 into the manifest, because it changes with formatting and would break the property above. The owner team
-is the stored `owner` slug when the agent belongs to a team, not the live team record, so renaming a team
-does not change a published export.
+is the stored `owner` slug, exported only when it resolves to the team the agent belongs to
+(`owner_team_mismatch` otherwise); renaming a team therefore makes the export refuse rather than name
+another team.
+
+The bytes are recomputed from the stored definition on every call. They are stable for one exporter
+version; a later exporter version (a new mapping rule, a pin upgrade) can change the bytes and digest
+of old versions. The manifest digest is not stored at publish; consumers that need a fixed value should
+record the digest they reviewed.
 
 ### Verification
 

@@ -1,4 +1,5 @@
 import { canonicalJson } from '../canonical.js';
+import { toolMatchesGrant } from '../mcp-pin.js';
 import type { AgentSpec } from '../agents/parser.js';
 import type { PublishedDefinition } from '../agents/profiles.js';
 import type { ToolGrant } from '../agents/schema.js';
@@ -38,13 +39,15 @@ function toolNames(
   path: string,
 ): string[] | null {
   if (!grant.tool.includes('*')) return [grant.tool];
-  const record = def.wildcardExpansion?.[`${grant.server}/${grant.tool}`];
-  if (record && record.tools.length > 0) return record.tools;
+  // Re-filtered: a record that lists a tool the pattern does not match is never trusted.
+  const listed = def.wildcardExpansion?.[`${grant.server}/${grant.tool}`]?.tools ?? [];
+  const tools = listed.filter((n) => toolMatchesGrant(grant.tool, n));
+  if (tools.length > 0) return tools;
   ctx.refuse(
     'wildcard_expansion_missing',
     `${path}.tool`,
-    `"${grant.server}/${grant.tool}" cannot be enumerated: no reviewed tool list of the connection ` +
-      'was recorded at publish (republish with a reviewed tool snapshot)',
+    `"${grant.server}/${grant.tool}" cannot be enumerated: no approved tool snapshot of a pinned ` +
+      'connection was recorded at publish (republish with an approved snapshot)',
   );
   return null;
 }
@@ -94,7 +97,7 @@ export function exportTools(
   checkProfileGrants(ctx, def, agent, index);
   const byServer = new Map<string, string[]>();
   const permissionTools: JsonObject = {};
-  const approvalRequired = new Set<string>();
+  const approvalOf = new Map<string, boolean>();
   (agent.tools ?? []).forEach((grant, j) => {
     const path = `agents.${index}.tools.${j}`;
     rejectUnknownKeys(ctx, grant, KNOWN_GRANT_KEYS, path);
@@ -109,16 +112,22 @@ export function exportTools(
       }
       const entry: JsonObject = { allow: true, ...ext };
       const known = permissionTools[key];
-      if (known !== undefined && canonicalJson(known) !== canonicalJson(entry))
+      const needsApproval = grant.approval === 'required';
+      // At run time the exact grant wins over a wildcard, so overlapping grants that differ in
+      // limits or approval cannot be merged into one claim.
+      if (
+        known !== undefined &&
+        (canonicalJson(known) !== canonicalJson(entry) || approvalOf.get(key) !== needsApproval)
+      )
         ctx.refuse(
           'duplicate_grant_conflict',
           path,
-          `"${key}" is granted twice with different limits`,
+          `"${key}" is granted twice with different limits or approval`,
         );
       permissionTools[key] = entry;
+      approvalOf.set(key, needsApproval);
       const listed = byServer.get(grant.server) ?? [];
       if (!listed.includes(tool)) byServer.set(grant.server, [...listed, tool]);
-      if (grant.approval === 'required') approvalRequired.add(key);
     }
   });
   const sources = [...byServer].map(([server, tools]): JsonObject => ({
@@ -126,5 +135,9 @@ export function exportTools(
     server,
     tools,
   }));
-  return { sources, permissionTools, approvalRequired: [...approvalRequired] };
+  return {
+    sources,
+    permissionTools,
+    approvalRequired: [...approvalOf].filter(([, v]) => v).map(([k]) => k),
+  };
 }

@@ -10,7 +10,7 @@
     },
     "classification": "internal",
     "integrity": {
-      "digest": "sha256:00911488ca237f39f64114be4367fb790a3aa8bc45ca8143a887243c6be895c5"
+      "digest": "sha256:f46509782656167596ba9eeb65e9202173aa636c8d96058146e3dc0f45d6d3fe"
     }
   },
   "spec": {
@@ -41,9 +41,6 @@
         ],
         "permissions": {
           "default": "deny",
-          "network": {
-            "egress": "deny"
-          },
           "tools": {
             "logs.get_errors": {
               "allow": true
