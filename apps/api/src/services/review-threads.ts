@@ -13,9 +13,11 @@ import type { Db } from '../db/client.js';
 import {
   agentDraftRevisions,
   agentReviewComments,
+  agentReviewDecisions,
   agentReviewThreads,
   agentReviews,
   agentVersions,
+  users,
 } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
 import { reviewHead, MAX_COMMENT_LENGTH, type AgentReviewsService } from './agent-reviews.js';
@@ -418,6 +420,47 @@ export class ReviewThreadsService {
   }
 
   // ------------------------------------------------------------------ reads
+
+  /**
+   * Display names of the people a review involves (opener, authors of revisions, reviewers, thread
+   * and comment authors, resolvers), so that the console shows names instead of identifiers. Only
+   * accounts of the acting tenant are named: a platform operator acting here stays an identifier.
+   * Readable with `agents:read` on the agent, like the identifiers it resolves.
+   */
+  async people(p: Principal, reviewId: string): Promise<Record<string, string>> {
+    const { review, agent } = await this.reviews.loadReview(p, reviewId);
+    await this.agents.assertAccess(p, agent, 'agents:read').catch((e: unknown) => {
+      throw e instanceof HttpError && e.statusCode === 404 ? notFound('review') : e;
+    });
+    const db = this.ctx.db;
+    const ids = new Set<string>([review.openedBy]);
+    const take = (...xs: (string | null)[]) => xs.forEach((x) => x && ids.add(x));
+    for (const r of await db
+      .select({ a: agentDraftRevisions.authorId })
+      .from(agentDraftRevisions)
+      .where(eq(agentDraftRevisions.agentId, agent.id)))
+      take(r.a);
+    for (const r of await db
+      .select({ a: agentReviewDecisions.reviewerId })
+      .from(agentReviewDecisions)
+      .where(eq(agentReviewDecisions.reviewId, review.id)))
+      take(r.a);
+    for (const r of await db
+      .select({ a: agentReviewThreads.createdBy, b: agentReviewThreads.resolvedBy })
+      .from(agentReviewThreads)
+      .where(eq(agentReviewThreads.reviewId, review.id)))
+      take(r.a, r.b);
+    for (const r of await db
+      .select({ a: agentReviewComments.authorId })
+      .from(agentReviewComments)
+      .where(eq(agentReviewComments.reviewId, review.id)))
+      take(r.a);
+    const rows = await db
+      .select({ id: users.id, name: users.displayName })
+      .from(users)
+      .where(and(inArray(users.id, [...ids]), eq(users.tenantId, review.tenantId)));
+    return Object.fromEntries(rows.map((r) => [r.id, r.name]));
+  }
 
   async list(p: Principal, reviewId: string): Promise<ThreadView[]> {
     const { review, agent } = await this.open(p, reviewId);

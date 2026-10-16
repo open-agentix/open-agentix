@@ -608,6 +608,18 @@ describe('the changes endpoint', () => {
   });
 });
 
+describe('the people endpoint', () => {
+  it('names the people of the review in the acting tenant and hides the review from other tenants', async () => {
+    const { review } = await reviewed();
+    await startThread(tok['rev1']!, review.id, { body: 'hello' });
+    const res = await req(tok['viewer']!, 'GET', `/v1/reviews/${review.id}/people`);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(j(res).people).toMatchObject({ [uid['author']!]: 'author', [uid['rev1']!]: 'rev1' });
+    expect(Object.keys(j(res).people)).not.toContain(uid['rev2']);
+    expect((await req(adminB, 'GET', `/v1/reviews/${review.id}/people`)).statusCode).toBe(404);
+  });
+});
+
 describe('the inbox', () => {
   it('lists open reviews the caller could decide, not the ones they wrote', async () => {
     const { agent, review } = await reviewed();

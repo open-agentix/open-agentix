@@ -45,6 +45,7 @@ const SCOPED = [
   'GET /v1/agents/:id/reviews',
   'GET /v1/reviews/:id',
   'GET /v1/reviews/:id/changes',
+  'GET /v1/reviews/:id/people',
   'POST /v1/reviews/:id/withdraw',
   'GET /v1/agents/:id/members',
   'POST /v1/agents/:id/dry-run',

@@ -76,6 +76,10 @@ export const CreateThreadBody = z.object({
 export const AddCommentBody = z.object({ body: CommentText });
 export const ResolveBody = z.object({ resolved: z.boolean() });
 
+export const PeopleSchema = z.object({
+  people: z.record(z.string(), z.string()).describe('user id to display name'),
+});
+
 // ---------------------------------------------------------------- changes
 
 const ToolFactSchema = z.object({

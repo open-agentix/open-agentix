@@ -8,6 +8,7 @@ import {
   CreateThreadBody,
   InboxQuery,
   InboxSchema,
+  PeopleSchema,
   ResolveBody,
   ReviewChangesSchema,
   ThreadListSchema,
@@ -219,6 +220,23 @@ export function registerReviewThreadRoutes(app: ZApp, { services }: Deps): void 
       },
     },
     async (req) => reviewChanges.get(principalOf(req), req.params.id),
+  );
+
+  app.get(
+    '/v1/reviews/:id/people',
+    {
+      config: { access: 'agents:read' },
+      schema: {
+        tags,
+        summary: 'Display names of the people a review involves',
+        description:
+          'User id to display name for the opener, the authors of revisions, the reviewers and the authors and resolvers of comments, so that the console can show names. Only accounts of the acting tenant are named. Needs `agents:read` on the agent; another tenant or an unreadable agent is 404.',
+        security: sec,
+        params: IdParams,
+        response: { 200: PeopleSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => ({ people: await reviewThreads.people(principalOf(req), req.params.id) }),
   );
 
   app.get(
