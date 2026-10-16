@@ -7,7 +7,7 @@ import {
   type AnchorSide,
   type Principal,
 } from '@openagentix/core';
-import { and, asc, count, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import {
@@ -172,6 +172,9 @@ export class ReviewThreadsService {
    * is a hundred and K sessions do not give K times the quota.
    */
   private async assertRate(tx: Db, userId: string) {
+    // One user's requests on different reviews take turns: without this lock they could all count
+    // before any of them writes its audit entry, and overshoot the limit together.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`review-rate:${userId}`}))`);
     const since = new Date(this.ctx.now().getTime() - RATE_WINDOW_MS);
     const [row] = await tx
       .select({ n: count() })
@@ -569,17 +572,27 @@ export class ReviewThreadsService {
       .orderBy(asc(agentReviewThreads.createdAt), asc(agentReviewThreads.id))
       .limit(MAX_THREADS_PER_REVIEW);
     if (threads.length === 0) return [];
-    const comments = await db
+    // Live comments are bounded by the budget; tombstones (empty text, kept for the shape of a
+    // thread) are read newest first with their own bound, so they can never push a live comment out.
+    const scope = and(
+      eq(agentReviewComments.reviewId, review.id),
+      onlyThread ? eq(agentReviewComments.threadId, onlyThread) : undefined,
+    );
+    const live = await db
       .select()
       .from(agentReviewComments)
-      .where(
-        and(
-          eq(agentReviewComments.reviewId, review.id),
-          onlyThread ? eq(agentReviewComments.threadId, onlyThread) : undefined,
-        ),
-      )
+      .where(and(scope, isNull(agentReviewComments.deletedAt)))
       .orderBy(asc(agentReviewComments.createdAt), asc(agentReviewComments.id))
       .limit(MAX_COMMENTS_PER_REVIEW);
+    const tombstones = await db
+      .select()
+      .from(agentReviewComments)
+      .where(and(scope, isNotNull(agentReviewComments.deletedAt)))
+      .orderBy(desc(agentReviewComments.createdAt), desc(agentReviewComments.id))
+      .limit(MAX_COMMENTS_PER_REVIEW);
+    const comments = [...live, ...tombstones].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : 1),
+    );
     const byThread = new Map<string, CommentRow[]>();
     for (const c of comments) {
       const list = byThread.get(c.threadId);
