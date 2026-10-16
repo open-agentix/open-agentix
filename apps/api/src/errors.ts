@@ -55,6 +55,33 @@ export const mcpRelayRefusal = () => new HttpError(404, 'not_found', 'MCP server
 export const forbidden = (msg = 'insufficient permissions') => new HttpError(403, 'forbidden', msg);
 export const conflict = (msg: string) => new HttpError(409, 'conflict', msg);
 
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+
+/**
+ * What a failed database statement may put in a log. drizzle's `DrizzleQueryError` carries the
+ * statement and its **parameters** in its message, and a PostgreSQL error carries the failing row
+ * in `detail`: both can hold tenant content (comment text, agent sources). Only the code, the
+ * constraint, the table and the statement with its placeholders are kept.
+ */
+export function loggableError(err: unknown): unknown {
+  if (!isObject(err)) return err;
+  const cause = isObject(err.cause) ? err.cause : undefined;
+  const pg = cause ?? err;
+  const looksDb =
+    err.name === 'DrizzleQueryError' ||
+    (typeof err.message === 'string' && err.message.startsWith('Failed query:')) ||
+    (typeof pg.severity === 'string' && typeof pg.code === 'string');
+  if (!looksDb) return err;
+  return {
+    type: 'DatabaseError',
+    message: 'database statement failed',
+    code: typeof pg.code === 'string' ? pg.code : undefined,
+    constraint: typeof pg.constraint === 'string' ? pg.constraint : undefined,
+    table: typeof pg.table === 'string' ? pg.table : undefined,
+    query: typeof err.query === 'string' ? err.query : undefined,
+  };
+}
+
 export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((err: FastifyError | OaxError | Error, req, reply) => {
     if (hasZodFastifySchemaValidationErrors(err)) {
@@ -92,7 +119,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
         .status(fe.statusCode)
         .send({ error: fe.code ?? 'bad_request', message: fe.message });
     }
-    req.log.error({ err }, 'unhandled error');
+    req.log.error({ err: loggableError(err) }, 'unhandled error');
     return reply.status(500).send({ error: 'internal_error', message: 'internal server error' });
   });
 }

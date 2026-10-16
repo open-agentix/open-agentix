@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+import { buildApp } from '../src/http/app.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/db/schema.js';
 import { resetTelemetryRuntime } from '../src/telemetry.js';
@@ -173,6 +174,48 @@ describe('a canary comment through every operation', () => {
     expect(leaking.length).toBeGreaterThan(0); // the thread endpoints do return it
     for (const r of responses.slice(-4)) expect(r).not.toContain(CANARY);
     expect(joined).not.toContain('x'.repeat(200));
+  });
+});
+
+describe('a failing database statement', () => {
+  it('logs no comment text and answers with a plain 500', async () => {
+    const sink: string[] = [];
+    // an app whose request log (where a 500 is logged) is captured, on the same node
+    const logged = await buildApp({
+      ctx: { ...n.ctx, config: { ...n.ctx.config, logLevel: 'trace' } },
+      services: n.services,
+      logSink: { write: (line: string) => void sink.push(line) } as never,
+    });
+    const created = await call(author, 'POST', '/v1/agents', {
+      source: agentSource('canary-db-agent', 'team-c', '1.0.0'),
+    });
+    const review = (
+      await call(author, 'POST', `/v1/agents/${(created.json() as Json).id}/reviews`)
+    ).json() as Json;
+    // every insert of a comment now fails inside the database, after drizzle bound its parameters
+    await n.ctx.db.execute(
+      sql`create function oax_test_boom() returns trigger as $$ begin raise exception 'boom'; end; $$ language plpgsql`,
+    );
+    await n.ctx.db.execute(
+      sql`create trigger oax_test_boom before insert on agent_review_comments for each row execute function oax_test_boom()`,
+    );
+    try {
+      const res = await logged.inject({
+        method: 'POST',
+        url: `/v1/reviews/${review.id}/threads`,
+        headers: { authorization: `Bearer ${reviewer}` },
+        payload: { body: `${CANARY} db` },
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain(CANARY);
+    } finally {
+      await n.ctx.db.execute(sql`drop trigger oax_test_boom on agent_review_comments`);
+      await n.ctx.db.execute(sql`drop function oax_test_boom()`);
+      await logged.close();
+    }
+    const text = sink.join('\n');
+    expect(text, 'the failure is logged').toContain('database statement failed');
+    expect(text).not.toContain(CANARY);
   });
 });
 
