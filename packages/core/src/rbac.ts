@@ -242,6 +242,8 @@ export interface Principal extends TenantActor {
   authzEpoch?: number | undefined;
   /** API tokens may be restricted to a subset of permissions; `undefined` = no restriction. */
   scopes?: readonly Permission[] | undefined;
+  /** Id of the token the request was authenticated with (session or API token); never the secret. */
+  tokenId?: string | undefined;
 }
 
 /** The tenant the principal belongs to, whichever node it currently acts in. */
