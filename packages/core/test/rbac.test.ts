@@ -169,7 +169,10 @@ describe('use-case bindings (slice S8)', () => {
     const p = user([{ role: 'viewer', teamId: 'sec' }, uc('operator', 'ops')]);
     expect(hasPermissionIn(p, 'runs:read', { teamId: 'sec', useCase: 'other' })).toBe(true);
     expect(hasPermissionIn(p, 'runs:execute', { teamId: 'sec', useCase: 'other' })).toBe(false);
-    expect(hasPermissionIn(p, 'runs:execute', { teamId: 'x', useCase: 'ops/oncall' })).toBe(true);
+    expect(hasPermissionIn(p, 'runs:execute', { useCase: 'ops/oncall' })).toBe(true);
+    // on an agent of a team a use-case binding gives the read side only
+    expect(hasPermissionIn(p, 'runs:execute', { teamId: 'x', useCase: 'ops/oncall' })).toBe(false);
+    expect(hasPermissionIn(p, 'runs:read', { teamId: 'x', useCase: 'ops/oncall' })).toBe(true);
   });
 
   it('honour token scopes and the use-case permission list', () => {
