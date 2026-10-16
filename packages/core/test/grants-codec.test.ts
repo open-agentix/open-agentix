@@ -287,3 +287,36 @@ describe('raw grants cache representation', () => {
     });
   });
 });
+
+describe('role restrictions on the wire (slice S9)', () => {
+  const restriction = {
+    tenantId: CHILD,
+    role: 'operator' as Role,
+    permission: 'runs:approve' as const,
+  };
+  const base = () => {
+    const g = loaded([grant('viewer')]);
+    return serializeGrants({ ...g, raw: { ...g.raw, restrictions: [restriction] } });
+  };
+
+  it('survive a JSON round trip', () => {
+    const back = reviveGrants(viaJson(base()), { userId: 'u1' });
+    expect(back?.raw.restrictions).toEqual([restriction]);
+  });
+
+  it('make the whole entry unusable when one is not exactly a restriction', () => {
+    for (const bad of [
+      { ...restriction, role: 'nope' },
+      { ...restriction, permission: 'runs:fly' },
+      { ...restriction, tenantId: '' },
+      'x',
+    ]) {
+      const w = viaJson(base()) as { raw: { restrictions: unknown[] } };
+      w.raw.restrictions.push(bad);
+      expect(reviveGrants(w, { userId: 'u1' })).toBeUndefined();
+    }
+    const w = viaJson(base()) as { raw: { restrictions?: unknown } };
+    delete w.raw.restrictions;
+    expect(reviveGrants(w, { userId: 'u1' })).toBeUndefined();
+  });
+});

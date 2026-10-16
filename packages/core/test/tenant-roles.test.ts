@@ -1072,3 +1072,189 @@ describe('property: the attach invariant (ADR 0014 section 13)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------- slice S9: role restrictions
+
+describe('role restrictions carried in the raw grants (ADR 0014 section 5, slice S9)', () => {
+  const restrict = (tenantId: string, role: Role, permission: Permission): RoleRestriction => ({
+    tenantId,
+    role,
+    permission,
+  });
+
+  it('raw.restrictions and opts.restrictions are the same thing (seeds 1..200)', () => {
+    for (const seed of SEEDS) {
+      const c = randomCase(seed);
+      const viaRaw: RawGrants = { ...c.raw, restrictions: c.restrictions };
+      for (const n of c.nodes)
+        expect(
+          bindingFingerprint(effectiveAt(viaRaw, n, { now: NOW })),
+          `seed ${seed} node ${n.id}`,
+        ).toEqual(
+          bindingFingerprint(effectiveAt(c.raw, n, { now: NOW, restrictions: c.restrictions })),
+        );
+    }
+  });
+
+  it('agree with the naive reference when they come with the grants (seeds 1..200)', () => {
+    for (const seed of SEEDS) {
+      const c = randomCase(seed);
+      const raw: RawGrants = { ...c.raw, restrictions: c.restrictions };
+      for (const n of c.nodes)
+        expect(permsOf(effectiveAt(raw, n, { now: NOW })), `seed ${seed} node ${n.id}`).toEqual(
+          naivePermissions(c.byId, raw, n, NOW, c.restrictions),
+        );
+    }
+  });
+
+  it('never add a permission and never touch platform admins or admin (seeds 1..200)', () => {
+    for (const seed of SEEDS) {
+      const c = randomCase(seed);
+      // Every role, every permission, on every node: the harshest restriction list there is.
+      const everything: RoleRestriction[] = [];
+      for (const n of c.nodes)
+        for (const role of ROLES)
+          for (const p of PERMISSIONS) everything.push(restrict(n.id, role, p));
+      const admins: RawGrants = { ...c.raw, platformAdmin: true, restrictions: everything };
+      const plain: RawGrants = { ...c.raw, restrictions: everything };
+      for (const n of c.nodes) {
+        const op = effectiveAt(admins, n, { now: NOW });
+        expect(op, `seed ${seed} platform`).toHaveLength(1);
+        expect(permsOf(op)).toEqual(PERMISSIONS);
+        const open = permsOf(effectiveAt(c.raw, n, { now: NOW }));
+        const shut = effectiveAt(plain, n, { now: NOW });
+        for (const p of permsOf(shut)) expect(open, `seed ${seed} node ${n.id}`).toContain(p);
+        // Whatever is left comes from an admin binding and nothing else.
+        for (const b of shut)
+          if (b.role !== 'admin') expect(bindingPermissions(b), `seed ${seed}`).toEqual([]);
+      }
+    }
+  });
+
+  it('narrow only bindings bound at the restricting node or below (seeds 1..200)', () => {
+    for (const seed of SEEDS) {
+      const c = randomCase(seed);
+      const r = rng(seed * 7919);
+      const at = r.pick(c.nodes);
+      const role = r.pick(ROLES.filter((x) => x !== 'admin'));
+      const restriction = restrict(at.id, role, r.pick(ROLE_PERMISSIONS[role]));
+      for (const n of c.nodes) {
+        const before = appliedAt(c.raw, n, { now: NOW });
+        const after = appliedAt(c.raw, n, { now: NOW, restrictions: [restriction] });
+        expect(after).toHaveLength(before.length);
+        before.forEach((b, i) => {
+          const a = after[i]!;
+          const anchor = c.byId.get(b.tenantId)!;
+          const narrowed = a.permissions.length !== b.permissions.length;
+          // The restricting node is the binding's node or an ancestor of it, nothing else.
+          if (narrowed)
+            expect(anchor.path.startsWith(at.path), `seed ${seed} node ${n.id}`).toBe(true);
+          if (!anchor.path.startsWith(at.path))
+            expect(a.permissions, `seed ${seed} node ${n.id}`).toEqual(b.permissions);
+        });
+      }
+    }
+  });
+
+  it('explain what they removed: permissions plus restrictedBy are the role (seeds 1..200)', () => {
+    for (const seed of SEEDS) {
+      const c = randomCase(seed);
+      const raw: RawGrants = { ...c.raw, restrictions: c.restrictions };
+      for (const n of c.nodes)
+        for (const b of appliedAt(raw, n, { now: NOW })) {
+          const scoped = b.useCase !== null && b.source === 'direct';
+          const role = ROLE_PERMISSIONS[b.role].filter(
+            (p) => !scoped || USE_CASE_PERMISSIONS.includes(p),
+          );
+          const removed = b.restrictedBy.map((x) => x.permission);
+          expect([...b.permissions, ...removed].sort(), `seed ${seed} ${b.role}`).toEqual(
+            [...role].sort(),
+          );
+          for (const x of b.restrictedBy) {
+            // the restricting node is on the chain of the binding's node and restricts exactly this
+            const anchor = c.byId.get(b.tenantId)!;
+            expect(anchor.path.includes(x.tenantId), `seed ${seed}`).toBe(true);
+            expect(
+              c.restrictions.some(
+                (q) =>
+                  q.tenantId === x.tenantId && q.role === b.role && q.permission === x.permission,
+              ),
+            ).toBe(true);
+          }
+        }
+    }
+  });
+
+  describe('the interplay with bindings from above (documented behaviour)', () => {
+    const root: Node = {
+      id: 'aaaaaaaa-0000-4000-8000-0000000000a1',
+      rootId: '',
+      path: '',
+      parentId: null,
+    };
+    root.rootId = root.id;
+    root.path = `/${root.id}/`;
+    const child = (id: string, parent: Node): Node => ({
+      id,
+      rootId: parent.rootId,
+      path: `${parent.path}${id}/`,
+      parentId: parent.id,
+    });
+    const a = child('aaaaaaaa-0000-4000-8000-0000000000a2', root);
+    const a1 = child('aaaaaaaa-0000-4000-8000-0000000000a3', a);
+    const r = [restrict(a.id, 'operator', 'runs:approve')];
+
+    it('a restriction at a node does not narrow the same role inherited from above it', () => {
+      const raw = rawOf(root, {
+        nodeBindings: [grant(root.id, 'operator', { inherit: true }), grant(a.id, 'operator')],
+        restrictions: r,
+      });
+      const here = appliedAt(raw, a, { now: NOW });
+      // the binding bound at `a` is narrowed ...
+      expect(here.find((b) => b.tenantId === a.id)!.permissions).not.toContain('runs:approve');
+      // ... the one from above is not, so the user still holds the permission at `a` and below.
+      expect(here.find((b) => b.tenantId === root.id)!.permissions).toContain('runs:approve');
+      expect(permsOf(effectiveAt(raw, a, { now: NOW }))).toContain('runs:approve');
+      expect(permsOf(effectiveAt(raw, a1, { now: NOW }))).toContain('runs:approve');
+    });
+
+    it('without the binding from above the permission is gone at the node and below', () => {
+      const raw = rawOf(root, {
+        nodeBindings: [grant(a.id, 'operator', { inherit: true })],
+        restrictions: r,
+      });
+      expect(permsOf(effectiveAt(raw, a, { now: NOW }))).not.toContain('runs:approve');
+      expect(permsOf(effectiveAt(raw, a1, { now: NOW }))).not.toContain('runs:approve');
+      const [b] = appliedAt(raw, a1, { now: NOW });
+      expect(b!.restrictedBy).toEqual([{ permission: 'runs:approve', tenantId: a.id }]);
+    });
+
+    it('name the deepest restricting node when several remove the same permission', () => {
+      const raw = rawOf(root, {
+        nodeBindings: [grant(a1.id, 'operator')],
+        restrictions: [
+          restrict(root.id, 'operator', 'runs:approve'),
+          restrict(a.id, 'operator', 'runs:approve'),
+        ],
+      });
+      const [b] = appliedAt(raw, a1, { now: NOW });
+      expect(b!.restrictedBy).toEqual([{ permission: 'runs:approve', tenantId: a.id }]);
+    });
+
+    it('do not apply to a use-case binding in an attached node (unrestricted there)', () => {
+      const raw = rawOf(root, {
+        nodeBindings: [
+          grant(root.id, 'operator', {
+            useCase: 'security',
+            inherit: true,
+            attachedNodeIds: [a.id],
+          }),
+        ],
+        restrictions: [restrict(a.id, 'operator', 'runs:approve')],
+      });
+      const [b] = appliedAt(raw, a1, { now: NOW });
+      expect(b).toMatchObject({ source: 'attached' });
+      expect(b!.permissions).toContain('runs:approve');
+    });
+  });
+});
