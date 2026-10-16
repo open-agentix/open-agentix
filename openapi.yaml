@@ -3109,6 +3109,112 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /v1/agents/{id}/versions/{version}/awp:
+    get:
+      summary: Export a published version as an AWP manifest
+      tags:
+        - agents
+      description: The effective manifest of the stored version as an AWP v1alpha1 Workflow, built to the pinned AWP schema (a draft; this is a mapping, not a conformance claim). Computed from the stored definition, so every call returns the same bytes (RFC 8785 form, `metadata.integrity.digest` per AWP spec 9.1). The header `x-oax-source-digest` carries the digest of the agents.md source. Bytes are recomputed from the stored definition; a later exporter version may change them. Restrictions AWP v1alpha1 cannot express (argument constraints, call limits, conditions, handovers, runner, ...) refuse the export with 422 `awp_export_refused` and one finding per field; nothing is dropped silently. An agent without a team (or whose owner slug is not its team), and a wildcard grant without a recorded approved snapshot, are refused too.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+          in: path
+          name: version
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: "AWP manifest (kind Workflow, API version v1alpha1, a draft) built to the pinned AWP JSON Schema. A mapping of the stored definition, not a conformance claim. Serialised in RFC 8785 form: `metadata.integrity.digest` is the SHA-256 of these bytes without `metadata.integrity`."
+          content:
+            application/json:
+              schema:
+                type: object
+                propertyNames:
+                  type: string
+                additionalProperties: {}
+                description: "AWP manifest (kind Workflow, API version v1alpha1, a draft) built to the pinned AWP JSON Schema. A mapping of the stored definition, not a conformance claim. Serialised in RFC 8785 form: `metadata.integrity.digest` is the SHA-256 of these bytes without `metadata.integrity`."
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details:
+                    type: object
+                    properties:
+                      findings:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            code:
+                              type: string
+                              description: stable finding code, e.g. critical_extension, owner_team_required
+                            path:
+                              type: string
+                              description: path of the source field in the stored definition
+                            message:
+                              type: string
+                            field:
+                              description: "critical_extension: the source field"
+                              type: string
+                            extension:
+                              description: "critical_extension: the extension that would carry it"
+                              type: string
+                          required:
+                            - code
+                            - path
+                            - message
+                          additionalProperties: false
+                    required:
+                      - findings
+                    additionalProperties: false
+                required:
+                  - error
+                  - message
+                  - details
+                additionalProperties: false
   /v1/agents/{id}/members:
     get:
       summary: Users with a role on this agent only (agent-scoped bindings)

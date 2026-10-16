@@ -38,6 +38,7 @@ const SCOPED = [
   'POST /v1/agents/:id/enable',
   'GET /v1/agents/:id/versions',
   'GET /v1/agents/:id/versions/:version',
+  'GET /v1/agents/:id/versions/:version/awp',
   // draft revisions and reviews (ADR 0017 S1): through the agent, like its versions
   'GET /v1/agents/:id/revisions',
   'GET /v1/agents/:id/revisions/:seq',

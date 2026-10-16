@@ -1,0 +1,68 @@
+{
+  "apiVersion": "awp.agenticworkflowprotocol.org/v1alpha1",
+  "kind": "Workflow",
+  "metadata": {
+    "name": "log-reader",
+    "version": "1.0.0",
+    "description": "Summarise recent log lines of a service (read tools only).",
+    "owner": {
+      "team": "team-ops"
+    },
+    "classification": "internal",
+    "integrity": {
+      "digest": "sha256:f46509782656167596ba9eeb65e9202173aa636c8d96058146e3dc0f45d6d3fe"
+    }
+  },
+  "spec": {
+    "triggers": [
+      {
+        "type": "manual"
+      }
+    ],
+    "budget": {
+      "resources": {
+        "maxTokens": 10000
+      }
+    },
+    "agents": [
+      {
+        "id": "reader",
+        "model": {
+          "provider": "simulated",
+          "name": "sim-1"
+        },
+        "instructions": "Summarise the log lines you can read. Name the three most frequent errors.",
+        "tools": [
+          {
+            "type": "mcp",
+            "server": "logs",
+            "tools": ["get_errors", "get_lines"]
+          }
+        ],
+        "permissions": {
+          "default": "deny",
+          "tools": {
+            "logs.get_errors": {
+              "allow": true
+            },
+            "logs.get_lines": {
+              "allow": true
+            }
+          }
+        }
+      }
+    ],
+    "workflow": [
+      {
+        "id": "reader",
+        "type": "agent",
+        "agent": "reader",
+        "outputs": [
+          {
+            "name": "result"
+          }
+        ]
+      }
+    ]
+  }
+}

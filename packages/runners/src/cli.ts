@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { PolicyBundleSchema, PriceTableSchema, validateAgentSource } from '@openagentix/core';
 import { parseProviderConfigs } from '@openagentix/providers';
+import { AWP_USAGE, runAwpCommand } from './cli-awp.js';
 import { PLAN_USAGE, runPlanCommand } from './cli-plan.js';
 import { createHarness } from './harness.js';
 import { runLocal } from './local.js';
@@ -24,6 +25,7 @@ Usage:
   oax run <agents.md> --event <event.json> [options]
   oax validate <agents.md>
   oax plan check|generate <plan.yaml> (see "oax plan --help")
+  oax awp export <agents.md> (see "oax awp --help")
   oax --version
 
 Options for "run":
@@ -56,6 +58,7 @@ function parseArgs(argv: string[]): {
         key === 'json' ||
         key === 'version' ||
         key === 'help' ||
+        key === 'canonical' ||
         next === undefined ||
         next.startsWith('--')
       )
@@ -86,6 +89,10 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
     io.out(USAGE + PLAN_USAGE);
     return 0;
   }
+  if (cmd === 'awp' && flags.help) {
+    io.out(USAGE + AWP_USAGE);
+    return 0;
+  }
   if (!cmd || flags.help) {
     io.out(USAGE);
     return cmd ? 0 : 2;
@@ -100,6 +107,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       return r.valid ? 0 : 1;
     }
     if (cmd === 'plan') return await runPlanCommand(file, file2, flags, io);
+    if (cmd === 'awp') return await runAwpCommand(file, file2, flags, io);
     if (cmd !== 'run') {
       io.err(`unknown command "${cmd}"`);
       io.out(USAGE);

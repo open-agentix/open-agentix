@@ -69,6 +69,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **AWP manifest exporter (AWP-2, #255)**: `GET /v1/agents/{id}/versions/{version}/awp` exports a
+  published agent version, and `oax awp export <agents.md>` a file as parsed, as an AWP `v1alpha1`
+  `Workflow` manifest built to the pinned schema, with a JCS digest in `metadata.integrity.digest`,
+  `metadata.owner.team` and operational `x-openagentix-*` extensions. AWP is a draft and openagentix is
+  **not** conformant to any profile: the output is a mapping, not a conformance claim. Fail closed: limits
+  that AWP cannot express yet (`when`, handovers, `args`, `allowAdditionalArgs`, `maxCallsPerRun`, grant
+  `classification`, `access`, runner/toolbox, `guidelines`) refuse the export with one finding per field
+  (`422 awp_export_refused`) until the pinned AWP version has `metadata.requiredExtensions`; an agent
+  without a team is refused (`owner_team_required`). Publish now records the enumeration of wildcard grants
+  (`definition.wildcardExpansion`) from the approved snapshot of a pinned connection; exports never contain a wildcard, and a
+  wildcard without a recorded list is refused. See [docs/awp.md](docs/awp.md).
+
 - **Vendored AWP schema and conformance suite with an offline pin check (#254)**: `packages/awp/vendor/awp-v1alpha1/`
   holds a byte-identical copy of the AWP draft (`v1alpha1`) JSON Schema and conformance suite at a pinned
   upstream commit, with `PROVENANCE.json` (source URL, commit SHA, retrieval date, licence and SHA-256 per file).
