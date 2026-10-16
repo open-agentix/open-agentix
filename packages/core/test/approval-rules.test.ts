@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   REFUSAL_STATUS,
+  ROLE_PERMISSIONS,
+  USE_CASE_PERMISSIONS,
   checkApprover,
   collectContributors,
   declaredSecretReferences,
+  expandProfiles,
+  loadAgentDefinition,
   requiredApprovals,
   reviewState,
   secretResolutionDigest,
   summariseDecisions,
+  type AccessCatalog,
   type ApprovalContext,
   type ApproverBinding,
   type ApproverFacts,
@@ -451,5 +456,70 @@ describe('secret resolution digest', () => {
         ],
       }),
     ).toEqual(['x', 'y']);
+  });
+});
+
+describe('the expansion digest an approval binds to', () => {
+  const catalog = (profile: string[], extra: Record<string, unknown> = {}) =>
+    ({
+      jira: {
+        tools: { get_issue: 'read', search_issues: 'read', create_issue: 'write' },
+        profiles: { read: profile },
+        version: 'v1',
+      },
+      ...extra,
+    }) as unknown as AccessCatalog;
+  const src = (eol = '\n') =>
+    [
+      '---',
+      'apiVersion: openagentix.io/v1alpha1',
+      'kind: Agent',
+      'name: bound',
+      'version: 1.0.0',
+      'owner: team-security',
+      'agents:',
+      '  - id: a',
+      '    provider: simulated',
+      '    model: sim-1',
+      '    instructions: Do the work.',
+      '    access: read-only',
+      '    tools:',
+      '      - { server: jira, profile: read }',
+      '---',
+      'Do the work.',
+      '',
+    ].join(eol);
+  const digestOf = (source: string, cat: AccessCatalog) =>
+    expandProfiles(loadAgentDefinition(source), cat).definition.expansionDigest;
+
+  it('does not depend on how the source is written', () => {
+    const cat = catalog(['get_issue', 'search_issues']);
+    expect(digestOf(src('\r\n'), cat)).toBe(digestOf(src('\n'), cat));
+  });
+  it('changes when a profile widens, so the approval of the concrete tools goes stale', () => {
+    const before = digestOf(src(), catalog(['get_issue']));
+    const after = digestOf(src(), catalog(['get_issue', 'search_issues']));
+    expect(after).not.toBe(before);
+  });
+  it('does not change when an unrelated connection appears in the catalog', () => {
+    const base = digestOf(src(), catalog(['get_issue']));
+    const other = catalog(['get_issue'], {
+      github: { tools: { list: 'read' }, profiles: { read: ['list'] }, version: 'v9' },
+    });
+    expect(digestOf(src(), other)).toBe(base);
+  });
+});
+
+describe('who can hold the permissions of the approval flow', () => {
+  it('read-only roles hold neither agents:write nor agents:approve', () => {
+    for (const role of ['viewer', 'pentest', 'auditor', 'integrator'] as const) {
+      expect(ROLE_PERMISSIONS[role], role).not.toContain('agents:write');
+      expect(ROLE_PERMISSIONS[role], role).not.toContain('agents:approve');
+      expect(ROLE_PERMISSIONS[role], role).not.toContain('agents:publish');
+    }
+  });
+  it('keeps agents:review, agents:approve and agents:rules out of the use-case permissions (fail closed, #336 item 7)', () => {
+    for (const p of ['agents:review', 'agents:approve', 'agents:rules'] as const)
+      expect(USE_CASE_PERMISSIONS).not.toContain(p);
   });
 });

@@ -141,6 +141,11 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
  * administrator grants roles for the own use case, rule 3). Everything else (connections, sources,
  * policies, tokens, settings, audit verification) belongs to the whole node: a use-case binding
  * never carries it.
+ *
+ * `agents:review`, `agents:approve` and `agents:rules` are deliberately **not** in this list (ADR 0017
+ * S1, follow-up #336 item 7): a maintainer who holds the role through a use case only cannot decide
+ * a review or manage agent rules. That is fail closed on purpose; granting them per use case is a
+ * decision of its own, taken together with the use-case scoping of agent rules (ADR 0017 S8).
  */
 export const USE_CASE_PERMISSIONS: readonly Permission[] = [
   'agents:read',
