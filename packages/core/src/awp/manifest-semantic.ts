@@ -85,6 +85,8 @@ function forEachNode(root: unknown, fn: (node: unknown, path: (string | number)[
 export interface SemanticOptions {
   profiles: ReadonlySet<string>;
   verifyDigest: boolean;
+  /** Stop collecting after this many findings (a hostile document must not cost more than that). */
+  maxFindings?: number;
 }
 
 interface Doc extends Obj {
@@ -99,6 +101,7 @@ interface Doc extends Obj {
 export function semanticFindings(doc: Doc, opts: SemanticOptions): ManifestFinding[] {
   const out: ManifestFinding[] = [];
   const { profiles } = opts;
+  const cap = opts.maxFindings ?? Number.POSITIVE_INFINITY;
   const add = (
     severity: ManifestFinding['severity'],
     code: string,
@@ -106,7 +109,7 @@ export function semanticFindings(doc: Doc, opts: SemanticOptions): ManifestFindi
     path: string,
     message: string,
   ): void => {
-    out.push({ severity, code, message, path, section });
+    if (out.length < cap) out.push({ severity, code, message, path, section });
   };
   const err = (code: string, section: string, path: string, message: string): void =>
     add('error', code, section, path, message);
@@ -465,7 +468,8 @@ export function semanticFindings(doc: Doc, opts: SemanticOptions): ManifestFindi
         }
         const d = list[frame.next++]!;
         if (state.get(d) === 1) {
-          const cyc = [...stack.slice(stack.indexOf(d)), d];
+          // the message lists the cycle: build it only for a finding that is kept
+          const cyc = out.length < cap ? [...stack.slice(stack.indexOf(d)), d] : [];
           err(
             'dependsOn.cycle',
             '5.6.3',

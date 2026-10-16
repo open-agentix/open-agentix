@@ -30,6 +30,9 @@ export const AWP_LIMITS = {
   maxDocuments: 16,
   /** Nesting depth; RFC 8785 canonicalization (the digest) allows 64 as well. */
   maxDepth: 64,
+  /** Workflow steps and agents per document: closures and cycle search are quadratic in them. */
+  maxSteps: 1000,
+  maxAgents: 1000,
   /** YAML aliases (`*name`), counted with their expansion by the parser. */
   maxAliasCount: 50,
   /** Findings returned; more are replaced by one `limit.findings` entry. */

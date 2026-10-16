@@ -41,6 +41,25 @@ export function metadataProperties(schema: Record<string, unknown>): string[] {
   return Object.keys(defs?.Metadata?.properties ?? {});
 }
 
+/**
+ * Closures and cycle search of a workflow are quadratic in its steps, so a document with more steps
+ * or agents than the limit is refused before the semantic rules run (a deliberate divergence from
+ * the reference checker, which has no limit; within the limits the findings are identical).
+ */
+function countLimit(doc: JsonObject): ManifestFinding | null {
+  const spec = doc.spec as { workflow?: unknown[]; agents?: unknown[] } | undefined;
+  if (doc.kind !== 'Workflow' || !spec) return null;
+  if ((spec.workflow?.length ?? 0) > AWP_LIMITS.maxSteps)
+    return error(
+      'limit.steps',
+      '/spec/workflow',
+      `more than ${AWP_LIMITS.maxSteps} workflow steps`,
+    );
+  if ((spec.agents?.length ?? 0) > AWP_LIMITS.maxAgents)
+    return error('limit.steps', '/spec/agents', `more than ${AWP_LIMITS.maxAgents} agents`);
+  return null;
+}
+
 const hasErrors = (findings: ManifestFinding[]): boolean =>
   findings.some((f) => f.severity === 'error');
 
@@ -95,6 +114,11 @@ export function validateManifestValue(
   if (structural.length > 0) return finish(null);
 
   const doc = value as JsonObject;
+  const tooMany = countLimit(doc);
+  if (tooMany) {
+    findings.push(tooMany);
+    return finish(null);
+  }
   let digest: string | null = null;
   let verifyDigest = options.verifyDigest ?? true;
   try {
@@ -119,6 +143,7 @@ export function validateManifestValue(
     ...semanticFindings(doc, {
       profiles: new Set<string>(options.profiles ?? SUPPORTED_AWP_PROFILES),
       verifyDigest,
+      maxFindings: AWP_LIMITS.maxFindings + 1,
     }),
   );
   return finish(digest);

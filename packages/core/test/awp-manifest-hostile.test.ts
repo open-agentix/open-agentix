@@ -42,6 +42,8 @@ describe('size and structure limits', () => {
       maxNodes: 50_000,
       maxDocuments: 16,
       maxDepth: 64,
+      maxSteps: 1000,
+      maxAgents: 1000,
       maxAliasCount: 50,
       maxFindings: 200,
     });
@@ -275,34 +277,75 @@ describe('inputs that try to make the validator slow or crash', () => {
     expect(codes(doc(JSON.stringify(m)))).toEqual(['input.pattern-invalid']);
   });
 
-  it('a dependency chain of thousands of steps and a long cycle do not overflow the stack', () => {
-    const n = 4000;
+  const chain = (n: number, expressions: boolean, closeCycle = false): JsonObject => {
     const steps = Array.from({ length: n }, (_, i) => ({
       id: `s${i}`,
       agent: 'a',
-      ...(i > 0 ? { dependsOn: [`s${i - 1}`] } : {}),
+      ...(expressions ? { outputs: [{ name: 'r' }] } : {}),
+      ...(i > 0
+        ? {
+            dependsOn: [`s${i - 1}`],
+            ...(expressions ? { task: `\${{ steps.s${i - 1}.outputs.r }}` } : {}),
+          }
+        : closeCycle
+          ? { dependsOn: [`s${n - 1}`] }
+          : {}),
     }));
     const m = valid();
     (m.spec as JsonObject).workflow = steps;
-    expect(timed(() => doc(JSON.stringify(m))).valid).toBe(true);
-    steps[0]!.dependsOn = [`s${n - 1}`] as never;
-    const r = timed(() => doc(JSON.stringify(m)));
+    return m;
+  };
+  const cheap = <T>(fn: () => T, maxMs: number, maxRssMb: number): T => {
+    const before = process.memoryUsage().rss;
+    const t0 = performance.now();
+    const out = fn();
+    expect(performance.now() - t0).toBeLessThan(maxMs);
+    expect((process.memoryUsage().rss - before) / 1e6).toBeLessThan(maxRssMb);
+    return out;
+  };
+
+  it('a chain at the step limit is checked completely, in bounded time and memory', () => {
+    const n = AWP_LIMITS.maxSteps;
+    expect(cheap(() => doc(JSON.stringify(chain(n, true))), 2500, 250).valid).toBe(true);
+    const r = cheap(() => doc(JSON.stringify(chain(n, true, true))), 2500, 250);
     expect(codes(r)).toContain('dependsOn.cycle');
   });
 
-  it('many expression references to long chains stay fast (closures are memoised)', () => {
-    const n = 1500;
-    const steps = Array.from({ length: n }, (_, i) => ({
-      id: `s${i}`,
-      agent: 'a',
-      outputs: [{ name: 'result' }],
-      ...(i > 0
-        ? { dependsOn: [`s${i - 1}`], task: `\${{ steps.s${i - 1}.outputs.result }}` }
-        : {}),
-    }));
+  it('a workflow above the step limit is refused before the quadratic rules run (3000 with expressions, 5000 with a cycle)', () => {
+    for (const n of [AWP_LIMITS.maxSteps + 1, 3000, 5000]) {
+      const text = JSON.stringify(chain(n, n < 5000, n === 5000));
+      expect(text.length).toBeLessThan(AWP_LIMITS.maxSourceBytes);
+      const r = cheap(() => doc(text), 1500, 150);
+      expect(codes(r)).toEqual(['limit.steps']);
+      expect(r.findings[0]!.path).toBe('/spec/workflow');
+    }
+  });
+
+  it('too many agents are refused the same way', () => {
     const m = valid();
-    (m.spec as JsonObject).workflow = steps;
-    expect(timed(() => doc(JSON.stringify(m))).valid).toBe(true);
+    (m.spec as { agents: JsonObject[] }).agents = Array.from(
+      { length: AWP_LIMITS.maxAgents + 1 },
+      (_, i) => ({ id: `a${i}`, model: { provider: 'p', name: 'm' } }),
+    );
+    expect(codes(cheap(() => doc(JSON.stringify(m)), 1500, 150))).toEqual(['limit.steps']);
+  });
+
+  it('many back edges cost no more than the finding cap (no per-edge cycle message)', () => {
+    const n = 200;
+    const ids = Array.from({ length: n }, (_, i) => `s${i}`);
+    const m = valid();
+    (m.spec as JsonObject).workflow = ids.map((id) => ({ id, agent: 'a', dependsOn: ids }));
+    const r = cheap(() => doc(JSON.stringify(m)), 2500, 250);
+    expect(r.findings.length).toBeLessThanOrEqual(AWP_LIMITS.maxFindings + 1);
+    expect(r.findings.at(-1)!.code).toBe('limit.findings');
+    expect(r.valid).toBe(false);
+  });
+
+  it('keeps the invariant that makes EXPR_RE safe: the schema pattern rejects a malformed expression first', () => {
+    const m = valid();
+    (m.spec as { workflow: JsonObject[] }).workflow[0]!.task = '${{ inputs.x '.repeat(30_000);
+    const r = cheap(() => doc(JSON.stringify(m)), 3000, 250);
+    expect(codes(r)).toEqual(['schema.pattern']);
   });
 
   it('control characters, NUL and byte order marks do not crash', () => {
