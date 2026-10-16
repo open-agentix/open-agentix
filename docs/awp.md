@@ -206,8 +206,8 @@ schema of this repository.
 # API: same endpoint as for agents.md; the response says how the source was read
 POST /v1/agents/validate        { "source": "<agents.md, JSON or YAML text>" }   -> format: "awp" | "agents-md"
 
-# CLI: *.awp.yaml, *.awp.json (and .yaml/.yml/.json) are read as AWP; an .md file is read as AWP when its
-# front matter says apiVersion: awp.…, otherwise as the legacy agents.md
+# CLI: only *.awp.yaml, *.awp.yml and *.awp.json are AWP documents (size checked before reading); an .md file
+# is read as AWP when its front matter says apiVersion: awp.…, otherwise as the legacy agents.md
 oax validate examples/awp/ticket-updater.awp.md
 ```
 
@@ -272,12 +272,26 @@ findings, and `awp-manifest-conformance.test.ts` runs every vendored `valid/` an
   field, the same code switches on: every listed name must be known (`extension.required-unknown`, other
   vendors' names are refused because they cannot be honoured) and every critical extension must be listed
   (`extension.required-missing`); tests run this with a schema that has the field.
-- **Limits** for untrusted input (`AWP_LIMITS`): 512 KiB of source, 50 000 nodes, depth 64, 50 YAML aliases
-  (counted with their expansion), 16 documents, 200 findings. No custom tags, no non-string keys, no
-  duplicate keys, no cycles, no `.inf`/`.nan`, no integers beyond 2^53, JSON read by the same YAML
-  parser, YAML 1.2 core schema (so `<<` merge keys are an unknown field). The cycle search is iterative; a
-  hostile document never throws. Prototype-polluting keys (`__proto__`, `constructor`) are plain data and,
-  where the schema is closed, unknown fields.
+- **Limits** for untrusted input (`AWP_LIMITS`): 512 KiB of source, 50 000 nodes (shared across the documents
+  of a file), depth 64, 1000 workflow steps and 1000 agents, 16 documents, 200 findings, and 50 YAML aliases
+  in the parser's accounting (the expansion of aliases is in any case bounded by the node budget, which is
+  checked on the parsed value). No custom tags, no non-string keys, no duplicate keys, no cycles, no
+  `.inf`/`.nan`, no integers beyond 2^53, JSON read by the same YAML parser, YAML 1.2 core schema (so `<<`
+  merge keys are an unknown field). The cycle search is iterative; a hostile document never throws.
+  Prototype-polluting keys (`__proto__`, `constructor`) are plain data and, where the schema is closed,
+  unknown fields.
+- **Deliberate divergence from the reference checker.** The semantic rules for workflows are quadratic in
+  the number of steps (transitive closure for `expr.not-a-dependency`, cycle messages). A workflow with
+  more than 1000 steps or 1000 agents is therefore refused with `limit.steps` before the semantic and
+  extension rules run; within the limits the findings are identical to the vendored `semantic.mjs` (the
+  differential test). The semantic phase also stops collecting after the finding cap, and a cycle message
+  is only built for a finding that is kept. The expression scan (`EXPR_RE`) is quadratic on a malformed
+  `${{`, which is unreachable because the schema pattern for expression fields rejects such a string first;
+  `awp-manifest-hostile.test.ts` keeps that invariant under test. There is no wall-clock budget for the
+  semantic phase: the limits above bound its work instead.
+- **Rate limit.** `POST /v1/agents/validate` is limited per token or IP to `OAX_RATE_LIMIT_VALIDATE_MAX`
+  requests per minute (default 120, tighter than the global limit); it needs `agents:read` only, and a
+  validation is CPU work.
 
 ### No privilege creation
 

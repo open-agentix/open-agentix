@@ -55,7 +55,8 @@ All notable changes to this project are documented here. The format follows
   `packages/awp/extensions/openagentix-extensions.v1alpha1.json`. Fail closed: an unknown field, a field of an
   unsupported profile (`audit`, `security`, `a2a`), an unknown or misplaced `x-openagentix-*` name, an invalid
   extension value and an unknown `metadata.requiredExtensions` entry are errors; limits on size, nodes, depth,
-  YAML aliases and documents apply. The response gains `format`, `manifest` and an optional `code` per issue.
+  YAML aliases, documents, workflow steps (1000) and agents (1000, `limit.steps`) apply, and the route has its own rate
+  limit (`OAX_RATE_LIMIT_VALIDATE_MAX`, default 120 per minute). The response gains `format`, `manifest` and an optional `code` per issue.
   Validation only: an AWP manifest cannot be stored, published or run yet (`400 awp_not_runnable`), and
   nothing is granted from it. AWP is a draft and openagentix is not conformant to any profile. See
   [docs/awp.md](docs/awp.md).
