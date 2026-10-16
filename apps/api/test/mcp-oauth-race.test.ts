@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { connections, mcpOauthTokens } from '../src/db/schema.js';
+import { auditLog, connections, mcpOauthTokens } from '../src/db/schema.js';
 import { createMcpOauth, SecretRegistry } from '../src/mcp-oauth/index.js';
+import type { RenewalLimiter } from '../src/mcp-oauth/renewal-limiter.js';
 import { CREDENTIAL_LOCK_NS, lockCredential } from '../src/mcp-oauth/token-store.js';
 import { McpOauthService } from '../src/services/mcp-oauth.js';
 import { PG_URL, openPostgres, type Sql } from './db-targets.js';
@@ -206,6 +207,103 @@ describe.skipIf(!PG_URL)('renewal races on a real PostgreSQL', () => {
     expect(stale.accessTokenEnc).toBeTruthy();
     expect((await statusOf(id)).status).toBe('active');
   });
+  /** An authorization-code connection: the first grant issues a refresh token, the row is switched. */
+  async function authorizedCode() {
+    as.issueRefresh = true;
+    const c = await authorized();
+    as.issueRefresh = false;
+    await n.ctx.db
+      .update(mcpOauthTokens)
+      .set({ grantType: 'authorization_code' })
+      .where(eq(mcpOauthTokens.connectionId, c.id));
+    return c;
+  }
+  const tick = () => {
+    clock = new Date(clock.getTime() + 1_000);
+  };
+
+  it('a disconnect behind a held credential lock fails with 503 and revokes nothing', async () => {
+    const { id } = await authorized();
+    const revokedBefore = as.revoked.length;
+    const holder = await db.session!();
+    await holder.query('begin');
+    await holder.query('select pg_advisory_xact_lock($1::int, hashtext($2))', [
+      CREDENTIAL_LOCK_NS,
+      `${id}:1`,
+    ]);
+    try {
+      const res = await n.req({ method: 'POST', url: `/v1/connections/${id}/oauth/disconnect` });
+      expect(res.statusCode, res.body).toBe(503);
+      expect(res.json().error).toBe('mcp_credential_busy');
+      expect(await rows(id)).toHaveLength(1);
+      const audited = (await n.ctx.db.select().from(auditLog)).filter(
+        (a) => a.target === id && a.action === 'mcp.oauth.revoked',
+      );
+      expect(audited).toHaveLength(0);
+      expect(as.revoked).toHaveLength(revokedBefore);
+    } finally {
+      await holder.query('rollback').catch(() => undefined);
+      holder.release();
+    }
+    // once the lock is free, the same request goes through
+    const again = await n.req({ method: 'POST', url: `/v1/connections/${id}/oauth/disconnect` });
+    expect(again.statusCode, again.body).toBe(200);
+    expect(await rows(id)).toHaveLength(0);
+  }, 40_000);
+
+  it('a renewal that lost the compare-and-swap to a step-up does not clear the requirement', async () => {
+    const { id, ref } = await authorizedCode();
+    const tokens = n.services.mcpOauth.tokens;
+    const stored = (await tokens.open(ref.tenantId, id, 1))!;
+    const revoked = as.revoked.length;
+    as.latency = 400;
+    const renewing = n.services.mcpOauthFlows.refresh(ref).then(
+      () => 'ok',
+      (e: { code: string }) => e.code,
+    );
+    await sleep(150);
+    as.latency = 0;
+    tick();
+    // a 403 insufficient_scope: written without the credential lock
+    expect(
+      await tokens.requireStepUp(ref.tenantId, id, 1, stored.accessToken, ['issues.write']),
+    ).toBe(true);
+    expect(await renewing).toBe('mcp_auth_required');
+    const [row] = await rows(id);
+    expect(row!.status).toBe('reauthorization_required');
+    expect(row!.lastError).toBe('insufficient_scope');
+    expect(row!.requiredScopes).toBe('issues.write');
+    // what the server issued for the failed attempt is revoked, the access token and the refresh token
+    expect(as.revoked.length - revoked).toBeGreaterThanOrEqual(2);
+    expect((await statusOf(id)).status).toBe('reauthorization_required');
+  });
+
+  it('a rotated refresh token survives a lost compare-and-swap (authorization code)', async () => {
+    const { id, ref } = await authorizedCode();
+    const tokens = n.services.mcpOauth.tokens;
+    const before = as.tokenRequests.length;
+    const revoked = as.revoked.length;
+    const old = (await tokens.open(ref.tenantId, id, 1))!;
+    as.latency = 400;
+    const renewing = n.services.mcpOauthFlows.refresh(ref).then(
+      () => 'ok',
+      (e: { code: string }) => e.code,
+    );
+    await sleep(150);
+    as.latency = 0;
+    tick();
+    await tokens.setStatus(ref.tenantId, id, 1, 'active'); // a status-only writer, no lock
+    expect(await renewing).toBe('ok');
+    // one request only: the pair the server rotated is written by the retry, not requested again
+    expect(as.tokenRequests.length - before).toBe(1);
+    expect(as.revoked.length).toBe(revoked);
+    const now = (await tokens.open(ref.tenantId, id, 1))!;
+    expect(now.refreshToken).not.toBe(old.refreshToken);
+    expect(as.validRefresh.has(now.refreshToken!)).toBe(true);
+    expect(now.accessToken).not.toBe(old.accessToken);
+    expect(now.meta.status).toBe('active');
+    expect((await statusOf(id)).lastError).toBeNull();
+  });
 });
 
 /**
@@ -309,6 +407,17 @@ describe.skipIf(!PG_URL)('bounded renewals on a real PostgreSQL', () => {
       expect(row!.status).toBe('active');
       expect(row!.lastError).toBeNull();
     }
+    // the refused ones are not asked again within the backoff, even though slots are free now
+    const refused = conns.filter((_c, i) => out[i] === 'mcp_auth_refresh_failed');
+    const requests = as.tokenRequests.length;
+    for (const c of refused)
+      expect(
+        await svc.refresh(c.ref).then(
+          () => 'ok',
+          (e: { code: string }) => e.code,
+        ),
+      ).toBe('mcp_auth_refresh_failed');
+    expect(as.tokenRequests.length).toBe(requests);
     // the refused ones renew at the next request once the short backoff has passed
     clock = new Date(clock.getTime() + 6_000);
     for (const c of conns)
@@ -318,6 +427,38 @@ describe.skipIf(!PG_URL)('bounded renewals on a real PostgreSQL', () => {
           (e: { code: string }) => e.code,
         ),
       ).toBe('ok');
+  }, 30_000);
+
+  it('the process bound counts every tenant: other tenants holding slots leave less for this one', async () => {
+    as.expiresIn = 120;
+    const conns = [];
+    for (let i = 0; i < 3; i++) conns.push(await connect(300 + i));
+    as.expiresIn = 3600;
+    clock = new Date(clock.getTime() + 70_000);
+    const svc = n.services.mcpOauthFlows;
+    const limiter = (svc as unknown as { limiter: RenewalLimiter }).limiter;
+    // two renewals of other tenants are in flight: 2 of 3 process slots are taken
+    const others = [limiter.tryAcquire('other-tenant-a'), limiter.tryAcquire('other-tenant-b')];
+    expect(others.every(Boolean)).toBe(true);
+    try {
+      as.latency = 600;
+      const out = await Promise.all(
+        conns.map((c) =>
+          svc.refresh(c.ref).then(
+            () => 'ok',
+            (e: { code: string }) => e.code,
+          ),
+        ),
+      );
+      as.latency = 0;
+      // this tenant may use 2, the process has 1 left
+      expect(out.filter((x) => x === 'ok')).toHaveLength(1);
+      expect(out.filter((x) => x === 'mcp_auth_refresh_failed')).toHaveLength(2);
+    } finally {
+      as.latency = 0;
+      for (const release of others) release?.();
+    }
+    expect(limiter.inFlight).toBe(0);
   }, 30_000);
 
   it('a delete or update behind a held credential lock gives up with 503 instead of waiting', async () => {
@@ -343,7 +484,7 @@ describe.skipIf(!PG_URL)('bounded renewals on a real PostgreSQL', () => {
         };
         return res.rows[0]!.lock_timeout;
       });
-      expect(shown).toBe('15s');
+      expect(shown).toBe('10s');
       expect(ref.id).toBe(id);
     } finally {
       await holder.query('rollback').catch(() => undefined);

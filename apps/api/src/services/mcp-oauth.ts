@@ -1218,11 +1218,13 @@ export class McpOauthService {
     if (this.lastRefresh.size > 5000) this.lastRefresh.clear();
     const origin = this.originOf(row);
     let as: AuthServerMetadata | undefined;
+    // `updated_at` of the row as the renewal read it under the lock (the last attempt wins).
+    const seen: { at: Date } = { at: meta.updatedAt };
     try {
       as = await this.verifyPin(row, cfg, meta.issuer, meta.endpoints, origin);
       const resolver = await this.resolverOf(row);
       const client = await this.clientOf(row, cfg, resolver, meta.issuer);
-      await this.renewBounded(row, cfg, as, client, origin);
+      await this.renewBounded(row, cfg, as, client, origin, seen);
       this.ctx.metrics.oauthRefresh('ok');
       await this.audit.append({
         actor: SYSTEM_ACTOR,
@@ -1242,14 +1244,16 @@ export class McpOauthService {
           e.code === 'mcp_token_changed')
       ) {
         this.lastRefresh.delete(gapKey);
-        if (e.code !== 'mcp_token_changed')
+        if (e.code !== 'mcp_token_changed') {
+          if (this.busyUntil.size > 5000) this.busyUntil.clear();
           this.busyUntil.set(busyKey, this.ctx.now().getTime() + BUSY_BACKOFF_MS);
+        }
         this.ctx.metrics.oauthRefresh(e.code === 'mcp_token_changed' ? 'failed' : 'busy');
         throw e.code === 'mcp_token_changed'
           ? new OaxError('mcp_auth_refresh_failed', 'the access token is being renewed elsewhere')
           : busyError();
       }
-      const permanent = await this.failRefresh(row, e, meta.updatedAt);
+      const permanent = await this.failRefresh(row, e, seen.at);
       // `mcp_auth_required`: the credentials are no good until an administrator acts. The other
       // code is a failure that may pass; a token that has not expired yet is still used meanwhile.
       throw e instanceof OaxError && e.code === 'mcp_auth_required'
@@ -1326,15 +1330,16 @@ export class McpOauthService {
     as: AuthServerMetadata,
     client: ClientCredentials,
     origin: OauthOrigin,
+    seen: { at: Date },
   ): Promise<void> {
     const release = this.limiter.tryAcquire(row.tenantId);
     if (!release) throw new OaxError('mcp_renewal_busy', 'too many token renewals are running');
     try {
       try {
-        await this.renewLocked(row, cfg, as, client, origin);
+        await this.renewLocked(row, cfg, as, client, origin, seen);
       } catch (e) {
         if (!(e instanceof OaxError && e.code === 'mcp_token_changed')) throw e;
-        await this.renewLocked(row, cfg, as, client, origin);
+        await this.renewLocked(row, cfg, as, client, origin, seen);
       }
     } finally {
       release();
@@ -1358,6 +1363,7 @@ export class McpOauthService {
     as: AuthServerMetadata,
     client: ClientCredentials,
     origin: OauthOrigin,
+    seen: { at: Date },
   ): Promise<void> {
     const key = ownerKey(row.id, row.credentialVersion);
     const box: { rotation?: Rotation } = {};
@@ -1373,17 +1379,23 @@ export class McpOauthService {
         );
         if (!stored)
           throw new OaxError('mcp_auth_required', 'the connection needs to be authorized');
+        seen.at = stored.meta.updatedAt;
+        // Read under the lock: a writer that does not take it (a step-up requirement, a failure of
+        // an earlier attempt) may have changed the status since the caller looked. Only an
+        // `active` or `refresh_failed` row is renewed; anything else needs an administrator and a
+        // renewal must not write over it (the write would set the row active and clear the
+        // requirement). A pair this process still holds for the row is then of no use.
+        if (stored.meta.status !== 'active' && stored.meta.status !== 'refresh_failed') {
+          const stale = this.unpersisted.get(key);
+          if (stale) {
+            this.unpersisted.delete(key);
+            await this.revokeIssued(row, client, as.revocationEndpoint, stale.write);
+          }
+          throw new OaxError('mcp_auth_required', 'the connection needs to be authorized');
+        }
         const nowMs = this.ctx.now().getTime();
-        const exp = stored.meta.expiresAt?.getTime();
-        // Another replica renewed while this one waited for the lock: nothing left to do.
-        if (
-          stored.meta.status === 'active' &&
-          exp !== undefined &&
-          exp - nowMs > refreshSkewMs(stored.meta.updatedAt, new Date(exp)) &&
-          stored.accessToken
-        )
-          return;
-        // A pair this process obtained earlier and could not store goes first, with no request.
+        // A pair this process obtained earlier and could not store goes first, with no request
+        // (before the freshness check: the stored refresh token may already be dead).
         const held = this.unpersisted.get(key);
         if (held) {
           // The row is still the one that was rotated (a failed attempt only touches its status).
@@ -1396,6 +1408,15 @@ export class McpOauthService {
           this.unpersisted.delete(key);
           await this.revokeIssued(row, client, as.revocationEndpoint, held.write);
         }
+        const exp = stored.meta.expiresAt?.getTime();
+        // Another replica renewed while this one waited for the lock: nothing left to do.
+        if (
+          stored.meta.status === 'active' &&
+          exp !== undefined &&
+          exp - nowMs > refreshSkewMs(stored.meta.updatedAt, new Date(exp)) &&
+          stored.accessToken
+        )
+          return;
         const resource = canonicalResource(cfg.url);
         // A client-credentials grant has no refresh token to rotate (RFC 6749 section 4.4.3): it is
         // always renewed with a new grant, so a lost rotated token can never lock the connection
@@ -1447,6 +1468,18 @@ export class McpOauthService {
     } catch (e) {
       const r = box.rotation;
       if (!r) throw e;
+      if (
+        e instanceof OaxError &&
+        e.code === 'mcp_token_changed' &&
+        r.write.grantType === 'authorization_code'
+      ) {
+        // The server has rotated the refresh token: the stored one is dead, so the new pair must
+        // not be thrown away. It is held and written over the very row it replaces by the retry
+        // (or the next renewal), which revokes it instead if the row turned out to be different.
+        this.unpersisted.set(key, r);
+        if (this.unpersisted.size > 1000) this.unpersisted.clear();
+        throw e;
+      }
       if (e instanceof OaxError && DETERMINISTIC.has(e.code)) {
         // The row changed or went away while the server answered: nobody will hold these tokens.
         await this.revokeIssued(row, client, as.revocationEndpoint, r.write);
@@ -1489,6 +1522,12 @@ export class McpOauthService {
 
   /** Records the failure; true when the credentials are rejected for good. */
   private async failRefresh(row: ConnectionRow, e: unknown, seen: Date): Promise<boolean> {
+    // The row is gone or needs an administrator already (deleted, step-up, rejected): there is
+    // nothing to record, and recording would put a renewable status over that state.
+    if (e instanceof OaxError && e.code === 'mcp_auth_required') {
+      this.ctx.metrics.oauthRefresh('failed');
+      return true;
+    }
     let status: TokenStatus | null = null;
     let outcome = 'failed';
     let code = e instanceof OaxError ? e.code : 'error';
@@ -1582,6 +1621,10 @@ export class McpOauthService {
     const full = row as ConnectionRow;
     return {
       run: async (reason, actor = SYSTEM_ACTOR, rows = 'delete') => {
+        // First, and not swallowed: when the credential lock cannot be had (a renewal that is
+        // stuck on a stalled server) the disconnect fails with 503 mcp_credential_busy, nothing is
+        // revoked or audited as done, and the caller can simply try again.
+        if (rows === 'delete') await this.stores.tokens.delete(row.tenantId, row.id);
         let remote: 'ok' | 'failed' | 'skipped' = 'skipped';
         const cfg = (() => {
           const p = McpServerConfigSchema.safeParse(config);
@@ -1617,8 +1660,6 @@ export class McpOauthService {
             remote = 'failed';
           }
         }
-        if (rows === 'delete')
-          await this.stores.tokens.delete(row.tenantId, row.id).catch(() => undefined);
         // After a re-authorization the new tokens are registered under the same owner.
         if (rows !== 'replaced')
           for (const v of versions) this.stores.registry.forgetOwner(ownerKey(row.id, v));

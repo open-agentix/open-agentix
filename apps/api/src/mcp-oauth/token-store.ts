@@ -67,7 +67,8 @@ export interface McpConnectionInfo {
 export const CREDENTIAL_LOCK_NS = 0x6f617831;
 
 /** Longest wait for a credential lock before the caller is told the credential is busy. */
-export const CREDENTIAL_LOCK_TIMEOUT_MS = 15_000;
+/** Below the default statement timeout (15 s), so that this error is the one that is raised. */
+export const CREDENTIAL_LOCK_TIMEOUT_MS = 10_000;
 
 const sqlStateOf = (e: unknown): string | undefined => {
   for (let c: unknown = e, i = 0; c && typeof c === 'object' && i < 4; i++) {
@@ -77,6 +78,21 @@ const sqlStateOf = (e: unknown): string | undefined => {
   }
   return undefined;
 };
+
+const busyError = () =>
+  new HttpError(
+    503,
+    'mcp_credential_busy',
+    'the credentials of the connection are being renewed; try again shortly',
+  );
+
+/**
+ * Maps a `lock_timeout` (SQLSTATE 55P03) raised by any statement of a transaction that took the
+ * credential lock to `503 mcp_credential_busy`; other errors are returned unchanged.
+ */
+export function asCredentialBusy(e: unknown): unknown {
+  return sqlStateOf(e) === '55P03' ? busyError() : e;
+}
 
 /**
  * Takes the transaction-scoped advisory lock of one credential (connection and credential version).
@@ -100,13 +116,9 @@ export async function lockCredential(
     );
   } catch (e) {
     // 55P03 lock_not_available: the timeout above.
-    if (sqlStateOf(e) === '55P03')
-      throw new HttpError(
-        503,
-        'mcp_credential_busy',
-        'the credentials of the connection are being renewed; try again shortly',
-      );
-    throw e;
+    // 57014 query_canceled: a statement timeout that is not longer than the lock timeout.
+    if (sqlStateOf(e) === '57014') throw busyError();
+    throw asCredentialBusy(e);
   }
 }
 

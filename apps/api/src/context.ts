@@ -147,6 +147,13 @@ export async function createContext(
   for (const warning of getNetworkSettings()?.warnings ?? [])
     logger.warn({ warning }, 'network configuration warning');
   const db = config.database;
+  // A renewal holds a pooled connection across the call to the authorization server: the bound
+  // should leave room in the pool for everything else.
+  if (config.mcp.oauth.renewals.max >= db.poolMax)
+    logger.warn(
+      { renewals: config.mcp.oauth.renewals.max, poolMax: db.poolMax },
+      'OAX_MCP_OAUTH_RENEWALS is not lower than OAX_DB_POOL_MAX: stalled authorization servers can use the whole pool',
+    );
   const database =
     overrides.database ??
     (await createDatabase({
