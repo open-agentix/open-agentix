@@ -111,6 +111,8 @@ beforeAll(async () => {
   await mkUser('oper', ['operator']);
   await mkUser('limited', ['agent-maintainer']);
   await mkUser('fresh', ['agent-maintainer']);
+  await mkUser('edit1', ['agent-maintainer']);
+  await mkUser('edit2', ['agent-maintainer']);
 }, 120_000);
 afterAll(async () => {
   await n?.close();
@@ -867,20 +869,95 @@ describe('bounds on what a review costs to read', () => {
     expect(performance.now() - started).toBeLessThan(3000);
   }, 60_000);
 
-  it('limits edits too: the route and the per-user count both apply', async () => {
+  it('limits requests per token on the route, apart from the per-user count', async () => {
+    // refused requests are never counted by the per-user count (they write no audit entry), so only
+    // the route limit can answer 429 here
     const { review } = await reviewed();
-    const t = j(await startThread(tok['fresh']!, review.id, { body: 'v0' }));
+    const theirs = j(await startThread(tok['rev1']!, review.id, { body: 'theirs' }));
     const cfg = n.ctx.config.rateLimit;
     const before = cfg.commentMax;
-    cfg.commentMax = 2;
+    cfg.commentMax = 3;
     try {
-      const url = `${base(review.id)}/${t.id}/comments/${t.comments[0].id}`;
-      const codes: number[] = [];
-      for (let i = 1; i <= 4; i++)
-        codes.push((await req(tok['fresh']!, 'PATCH', url, { body: `v${i}` })).statusCode);
-      expect(codes).toContain(429);
+      const url = `${base(review.id)}/${theirs.id}/comments/${theirs.comments[0].id}`;
+      const answers: Json[] = [];
+      for (let i = 0; i < 5; i++) {
+        const res = await req(tok['edit1']!, 'PATCH', url, { body: `mine ${i}` });
+        answers.push({ status: res.statusCode, error: res.json().error });
+      }
+      expect(answers.slice(0, 3).map((a) => a.status)).toEqual([403, 403, 403]);
+      expect(answers.slice(3).map((a) => a.status)).toEqual([429, 429]);
+      expect(answers[3]!.error).not.toBe('rate_limited');
     } finally {
       cfg.commentMax = before;
     }
   });
+
+  it('counts every edit per user, however many sessions it comes from', async () => {
+    const { review } = await reviewed();
+    const cfg = n.ctx.config.rateLimit;
+    const before = cfg.commentMax;
+    cfg.commentMax = 3;
+    try {
+      // each session stays far below the route limit; only the per-user count can stop the fourth
+      const sessions = [tok['edit2']!];
+      for (let i = 0; i < 3; i++) sessions.push(await n.login('edit2@org-a.example.org', PW));
+      const t = j(await startThread(sessions[0]!, review.id, { body: 'v0' }));
+      const url = `${base(review.id)}/${t.id}/comments/${t.comments[0].id}`;
+      const codes: number[] = [];
+      const errors: string[] = [];
+      for (const [i, token] of sessions.slice(1).entries()) {
+        const res = await req(token, 'PATCH', url, { body: `v${i + 1}` });
+        codes.push(res.statusCode);
+        errors.push(res.json().error ?? '');
+      }
+      expect(codes).toEqual([200, 200, 429]);
+      expect(errors[2]).toBe('rate_limited');
+    } finally {
+      cfg.commentMax = before;
+    }
+  });
+
+  it('does not count deleted comments towards the 1,000 and gives one author a quarter at most', async () => {
+    const { review } = await reviewed();
+    const thread = randomUUID();
+    await n.ctx.db.insert(agentReviewThreads).values({
+      id: thread,
+      reviewId: review.id,
+      agentId: review.agentId,
+      tenantId: orgA,
+      createdBy: uid['rev1']!,
+      anchorKind: 'review',
+    });
+    const tombstones = Array.from({ length: 1000 }, () => ({
+      id: randomUUID(),
+      threadId: thread,
+      reviewId: review.id as string,
+      tenantId: orgA,
+      authorId: randomUUID(),
+      body: '',
+      deletedAt: new Date(),
+    }));
+    await n.ctx.db.insert(agentReviewComments).values(tombstones);
+    expect((await startThread(tok['rev2']!, review.id, { body: 'fits' })).statusCode).toBe(201);
+    // 250 live comments by one author use that author's share
+    await n.ctx.db.insert(agentReviewComments).values(
+      Array.from({ length: 249 }, () => ({
+        id: randomUUID(),
+        threadId: thread,
+        reviewId: review.id as string,
+        tenantId: orgA,
+        authorId: uid['rev1']!,
+        body: 'x',
+      })),
+    );
+    const mine = await startThread(tok['rev1']!, review.id, { body: 'the 250th' });
+    expect(mine.statusCode, mine.body).toBe(201);
+    const more = await startThread(tok['rev1']!, review.id, { body: 'the 251st' });
+    expect(more.statusCode).toBe(409);
+    expect(more.json().error).toBe('author_comment_budget_reached');
+    // somebody else can still take part
+    expect((await startThread(tok['rev2']!, review.id, { body: 'still room' })).statusCode).toBe(
+      201,
+    );
+  }, 60_000);
 });

@@ -7,7 +7,7 @@ import {
   type AnchorSide,
   type Principal,
 } from '@openagentix/core';
-import { and, asc, count, eq, gt, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import {
@@ -18,6 +18,7 @@ import {
   agentReviews,
   agentVersions,
   agents,
+  auditLog,
   users,
 } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
@@ -48,6 +49,8 @@ export const MAX_COMMENTS_PER_THREAD = 200;
 /** Bounds what one list call reads and returns: comments and characters of a whole review. */
 export const MAX_COMMENTS_PER_REVIEW = 1000;
 export const MAX_COMMENT_CHARS_PER_REVIEW = 1_000_000;
+/** The part of the review budget one author may use. */
+export const AUTHOR_SHARE = 0.25;
 const RATE_WINDOW_MS = 60_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -163,16 +166,21 @@ export class ReviewThreadsService {
     return thread;
   }
 
-  /** Per user and minute, counted over every session and token, deleted comments and edits included. */
+  /**
+   * Per user and minute, over every session and token. Counted on the audit entries of comment
+   * operations (create, edit, delete), one per operation, so that editing one comment a hundred times
+   * is a hundred and K sessions do not give K times the quota.
+   */
   private async assertRate(tx: Db, userId: string) {
     const since = new Date(this.ctx.now().getTime() - RATE_WINDOW_MS);
     const [row] = await tx
       .select({ n: count() })
-      .from(agentReviewComments)
+      .from(auditLog)
       .where(
         and(
-          eq(agentReviewComments.authorId, userId),
-          or(gt(agentReviewComments.createdAt, since), gt(agentReviewComments.editedAt, since)),
+          eq(auditLog.action, 'agent.review.comment'),
+          eq(auditLog.actor, userId),
+          gt(auditLog.ts, since),
         ),
       );
     if ((row?.n ?? 0) >= this.ctx.config.rateLimit.commentMax)
@@ -184,25 +192,46 @@ export class ReviewThreadsService {
   /**
    * The size of a review's discussion is bounded, so that listing it reads and returns a bounded
    * amount: at most {@link MAX_COMMENTS_PER_REVIEW} comments and {@link MAX_COMMENT_CHARS_PER_REVIEW}
-   * characters. `adding` is the new text; `replacing` the length of the text an edit replaces.
+   * characters, of which one author may use a quarter ({@link AUTHOR_SHARE}), so that one participant
+   * cannot fill the review. Deleted comments (tombstones) count for nothing. `adding` is the new text;
+   * `replacing` the length of the text an edit replaces.
    */
-  private async assertBudget(tx: Db, reviewId: string, adding: number, replacing = 0) {
+  private async assertBudget(
+    tx: Db,
+    reviewId: string,
+    authorId: string,
+    adding: number,
+    replacing = 0,
+  ) {
+    const live = isNull(agentReviewComments.deletedAt);
+    const mine = eq(agentReviewComments.authorId, authorId);
     const [row] = await tx
       .select({
-        n: count(),
+        n: sql<number>`count(*) filter (where ${live})::int`,
         chars: sql<number>`coalesce(sum(char_length(${agentReviewComments.body})), 0)::int`,
+        myN: sql<number>`count(*) filter (where ${live} and ${mine})::int`,
+        myChars: sql<number>`coalesce(sum(char_length(${agentReviewComments.body})) filter (where ${mine}), 0)::int`,
       })
       .from(agentReviewComments)
       .where(eq(agentReviewComments.reviewId, reviewId));
-    const newComment = replacing === 0 ? 1 : 0;
-    if (
-      (row?.n ?? 0) + newComment > MAX_COMMENTS_PER_REVIEW ||
-      (row?.chars ?? 0) - replacing + adding > MAX_COMMENT_CHARS_PER_REVIEW
-    )
+    const more = replacing === 0 ? 1 : 0;
+    const total =
+      (row?.n ?? 0) + more > MAX_COMMENTS_PER_REVIEW ||
+      (row?.chars ?? 0) - replacing + adding > MAX_COMMENT_CHARS_PER_REVIEW;
+    if (total)
       throw new HttpError(
         409,
         'review_comment_budget_reached',
         `a review holds at most ${MAX_COMMENTS_PER_REVIEW} comments and ${MAX_COMMENT_CHARS_PER_REVIEW} characters of discussion`,
+      );
+    if (
+      (row?.myN ?? 0) + more > MAX_COMMENTS_PER_REVIEW * AUTHOR_SHARE ||
+      (row?.myChars ?? 0) - replacing + adding > MAX_COMMENT_CHARS_PER_REVIEW * AUTHOR_SHARE
+    )
+      throw new HttpError(
+        409,
+        'author_comment_budget_reached',
+        'you have used your share of the discussion of this review',
       );
   }
 
@@ -282,7 +311,7 @@ export class ReviewThreadsService {
           'thread_limit_reached',
           `a review has at most ${MAX_THREADS_PER_REVIEW} threads`,
         );
-      await this.assertBudget(tx, review.id, body.length);
+      await this.assertBudget(tx, review.id, p.userId, body.length);
       const anchor = input.anchor ? await this.anchorOf(tx, agent, review, input.anchor) : null;
       const now = this.ctx.now();
       const id = randomUUID();
@@ -338,7 +367,7 @@ export class ReviewThreadsService {
           'comment_limit_reached',
           `a thread has at most ${MAX_COMMENTS_PER_THREAD} comments`,
         );
-      await this.assertBudget(tx, review.id, body.length);
+      await this.assertBudget(tx, review.id, p.userId, body.length);
       const id = randomUUID();
       await tx.insert(agentReviewComments).values({
         id,
@@ -371,7 +400,7 @@ export class ReviewThreadsService {
       const comment = await this.ownComment(tx, p, thread, commentId, 'edit');
       if (comment.deletedAt) throw new HttpError(409, 'comment_deleted', 'the comment was deleted');
       await this.assertRate(tx, p.userId);
-      await this.assertBudget(tx, review.id, body.length, comment.body.length);
+      await this.assertBudget(tx, review.id, p.userId, body.length, comment.body.length);
       await tx
         .update(agentReviewComments)
         .set({ body, editedAt: this.ctx.now() })
