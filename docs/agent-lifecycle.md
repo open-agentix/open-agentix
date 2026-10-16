@@ -139,15 +139,28 @@ console numbers them (the source split on `\n`); trailing blanks do not count fo
   reviewer's will.
 - **Limits.** At most 10,000 characters per comment (after invisible and steering characters are removed;
   `400 comment_too_long`), 200 threads per review (`409 thread_limit_reached`), 200 comments per thread
-  (`409 comment_limit_reached`), and `OAX_RATE_LIMIT_COMMENT_MAX` (default 30) new comments per user and
-  minute (`429 rate_limited`), counted in the database over every session and token of the user,
-  deleted comments included. A comment on a closed review is `409 review_closed`.
+  (`409 comment_limit_reached`), 1,000 comments and 1,000,000 characters of discussion per review, edits
+  included (`409 review_comment_budget_reached`; one list call reads and returns at most that), and
+  `OAX_RATE_LIMIT_COMMENT_MAX` (default 30) new comments per user and
+  minute (`429 rate_limited`), counted in the database over every session and token of the user, deleted
+  comments and edits included; every write route also has the same limit per token and address. A comment on a closed review is `409 review_closed`.
 - **Concurrency.** Every write locks the agent row `FOR KEY SHARE` and then the review row `FOR UPDATE`, the
   order a decision uses (it holds the agent row `FOR UPDATE` first), so the two cannot deadlock; inserting a
   thread takes that agent lock anyway through its foreign key. A comment that
   races a rejecting decision either lands first or is refused with `409 review_closed`; the thread and
   rate limits are counted after every earlier write committed. Comments never change the state of a
   review.
+- **Long lines.** A source line may be hundreds of thousands of characters. The line hash trims trailing
+  blanks with a loop (a regular expression is quadratic on a long run of blanks) and hashes the first
+  4,096 characters plus the length; tests time a 500,000-blank line. The console's diff trims the common
+  ends, falls back to "removed lines, then added lines" above 4 million cells, collapses unchanged
+  lines (three lines of context) and renders at most 3,000 lines.
+- **Database integrity.** A thread must agree with its review on agent and tenant, and a comment with its
+  thread on review and tenant (composite foreign keys); threads and comments cannot be deleted or
+  truncated (triggers, and `deploy/sql/roles.sql` revokes `DELETE` and `TRUNCATE` from the application role).
+- **Logs.** A failed statement is logged with its code, constraint, table and placeholders only: drizzle's
+  error message holds the bound parameters and PostgreSQL's `detail` holds the failing row, either of
+  which could be comment text.
 - **Mentions** are plain text: nothing is resolved and nothing is notified (notifications are slice S13).
 - **Text stays out of everything else.** The comment text is stored in `agent_review_comments` and
   returned by the thread endpoints, and goes nowhere else. The audit entry `agent.review.comment`

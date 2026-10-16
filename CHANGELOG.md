@@ -27,8 +27,8 @@ All notable changes to this project are documented here. The format follows
   pentest cannot read comment text, use-case bindings never carry it), anchored to a line of the diff
   with a server-computed line hash and marked **outdated** when the line changed in a later revision;
   resolve and reopen by the thread starter or a contributor; edit and delete by the author only; limits of
-  10,000 characters per comment, 200 threads per review and 30 new comments per user and minute
-  (`OAX_RATE_LIMIT_COMMENT_MAX`). Comment text never enters the audit chain (ids and lengths only),
+  10,000 characters per comment, 200 threads and 1,000 comments (1,000,000 characters) per review and 30 new
+  comments or edits per user and minute (`OAX_RATE_LIMIT_COMMENT_MAX`). Comment text never enters the audit chain (ids and lengths only),
   logs, spans, metrics or any model context. `GET /v1/reviews/{id}/changes` returns the sources, a
   semantic summary (tools with access class, egress, secret references by name, budget,
   classification, runtime, owner) and the policy summary; `GET /v1/me/reviews` is the review inbox. The
