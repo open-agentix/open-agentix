@@ -606,6 +606,9 @@ describe('closed reviews and the race with a decision', () => {
         req(tok['rev1']!, 'POST', `/v1/reviews/${review.id}/decisions`, {
           decision: 'reject',
           expectedDigest: review.revision.digest,
+          expectedExpansionDigest: review.digests.expansionDigest,
+          expectedResolutionDigest: review.digests.resolutionDigest,
+          expectedPolicyDigest: review.digests.policyDigest,
           comment: 'no',
         }),
       ]);
@@ -715,6 +718,9 @@ describe('the inbox', () => {
     await req(tok['rev1']!, 'POST', `/v1/reviews/${review.id}/decisions`, {
       decision: 'approve',
       expectedDigest: review.revision.digest,
+      expectedExpansionDigest: review.digests.expansionDigest,
+      expectedResolutionDigest: review.digests.resolutionDigest,
+      expectedPolicyDigest: review.digests.policyDigest,
     });
     const item = j(await req(tok['rev1']!, 'GET', '/v1/me/reviews')).items.find(
       (i: Json) => i.reviewId === review.id,

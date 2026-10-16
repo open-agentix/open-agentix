@@ -84,12 +84,27 @@ longer eligible stops counting, with the reason):
 | A1 | A **contributor never decides**: every author of a revision since the base version and the user who opened the review. In no role, with no token, platform administrators included. Not configurable. | `403 self_approval` |
 | A2 | Distinct users: one reviewer counts once whatever roles they hold. | n/a |
 | A3 | The reviewer holds `agents:approve` on the agent through a binding whose role is in the effective `allowedApproverRoles` (default `admin`, `agent-maintainer`; `agent-developer` and `operator` only when the tenant adds them). The binding covers the agent: node binding (with inheritance), team binding of the agent's team, or a binding on the agent. | `403 not_eligible` |
-| A4 | The qualifying binding was **not granted by a contributor** (`granted_by`; for a directory mapping the creator of the mapping). There is no minimum age. A change that widens a binding (another role, `inherit`, a later expiry) counts as a new grant by the person who made it. | `403 binding_granted_by_contributor` |
+| A4 | The qualifying binding was **not granted by a contributor**, **anywhere up its grant chain**, and the reviewer's account was **not made by a contributor** (`granted_by`; for a directory mapping the creator of the mapping). The chain is followed transitively, six hops deep: the grantor, the account that created the grantor (`users.created_by`), and whoever granted the grantor the roles that allow granting (`users:write`), and so on. A contributor who makes a second administrator account and lets it create the approver therefore does not get an approver. A grantor that is **unknown** (see below), or a chain longer than six hops, is refused as well unless the installation sets `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow`. There is no minimum age. A change that widens a binding (another role, `inherit`, a later expiry) makes the person who widened it the grantor only when nobody was; a recorded or unknown grantor is kept (replacing it would hide who granted the binding and would clear an unknown mark). Storing the full grantor chain on the row is tracked as a follow-up. | `403 binding_granted_by_contributor`, `403 binding_grantor_unknown` |
 | A5 | A person with an interactive session. API tokens only when the tenant sets `allowTokenApprovals`. Non-human actors (`repo:*`, `node:*`, guests, the system) never. | `403 token_approval_disabled`, `403 actor_not_human` |
 | A6 | `approverIdentitySources` limits which accounts count (`local`, `oidc`, `ldap`). | `403 identity_source_not_allowed` |
 | A7 | `approverScope`: `tenant`, `team` (members of the agent's team only) or `other-team` (not members). | `403 approver_scope` |
 | A8 | `minApprovals` distinct approvals (default 1, at most 5). | state stays `review_requested` |
-| A10 | The reviewer can read the agent and decided on the digest of the current revision. A reviewer who cannot read the agent gets 404; the stale check comes last, so an ineligible caller never learns that the digest is stale. | `404`, `409 stale_view` |
+| A10 | The reviewer can read the agent and decided on the digest of the current revision. A reviewer who cannot read the agent gets 404; the stale check comes last, so an ineligible caller never learns that the digest is stale. A decision must carry `expectedExpansionDigest`, `expectedResolutionDigest` and `expectedPolicyDigest` as well whenever it is an approval or approval is required (`400 validation_failed` otherwise), so an approval never binds to an expansion the reviewer did not see. | `404`, `409 stale_view` |
+
+**Grantor: nobody versus unknown.** `granted_by IS NULL` with `grantor_unknown = false` means nobody
+granted the row (an identity provider, the bootstrap administrator, the platform operator flag) and is
+never contributor-made. `grantor_unknown = true` means somebody did and we cannot say who: rows from
+before the grantor was recorded that the audit chain (`user.created`, `user.updated`,
+`team.members.set`, `agent.members.set`) could not attribute, mirror rows that the reconcile or the
+home-move trigger re-created, and rows whose grantor account was deleted. Migration `0036` attributes
+the rows it can and marks the rest unknown; rows of identity-provider accounts and of the bootstrap
+administrator stay "nobody". Unknown rows cannot make a reviewer an approver by default (the
+operator can set `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow` while the bindings are removed and added again; a
+membership that stays in a team or agent member list keeps its unknown grantor, so remove and add it to
+clear the mark). **Recommendation:** set `approverIdentitySources` to `[oidc, ldap]`. Accounts of an
+identity provider cannot be created or given a password by a contributor, which closes the
+local-account route of rule A4 completely; the grant-chain check is the defence for installations that
+approve with local accounts.
 
 The review lists its `contributors` (user ids) to everybody who can read the agent, so the console can
 say why somebody may not decide. A9 (agent rules) arrives with slice S8. A platform operator is an approver under the same rules, as a
@@ -220,6 +235,28 @@ review as a whole; and the outdated threads.
 - Names: `GET /v1/reviews/{id}/people` resolves the identifiers of the review to display names of
   accounts of the acting tenant, so the console shows people, not identifiers.
 
+## Policy changes while a review is open
+
+An open review is judged by the **stricter of the policy it was opened under (its snapshot) and the
+policy now**, key by key (the same rule as narrowing: the larger `minApprovals`, the shorter expiry, the
+intersection of the approver roles and identity sources, approval stays required). Loosening the policy,
+or switching approval off, therefore does not relax a review that is already open; tightening applies
+at once. The reviewer sees the digest of the policy that applies. A change that makes the effective
+policy of a node looser is refused with `403 policy_loosening_by_contributor` when the caller is a
+contributor of an open review in the subtree of that node; another administrator makes it. (Notifying
+the administrators of a node about loosening changes follows with the notification slice S13; the
+audit entry `tenant.lifecycle_policy_changed` lists the loosened keys.)
+
+## Draft source and head revision
+
+`agents.draft_source` and `agents.draft_revision_id` are written together, but nothing in the
+database ties them. When the draft of a locked agent has a different digest than its head revision (an old
+replica during a rolling upgrade, a manual repair), the draft is appended as a new revision by an unknown
+author (`system`) before a review, a decision, a save or a publish goes on, so what is reviewed and
+approved is the content the draft really has. **Do not run mixed versions of the API during an
+upgrade** (stop the old replicas before the new ones take writes); the S3 publish publishes the source
+of the revision it checked.
+
 None of the endpoints of this slice returns `grantedBy`, the binding references or a token identifier
 (finding 9 of #343); the S1 review view still does, for any reader of the agent, until that follow-up.
 
@@ -305,7 +342,16 @@ sources.
   reference the review tables.
 - Directory-mapped bindings (S11) do not exist yet; the rule module already treats the mapping creator
   as the grantor, and rows of the other sources record who granted them. Bindings written before
-  migration `0032` have no recorded grantor for teams and agents (`NULL`: not a contributor).
+  migration `0032` have an unknown grantor unless the audit chain shows who made them (see "Grantor:
+  nobody versus unknown"); they do not make an approver by default.
+- **Authors that are not users.** Every revision whose author is not a user (the upgrade and
+  divergence revisions of `system`, and `repo`, even with an author id) makes the contributor set
+  include everybody the audit chain shows editing the draft and the creator of the agent, until the Git
+  slice (S12) maps signers to accounts.
+- **Still open from the S1 review (#343):** the platform-operator binding across organisations carries
+  no grantor (7), information exposure of `grantedBy` and token ids to readers of the agent (9), database
+  hardening such as truncate triggers and missing foreign keys (10), the start-up backfill running
+  before the server listens (11) and the smaller items of (12).
 - Eligibility is derived from the stored bindings (`tenant_role_bindings`, team and agent bindings),
   with the resolver the request path uses; role restrictions per node are not applied (as in the
   request path, until ADR 0014 S9).

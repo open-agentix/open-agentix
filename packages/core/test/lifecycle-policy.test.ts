@@ -9,6 +9,8 @@ import {
   wideningKeys,
   changedKeys,
   isProductionUseCase,
+  policyFromSnapshot,
+  stricterPolicy,
   type LifecyclePolicy,
   type LifecyclePolicyInput,
 } from '../src/index.js';
@@ -311,6 +313,56 @@ describe('policy digest', () => {
       proposeLifecyclePolicy(DEFAULTS, { productionUseCases: ['a', 'b'] }),
     );
     expect(a).not.toBe(b);
+  });
+});
+
+describe('stricterPolicy and policyFromSnapshot (an open review keeps the stricter policy)', () => {
+  const strict = lifecycleDefaults({
+    requireApprovalForPublish: 'on',
+    minApprovals: 2,
+    allowedApproverRoles: ['admin'],
+    approvalExpiryHours: 24,
+    allowTokenApprovals: false,
+  });
+  const loose = lifecycleDefaults({
+    requireApprovalForPublish: 'off',
+    minApprovals: 1,
+    allowedApproverRoles: ['admin', 'agent-maintainer', 'operator'],
+    approvalExpiryHours: 720,
+    allowTokenApprovals: true,
+  });
+
+  it('takes the stricter value of every key, in either order', () => {
+    for (const [a, b] of [
+      [strict, loose],
+      [loose, strict],
+    ] as const) {
+      const s = stricterPolicy(a, b);
+      expect(s).toMatchObject({
+        requireApprovalForPublish: 'on',
+        minApprovals: 2,
+        allowedApproverRoles: ['admin'],
+        approvalExpiryHours: 24,
+        allowTokenApprovals: false,
+      });
+    }
+  });
+  it('is never looser than either policy', () => {
+    const s = stricterPolicy(strict, loose);
+    expect(wideningKeys(strict, s)).toEqual([]);
+    expect(wideningKeys(loose, stricterPolicy(loose, strict))).toEqual([]);
+  });
+  it('keeps the union of the production use cases', () => {
+    const a = { ...strict, productionUseCases: ['prod'] };
+    const b = { ...loose, productionUseCases: ['pay/**'] };
+    expect(stricterPolicy(a, b).productionUseCases).toEqual(['pay/**', 'prod']);
+  });
+  it('reads a stored snapshot and ignores one that is incomplete', () => {
+    expect(policyFromSnapshot({ policy: strict, rules: [] })).toEqual(strict);
+    expect(policyFromSnapshot({ policy: { minApprovals: 2 } })).toBeUndefined();
+    expect(policyFromSnapshot({})).toBeUndefined();
+    expect(policyFromSnapshot(null)).toBeUndefined();
+    expect(policyFromSnapshot({ policy: { ...strict, minApprovals: 99 } })).toBeUndefined();
   });
 });
 

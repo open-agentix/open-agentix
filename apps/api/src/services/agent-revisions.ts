@@ -71,15 +71,25 @@ async function insertRevision(
 /**
  * The newest revision of a locked agent; an agent from before the revisions existed gets its one
  * system revision here (author unknown, ADR 0017 section 4.1). `onCreated` lets the caller audit it.
+ *
+ * `agents.draft_source` and `draft_revision_id` are written together by this code, but nothing in
+ * the database ties them (an old replica during a rolling upgrade, a manual repair), so the head is
+ * only trusted when its digest is the digest of the draft: otherwise the draft is appended as a new
+ * revision by an unknown author (`system`), parented on the old head, so that a review, an approval
+ * and a publish always refer to the content the draft really has (S1 review finding 4). Callers
+ * that are about to replace the draft (`appendRevision`) pass the agent as read under the lock, so
+ * the content that is about to be overwritten is recorded first.
  */
 export async function ensureHead(
   tx: Db,
   agent: AgentRow,
   onCreated?: (r: RevisionRow) => Promise<void>,
 ): Promise<RevisionRow> {
+  let parent: RevisionRow | undefined;
   if (agent.draftRevisionId) {
     const head = await revisionById(tx, agent.draftRevisionId);
-    if (head) return head;
+    if (head && head.digest === sourceDigest(agent.draftSource)) return head;
+    parent = head;
   }
   const [topRow] = await tx
     .select({ top: max(agentDraftRevisions.seq) })
@@ -93,7 +103,7 @@ export async function ensureHead(
     (topRow?.top ?? 0) + 1,
     agent.draftSource,
     { kind: 'system' },
-    null,
+    parent?.id ?? null,
     agent.draftUpdatedAt,
   );
   await tx.update(agents).set({ draftRevisionId: rev.id }).where(eq(agents.id, agent.id));

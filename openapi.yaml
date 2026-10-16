@@ -4903,7 +4903,7 @@ paths:
       summary: Approve, request changes on, or reject a review
       tags:
         - lifecycle
-      description: "Needs `agents:approve` on the agent through a role the tenant lists in `allowedApproverRoles` (default `admin`, `agent-maintainer`), with a binding that no contributor of the review granted. Refusals: `403 self_approval` (the caller is an author since the base version or the opener, in any role, with any token, platform administrators included), `403 actor_not_human`, `403 token_approval_disabled` (API tokens decide only when the tenant sets `allowTokenApprovals`), `403 identity_source_not_allowed`, `403 not_eligible`, `403 binding_granted_by_contributor`, `403 approver_scope`, `409 stale_view` (the digest you looked at is not the digest of the revision now; reload), `409 review_closed`. `expectedDigest` is required; the optional expected digests bind the decision to the expansion, secret resolution and policy you saw. Use-case bindings never carry `agents:approve` (fail closed). A comment is required to request changes or reject, is limited to 10 000 characters and never copied to the audit chain. A reject closes the review."
+      description: "Needs `agents:approve` on the agent through a role the tenant lists in `allowedApproverRoles` (default `admin`, `agent-maintainer`), with a binding that no contributor of the review granted. Refusals: `403 self_approval` (the caller is an author since the base version or the opener, in any role, with any token, platform administrators included), `403 actor_not_human`, `403 token_approval_disabled` (API tokens decide only when the tenant sets `allowTokenApprovals`), `403 identity_source_not_allowed`, `403 not_eligible`, `403 binding_granted_by_contributor` (also when a contributor granted the binding further up the chain or made the account), `403 binding_grantor_unknown` (nobody can say who granted the binding; `OAX_LIFECYCLE_UNKNOWN_GRANTOR`), `403 approver_scope`, `409 stale_view` (the digest you looked at is not the digest of the revision now; reload), `409 review_closed`. `expectedDigest` is required; `expectedExpansionDigest`, `expectedResolutionDigest` and `expectedPolicyDigest` are required for an approval and for every decision while approval is required (`400 validation_failed` otherwise): they bind the decision to the expansion, secret resolution and policy you saw. Use-case bindings never carry `agents:approve` (fail closed). A comment is required to request changes or reject, is limited to 10 000 characters and never copied to the audit chain. A reject closes the review."
       requestBody:
         required: true
         content:
@@ -4922,16 +4922,17 @@ paths:
                   pattern: ^[0-9a-f]{64}$
                   description: the digest of the revision you looked at (`revision.digest`)
                 expectedExpansionDigest:
+                  description: required for an approval and while approval is required
                   type: string
                   maxLength: 64
                 expectedResolutionDigest:
+                  description: required for an approval and while approval is required
                   type: string
                   pattern: ^[0-9a-f]{64}$
-                  description: SHA-256, lower-case hex
                 expectedPolicyDigest:
+                  description: required for an approval and while approval is required
                   type: string
                   pattern: ^[0-9a-f]{64}$
-                  description: SHA-256, lower-case hex
                 comment:
                   description: required for `request_changes` and `reject`; never copied to the audit chain
                   type: string
@@ -6069,7 +6070,7 @@ paths:
       summary: Change the agent lifecycle policy of a tenant
       tags:
         - lifecycle
-      description: "Send the keys to change; `null` removes a value (the node then inherits). Needs `settings:write` on the node. Narrowing only: below a parent a value that would make the effective policy looser than the parent's is refused with `422 not_narrowing` and the keys named (the root of an organisation chooses freely). Keys that do not exist, `breakGlass*` and `approverBindingMinAgeHours` included, are 400. Audited as `tenant.lifecycle_policy_changed`."
+      description: "Send the keys to change; `null` removes a value (the node then inherits). Needs `settings:write` on the node. Narrowing only: below a parent a value that would make the effective policy looser than the parent's is refused with `422 not_narrowing` and the keys named (the root of an organisation chooses freely). A change that loosens the effective policy is refused with `403 policy_loosening_by_contributor` when the caller contributed to an open review in the subtree (another administrator makes it); an open review is judged by the stricter of its own snapshot and the current policy. Keys that do not exist, `breakGlass*` and `approverBindingMinAgeHours` included, are 400. Audited as `tenant.lifecycle_policy_changed`."
       requestBody:
         required: true
         content:

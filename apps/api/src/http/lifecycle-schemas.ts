@@ -143,9 +143,17 @@ export const ReviewListSchema = z.object({
 export const DecisionBody = z.object({
   decision: DecisionKindSchema,
   expectedDigest: Digest.describe('the digest of the revision you looked at (`revision.digest`)'),
-  expectedExpansionDigest: z.string().max(64).optional(),
-  expectedResolutionDigest: Digest.optional(),
-  expectedPolicyDigest: Digest.optional(),
+  expectedExpansionDigest: z
+    .string()
+    .max(64)
+    .optional()
+    .describe('required for an approval and while approval is required'),
+  expectedResolutionDigest: Digest.optional().describe(
+    'required for an approval and while approval is required',
+  ),
+  expectedPolicyDigest: Digest.optional().describe(
+    'required for an approval and while approval is required',
+  ),
   comment: z
     .string()
     .max(10_000)

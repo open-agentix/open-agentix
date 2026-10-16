@@ -20,6 +20,29 @@ All notable changes to this project are documented here. The format follows
   `agent-maintainer`. Revert with `apps/api/drizzle/down/0030_agent_roles.down.sql` (refuses while
   `agent-developer` bindings exist). The OpenAPI role enums changed accordingly.
 
+### Security
+
+- **Rule A4 follows the grant chain, pins the policy of an open review and fails closed on an unknown
+  grantor (ADR 0017, blockers 1 to 5 and follow-ups 6 and 8 of #343)**. Before approval is enforced
+  (S3): (1) a binding no longer counts when a contributor granted it further up the chain, or made the
+  account that granted it, or made the reviewer's account (`users.created_by`, new); the chain is
+  followed six hops deep. (2) An open review is judged by the stricter of its policy snapshot and the
+  current policy, and loosening the policy of a subtree with an open review the caller contributed to is
+  refused (`403 policy_loosening_by_contributor`). (3) `expectedExpansionDigest`,
+  `expectedResolutionDigest` and `expectedPolicyDigest` are required for an approval and whenever
+  approval is required. (4) A draft whose digest differs from its head revision gets a new system
+  revision before it is reviewed, decided or published. (5) New `grantor_unknown` marker on
+  `tenant_role_bindings`, `team_members` and `agent_role_bindings` separates "nobody granted this"
+  from "unknown"; migration `0036` attributes pre-existing rows from the audit chain where it can and
+  marks the rest unknown; unknown grantors are refused (`403 binding_grantor_unknown`) unless
+  `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow`. (6) Every non-user revision author kind counts as an unknown
+  author (a `repo` author with an id no longer fails open). (8) Withdrawing a review checks
+  administrator rights from the database at the agent's node. **Upgrade note:** after the migration,
+  bindings that could not be attributed stop making approvers; remove each affected binding or role and add it again in a second step (saving the same list again keeps the mark), or set
+  `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow` temporarily. Prefer `approverIdentitySources: [oidc, ldap]`.
+  Revert with `apps/api/drizzle/down/0036_grantor_unknown.down.sql`. Still open from #343: items 7 and
+  9 to 12.
+
 ### Added
 
 - **Vendored AWP schema and conformance suite with an offline pin check (#254)**: `packages/awp/vendor/awp-v1alpha1/`

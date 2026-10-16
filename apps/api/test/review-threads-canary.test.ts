@@ -125,6 +125,9 @@ describe('a canary comment through every operation', () => {
     const decision = await call(reviewer, 'POST', `/v1/reviews/${reviewId}/decisions`, {
       decision: 'request_changes',
       expectedDigest: review.revision.digest,
+      expectedExpansionDigest: review.digests.expansionDigest,
+      expectedResolutionDigest: review.digests.resolutionDigest,
+      expectedPolicyDigest: review.digests.policyDigest,
       comment: `${CANARY} decision`,
     });
     expect(decision.statusCode, decision.body).toBe(201);

@@ -8,8 +8,9 @@ import type { LifecyclePolicy } from '../tenancy/lifecycle-policy.js';
  *
  * Implemented here: A1 (a contributor never approves, in no role, with no credential, platform
  * admins included), A2 (distinct users), A3 (an approver role through a binding that covers the
- * agent), A4 (the qualifying binding was not granted by a contributor; there is no minimum
- * age), A5 (an interactive session; tokens only when the tenant allows it; non-human actors
+ * agent), A4 (the qualifying binding was not granted by a contributor, directly or anywhere up its
+ * grant chain, and no contributor made the account; a grantor that is unknown is refused unless the
+ * installation allows it; there is no minimum age), A5 (an interactive session; tokens only when the tenant allows it; non-human actors
  * never), A6 (identity source), A7 (scope), A8 (the number of approvals) and A10 (the reviewer
  * saw the current revision). A9 (agent rules) arrives with slice S8.
  *
@@ -34,6 +35,29 @@ export interface ApproverBinding {
    * never be a contributor.
    */
   grantedBy: string | null;
+  /**
+   * The grantor of the row is **unknown**, which is not the same as `grantedBy: null` ("nobody
+   * granted it": an identity provider, the bootstrap, the platform operator flag). Rows from before
+   * the grantor was recorded, mirror rows repaired by the reconcile and rows created by the
+   * home-move trigger are unknown (ADR 0017 A4, finding 5 of the S1 review).
+   */
+  grantorUnknown?: boolean | undefined;
+  /**
+   * Everybody further up the grant chain of this binding: the accounts that created the grantor, the
+   * grantors of the grantor's own administrator bindings, and so on (depth limited, see
+   * `GrantChain`). The direct grantor is `grantedBy`; it is also listed here.
+   */
+  chain?: GrantChain | undefined;
+}
+
+/**
+ * The users a binding or an account depends on, transitively. `unknown` is true when a link could
+ * not be followed to a known end (an unknown grantor, or the depth limit was reached), so the
+ * chain may hide a contributor.
+ */
+export interface GrantChain {
+  users: readonly string[];
+  unknown: boolean;
 }
 
 /** Who is deciding. Everything except `user` is a non-human actor and never approves (A5). */
@@ -53,6 +77,11 @@ export interface ApproverFacts {
   bindings: readonly ApproverBinding[];
   /** The reviewer is a member of the agent's team, or holds a binding on the agent itself. */
   inAgentTeam: boolean;
+  /**
+   * The accounts that created the reviewer, transitively (`users.created_by`). An account made by a
+   * contributor is contributor-made: whoever it is bound by, it must not decide the review.
+   */
+  creatorChain?: GrantChain | undefined;
 }
 
 export interface ApprovalContext {
@@ -66,6 +95,12 @@ export interface ApprovalContext {
     | 'approverScope'
     | 'minApprovals'
   >;
+  /**
+   * What to do with a binding whose grantor is unknown, or whose grant chain cannot be followed to a
+   * known end: `refuse` (default; fail closed) or `allow` (the installation accepts the risk until
+   * the bindings have been removed and added again). Not a tenant policy key.
+   */
+  unknownGrantor?: 'refuse' | 'allow' | undefined;
   /** A10: what the reviewer says they saw and what the revision is now. */
   view: { expected: string; current: string };
 }
@@ -78,6 +113,7 @@ export type RefusalCode =
   | 'cannot_read'
   | 'not_eligible'
   | 'binding_granted_by_contributor'
+  | 'binding_grantor_unknown'
   | 'approver_scope'
   | 'stale_view';
 
@@ -90,6 +126,7 @@ export const REFUSAL_STATUS: Readonly<Record<RefusalCode, number>> = {
   cannot_read: 404,
   not_eligible: 403,
   binding_granted_by_contributor: 403,
+  binding_grantor_unknown: 403,
   approver_scope: 403,
   stale_view: 409,
 };
@@ -103,6 +140,8 @@ const MESSAGES: Readonly<Record<RefusalCode, string>> = {
   not_eligible: 'your role is not an approver role for this agent',
   binding_granted_by_contributor:
     'the only bindings that make you an approver were granted by a contributor of this review',
+  binding_grantor_unknown:
+    'who granted the bindings that make you an approver cannot be established; an administrator has to remove and add them again',
   approver_scope: 'the tenant policy does not let you decide for this agent (approver scope)',
   stale_view: 'the draft changed since you loaded it',
 };
@@ -133,22 +172,37 @@ export function checkApprover(f: ApproverFacts, ctx: ApprovalContext): Eligibili
     (ctx.policy.allowedApproverRoles as readonly string[]).includes(b.role),
   );
   if (allowed.length === 0) return refuse('not_eligible');
-  // A4: not through bindings that a contributor granted (a contributor with grant rights must not
-  // be able to create an approver). Bindings nobody granted (null) are not contributor-made.
-  const clean = allowed.filter((b) => b.grantedBy === null || !ctx.contributors.has(b.grantedBy));
+  // A4: not through bindings that a contributor granted, directly or further up the chain, and not
+  // as an account a contributor made (a contributor with grant rights must not be able to create an
+  // approver, not even through a second account). Bindings nobody granted (`grantedBy: null` and not
+  // unknown) are not contributor-made. A link that cannot be followed fails closed.
+  const mayRelyOnUnknown = ctx.unknownGrantor === 'allow';
+  const touched = (c: GrantChain | undefined) =>
+    (c?.users ?? []).some((u) => ctx.contributors.has(u));
+  const unknownIn = (c: GrantChain | undefined) => c?.unknown === true;
+  if (touched(f.creatorChain)) return refuse('binding_granted_by_contributor');
+  const clean = allowed.filter(
+    (b) => !(b.grantedBy !== null && ctx.contributors.has(b.grantedBy)) && !touched(b.chain),
+  );
   if (clean.length === 0) return refuse('binding_granted_by_contributor');
+  const known = mayRelyOnUnknown
+    ? clean
+    : clean.filter(
+        (b) => b.grantorUnknown !== true && !unknownIn(b.chain) && !unknownIn(f.creatorChain),
+      );
+  if (known.length === 0) return refuse('binding_grantor_unknown');
   // A7
   if (ctx.policy.approverScope === 'team' && !f.inAgentTeam) return refuse('approver_scope');
   if (ctx.policy.approverScope === 'other-team' && f.inAgentTeam) return refuse('approver_scope');
   // A10: the digest the reviewer saw is the digest of the revision now.
   if (ctx.view.expected !== ctx.view.current) return refuse('stale_view');
-  return { ok: true, via: [...clean] };
+  return { ok: true, via: [...known] };
 }
 
 /** Every user who counts as a contributor of a review (ADR 0017 section 2). */
 export interface ContributorSources {
   /** Authors of the revisions since the base version up to the reviewed revision. */
-  revisionAuthors: readonly { authorId: string | null; authorKind: 'user' | 'repo' | 'system' }[];
+  revisionAuthors: readonly { authorId: string | null; authorKind: string }[];
   /** The user who opened the review. */
   opener: string;
   /**
@@ -168,7 +222,9 @@ export function collectContributors(src: ContributorSources): Set<string> {
   let unknown = false;
   for (const r of src.revisionAuthors) {
     if (r.authorKind === 'user' && r.authorId) out.add(r.authorId);
-    else if (r.authorKind === 'system' || !r.authorId) unknown = true;
+    // Every other author kind is unknown until the Git slice (S12) maps signers to users: a `repo`
+    // revision with an author id still names no platform user, so it must not be skipped.
+    else unknown = true;
   }
   if (unknown) {
     for (const u of src.unknownAuthorFallback) out.add(u);

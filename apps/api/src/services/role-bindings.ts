@@ -67,12 +67,17 @@ export interface MirrorChange {
  * writes `global_roles`. Returns what it changed.
  *
  * `pentest` is refused: it needs an expiry, which `global_roles` cannot express.
+ *
+ * `grantedBy` is the user who made the change; leave it out for a change nobody made (the bootstrap,
+ * the identity provider) and pass `grantorUnknown` when somebody did but cannot be named (the
+ * reconcile re-creating a row): rule A4 of ADR 0017 fails closed on an unknown grantor.
  */
 export async function mirrorGlobalRoles(
   db: Db,
   user: { id: string; tenantId: string },
   roles: readonly Role[],
   grantedBy?: string | null,
+  opts: { grantorUnknown?: boolean } = {},
 ): Promise<MirrorChange> {
   const wanted = [...new Set(roles)];
   const refused = wanted.find((r) => !isGrantableRole(r));
@@ -104,6 +109,9 @@ export async function mirrorGlobalRoles(
         inherit: false,
         source: 'mirror' as const,
         grantedBy: by,
+        // `granted_by is null` alone means "nobody granted it" (identity provider, bootstrap); a
+        // caller that cannot say who did (the reconcile) marks the row unknown instead.
+        grantorUnknown: opts.grantorUnknown === true,
       })),
     )
     .onConflictDoNothing()
@@ -362,6 +370,9 @@ export async function reconcileUserBindings(
       tx as unknown as Db,
       { id: user.id, tenantId: user.tenantId },
       wanted,
+      null,
+      // The reconcile does not know who put the role into `global_roles`.
+      { grantorUnknown: true },
     );
     return { userId, ...change };
   });
