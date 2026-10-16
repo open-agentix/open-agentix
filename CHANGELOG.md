@@ -502,7 +502,7 @@ All notable changes to this project are documented here. The format follows
   over the row it saw: it no longer marks tokens written by a parallel authorization. A renewal whose
   write lost the compare-and-swap is retried once and otherwise fails as transient
   (`mcp_auth_refresh_failed`) instead of `mcp_auth_required`. `scopes_supported` of the resource and the
-  `scope` of a challenge keep only valid scope tokens and at most 32 values. No migration.
+  `scope` of a challenge keep only valid scope tokens and at most 32 values. No migration. A disconnect behind a held credential lock answers `503 mcp_credential_busy` instead of reporting success, a renewal that lost the swap no longer clears a step-up requirement, and a rotated authorization-code refresh token is kept for the retry instead of being revoked.
 
 ## [0.2.0-alpha.1] - 2026-10-10
 

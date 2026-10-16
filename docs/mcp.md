@@ -590,7 +590,14 @@ database connection. Three bounds keep that from starving the rest of the API:
 - **Compare-and-swap.** The new tokens are written only over the row the renewal read (`updated_at`). A
   write that loses (a status write or a re-authorization got in) is retried once, which re-reads the row
   under the lock and finds it renewed or renews it; if it loses again the renewal fails as transient
-  (`mcp_auth_refresh_failed`), never as `mcp_auth_required`. A failure is recorded in the same way, only over
+  (`mcp_auth_refresh_failed`), never as `mcp_auth_required`.
+  A rotated authorization-code pair that could not be stored for this reason is kept in memory and written
+  by the retry (the stored refresh token is already dead), and the retry first re-reads the status under the
+  lock: only `active` and `refresh_failed` rows are renewed, so a step-up requirement or
+  `reauthorization_required` is never cleared by a renewal, and what the server issued meanwhile is revoked.
+- **Disconnect.** `POST .../oauth/disconnect` deletes the rows first. If the credential lock cannot be had
+  within the timeout the request fails with `503 mcp_credential_busy`, nothing is revoked or audited as done,
+  and the same request can be repeated. A failure is recorded in the same way, only over
   the row the renewal saw, so a permanent failure of the old tokens cannot mark tokens a parallel
   authorization has just stored.
 
