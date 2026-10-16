@@ -112,6 +112,44 @@ describe('protected resource metadata', () => {
     });
   });
 
+  it('keeps only valid scope tokens from scopes_supported and caps them at 32', async () => {
+    const many = Array.from({ length: 50 }, (_v, i) => `s${i}`);
+    const { http } = serve({
+      ...doc,
+      scopes_supported: ['ok', 'has space', 'ctl\u0001', 'x'.repeat(129), 'dq"', '', 'ok', ...many],
+    });
+    const prm = await discoverProtectedResource(http, MCP, 'tenant');
+    expect(prm.scopesSupported).toHaveLength(32);
+    expect(prm.scopesSupported.slice(0, 3)).toEqual(['ok', 's0', 's1']);
+    expect(prm.scopesSupported.every((x) => /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/.test(x))).toBe(
+      true,
+    );
+  });
+
+  it('filters and caps the scope of the challenge in the same way', async () => {
+    const { w, http } = setup();
+    const scope = [
+      'a',
+      'b\u0001',
+      'x'.repeat(200),
+      ...Array.from({ length: 50 }, (_v, i) => `c${i}`),
+    ];
+    w.on('mcp.example.org', (r) =>
+      r.method === 'POST'
+        ? new Response('', {
+            status: 401,
+            headers: {
+              'www-authenticate': `Bearer resource_metadata="https://mcp.example.org/meta/prm.json", scope="${scope.join(' ')}"`,
+            },
+          })
+        : json(doc),
+    );
+    const prm = await discoverProtectedResource(http, MCP, 'tenant');
+    const got = prm.challengeScope?.split(' ') ?? [];
+    expect(got).toHaveLength(32);
+    expect(got.slice(0, 2)).toEqual(['a', 'c0']);
+  });
+
   it.each([
     ['another host', 'https://other.example.org/mcp'],
     ['another path', 'https://mcp.example.org/other'],

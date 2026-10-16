@@ -8,6 +8,7 @@ import type { KeyService } from './key-service.js';
 import { assertHttpsUrl, canonicalResource } from './resource.js';
 import type { SecretRegistry } from './secret-registry.js';
 import { assertTokenShape } from './token-shape.js';
+import { HttpError } from '../errors.js';
 
 export type TokenStatus = 'active' | 'refresh_failed' | 'reauthorization_required' | 'revoked';
 
@@ -65,19 +66,60 @@ export interface McpConnectionInfo {
 /** Lock namespace of the per-credential advisory lock (renewal, disconnect, configuration change). */
 export const CREDENTIAL_LOCK_NS = 0x6f617831;
 
+/** Longest wait for a credential lock before the caller is told the credential is busy. */
+/** Below the default statement timeout (15 s), so that this error is the one that is raised. */
+export const CREDENTIAL_LOCK_TIMEOUT_MS = 10_000;
+
+const sqlStateOf = (e: unknown): string | undefined => {
+  for (let c: unknown = e, i = 0; c && typeof c === 'object' && i < 4; i++) {
+    const code = (c as { code?: unknown }).code;
+    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code;
+    c = (c as { cause?: unknown }).cause;
+  }
+  return undefined;
+};
+
+const busyError = () =>
+  new HttpError(
+    503,
+    'mcp_credential_busy',
+    'the credentials of the connection are being renewed; try again shortly',
+  );
+
+/**
+ * Maps a `lock_timeout` (SQLSTATE 55P03) raised by any statement of a transaction that took the
+ * credential lock to `503 mcp_credential_busy`; other errors are returned unchanged.
+ */
+export function asCredentialBusy(e: unknown): unknown {
+  return sqlStateOf(e) === '55P03' ? busyError() : e;
+}
+
 /**
  * Takes the transaction-scoped advisory lock of one credential (connection and credential version).
  * A renewal holds it across the network call; anything that deletes the tokens takes the same lock,
  * so a renewal can neither overlap a deletion nor bring the token back afterwards.
+ *
+ * The wait is bounded (`lock_timeout`, for the rest of the transaction): a request that finds the
+ * lock held for longer than that gets `503 mcp_credential_busy` instead of keeping a database
+ * connection for as long as a stalled authorization server takes.
  */
 export async function lockCredential(
   tx: Db,
   connectionId: string,
   credentialVersion: number,
+  timeoutMs: number = CREDENTIAL_LOCK_TIMEOUT_MS,
 ): Promise<void> {
-  await tx.execute(
-    sql`select pg_advisory_xact_lock(${CREDENTIAL_LOCK_NS}::int, hashtext(${`${connectionId}:${credentialVersion}`}))`,
-  );
+  await tx.execute(sql`select set_config('lock_timeout', ${`${timeoutMs}ms`}, true)`);
+  try {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(${CREDENTIAL_LOCK_NS}::int, hashtext(${`${connectionId}:${credentialVersion}`}))`,
+    );
+  } catch (e) {
+    // 55P03 lock_not_available: the timeout above.
+    // 57014 query_canceled: a statement timeout that is not longer than the lock timeout.
+    if (sqlStateOf(e) === '57014') throw busyError();
+    throw asCredentialBusy(e);
+  }
 }
 
 export const ownerKey = (connectionId: string, credentialVersion: number) =>
@@ -190,7 +232,9 @@ export class McpOauthTokenStore {
         )
         .returning({ id: mcpOauthTokens.id });
       if (updated.length === 0)
-        throw new OaxError('mcp_auth_required', 'the stored tokens changed during the renewal');
+        // Not `mcp_auth_required`: the connection may be perfectly authorized (another writer got there
+        // first), so this is a transient condition the renewal retries once.
+        throw new OaxError('mcp_token_changed', 'the stored tokens changed during the renewal');
       return;
     }
     const written = await tx
@@ -262,6 +306,10 @@ export class McpOauthTokenStore {
   /**
    * Records a failed refresh by its closed code. `status` stays `active` while the stored access
    * token can still be used; a token that is expired (or credentials rejected for good) changes it.
+   *
+   * Only over the row the renewal saw (`seen`, its `updated_at`): a failure that arrives after the
+   * tokens were replaced (a parallel authorization or renewal) must not mark the new tokens.
+   * Returns whether the row was still the one that was seen.
    */
   async recordFailure(
     tenantId: string,
@@ -269,12 +317,23 @@ export class McpOauthTokenStore {
     credentialVersion: number,
     status: TokenStatus,
     lastError: string,
-  ): Promise<void> {
-    await this.db
+    seen?: Date,
+  ): Promise<boolean> {
+    const changed = await this.db
       .update(mcpOauthTokens)
       .set({ status, lastError, updatedAt: this.now() })
-      .where(this.where(tenantId, connectionId, credentialVersion));
+      .where(
+        seen
+          ? and(
+              this.where(tenantId, connectionId, credentialVersion),
+              eq(mcpOauthTokens.updatedAt, seen),
+            )
+          : this.where(tenantId, connectionId, credentialVersion),
+      )
+      .returning({ id: mcpOauthTokens.id });
+    if (changed.length === 0) return false;
     if (status !== 'active') this.registry.forgetOwner(ownerKey(connectionId, credentialVersion));
+    return true;
   }
 
   /**

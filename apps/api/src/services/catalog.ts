@@ -44,7 +44,7 @@ import {
 } from '@openagentix/providers';
 import { legacyNetwork } from '@openagentix/providers';
 import { canonicalResource } from '../mcp-oauth/resource.js';
-import { lockCredential } from '../mcp-oauth/token-store.js';
+import { asCredentialBusy, lockCredential } from '../mcp-oauth/token-store.js';
 import { processSecrets } from '../mcp-oauth/secret-registry.js';
 import { and, asc, desc, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import { cached } from '../cache.js';
@@ -1047,24 +1047,29 @@ export class CatalogService {
       return updated;
     };
     // A telemetry connection and its audit entries commit together (the content opt-in is audited).
-    const row = await this.ctx.db.transaction(async (t) => {
-      const tx = t as unknown as Db;
-      const r = await write(tx);
-      if (r && current.kind === 'telemetry') {
-        await this.audit.append(
-          {
-            actor: actor.userId,
-            tenantId: actor.tenantId,
-            action: 'connection.updated',
-            target: id,
-            payload: { config: parsed },
-          },
-          tx,
-        );
-        await this.auditContentChange(actor, tx, r, current.config, parsed);
-      }
-      return r;
-    });
+    const row = await this.ctx.db
+      .transaction(async (t) => {
+        const tx = t as unknown as Db;
+        const r = await write(tx);
+        if (r && current.kind === 'telemetry') {
+          await this.audit.append(
+            {
+              actor: actor.userId,
+              tenantId: actor.tenantId,
+              action: 'connection.updated',
+              target: id,
+              payload: { config: parsed },
+            },
+            tx,
+          );
+          await this.auditContentChange(actor, tx, r, current.config, parsed);
+        }
+        return r;
+      })
+      .catch((e: unknown) => {
+        // A row lock that waited longer than the credential lock timeout (set by lockCredential).
+        throw moved ? asCredentialBusy(e) : e;
+      });
     if (!row) {
       // Gone (deleted meanwhile) is a 404; present but different is a 409.
       const [still] = await this.ctx.db

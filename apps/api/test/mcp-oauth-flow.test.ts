@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { ContextGuard, type SecretResolver } from '@openagentix/core';
+import { ContextGuard, OaxError, type SecretResolver } from '@openagentix/core';
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { auditLog, connections, mcpOauthTokens } from '../src/db/schema.js';
@@ -332,6 +332,37 @@ describe('authorization with private_key_jwt', () => {
     expect(blob).not.toContain(form.get('client_assertion')!);
   });
 
+  it('keeps signing with PS256 on a renewal inside the verified window (PS256-only server)', async () => {
+    const saved = as.metadata.token_endpoint_auth_signing_alg_values_supported;
+    as.metadata.token_endpoint_auth_signing_alg_values_supported = ['PS256'];
+    const algOf = (form: URLSearchParams) =>
+      JSON.parse(Buffer.from(form.get('client_assertion')!.split('.')[0]!, 'base64url').toString())
+        .alg as string;
+    try {
+      const id = await create(jwtAuth);
+      as.expiresIn = 120;
+      expect((await authorize(id)).statusCode).toBe(200);
+      expect(algOf(as.tokenRequests.at(-1)!.form)).toBe('PS256');
+      as.expiresIn = 3600;
+      advance(70_000); // inside the renewal window, still inside the one hour of the pin
+      const before = as.tokenRequests.length;
+      await token(id);
+      expect(as.tokenRequests.length - before).toBe(1);
+      // the pin is trusted for the hour, so the algorithms come from the cache next to it
+      expect(algOf(as.tokenRequests.at(-1)!.form)).toBe('PS256');
+      expect((await status(id)).status).toBe('active');
+      // and again from a fresh document once the pin has to be verified anew
+      expireDiscoveryCache();
+      advance(10 * 60_000);
+      as.expiresIn = 120;
+      await token(id);
+      expect(algOf(as.tokenRequests.at(-1)!.form)).toBe('PS256');
+    } finally {
+      as.metadata.token_endpoint_auth_signing_alg_values_supported = saved;
+      as.expiresIn = 3600;
+    }
+  });
+
   it('refuses a key the PEM parser cannot read without quoting it', async () => {
     secrets.values['oa-client-key'] = 'not a pem SECRET-MATERIAL';
     try {
@@ -661,6 +692,65 @@ describe('renewal', () => {
     advance(31_000);
     expect(as.tokens.has((await token(id)).token)).toBe(true);
     expect((await status(id)).status).toBe('active');
+  });
+});
+
+describe('renewal against concurrent writers', () => {
+  it('records a failure only over the row the renewal saw', async () => {
+    const id = await create(basicAuth);
+    await authorize(id);
+    const r = await ref(id);
+    const store = n.services.mcpOauth.tokens;
+    const seen = (await store.open(r.tenantId, r.id, 1))!.meta.updatedAt;
+    advance(1_000);
+    await store.setStatus(r.tenantId, r.id, 1, 'active'); // the row is rewritten meanwhile
+    expect(
+      await store.recordFailure(
+        r.tenantId,
+        r.id,
+        1,
+        'reauthorization_required',
+        'invalid_client',
+        seen,
+      ),
+    ).toBe(false);
+    expect(await status(id)).toMatchObject({ status: 'active', lastError: null });
+    const now = (await store.open(r.tenantId, r.id, 1))!.meta.updatedAt;
+    expect(
+      await store.recordFailure(
+        r.tenantId,
+        r.id,
+        1,
+        'reauthorization_required',
+        'invalid_client',
+        now,
+      ),
+    ).toBe(true);
+    expect((await status(id)).status).toBe('reauthorization_required');
+  });
+
+  it('a row that is still changing under the renewal is a transient failure, not a lockout', async () => {
+    const id = await create(basicAuth);
+    as.expiresIn = 120;
+    await authorize(id);
+    as.expiresIn = 3600;
+    advance(70_000);
+    const r = await ref(id);
+    const store = n.services.mcpOauth.tokens;
+    const real = store.write.bind(store);
+    store.write = (async () => {
+      throw new OaxError('mcp_token_changed', 'the stored tokens changed during the renewal');
+    }) as never;
+    try {
+      await expect(n.services.mcpOauthFlows.refresh(r)).rejects.toMatchObject({
+        code: 'mcp_auth_refresh_failed',
+      });
+    } finally {
+      store.write = real;
+    }
+    expect(await status(id)).toMatchObject({ status: 'active', lastError: null });
+    advance(6_000); // past the minimum gap: the next use renews again
+    expect(as.tokens.has((await token(id)).token)).toBe(true);
   });
 });
 

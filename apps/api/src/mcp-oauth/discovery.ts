@@ -1,5 +1,5 @@
 import { OaxError } from '@openagentix/core';
-import { canonicalResource } from '@openagentix/mcp';
+import { OAUTH_SCOPE, canonicalResource } from '@openagentix/mcp';
 import { assertOauthUrl, hostOf, type OauthFetch, type OauthOrigin } from './oauth-fetch.js';
 
 /**
@@ -47,6 +47,24 @@ export interface ProtectedResource {
   scopesSupported: string[];
   /** Scope of the 401 challenge, if the server sent one. */
   challengeScope?: string;
+}
+
+/** At most this many scopes are taken from what a resource suggests (metadata and challenge). */
+export const MAX_SUGGESTED_SCOPES = 32;
+
+/**
+ * Scopes a resource suggests are untrusted input: values that are not OAuth scope tokens
+ * (RFC 6749 section 3.3, bounded to {@link OAUTH_SCOPE}) are dropped, duplicates removed and the
+ * list is capped, so that a hostile document cannot flood the consent or a token request.
+ */
+export function boundSuggestedScopes(values: readonly string[] | undefined): string[] {
+  const out: string[] = [];
+  for (const v of values ?? []) {
+    if (!OAUTH_SCOPE.test(v) || out.includes(v)) continue;
+    out.push(v);
+    if (out.length >= MAX_SUGGESTED_SCOPES) break;
+  }
+  return out;
 }
 
 const isStrings = (v: unknown): v is string[] =>
@@ -134,11 +152,12 @@ export async function discoverProtectedResource(
     const issuers = [...new Set(servers.filter(isIssuer))];
     if (issuers.length === 0)
       throw new OaxError('mcp_oauth_discovery_failed', 'no usable authorization server is named');
+    const challengeScopes = boundSuggestedScopes(challenge.scope?.split(' '));
     return {
       resource: stated,
       authorizationServers: issuers,
-      scopesSupported: scopes ?? [],
-      ...(challenge.scope ? { challengeScope: challenge.scope } : {}),
+      scopesSupported: boundSuggestedScopes(scopes),
+      ...(challengeScopes.length > 0 ? { challengeScope: challengeScopes.join(' ') } : {}),
     };
   }
   throw new OaxError(
