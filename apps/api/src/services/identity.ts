@@ -435,11 +435,27 @@ export class IdentityService {
         actor,
         members.map((m) => m.role),
       );
+      // A membership that stays keeps its original grantor; a new one is granted by the actor
+      // (ADR 0017 rule A4 asks who created a binding).
+      const kept = new Map(
+        (
+          await tx.select().from(agentRoleBindings).where(eq(agentRoleBindings.agentId, agentId))
+        ).map((r) => [`${r.userId}|${r.role}`, r.grantedBy] as const),
+      );
       await tx.delete(agentRoleBindings).where(eq(agentRoleBindings.agentId, agentId));
       if (members.length)
         await tx
           .insert(agentRoleBindings)
-          .values(members.map((m) => ({ agentId, userId: m.userId, role: m.role })))
+          .values(
+            members.map((m) => ({
+              agentId,
+              userId: m.userId,
+              role: m.role,
+              grantedBy: kept.has(`${m.userId}|${m.role}`)
+                ? kept.get(`${m.userId}|${m.role}`)!
+                : grantorOf(actor.userId),
+            })),
+          )
           .onConflictDoNothing();
     });
     await Promise.all(
@@ -1305,11 +1321,25 @@ export class IdentityService {
         actor,
         members.map((m) => m.role),
       );
+      const kept = new Map(
+        (await tx.select().from(teamMembers).where(eq(teamMembers.teamId, teamId))).map(
+          (r) => [`${r.userId}|${r.role}`, r.grantedBy] as const,
+        ),
+      );
       await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
       if (members.length)
         await tx
           .insert(teamMembers)
-          .values(members.map((m) => ({ teamId, userId: m.userId, role: m.role })))
+          .values(
+            members.map((m) => ({
+              teamId,
+              userId: m.userId,
+              role: m.role,
+              grantedBy: kept.has(`${m.userId}|${m.role}`)
+                ? kept.get(`${m.userId}|${m.role}`)!
+                : grantorOf(actor.userId),
+            })),
+          )
           .onConflictDoNothing();
     });
     await Promise.all(
@@ -1324,6 +1354,10 @@ export class IdentityService {
     });
   }
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** `granted_by` is a foreign key to users: only a real user id is recorded. */
+const grantorOf = (userId: string): string | null => (UUID_RE.test(userId) ? userId : null);
 
 function toTokenInfo(r: typeof apiTokens.$inferSelect): TokenInfo {
   return {

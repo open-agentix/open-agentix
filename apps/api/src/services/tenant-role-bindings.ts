@@ -617,12 +617,21 @@ export class TenantRoleBindingsService {
         if (changes.some((c) => c.field === 'expiresAt')) this.checkExpiry(next.expiresAt);
         await assertNotLastAdmin(tx, actor, node, row, next);
         const expiryChanged = changes.some((c) => c.field === 'expiresAt' || c.field === 'role');
+        // A change that gives the binding more (another role, wider reach, a later expiry) is a new
+        // grant by this actor: ADR 0017 rule A4 must not see the original, clean grantor of a
+        // binding that a contributor has since widened.
+        const widened =
+          next.role !== row.role ||
+          (next.inherit && !row.inherit) ||
+          (row.expiresAt !== null &&
+            (next.expiresAt === null || next.expiresAt.getTime() > row.expiresAt.getTime()));
         await tx
           .update(tenantRoleBindings)
           .set({
             role: next.role,
             inherit: next.inherit,
             expiresAt: next.expiresAt,
+            ...(widened ? { grantedBy: actor.userId } : {}),
             ...(expiryChanged
               ? {
                   expiryWarnedAt:
@@ -820,7 +829,8 @@ export class TenantRoleBindingsService {
       if (input.dryRun || targets.length === 0) return result;
       await tx
         .update(tenantRoleBindings)
-        .set({ inherit: true })
+        // Wider reach is a new grant by the operator (ADR 0017 rule A4).
+        .set({ inherit: true, grantedBy: p.userId })
         .where(
           inArray(
             tenantRoleBindings.id,
