@@ -197,6 +197,13 @@
       "when": 1792700000002,
       "tag": "0033_role_restrictions_epoch",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792700000003,
+      "tag": "0034_tenant_move",
+      "breakpoints": true
     }
   ]
 }
