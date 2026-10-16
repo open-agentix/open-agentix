@@ -1293,6 +1293,20 @@ export const agentReviews = pgTable(
 );
 
 /**
+ * An administrator's explicit release of a withdrawn or rejected review from the loosening hold
+ * (#356): such a review keeps blocking policy loosening by its contributors until it is cleared here
+ * by an administrator who is not one of them (or their chain). One row per review, append-only.
+ */
+export const agentReviewHoldClears = pgTable('agent_review_hold_clears', {
+  reviewId: uuid('review_id')
+    .primaryKey()
+    .references(() => agentReviews.id, { onDelete: 'cascade' }),
+  clearedBy: uuid('cleared_by').notNull(),
+  clearedAt: ts('cleared_at').notNull().defaultNow(),
+  reason: text('reason').notNull(),
+});
+
+/**
  * One decision of one reviewer on one revision, with everything an approval binds to (ADR 0017
  * section 4.2). Append-only: a reviewer who changes their mind adds a new row, the latest one counts.
  */

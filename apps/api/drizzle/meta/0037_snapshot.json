@@ -1,5 +1,5 @@
 {
-  "id": "d3b9c1b1-66be-4b74-8628-0e511443632c",
+  "id": "8ee5bbae-60f2-4248-9ee9-e7939f49efdb",
   "prevId": "16859ec1-2761-454e-9c2d-96f7df96b66f",
   "version": "7",
   "dialect": "postgresql",
@@ -543,6 +543,58 @@
           "value": "(\"agent_review_decisions\".\"decision\" = 'approve') = (\"agent_review_decisions\".\"expires_at\" is not null)"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.agent_review_hold_clears": {
+      "name": "agent_review_hold_clears",
+      "schema": "",
+      "columns": {
+        "review_id": {
+          "name": "review_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "cleared_by": {
+          "name": "cleared_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cleared_at": {
+          "name": "cleared_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "agent_review_hold_clears_review_id_agent_reviews_id_fk": {
+          "name": "agent_review_hold_clears_review_id_agent_reviews_id_fk",
+          "tableFrom": "agent_review_hold_clears",
+          "tableTo": "agent_reviews",
+          "columnsFrom": [
+            "review_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.agent_review_threads": {

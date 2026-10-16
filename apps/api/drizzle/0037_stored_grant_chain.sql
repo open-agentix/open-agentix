@@ -8,10 +8,16 @@
 -- * users.creator_unknown: "nobody made this account" (bootstrap, identity provider) versus "the
 --   creator is not known" (created before the creator was recorded, creator deleted before a chain was
 --   stored).
+-- * agent_review_hold_clears: an administrator's explicit, audited release of a withdrawn or rejected
+--   review from the policy-loosening hold.
+-- * The chain of every existing row is backfilled TRANSITIVELY (a bounded recursive walk over the
+--   creators and over the grantors of the `admin` bindings, six hops; a link that is unknown or a
+--   chain that is deeper leaves the row without a chain, i.e. unknown), so rows made before the
+--   upgrade cannot be laundered by revoking a link afterwards.
 -- * Attribution of 0036 made strict: a role / membership counts as granted by the actor of an audit
 --   entry only when the audit chain shows the grantee WITHOUT it before (a `user.created` /
 --   `team.created` / `agent.created` entry that starts the chain, or an earlier entry that lacks it).
---   An attribution that cannot be shown that way becomes unknown. Memberships and roles of identity
+--   An attribution that cannot be shown that way is marked unknown (`granted_by` stays). Memberships and roles of identity
 --   provider accounts that an administrator listed before are no longer "nobody".
 -- Down path: drizzle/down/0037_stored_grant_chain.down.sql
 ALTER TABLE "agent_role_bindings" ADD COLUMN "grant_chain" uuid[];--> statement-breakpoint
@@ -19,6 +25,17 @@ ALTER TABLE "team_members" ADD COLUMN "grant_chain" uuid[];--> statement-breakpo
 ALTER TABLE "tenant_role_bindings" ADD COLUMN "grant_chain" uuid[];--> statement-breakpoint
 ALTER TABLE "users" ADD COLUMN "grant_chain" uuid[];--> statement-breakpoint
 ALTER TABLE "users" ADD COLUMN "creator_unknown" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE TABLE "agent_review_hold_clears" (
+	"review_id" uuid PRIMARY KEY NOT NULL,
+	"cleared_by" uuid NOT NULL,
+	"cleared_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"reason" text NOT NULL
+);--> statement-breakpoint
+ALTER TABLE "agent_review_hold_clears" ADD CONSTRAINT "agent_review_hold_clears_review_id_agent_reviews_id_fk" FOREIGN KEY ("review_id") REFERENCES "public"."agent_reviews"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+-- The functions below look up the audit chain by (target, action, seq) once per row: without an index
+-- that is a scan of audit_log per row (only (action, seq) is indexed). Built here, dropped at the end.
+-- It takes a SHARE lock on audit_log (audit appends wait) for the duration of the migration.
+CREATE INDEX "oax_tmp_audit_target_idx" ON "audit_log" ("target", "action", "seq");--> statement-breakpoint
 -- The grantor columns are not read by the resolver: keep the authz epoch where it is.
 ALTER TABLE "tenant_role_bindings" DISABLE TRIGGER "authz_epoch_trb_upd";--> statement-breakpoint
 ALTER TABLE "team_members" DISABLE TRIGGER "authz_epoch_team_members_trg";--> statement-breakpoint
@@ -73,15 +90,14 @@ BEGIN
 END;
 $$;--> statement-breakpoint
 -- Re-check what 0036 attributed: a grantor the strict rule cannot reproduce becomes unknown.
-UPDATE "tenant_role_bindings" b SET "granted_by" = NULL, "grantor_unknown" = true
-WHERE b."source" = 'mirror' AND b."use_case" IS NULL AND b."granted_by" IS NOT NULL
-	AND EXISTS (SELECT 1 FROM "users" u WHERE u."id" = b."user_id" AND u."source" = 'local')
+UPDATE "tenant_role_bindings" b SET "grantor_unknown" = true
+WHERE b."source" = 'mirror' AND b."use_case" IS NULL AND b."granted_by" IS NOT NULL AND NOT b."grantor_unknown"
 	AND oax_tmp_mirror_actor(b."user_id", b."role") IS DISTINCT FROM b."granted_by";--> statement-breakpoint
-UPDATE "team_members" m SET "granted_by" = NULL, "grantor_unknown" = true
-WHERE m."granted_by" IS NOT NULL
+UPDATE "team_members" m SET "grantor_unknown" = true
+WHERE m."granted_by" IS NOT NULL AND NOT m."grantor_unknown"
 	AND oax_tmp_set_actor('team.members.set', 'team.created', m."team_id", m."user_id", m."role") IS DISTINCT FROM m."granted_by";--> statement-breakpoint
-UPDATE "agent_role_bindings" m SET "granted_by" = NULL, "grantor_unknown" = true
-WHERE m."granted_by" IS NOT NULL
+UPDATE "agent_role_bindings" m SET "grantor_unknown" = true
+WHERE m."granted_by" IS NOT NULL AND NOT m."grantor_unknown"
 	AND oax_tmp_set_actor('agent.members.set', 'agent.created', m."agent_id", m."user_id", m."role") IS DISTINCT FROM m."granted_by";--> statement-breakpoint
 -- "Nobody" is only right for rows the audit chain never shows an administrator setting: an
 -- identity-provider account whose role or membership an administrator listed before is unknown.
@@ -99,19 +115,50 @@ WHERE m."granted_by" IS NULL AND NOT m."grantor_unknown"
 	AND EXISTS (SELECT 1 FROM "audit_log" a WHERE a."action" = 'team.members.set' AND a."target" = m."team_id"::text
 		AND jsonb_path_exists(a."payload", '$.members[*] ? (@.userId == $u && @.role == $r)',
 			jsonb_build_object('u', m."user_id"::text, 'r', m."role")));--> statement-breakpoint
--- The chain of every row whose grantor is known is that grantor. The links further up are added by
--- the live walk at decision time, as before; rows granted from now on carry the full chain.
-UPDATE "tenant_role_bindings" SET "grant_chain" = ARRAY["granted_by"] WHERE "granted_by" IS NOT NULL;--> statement-breakpoint
-UPDATE "team_members" SET "grant_chain" = ARRAY["granted_by"] WHERE "granted_by" IS NOT NULL;--> statement-breakpoint
-UPDATE "agent_role_bindings" SET "grant_chain" = ARRAY["granted_by"] WHERE "granted_by" IS NOT NULL;--> statement-breakpoint
-UPDATE "users" SET "grant_chain" = ARRAY["created_by"] WHERE "created_by" IS NOT NULL;--> statement-breakpoint
 -- A local account nobody is shown to have made (not the bootstrap administrator) has an unknown creator.
 UPDATE "users" u SET "creator_unknown" = true
 WHERE u."created_by" IS NULL AND u."source" = 'local'
 	AND u."email" NOT IN (SELECT l."target" FROM "audit_log" l WHERE l."action" = 'user.bootstrap');--> statement-breakpoint
+-- The transitive chain of every existing row. Edges: an account to the account that created it, and
+-- an account to the grantor of each of its `admin` bindings (the roles that allow granting) that has
+-- not expired. A link with an unknown creator or grantor, or a walk of more than six hops, leaves the
+-- chain empty (null = unknown).
+CREATE TEMP TABLE "oax_tmp_edges" AS
+	SELECT u."id" AS src, u."created_by" AS dst, false AS unk FROM "users" u WHERE u."created_by" IS NOT NULL
+	UNION ALL SELECT u."id", NULL::uuid, true FROM "users" u WHERE u."creator_unknown"
+	UNION ALL SELECT b."user_id", b."granted_by", false FROM "tenant_role_bindings" b
+		WHERE b."role" = 'admin' AND b."granted_by" IS NOT NULL AND (b."expires_at" IS NULL OR b."expires_at" > now())
+	UNION ALL SELECT b."user_id", NULL::uuid, true FROM "tenant_role_bindings" b
+		WHERE b."role" = 'admin' AND b."grantor_unknown" AND (b."expires_at" IS NULL OR b."expires_at" > now());--> statement-breakpoint
+CREATE INDEX "oax_tmp_edges_src_idx" ON "oax_tmp_edges" ("src");--> statement-breakpoint
+CREATE TEMP TABLE "oax_tmp_reach" AS
+	WITH RECURSIVE r(origin, node, depth, unk, path) AS (
+		SELECT u."id", u."id", 0, false, ARRAY[u."id"] FROM "users" u
+		UNION ALL
+		SELECT r.origin, e.dst, r.depth + 1, r.unk OR e.unk, r.path || e.dst
+		FROM r JOIN "oax_tmp_edges" e ON e.src = r.node
+		WHERE r.depth < 7 AND r.node IS NOT NULL AND (e.dst IS NULL OR NOT e.dst = ANY (r.path))
+	)
+	SELECT origin, array_agg(DISTINCT node) FILTER (WHERE node IS NOT NULL) AS chain,
+		(bool_or(unk) OR bool_or(depth >= 7)) AS unknown
+	FROM r GROUP BY origin;--> statement-breakpoint
+CREATE INDEX "oax_tmp_reach_origin_idx" ON "oax_tmp_reach" ("origin");--> statement-breakpoint
+UPDATE "tenant_role_bindings" b SET "grant_chain" = r.chain
+FROM "oax_tmp_reach" r WHERE b."granted_by" IS NOT NULL AND NOT b."grantor_unknown" AND r.origin = b."granted_by" AND NOT r.unknown;--> statement-breakpoint
+UPDATE "team_members" b SET "grant_chain" = r.chain
+FROM "oax_tmp_reach" r WHERE b."granted_by" IS NOT NULL AND NOT b."grantor_unknown" AND r.origin = b."granted_by" AND NOT r.unknown;--> statement-breakpoint
+UPDATE "agent_role_bindings" b SET "grant_chain" = r.chain
+FROM "oax_tmp_reach" r WHERE b."granted_by" IS NOT NULL AND NOT b."grantor_unknown" AND r.origin = b."granted_by" AND NOT r.unknown;--> statement-breakpoint
+UPDATE "users" u SET "grant_chain" = r.chain
+FROM "oax_tmp_reach" r WHERE u."created_by" IS NOT NULL AND r.origin = u."created_by" AND NOT r.unknown;--> statement-breakpoint
+-- An account whose creator is known but whose chain is not (a link above it is unknown): unknown.
+UPDATE "users" SET "creator_unknown" = true WHERE "created_by" IS NOT NULL AND "grant_chain" IS NULL;--> statement-breakpoint
+DROP TABLE "oax_tmp_reach";--> statement-breakpoint
+DROP TABLE "oax_tmp_edges";--> statement-breakpoint
 DROP FUNCTION "oax_tmp_set_actor"(text, text, uuid, uuid, text);--> statement-breakpoint
 DROP FUNCTION "oax_tmp_mirror_actor"(uuid, text);--> statement-breakpoint
 DROP FUNCTION "oax_tmp_uuid"(text);--> statement-breakpoint
+DROP INDEX "oax_tmp_audit_target_idx";--> statement-breakpoint
 ALTER TABLE "tenant_role_bindings" ENABLE TRIGGER "authz_epoch_trb_upd";--> statement-breakpoint
 ALTER TABLE "team_members" ENABLE TRIGGER "authz_epoch_team_members_trg";--> statement-breakpoint
 ALTER TABLE "agent_role_bindings" ENABLE TRIGGER "authz_epoch_agent_role_bindings_trg";--> statement-breakpoint

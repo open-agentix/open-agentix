@@ -906,24 +906,34 @@ export class IdentityService {
     // The login rewrites the memberships from the group mapping. A membership that stays keeps who
     // granted it (an administrator may have set it through `team.members.set`): the rewrite must not
     // turn it into one nobody granted (rule A4, #356). Only a membership the mapping adds is nobody's.
-    const previous = await this.ctx.db.select().from(teamMembers).where(eq(teamMembers.userId, id));
-    await this.ctx.db.delete(teamMembers).where(eq(teamMembers.userId, id));
-    const values = mapped
-      .filter((m) => m.teamSlug)
-      .map((m) => {
-        const teamId = teamRows.find((t) => t.slug === m.teamSlug)?.id;
-        const kept = previous.find((r) => r.teamId === teamId && r.role === m.role);
-        return {
-          teamId,
-          userId: id,
-          role: m.role,
-          grantedBy: kept?.grantedBy ?? null,
-          grantorUnknown: kept?.grantorUnknown ?? false,
-          grantChain: kept?.grantChain ?? null,
-        };
-      })
-      .filter((v): v is typeof v & { teamId: string } => !!v.teamId);
-    if (values.length) await this.ctx.db.insert(teamMembers).values(values).onConflictDoNothing();
+    // Read, delete and insert are one transaction under the binding lock, like every other writer of
+    // a grantor (a concurrent `team.members.set` must not be lost between the read and the insert).
+    await this.ctx.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      const [home] = await tx.select().from(tenants).where(eq(tenants.id, tenantId));
+      if (home) {
+        await lockTreeShared(tx, home.rootId);
+        await lockBindings(tx, home.rootId);
+      }
+      const previous = await tx.select().from(teamMembers).where(eq(teamMembers.userId, id));
+      await tx.delete(teamMembers).where(eq(teamMembers.userId, id));
+      const values = mapped
+        .filter((m) => m.teamSlug)
+        .map((m) => {
+          const teamId = teamRows.find((r) => r.slug === m.teamSlug)?.id;
+          const kept = previous.find((r) => r.teamId === teamId && r.role === m.role);
+          return {
+            teamId,
+            userId: id,
+            role: m.role,
+            grantedBy: kept?.grantedBy ?? null,
+            grantorUnknown: kept?.grantorUnknown ?? false,
+            grantChain: kept?.grantChain ?? null,
+          };
+        })
+        .filter((v): v is typeof v & { teamId: string } => !!v.teamId);
+      if (values.length) await tx.insert(teamMembers).values(values).onConflictDoNothing();
+    });
     const [row] = await this.ctx.db.select().from(users).where(eq(users.id, id));
     return row!;
   }

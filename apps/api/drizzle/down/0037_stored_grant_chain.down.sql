@@ -4,7 +4,7 @@
 -- tenant_role_bindings, team_members, agent_role_bindings and users and users.creator_unknown: the
 -- stored grant chains and the "creator unknown" marker are lost (rule A4 goes back to the live
 -- chain). Rows that the migration turned into "grantor unknown" stay unknown; granted_by values stay.
--- The delete trigger goes back to the definition of 0036.
+-- It also drops agent_review_hold_clears (the released holds). The delete trigger goes back to the definition of 0036.
 CREATE OR REPLACE FUNCTION "oax_mark_grantor_unknown"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 	UPDATE "tenant_role_bindings" SET "grantor_unknown" = true WHERE "granted_by" = OLD."id";
@@ -13,6 +13,7 @@ BEGIN
 	RETURN OLD;
 END;
 $$;
+DROP TABLE IF EXISTS "agent_review_hold_clears";
 ALTER TABLE "users" DROP COLUMN IF EXISTS "creator_unknown";
 ALTER TABLE "users" DROP COLUMN IF EXISTS "grant_chain";
 ALTER TABLE "agent_role_bindings" DROP COLUMN IF EXISTS "grant_chain";
