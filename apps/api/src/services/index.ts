@@ -83,7 +83,7 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const agentReviews = new AgentReviewsService(ctx, audit, agents, lifecyclePolicy, catalog);
   agents.shadowPublish = (agent, source) => agentReviews.shadowPublish(agent, source);
   const reviewThreads = new ReviewThreadsService(ctx, audit, agents, agentReviews);
-  const reviewChanges = new ReviewChangesService(ctx, agents, agentReviews);
+  const reviewChanges = new ReviewChangesService(ctx, agents, agentReviews, lifecyclePolicy);
   const reviewInbox = new ReviewInboxService(ctx, agentReviews, lifecyclePolicy);
   const agentSummaries = new AgentSummaryService(ctx);
   const budgets = new BudgetsService(ctx, audit, agents);

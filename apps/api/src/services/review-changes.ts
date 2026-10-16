@@ -3,6 +3,7 @@ import {
   expandProfiles,
   loadAgentDefinition,
   summariseDefinition,
+  type LifecyclePolicy,
   type PublishedDefinition,
   type Principal,
   type SemanticChanges,
@@ -14,6 +15,7 @@ import { agentVersions } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
 import { reviewHead, type AgentReviewsService } from './agent-reviews.js';
 import type { AgentsService } from './agents.js';
+import type { LifecyclePolicyService } from './lifecycle-policy.js';
 
 /**
  * What a reviewer looks at besides the comments (ADR 0017 section 9): the base and head sources for
@@ -30,6 +32,16 @@ export interface ReviewChanges {
   headSource: string;
   facts: { base: SemanticFacts | null; head: SemanticFacts };
   changes: SemanticChanges;
+  /** The part of the tenant policy a reviewer needs to understand who may decide and why. */
+  policy: Pick<
+    LifecyclePolicy,
+    | 'requireApprovalForPublish'
+    | 'minApprovals'
+    | 'allowedApproverRoles'
+    | 'approverScope'
+    | 'approvalExpiryHours'
+    | 'allowTokenApprovals'
+  >;
   /** Agent rules arrive with ADR 0017 S8; until then no requirement is listed. */
   rules: { available: false; requirements: never[] };
 }
@@ -39,6 +51,7 @@ export class ReviewChangesService {
     private readonly ctx: AppContext,
     private readonly agents: AgentsService,
     private readonly reviews: AgentReviewsService,
+    private readonly policy: LifecyclePolicyService,
   ) {}
 
   async get(p: Principal, reviewId: string): Promise<ReviewChanges> {
@@ -57,6 +70,7 @@ export class ReviewChangesService {
     const catalog = await this.reviews.catalogOf(agent);
     const headFacts = summariseDefinition(expandProfiles(declared, catalog).definition, declared);
     const baseFacts = base ? baseFactsOf(base.source, base.definition) : null;
+    const policy = await this.policy.effectiveForTenant(agent.tenantId);
     return {
       reviewId: review.id,
       revision: { id: head.id, seq: head.seq, digest: head.digest },
@@ -66,6 +80,14 @@ export class ReviewChangesService {
       headSource: head.source,
       facts: { base: baseFacts, head: headFacts },
       changes: diffSummaries(baseFacts, headFacts),
+      policy: {
+        requireApprovalForPublish: policy.requireApprovalForPublish,
+        minApprovals: policy.minApprovals,
+        allowedApproverRoles: policy.allowedApproverRoles,
+        approverScope: policy.approverScope,
+        approvalExpiryHours: policy.approvalExpiryHours,
+        allowTokenApprovals: policy.allowTokenApprovals,
+      },
       rules: { available: false, requirements: [] },
     };
   }

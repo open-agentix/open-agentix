@@ -566,6 +566,11 @@ describe('the changes endpoint', () => {
     expect(c.facts.head).toMatchObject({ owner: 'team-sec', classification: 'internal' });
     expect(c.changes.scalars).toEqual([]);
     expect(c.rules).toEqual({ available: false, requirements: [] });
+    expect(c.policy).toMatchObject({
+      approverScope: 'tenant',
+      minApprovals: 1,
+      allowedApproverRoles: ['admin', 'agent-maintainer'],
+    });
     expect(c.revision.digest).toBe(review.revision.digest);
   });
 

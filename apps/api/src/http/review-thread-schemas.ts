@@ -1,4 +1,12 @@
-import { ANCHOR_SIDES, MAX_ANCHOR_LINE } from '@openagentix/core';
+import {
+  ANCHOR_SIDES,
+  APPROVER_ROLES,
+  APPROVER_SCOPES,
+  MAX_ANCHOR_LINE,
+  MAX_APPROVAL_EXPIRY_HOURS,
+  MAX_MIN_APPROVALS,
+  REQUIRE_APPROVAL_VALUES,
+} from '@openagentix/core';
 import { z } from 'zod';
 import { MAX_COMMENT_LENGTH } from '../services/agent-reviews.js';
 import { Id, Iso } from './schemas.js';
@@ -137,6 +145,16 @@ export const ReviewChangesSchema = z.object({
   headSource: z.string(),
   facts: z.object({ base: SemanticFactsSchema.nullable(), head: SemanticFactsSchema }),
   changes: SemanticChangesSchema,
+  policy: z
+    .object({
+      requireApprovalForPublish: z.enum(REQUIRE_APPROVAL_VALUES),
+      minApprovals: z.number().int().min(1).max(MAX_MIN_APPROVALS),
+      allowedApproverRoles: z.array(z.enum(APPROVER_ROLES)),
+      approverScope: z.enum(APPROVER_SCOPES),
+      approvalExpiryHours: z.number().int().min(1).max(MAX_APPROVAL_EXPIRY_HOURS),
+      allowTokenApprovals: z.boolean(),
+    })
+    .describe('the part of the effective lifecycle policy that decides who may approve'),
   rules: z
     .object({
       available: z.literal(false),
