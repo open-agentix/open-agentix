@@ -183,6 +183,13 @@
       "when": 1792700000000,
       "tag": "0031_tenant_use_case_attach",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792700000002,
+      "tag": "0033_role_restrictions_epoch",
+      "breakpoints": true
     }
   ]
 }
