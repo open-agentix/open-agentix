@@ -1,0 +1,122 @@
+{
+  "apiVersion": "awp.agenticworkflowprotocol.org/v1alpha1",
+  "kind": "Workflow",
+  "metadata": {
+    "name": "release-notes",
+    "version": "1.0.0",
+    "description": "Draft weekly release notes from a changelog excerpt and proofread them.",
+    "owner": {
+      "team": "team-docs"
+    },
+    "classification": "internal",
+    "labels": {
+      "domain": "documentation",
+      "useCase": "release-communication"
+    },
+    "integrity": {
+      "digest": "sha256:66356b7948b2cc429fd2800214ace694edb47a8d34d1f9ec892c8cd85cd16a8d"
+    }
+  },
+  "spec": {
+    "triggers": [
+      {
+        "type": "schedule",
+        "cron": "0 8 * * 1",
+        "timezone": "Europe/Berlin"
+      },
+      {
+        "type": "manual"
+      }
+    ],
+    "budget": {
+      "maxCostUsd": 0.25,
+      "maxSteps": 10,
+      "maxDuration": "600s",
+      "resources": {
+        "maxTokens": 30000
+      }
+    },
+    "agents": [
+      {
+        "id": "drafter",
+        "model": {
+          "provider": "simulated",
+          "name": "sim-1"
+        },
+        "instructions": "Write release notes from the changelog excerpt you are given. Group changes by theme.",
+        "permissions": {
+          "default": "deny",
+          "network": {
+            "egress": "deny",
+            "allowHosts": ["api.example.org"]
+          },
+          "secrets": ["changelog-reader"]
+        },
+        "x-openagentix-description": "Writes the first draft.",
+        "x-openagentix-model": {
+          "temperature": 0.2,
+          "maxTokensPerCall": 2000
+        },
+        "x-openagentix-credentialEnv": {
+          "changelog-reader": "CHANGELOG_TOKEN"
+        }
+      },
+      {
+        "id": "proofreader",
+        "model": {
+          "provider": "simulated",
+          "name": "sim-1"
+        },
+        "instructions": "Fix spelling and tone in the draft. Do not change facts.",
+        "permissions": {
+          "default": "deny",
+          "network": {
+            "egress": "deny",
+            "allowHosts": ["api.example.org"]
+          }
+        },
+        "budget": {
+          "resources": {
+            "maxTokens": 8000
+          }
+        },
+        "x-openagentix-outputs": [
+          {
+            "format": "report"
+          }
+        ]
+      }
+    ],
+    "workflow": [
+      {
+        "id": "drafter",
+        "type": "agent",
+        "agent": "drafter",
+        "outputs": [
+          {
+            "name": "result"
+          }
+        ]
+      },
+      {
+        "id": "proofreader",
+        "type": "agent",
+        "agent": "proofreader",
+        "outputs": [
+          {
+            "name": "result"
+          }
+        ],
+        "dependsOn": ["drafter"],
+        "task": "${{ steps.drafter.outputs.result }}"
+      }
+    ],
+    "secrets": [
+      {
+        "name": "changelog-reader",
+        "source": "openagentix",
+        "scope": ["drafter"]
+      }
+    ]
+  }
+}

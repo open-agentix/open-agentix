@@ -1,0 +1,96 @@
+{
+  "apiVersion": "awp.agenticworkflowprotocol.org/v1alpha1",
+  "kind": "Workflow",
+  "metadata": {
+    "name": "ticket-commenter",
+    "version": "1.0.0",
+    "description": "Read a ticket and add one comment after a human approves it.",
+    "owner": {
+      "team": "team-support"
+    },
+    "classification": "internal",
+    "integrity": {
+      "digest": "sha256:726f664609bfe29da1e106264081e6cdc30c39bbd11b15dfca131faa5b80320e"
+    }
+  },
+  "spec": {
+    "triggers": [
+      {
+        "type": "event",
+        "source": "tickets",
+        "eventType": "webhook.received"
+      }
+    ],
+    "inputs": [
+      {
+        "name": "event",
+        "type": "object",
+        "description": "Payload of the triggering event (untrusted external data)."
+      }
+    ],
+    "budget": {
+      "maxCostUsd": 0.1,
+      "resources": {
+        "maxTokens": 12000,
+        "maxToolCalls": 4
+      }
+    },
+    "agents": [
+      {
+        "id": "commenter",
+        "model": {
+          "provider": "simulated",
+          "name": "sim-1"
+        },
+        "instructions": "Read the ticket from the event. Write one short, factual comment that restates the open question.",
+        "tools": [
+          {
+            "type": "mcp",
+            "server": "tickets",
+            "tools": ["get_ticket", "add_comment"]
+          }
+        ],
+        "permissions": {
+          "default": "deny",
+          "network": {
+            "egress": "deny"
+          },
+          "tools": {
+            "tickets.get_ticket": {
+              "allow": true
+            },
+            "tickets.add_comment": {
+              "allow": true
+            }
+          }
+        }
+      }
+    ],
+    "workflow": [
+      {
+        "id": "commenter",
+        "type": "agent",
+        "agent": "commenter",
+        "outputs": [
+          {
+            "name": "result"
+          }
+        ],
+        "task": "${{ inputs.event }}"
+      }
+    ],
+    "approval": {
+      "requiredFor": ["tickets.add_comment"],
+      "approvers": [
+        {
+          "role": "operator"
+        },
+        {
+          "role": "admin"
+        }
+      ],
+      "timeout": "1800s",
+      "onTimeout": "fail"
+    }
+  }
+}
