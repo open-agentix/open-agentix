@@ -3811,6 +3811,1285 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/reviews/{id}/threads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the comment threads of a review
+         * @description Threads with their comments, oldest first. A thread on a line is `outdated` when the line no longer holds the same text in the current source of its side; it is kept, anchored to the revision it was written on. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                reviewId: string;
+                                /** Format: uuid */
+                                createdBy: string;
+                                /** @description `null` for a thread about the review as a whole */
+                                anchor: {
+                                    /** @enum {string} */
+                                    side: "base" | "head";
+                                    line: number;
+                                    /** @description SHA-256 of the line text, computed by the server */
+                                    lineHash: string;
+                                    /** @description the revision a `head` anchor was written on */
+                                    revisionId: string | null;
+                                    revisionSeq: number | null;
+                                } | null;
+                                /** @description the anchored line no longer holds the same text in the current source of its side */
+                                outdated: boolean;
+                                resolved: boolean;
+                                resolvedAt: string | null;
+                                resolvedBy: string | null;
+                                /** @description the caller started the thread or is an author of the review */
+                                canResolve: boolean;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                                comments: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    /** Format: uuid */
+                                    authorId: string;
+                                    /** @description empty when the comment was deleted */
+                                    body: string;
+                                    deleted: boolean;
+                                    /** @description ISO 8601 timestamp */
+                                    createdAt: string;
+                                    editedAt: string | null;
+                                }[];
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Start a comment thread on a line or on the review
+         * @description With `anchor` the thread is about one line of the diff (side `head`: the revision shown; side `base`: the base version); the server stores the SHA-256 of that line (`400 anchor_invalid` when the source has no such line). Without it the thread is about the review as a whole. Comment text is a Markdown subset shown without HTML, is limited to 10 000 characters (`400 comment_too_long`), a review holds at most 200 threads (`409 thread_limit_reached`) and a thread 200 comments (`409 comment_limit_reached`); creating comments is rate-limited per user (`429 rate_limited`). The review must be open (`409 review_closed`). The audit chain records ids and the length, never the text. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Markdown subset (no HTML, no images); at most 10000 characters after invisible characters are removed. Never copied to the audit chain, telemetry or a model context. */
+                        body: string;
+                        /** @description omit for a thread about the review as a whole */
+                        anchor?: {
+                            /** @enum {string} */
+                            side: "base" | "head";
+                            line: number;
+                            /**
+                             * Format: uuid
+                             * @description side `head`: the revision shown; defaults to the head
+                             */
+                            revisionId?: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            reviewId: string;
+                            /** Format: uuid */
+                            createdBy: string;
+                            /** @description `null` for a thread about the review as a whole */
+                            anchor: {
+                                /** @enum {string} */
+                                side: "base" | "head";
+                                line: number;
+                                /** @description SHA-256 of the line text, computed by the server */
+                                lineHash: string;
+                                /** @description the revision a `head` anchor was written on */
+                                revisionId: string | null;
+                                revisionSeq: number | null;
+                            } | null;
+                            /** @description the anchored line no longer holds the same text in the current source of its side */
+                            outdated: boolean;
+                            resolved: boolean;
+                            resolvedAt: string | null;
+                            resolvedBy: string | null;
+                            /** @description the caller started the thread or is an author of the review */
+                            canResolve: boolean;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            comments: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                authorId: string;
+                                /** @description empty when the comment was deleted */
+                                body: string;
+                                deleted: boolean;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                                editedAt: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reviews/{id}/threads/{tid}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reply in a comment thread
+         * @description Returns the thread. Comment text is a Markdown subset shown without HTML, is limited to 10 000 characters (`400 comment_too_long`), a review holds at most 200 threads (`409 thread_limit_reached`) and a thread 200 comments (`409 comment_limit_reached`); creating comments is rate-limited per user (`429 rate_limited`). The review must be open (`409 review_closed`). The audit chain records ids and the length, never the text. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    tid: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Markdown subset (no HTML, no images); at most 10000 characters after invisible characters are removed. Never copied to the audit chain, telemetry or a model context. */
+                        body: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            reviewId: string;
+                            /** Format: uuid */
+                            createdBy: string;
+                            /** @description `null` for a thread about the review as a whole */
+                            anchor: {
+                                /** @enum {string} */
+                                side: "base" | "head";
+                                line: number;
+                                /** @description SHA-256 of the line text, computed by the server */
+                                lineHash: string;
+                                /** @description the revision a `head` anchor was written on */
+                                revisionId: string | null;
+                                revisionSeq: number | null;
+                            } | null;
+                            /** @description the anchored line no longer holds the same text in the current source of its side */
+                            outdated: boolean;
+                            resolved: boolean;
+                            resolvedAt: string | null;
+                            resolvedBy: string | null;
+                            /** @description the caller started the thread or is an author of the review */
+                            canResolve: boolean;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            comments: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                authorId: string;
+                                /** @description empty when the comment was deleted */
+                                body: string;
+                                deleted: boolean;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                                editedAt: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reviews/{id}/threads/{tid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Resolve or reopen a comment thread
+         * @description Only the person who started the thread or a contributor of the review (an author of a revision since the base version, or the opener) can change the state (`403` otherwise). Idempotent. The review must be open. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    tid: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        resolved: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            reviewId: string;
+                            /** Format: uuid */
+                            createdBy: string;
+                            /** @description `null` for a thread about the review as a whole */
+                            anchor: {
+                                /** @enum {string} */
+                                side: "base" | "head";
+                                line: number;
+                                /** @description SHA-256 of the line text, computed by the server */
+                                lineHash: string;
+                                /** @description the revision a `head` anchor was written on */
+                                revisionId: string | null;
+                                revisionSeq: number | null;
+                            } | null;
+                            /** @description the anchored line no longer holds the same text in the current source of its side */
+                            outdated: boolean;
+                            resolved: boolean;
+                            resolvedAt: string | null;
+                            resolvedBy: string | null;
+                            /** @description the caller started the thread or is an author of the review */
+                            canResolve: boolean;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            comments: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                authorId: string;
+                                /** @description empty when the comment was deleted */
+                                body: string;
+                                deleted: boolean;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                                editedAt: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/v1/reviews/{id}/threads/{tid}/comments/{cid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete your own comment
+         * @description Only the author (`403` otherwise). The comment stays as an empty tombstone so that the thread keeps its shape; the text is gone. Allowed on a closed review too. Returns the thread. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    tid: string;
+                    cid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            reviewId: string;
+                            /** Format: uuid */
+                            createdBy: string;
+                            /** @description `null` for a thread about the review as a whole */
+                            anchor: {
+                                /** @enum {string} */
+                                side: "base" | "head";
+                                line: number;
+                                /** @description SHA-256 of the line text, computed by the server */
+                                lineHash: string;
+                                /** @description the revision a `head` anchor was written on */
+                                revisionId: string | null;
+                                revisionSeq: number | null;
+                            } | null;
+                            /** @description the anchored line no longer holds the same text in the current source of its side */
+                            outdated: boolean;
+                            resolved: boolean;
+                            resolvedAt: string | null;
+                            resolvedBy: string | null;
+                            /** @description the caller started the thread or is an author of the review */
+                            canResolve: boolean;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            comments: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                authorId: string;
+                                /** @description empty when the comment was deleted */
+                                body: string;
+                                deleted: boolean;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                                editedAt: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Edit your own comment
+         * @description Only the author (`403` otherwise); a deleted comment is `409 comment_deleted`. Returns the thread. Comment text is a Markdown subset shown without HTML, is limited to 10 000 characters (`400 comment_too_long`), a review holds at most 200 threads (`409 thread_limit_reached`) and a thread 200 comments (`409 comment_limit_reached`); creating comments is rate-limited per user (`429 rate_limited`). The review must be open (`409 review_closed`). The audit chain records ids and the length, never the text.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    tid: string;
+                    cid: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Markdown subset (no HTML, no images); at most 10000 characters after invisible characters are removed. Never copied to the audit chain, telemetry or a model context. */
+                        body: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            reviewId: string;
+                            /** Format: uuid */
+                            createdBy: string;
+                            /** @description `null` for a thread about the review as a whole */
+                            anchor: {
+                                /** @enum {string} */
+                                side: "base" | "head";
+                                line: number;
+                                /** @description SHA-256 of the line text, computed by the server */
+                                lineHash: string;
+                                /** @description the revision a `head` anchor was written on */
+                                revisionId: string | null;
+                                revisionSeq: number | null;
+                            } | null;
+                            /** @description the anchored line no longer holds the same text in the current source of its side */
+                            outdated: boolean;
+                            resolved: boolean;
+                            resolvedAt: string | null;
+                            resolvedBy: string | null;
+                            /** @description the caller started the thread or is an author of the review */
+                            canResolve: boolean;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            comments: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                authorId: string;
+                                /** @description empty when the comment was deleted */
+                                body: string;
+                                deleted: boolean;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                                editedAt: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/v1/reviews/{id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a review changes: sources, semantic summary and expanded grants
+         * @description The base version and the reviewed revision (sources for the diff), the semantic summary of both (tools with their access class and the profile they came from, egress hosts, secret references by name, budget, classification, runtime, owner) and the changes between them. The head is expanded against the connection catalog of now. Secret references carry no scope or owning node until the secret store exists (`scope: legacy`). `rules` is empty until agent rules exist. Needs `agents:read` on the agent; another tenant or an unreadable agent is 404.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            reviewId: string;
+                            revision: {
+                                /** Format: uuid */
+                                id: string;
+                                seq: number;
+                                digest: string;
+                            };
+                            base: {
+                                /** Format: uuid */
+                                id: string;
+                                version: string;
+                                digest: string;
+                                source: string;
+                            } | null;
+                            headSource: string;
+                            facts: {
+                                base: {
+                                    name: string;
+                                    version: string;
+                                    owner: string;
+                                    classification: string;
+                                    useCase: string | null;
+                                    runtime: {
+                                        runner: string;
+                                        toolbox: string | null;
+                                    };
+                                    egress: string[];
+                                    budget: {
+                                        [key: string]: number | null;
+                                    };
+                                    stepBudgets: {
+                                        [key: string]: {
+                                            [key: string]: number | null;
+                                        };
+                                    };
+                                    tools: {
+                                        key: string;
+                                        server: string;
+                                        tool: string;
+                                        /** @enum {string} */
+                                        access: "read" | "write" | "unclassified";
+                                        /** @enum {string} */
+                                        approval: "none" | "required";
+                                        maxCallsPerRun: number | null;
+                                        classification: string | null;
+                                        /** @description `server:profile` when the grant came from a profile */
+                                        profile: string | null;
+                                        steps: string[];
+                                    }[];
+                                    secretReferences: {
+                                        name: string;
+                                        /**
+                                         * @description scoped references arrive with the secret store (ADR 0017 S4)
+                                         * @enum {string}
+                                         */
+                                        scope: "legacy";
+                                        ownerNode: string | null;
+                                        env: string | null;
+                                        steps: string[];
+                                    }[];
+                                    steps: {
+                                        id: string;
+                                        provider: string;
+                                        model: string;
+                                        access: string | null;
+                                    }[];
+                                } | null;
+                                head: {
+                                    name: string;
+                                    version: string;
+                                    owner: string;
+                                    classification: string;
+                                    useCase: string | null;
+                                    runtime: {
+                                        runner: string;
+                                        toolbox: string | null;
+                                    };
+                                    egress: string[];
+                                    budget: {
+                                        [key: string]: number | null;
+                                    };
+                                    stepBudgets: {
+                                        [key: string]: {
+                                            [key: string]: number | null;
+                                        };
+                                    };
+                                    tools: {
+                                        key: string;
+                                        server: string;
+                                        tool: string;
+                                        /** @enum {string} */
+                                        access: "read" | "write" | "unclassified";
+                                        /** @enum {string} */
+                                        approval: "none" | "required";
+                                        maxCallsPerRun: number | null;
+                                        classification: string | null;
+                                        /** @description `server:profile` when the grant came from a profile */
+                                        profile: string | null;
+                                        steps: string[];
+                                    }[];
+                                    secretReferences: {
+                                        name: string;
+                                        /**
+                                         * @description scoped references arrive with the secret store (ADR 0017 S4)
+                                         * @enum {string}
+                                         */
+                                        scope: "legacy";
+                                        ownerNode: string | null;
+                                        env: string | null;
+                                        steps: string[];
+                                    }[];
+                                    steps: {
+                                        id: string;
+                                        provider: string;
+                                        model: string;
+                                        access: string | null;
+                                    }[];
+                                };
+                            };
+                            changes: {
+                                tools: {
+                                    added: {
+                                        key: string;
+                                        server: string;
+                                        tool: string;
+                                        /** @enum {string} */
+                                        access: "read" | "write" | "unclassified";
+                                        /** @enum {string} */
+                                        approval: "none" | "required";
+                                        maxCallsPerRun: number | null;
+                                        classification: string | null;
+                                        /** @description `server:profile` when the grant came from a profile */
+                                        profile: string | null;
+                                        steps: string[];
+                                    }[];
+                                    removed: {
+                                        key: string;
+                                        server: string;
+                                        tool: string;
+                                        /** @enum {string} */
+                                        access: "read" | "write" | "unclassified";
+                                        /** @enum {string} */
+                                        approval: "none" | "required";
+                                        maxCallsPerRun: number | null;
+                                        classification: string | null;
+                                        /** @description `server:profile` when the grant came from a profile */
+                                        profile: string | null;
+                                        steps: string[];
+                                    }[];
+                                    changed: {
+                                        from: {
+                                            key: string;
+                                            server: string;
+                                            tool: string;
+                                            /** @enum {string} */
+                                            access: "read" | "write" | "unclassified";
+                                            /** @enum {string} */
+                                            approval: "none" | "required";
+                                            maxCallsPerRun: number | null;
+                                            classification: string | null;
+                                            /** @description `server:profile` when the grant came from a profile */
+                                            profile: string | null;
+                                            steps: string[];
+                                        };
+                                        to: {
+                                            key: string;
+                                            server: string;
+                                            tool: string;
+                                            /** @enum {string} */
+                                            access: "read" | "write" | "unclassified";
+                                            /** @enum {string} */
+                                            approval: "none" | "required";
+                                            maxCallsPerRun: number | null;
+                                            classification: string | null;
+                                            /** @description `server:profile` when the grant came from a profile */
+                                            profile: string | null;
+                                            steps: string[];
+                                        };
+                                    }[];
+                                };
+                                egress: {
+                                    added: string[];
+                                    removed: string[];
+                                };
+                                secretReferences: {
+                                    added: {
+                                        name: string;
+                                        /**
+                                         * @description scoped references arrive with the secret store (ADR 0017 S4)
+                                         * @enum {string}
+                                         */
+                                        scope: "legacy";
+                                        ownerNode: string | null;
+                                        env: string | null;
+                                        steps: string[];
+                                    }[];
+                                    removed: {
+                                        name: string;
+                                        /**
+                                         * @description scoped references arrive with the secret store (ADR 0017 S4)
+                                         * @enum {string}
+                                         */
+                                        scope: "legacy";
+                                        ownerNode: string | null;
+                                        env: string | null;
+                                        steps: string[];
+                                    }[];
+                                };
+                                scalars: {
+                                    field: string;
+                                    from: string | number | null;
+                                    to: string | number | null;
+                                }[];
+                            };
+                            /** @description the part of the effective lifecycle policy that decides who may approve */
+                            policy: {
+                                /** @enum {string} */
+                                requireApprovalForPublish: "off" | "production-only" | "on";
+                                minApprovals: number;
+                                allowedApproverRoles: ("admin" | "agent-maintainer" | "agent-developer" | "operator")[];
+                                /** @enum {string} */
+                                approverScope: "tenant" | "team" | "other-team";
+                                approvalExpiryHours: number;
+                                allowTokenApprovals: boolean;
+                            };
+                            /** @description agent rules arrive with ADR 0017 S8; until then nothing is listed */
+                            rules: {
+                                /** @enum {boolean} */
+                                available: false;
+                                requirements: unknown[];
+                            };
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reviews/{id}/people": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Display names of the people a review involves
+         * @description User id to display name for the opener, the authors of revisions, the reviewers and the authors and resolvers of comments, so that the console can show names. Only accounts of the acting tenant are named. Needs `agents:read` on the agent; another tenant or an unreadable agent is 404.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description user id to display name */
+                            people: {
+                                [key: string]: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Your review inbox: open reviews you could decide now
+         * @description Open reviews of the acting tenant, newest first, for agents you can read and where the approval rules (A1 to A7) would let you decide. Reviews you are not eligible for are not listed. Looks at the newest 100 open reviews of the tenant.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                reviewId: string;
+                                /** Format: uuid */
+                                agentId: string;
+                                agentName: string;
+                                state: string;
+                                /** Format: uuid */
+                                openedBy: string;
+                                /** @description ISO 8601 timestamp */
+                                openedAt: string;
+                                revisionSeq: number;
+                                requiredApprovals: number;
+                                countedApprovals: number;
+                                yourDecision: ("approve" | "request_changes" | "reject") | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/event-sources": {
         parameters: {
             query?: never;

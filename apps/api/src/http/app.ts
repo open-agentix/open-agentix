@@ -44,6 +44,7 @@ import { registerRunRoutes } from './routes/runs.js';
 import { registerSystemRoutes } from './routes/system.js';
 import { registerBudgetRoutes } from './routes/budgets.js';
 import { registerReviewRoutes } from './routes/reviews.js';
+import { registerReviewThreadRoutes } from './routes/review-threads.js';
 import { registerTenantRoutes } from './routes/tenants.js';
 import { registerUserRoutes } from './routes/users.js';
 import { registerWorkerRoutes } from './routes/worker.js';
@@ -369,6 +370,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   registerAuthRoutes(typed, deps);
   registerAgentRoutes(typed, deps);
   registerReviewRoutes(typed, deps);
+  registerReviewThreadRoutes(typed, deps);
   registerEventRoutes(typed, deps);
   registerRunRoutes(typed, deps);
   registerCatalogRoutes(typed, deps);

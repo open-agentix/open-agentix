@@ -1,11 +1,20 @@
 import { useQuery } from '@tanstack/react-query';
+import { lazy, Suspense } from 'react';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ApiError } from '../../api/client';
-import { agentQuery, agentVersionQuery, agentVersionsQuery, useTeamNames } from '../../api/queries';
+import {
+  agentQuery,
+  agentReviewsQuery,
+  agentVersionQuery,
+  agentVersionsQuery,
+  useTeamNames,
+} from '../../api/queries';
 import { useCan } from '../../auth/auth';
 import { Icon } from '../../components/Icon';
 import { ItemNotFound } from '../../components/ItemNotFound';
 import { Badge, ErrorState, Loading, PageHeader, TabPanel, Tabs } from '../../components/ui';
+import { LifecycleBadge } from '../reviews/LifecycleBadge';
+import { openReviewOf } from '../reviews/lifecycleStatus';
 import { useI18n } from '../../i18n/i18n';
 import { useDocumentTitle } from '../../lib/hooks';
 import type { AgentTab } from '../../router';
@@ -16,6 +25,11 @@ import { TestRunTab } from './TestRunTab';
 import { VersionsTab } from './VersionsTab';
 
 const route = getRouteApi('/_app/agents/$agentId');
+
+// The review tab brings its own parser and components: load them when somebody opens it.
+const ReviewTab = lazy(() =>
+  import('../reviews/ReviewTab').then((m) => ({ default: m.ReviewTab })),
+);
 
 export function AgentDetailPage() {
   const { t, fmt } = useI18n();
@@ -30,6 +44,8 @@ export function AgentDetailPage() {
     ...agentVersionQuery(agentId, latestVersion ?? ''),
     enabled: !!latestVersion,
   });
+  const reviews = useQuery(agentReviewsQuery(agentId));
+  const openReview = openReviewOf(reviews.data?.items ?? []);
   const teamNames = useTeamNames();
   useDocumentTitle(agent.data?.name ?? t('agents.title'));
   const tab: AgentTab = search.tab ?? 'overview';
@@ -53,6 +69,7 @@ export function AgentDetailPage() {
     { key: 'editor' as const, label: t('agents.tabs.editor') },
     { key: 'versions' as const, label: t('agents.tabs.versions') },
     { key: 'diff' as const, label: t('agents.tabs.diff') },
+    { key: 'review' as const, label: t('agents.tabs.review') },
     ...(can('runs:execute') ? [{ key: 'test' as const, label: t('agents.tabs.test') }] : []),
   ];
   return (
@@ -70,7 +87,8 @@ export function AgentDetailPage() {
               <Badge tone="success">v{a.latestVersion}</Badge>
             ) : (
               <Badge>{t('agents.draftOnly')}</Badge>
-            )}
+            )}{' '}
+            <LifecycleBadge agent={a} review={openReview} />
           </>
         }
         description={
@@ -109,6 +127,10 @@ export function AgentDetailPage() {
               void navigate({ search: (s) => ({ ...s, from, to }), replace: true })
             }
           />
+        ) : tab === 'review' ? (
+          <Suspense fallback={<Loading />}>
+            <ReviewTab agent={a} />
+          </Suspense>
         ) : (
           <TestRunTab agent={a} versions={versions.data?.items ?? []} latest={latest.data} />
         )}

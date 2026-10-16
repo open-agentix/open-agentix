@@ -55,6 +55,39 @@ export const mcpRelayRefusal = () => new HttpError(404, 'not_found', 'MCP server
 export const forbidden = (msg = 'insufficient permissions') => new HttpError(403, 'forbidden', msg);
 export const conflict = (msg: string) => new HttpError(409, 'conflict', msg);
 
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+
+/**
+ * What a failed database statement may put in a log. drizzle's `DrizzleQueryError` carries the
+ * statement and its **parameters** in its message, and a PostgreSQL error carries the failing row
+ * in `detail`: both can hold tenant content (comment text, agent sources). Only the code, the
+ * constraint, the table and the statement with its placeholders are kept.
+ */
+export function loggableError(err: unknown): unknown {
+  // The whole cause chain: a wrapper around a failed statement logs the causes' messages too.
+  let e: unknown = err;
+  for (let depth = 0; depth < 10 && isObject(e); depth++) {
+    const cause = isObject(e.cause) ? e.cause : undefined;
+    const pg = cause ?? e;
+    const looksDb =
+      e.name === 'DrizzleQueryError' ||
+      (typeof e.message === 'string' && e.message.includes('Failed query:')) ||
+      (typeof pg.severity === 'string' && typeof pg.code === 'string');
+    if (looksDb) {
+      return {
+        type: 'DatabaseError',
+        message: 'database statement failed',
+        code: typeof pg.code === 'string' ? pg.code : undefined,
+        constraint: typeof pg.constraint === 'string' ? pg.constraint : undefined,
+        table: typeof pg.table === 'string' ? pg.table : undefined,
+        query: typeof e.query === 'string' ? e.query : undefined,
+      };
+    }
+    e = e.cause;
+  }
+  return err;
+}
+
 export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((err: FastifyError | OaxError | Error, req, reply) => {
     if (hasZodFastifySchemaValidationErrors(err)) {
@@ -92,7 +125,7 @@ export function registerErrorHandler(app: FastifyInstance): void {
         .status(fe.statusCode)
         .send({ error: fe.code ?? 'bad_request', message: fe.message });
     }
-    req.log.error({ err }, 'unhandled error');
+    req.log.error({ err: loggableError(err) }, 'unhandled error');
     return reply.status(500).send({ error: 'internal_error', message: 'internal server error' });
   });
 }

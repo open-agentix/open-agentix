@@ -289,6 +289,10 @@ describe.each(sqlTargets)('migration 0032 on existing data (%s)', (_kind, enable
   });
 
   it('is reverted by the down script', async () => {
+    // later migrations first: 0034 depends on the review tables
+    await c.script(
+      readFileSync(join(MIGRATIONS_FOLDER, 'down/0034_review_threads.down.sql'), 'utf8'),
+    );
     await c.script(DOWN);
     const cols = async (t: string) =>
       (
