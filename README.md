@@ -163,8 +163,9 @@ project; openagentix is one implementation of it, with no special rights over th
 
 **Not implemented today:** openagentix uses its own `agents.md` format. It does not read AWP
 manifests and is **not conformant** to any AWP profile; no conformance statement has been published.
-Work towards conformance is in progress; a pinned copy of the draft schema is vendored for it
-(see [docs/awp.md](docs/awp.md)). Wording: built to the AWP schema, conformance in progress (alpha).
+Work towards conformance is in progress; a pinned copy of the draft schema is vendored for it, and a
+published agent version can be exported as an AWP manifest (a mapping that refuses what AWP cannot yet
+express; see [docs/awp.md](docs/awp.md)). Wording: built to the AWP schema, conformance in progress (alpha).
 
 ## Contributing
 
