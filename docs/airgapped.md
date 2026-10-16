@@ -89,9 +89,28 @@ OAX_OTEL_INSECURE=true
   *empty* allowlist and asserts that the run succeeds and that **zero** egress attempts were
   recorded; a second test proves the guard is live by triggering real attempts that throw.
 
+MCP: allowlist checks of stored connections, their `egress` entries and OAuth endpoints are in
+`apps/api/test/airgap.test.ts`, `mcp-oauth-*.test.ts` and `packages/mcp/test/http-egress.test.ts`.
+
 Tenant-owned exporters are covered by `apps/api/test/telemetry-connection.test.ts` (endpoint refused
 outside the allowlist, stored connection checked at start-up in `airgap.test.ts`) and
 `apps/api/test/telemetry-tenant.test.ts` (a dispatcher with an air-gapped network sends nothing).
+
+## MCP servers in air-gapped mode
+
+- HTTP MCP servers (and the authorization servers of `oauth` connections) are contacted by the
+  **control node**: the api (relay for run nodes, connection tests, OAuth) and the worker (in-process
+  steps). Run nodes never connect to them, so the node network needs no route to your MCP servers;
+  the api and worker do, and the targets must be on `OAX_AIRGAPPED_ALLOW` (checked at start-up, at save
+  time and before every request). Mirror them in the api and worker NetworkPolicy as well.
+- Stdio servers: `egress` entries must be plain hosts on the allowlist; run nodes cannot resolve names;
+  platform stdio connections need `OAX_AIRGAPPED_STDIO=trusted`.
+- OAuth: pre-registered clients only; `OAX_MCP_OAUTH_CIMD` and `OAX_MCP_OAUTH_DCR` stop the start.
+- Tool pinning needs no network. Set `OAX_MCP_REQUIRE_TOOL_PIN=true` so that no unreviewed definition
+  reaches a model.
+- What the real-engine abuse suite does and does not cover is in
+  [`mcp.md`](mcp.md#abuse-suite-against-a-real-container-engine); it does **not** include an
+  air-gapped full run with an MCP server. Residual risks: [`threat-model-mcp.md`](threat-model-mcp.md).
 
 ## Offline bundle checklist
 

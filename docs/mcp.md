@@ -5,6 +5,23 @@ Secrets are referenced by name (`envSecrets`, `headerSecrets`), never stored. Th
 tool classification and the named **profiles** of
 [ADR 0008](adr/0008-agents-md-data-flow-and-isolation-contract.md), section 1.3.
 
+## How MCP traffic is controlled
+
+Four mechanisms of [ADR 0016](adr/0016-mcp-egress-and-authorization.md) work together. Each has its
+own section below; this table says which one applies where.
+
+| Question | Answer | Section |
+| --- | --- | --- |
+| Where can a server run? | **HTTP** servers are contacted by the control node (api, or the worker for in-process steps). **stdio** servers of tenants run only in run nodes; operator (platform) stdio servers may run in the worker. | [HTTP MCP servers](#http-mcp-servers-streamable-http), [Stdio MCP servers](#stdio-mcp-servers) |
+| What can it reach? | An HTTP server: its own URL, through the outbound dispatcher (https, public addresses, pinned DNS, no redirects). A stdio server: nothing unless its connection lists `egress`, then only those hosts through its own proxy account. A run node: only the control node and the egress proxy. | [HTTP](#http-mcp-servers-streamable-http), [Egress of stdio servers](#egress-of-stdio-servers) |
+| How does a run node call an HTTP server? | It does not connect: every call goes through the **relay** on the control node, which holds the credentials. | [Relay](#control-node-relay-for-run-nodes) |
+| How does it authenticate? | `none`, static `headerSecrets` (resolved on the control node), or `oauth` (client credentials or authorization code with PKCE). Tokens exist only in api and worker, encrypted at rest. | [OAuth](#oauth-for-http-mcp-connections), [Key service](#stored-oauth-tokens-and-the-key-service) |
+| What if the server changes its tools? | Granted tools are pinned by digest at publish. A mismatch at run time exposes none of that connection's tools and fails the step (`mcp_tools_changed`) until an admin re-approves. | [Pinned tool definitions](#pinned-tool-definitions) |
+| What is proven, what is not? | [Abuse suite](#abuse-suite-against-a-real-container-engine) and the [threat model](threat-model-mcp.md), which lists the residual risks. | |
+
+Air-gapped installations: [`airgapped.md`](airgapped.md). Every variable named here is in
+[`configuration.md`](configuration.md).
+
 ## Declare tool classes and profiles
 
 ```json
@@ -236,7 +253,7 @@ send secrets to `tools/list` in the first place.
 | `POST .../{digest}/approve` `{ "scope" }` | `connections:write` | `new-versions` or `existing-versions` (below). Audited as `mcp.tools.approved`. |
 | `POST .../{digest}/reject` | `connections:write` | Marks a pending snapshot `rejected` (`mcp.tools.rejected`). A later explicit refresh that sees the same list reopens it. |
 
-Approving needs `connections:write` (admin and integrator), which agent engineers, who publish, do not
+Approving needs `connections:write` (admin and integrator), which agent maintainers, who publish, do not
 have: whoever publishes an agent cannot approve the tools it will use. A platform connection can only
 be refreshed, approved and rejected by platform operators; tenants can read its snapshots. A
 connection or digest of another tenant answers `404`, exactly like one that does not exist.
@@ -362,7 +379,8 @@ platform stores. Nothing is stored in plaintext.
 - **Redaction.** Before `accessToken` returns, the value is registered with the run's `ContextGuard`
   and with a bounded per-process registry (Aho-Corasick; scanning cost follows the text, not the number
   of tokens). Spellings indexed: the value, percent-encoded in either case, JSON-escaped and the three
-  base64 alignments; hex and base64url are not indexed (the run's `ContextGuard` still matches them).
+  base64 alignments; hex and base64url are not indexed in logs, audit entries and API responses (only the
+  run's `ContextGuard`, which covers model context, matches them; #309).
   Values belong to the tenant of the connection:
   - audit payloads (string leaves, before hashing), JSON responses, run and model event streams are
     scrubbed with the values of the tenant they are written or served for (run-token routes use the
@@ -551,7 +569,7 @@ process-local single flight plus a PostgreSQL transaction-scoped advisory lock a
 that waited for the lock re-reads the row and finds the new token. A client-credentials connection is always renewed with a
 new client-credentials grant (RFC 6749 section 4.4.3); a refresh token such a server may issue is ignored,
 so a lost rotated token can never force a manual re-authorization. For the authorization-code grant
-(later slice) a stored refresh token is used and a rotated one is written together with the new access
+(see [Authorization code with PKCE](#authorization-code-with-pkce)) a stored refresh token is used and a rotated one is written together with the new access
 token in one row update inside the lock's transaction (a failure before the commit leaves the previous
 pair untouched). The renewal only ever UPDATEs the row it read under the lock and never inserts, and every
 deletion of the tokens (disconnect, URL or client change) takes the same advisory lock, so a renewal can
@@ -943,10 +961,12 @@ must lie within the allowlist. Names are not resolved by the node (see "DNS"). W
 runner the per-node NetworkPolicy applies to the whole Pod, and `OAX_K8S_DNS_EGRESS=true` opens
 kube-dns only with `OAX_K8S_DNS_EGRESS_ACK=true`.
 
-**Upgrading (egress accounts).** When egress accounts are sent, line 2 of the node's stdin is the
-marker `oax-bundle:v2`. A run-node image from before ADR 0016 S2 reads it as the step's proxy URL
-and refuses to start (`config_invalid`), so a mixed install fails closed instead of handing the
-step's account to every server. Bundles without egress are the bare token, as before.
+**Upgrading (egress accounts).** The node's stdin always carries
+the marker `oax-bundle:v3` on line 2 (v2 carried the egress accounts, ADR 0016 S2; v3 adds "HTTP MCP
+servers go through the relay", S4). A run-node image from before S2 reads it as the step's proxy
+URL, one from before S4 refuses the unknown version; both refuse to start (`config_invalid`), so a
+mixed install fails closed instead of handing the step's account to every server or dialling an
+HTTP server without a credential. Update api, worker and run-node images together.
 
 **Upgrading.** The step handover carries a new field `stdio` when a tenant stdio server is
 involved. Run-node images older than this change reject the unknown field (strict schema) and fail
@@ -1014,7 +1034,8 @@ connect to them at all, the control-node relay (slice S4) does, so they never be
 - Children of one node run as the same UID and can read each other's environment through
   `/proc/<pid>/environ`, including the proxy account (#140). The per-server grant stops honest and
   buggy servers and simple supply-chain payloads, not a determined attacker inside the node; run
-  untrusted servers in containers of their own (ADR 0016 section 3.3, not implemented yet).
+  untrusted servers in containers of their own (the `container` MCP transport of ADR 0016
+  section 3.3 does not exist yet; until then there is no strong wall between stdio servers).
 - Platform stdio servers that run in the worker process (in-process steps) share the worker's
   network; `egress` has no effect there (operator responsibility; air-gapped mode needs
   `OAX_AIRGAPPED_STDIO=trusted`).
@@ -1023,9 +1044,50 @@ connect to them at all, the control-node relay (slice S4) does, so they never be
 - There is no connection-type catalog yet (ADR 0012), so the floor of a catalog type is the
   operator's `OAX_MCP_STDIO_EGRESS` per program. The proxy ceiling and the air-gapped allowlist are
   enforced as described; a signed-image check of toolbox binaries is separate (#29).
-- The real-engine test (zero unexpected connections, raw socket and DNS from a node refused) is
-  opt-in (`OAX_TEST_DOCKER=1`, `packages/runners/test/container.integration.test.ts`); the
-  unit tests cover the proxy accounts and the run node, not the kernel's network namespace.
+- The real-engine tests (zero unexpected connections, raw socket and DNS from a node refused) are
+  opt-in; see [Abuse suite](#abuse-suite-against-a-real-container-engine). The unit tests cover the
+  proxy accounts and the run node's child environments, not the kernel's network namespace.
 
-**Not covered yet** (later ADR 0016 slices): the shared UID of a node's children and signed toolbox
-images.
+**Not covered**: the shared UID of a node's children (#140) and signed toolbox images (#29).
+
+## Abuse suite against a real container engine
+
+ADR 0016 section 10 asks for tests that need a real engine: counting connections, container
+networks, real DNS. They live in `apps/api/test/mcp-abuse-*.integration.test.ts`, extend the opt-in
+container test (W1-3b-10, `packages/runners/test/container.integration.test.ts`) and **never run in
+the default `pnpm test`** (they are skipped unless `OAX_TEST_DOCKER=1`). The "malicious" parties are
+small lab servers in throwaway containers (`apps/api/test/fixtures/lab-server.mjs`, a UDP resolver
+that changes its answers in `lab-dns.mjs`); everything the suite creates is named `oax-s8-<pid>-*`
+and removed at the end.
+
+| File | What it proves |
+| --- | --- |
+| `mcp-abuse-egress` | A real run node (real `ContainerRunner` on an `internal` network, real `EgressProxy`) with a toolbox binary, a stdio server **A** with egress and a stdio server **B** without: each reaches only its own destination, B has no proxy, no route and no name resolution, the proxy log shows exactly the expected tunnels per account, the upstream servers saw exactly the expected requests and a canary server saw none. The run token and the proxy grants appear neither in the node's environment, command lines, `docker inspect` nor logs. |
+| `mcp-abuse-network` | Rug pull (changed description, hidden character, schema, title, annotation, output schema, renamed or removed tool: no tool exposed, no `tools/call` reaches the server). SSRF: internal names and addresses, the metadata address and plain http refused with the canary untouched; redirects from the MCP server, from protected-resource metadata, from authorization-server metadata and from the token endpoint not followed; a challenge naming another origin refused; mismatching issuer, oversized, slow and non-JSON metadata refused. DNS rebinding with a real resolver whose answers flip to the canary: no packet reaches it. |
+| `mcp-abuse-leak` | Canary access token and client secret from a real authorization server over TLS: the values crossed the wire, yet are absent from tool results and errors of an echoing server, log lines, every connection endpoint, the audit log and the OpenAPI document (redactor emptied, so structural leaks show), and from a live run node started next to the stored token. |
+
+**Run it** (after `pnpm install`) inside a container that can reach the engine socket (the tests attach that container to
+their throwaway networks and host the egress proxy in it). Images must exist locally; nothing is
+pulled. With Docker:
+
+```bash
+IMG=$(docker image inspect node:22-alpine --format '{{index .RepoDigests 0}}')
+docker run --rm --name oax-s8-runner -v "$PWD":/work -w /work \
+  -v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/local/bin/docker:ro \
+  -e OAX_TEST_DOCKER=1 -e OAX_TEST_ALLOW_RAW_SOCKET=1 -e OAX_TEST_IMAGE="$IMG" \
+  -e OAX_TEST_SELF=oax-s8-runner node:22-bookworm \
+  node_modules/.bin/vitest run --maxWorkers=2 apps/api/test/mcp-abuse-
+```
+
+`OAX_TEST_OPENSSL_IMAGE` (default `node:22-bookworm`) generates the throwaway CA for the TLS lab
+servers; `OAX_TEST_ENGINE_URL` selects another engine socket. Run it on a host you may load
+(networks, a few containers, about a minute); do not point it at a shared engine without checking
+the names above first.
+
+**Limits of this evidence.** The node in the egress test runs a probe program, not the platform's
+own run-node program (that needs the worker image), so how the worker splits accounts between
+children is covered by `mcp-stdio-egress.test.ts` with real child processes instead. Not covered
+by the suite: the Kubernetes runner (rendered policies are unit-tested), Podman, an air-gapped full
+run with an allowlisted MCP server, the OAuth authorization-code flow against a container, and the
+end-to-end form of "no token in a live node" (#305). The [threat model](threat-model-mcp.md) lists
+what remains open.

@@ -297,7 +297,7 @@ describe.each(sqlTargets)(
           await n.services.identity.setAgentMembers(
             { userId: op().userId, tenantId: DEFAULT_TENANT_ID },
             agentId,
-            [{ userId: b, role: 'agent-engineer' }],
+            [{ userId: b, role: 'agent-maintainer' }],
           );
         const before = await shadow();
         const all = await n.ctx.db.select().from(usersTable);

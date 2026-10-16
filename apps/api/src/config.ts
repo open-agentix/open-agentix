@@ -547,6 +547,27 @@ export function mapGroupsToBindings(
   return [...out.values()];
 }
 
+/** Role names that were renamed without an alias, with the name that replaces them. */
+const RENAMED_ROLES: Readonly<Record<string, string>> = { 'agent-engineer': 'agent-maintainer' };
+
+/**
+ * Refuses a group mapping that still names a renamed role (ADR 0017 follow-up decision F2): the
+ * role `agent-engineer` is gone, and silently skipping it would leave the groups without access.
+ */
+export function assertNoRenamedRoles(variable: string, mapping: RoleMapping | undefined): void {
+  for (const [group, targets] of Object.entries(mapping ?? {})) {
+    for (const target of Array.isArray(targets) ? targets : [targets]) {
+      const role = target.split('@')[0] ?? '';
+      const replacement = RENAMED_ROLES[role];
+      if (replacement)
+        throw new OaxError(
+          'config_invalid',
+          `invalid configuration: ${variable} maps group "${group}" to the removed role "${role}"; use "${replacement}"`,
+        );
+    }
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = EnvSchema.safeParse(env);
   if (!parsed.success) {
@@ -554,6 +575,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new OaxError('config_invalid', `invalid configuration: ${details}`);
   }
   const e = parsed.data;
+  assertNoRenamedRoles('OAX_OIDC_ROLE_MAPPING', e.OAX_OIDC_ROLE_MAPPING);
+  assertNoRenamedRoles('OAX_LDAP_ROLE_MAPPING', e.OAX_LDAP_ROLE_MAPPING);
   const database = loadDatabaseConfig(env);
   if (e.NODE_ENV === 'production' && !e.OAX_RUN_TOKEN_SECRET) {
     throw new OaxError(
