@@ -659,7 +659,12 @@ read side only: `agents:read`, `runs:read`, `runs:approve`, `costs:read`, `event
 permission, because a team brings its connections and those are not part of a use case. Relabelling an
 agent of a team into another use case hands its runs and costs to that use case's administrators, so it
 needs node-level authority for the permission, or the administrator of the target use case who also holds
-the permission for the team (`403` otherwise, at draft and at publish).
+the permission for the team (`403` otherwise, at draft and at publish). The same holds for a team-less agent
+(a writer bound to that one agent cannot relabel it into a use case), and creating an agent of a team that
+carries a use case label needs node-level authority or the administrator of that use case. The read side
+on team agents includes everything attached to its runs: run-scoped audit entries (for example
+`mcp.relay.call`, `mcp.relay.denied`, `mcp.egress.refused`, `agent.members.set`), raw event payloads of its
+sources, and cost groupings that name teams.
 
 **Accounts, teams and role grants of a node.** Creating a local user, changing `globalRoles`, creating,
 renaming and deleting teams, and setting team and agent members need **node-level** authority: on the

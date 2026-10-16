@@ -515,7 +515,7 @@ describe.each(sqlTargets)('use-case scope in the services (%s)', (_kind, enabled
       );
       const pub = await w.req('uc-eng', 'POST', `/v1/agents/${a}/publish`);
       expect(pub.statusCode).toBe(403);
-      expect(pub.json().message).toContain('outside your scope');
+      expect(pub.json().message).toMatch(/outside your scope|node-level/);
       await w.n.services.agents.updateDraft(
         { ...w.op(), tenantId: w.id['org-a']! },
         a,

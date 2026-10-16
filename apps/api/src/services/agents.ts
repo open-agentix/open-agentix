@@ -138,17 +138,20 @@ export class AgentsService {
     next: string | null,
   ): void {
     const own = hasPermission(principal, permission, agent.teamId, agent.id);
-    // Relabelling an agent of a team into another use case hands its runs and costs to the
-    // administrators of that use case: node-level authority, or the use case's own administrator
-    // who also holds the permission for the team (never a team writer alone).
+    // Relabelling an agent into another use case hands its runs and costs to the administrators of
+    // that use case: node-level authority, or the administrator of the target use case (for an agent
+    // of a team who also holds the permission for the team). A team writer or a writer bound to this
+    // agent alone cannot do it.
     if (
-      agent.teamId !== null &&
       next !== null &&
       next !== agent.useCase &&
       !hasPermission(principal, permission, null) &&
-      !(own && useCaseScopes(principal, permission).some((s) => useCaseCovers(s, next)))
+      !(
+        useCaseScopes(principal, permission).some((s) => useCaseCovers(s, next)) &&
+        (own || agent.teamId === null)
+      )
     )
-      throw forbidden('relabelling the use case of a team agent needs node-level authority');
+      throw forbidden('relabelling the use case of an agent needs node-level authority');
     if (own) return;
     // A use-case binding writes agents without a team only.
     if (
@@ -230,6 +233,14 @@ export class AgentsService {
             : `no write access for team "${def.owner}"`,
         );
     }
+    // A labelled agent of a team lands in that use case: its administrators get its runs and costs.
+    if (
+      teamId !== null &&
+      useCaseOf(def) !== null &&
+      !hasPermission(principal, 'agents:write', null) &&
+      !useCaseScopes(principal, 'agents:write').some((s) => useCaseCovers(s, useCaseOf(def)))
+    )
+      throw forbidden('creating a team agent in a use case needs node-level authority');
     const [exists] = await this.ctx.db
       .select({ id: agents.id })
       .from(agents)

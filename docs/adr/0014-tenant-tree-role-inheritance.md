@@ -276,7 +276,7 @@ S6 (`pentest`; #191), details in `docs/tenancy.md` ("The `pentest` role"):
 
 S8 (use-case bindings and attached nodes; #193), details in `docs/tenancy.md` ("Use-case bindings and attached nodes"):
 
-- **Migration `0031_tenant_use_case_attach`** (additive; follows `0029_mcp_oauth_authorization_code`):
+- **Migration `0031_tenant_use_case_attach`** (additive; follows `0030_agent_roles`):
   `tenants.use_case` (child nodes only, syntax check), an index on `(parent_id, use_case)`, and the epoch
   trigger `authz_bump_tenant` also fires on a change of `use_case`. Down script included.
 - **Resolver.** A use-case binding applies at its own node, limited to `USE_CASE_PERMISSIONS`
@@ -317,6 +317,7 @@ S8 (use-case bindings and attached nodes; #193), details in `docs/tenancy.md` ("
   Attach takes the binding lock after the tree lock; node limits are hidden from use-case callers; agent
   names of the cost summary follow the agent's current use case. Accepted: team-less agents of use-case
   writers use team-less node connections.
+- **Second review.** Relabelling applies to team-less agents too (agent-scoped writers cannot relabel), and creating a labelled team agent needs node-level authority or the target use case's administrator. Known: the read side on team agents includes run-scoped audit entries, raw event payloads and cost groupings by team names; node-limit redaction applies only when every binding is a use-case binding.
 - **Agent lifecycle permissions (ADR 0017).** `agents:review`, `agents:approve` and `agents:rules` are deliberately **not** part of `USE_CASE_PERMISSIONS`: a use-case binding never carries them (fail closed) until ADR 0017 S1 decides how reviews and rules scope to a use case. The renamed `agent-maintainer` role keeps its write/publish permissions inside a use case on agents without a team.
 - Tests: `use-case-review.test.ts`, `use-case-scope.test.ts` (the service walk), `use-case-routes.test.ts` (registry, fail-closed walk),
   `use-case-bindings.test.ts` (grants, attach, acting node), the resolver and the attach-invariant property

@@ -10,7 +10,7 @@ import { buildWorld, PW, type World } from './use-case-world.js';
  * team administrator cannot mint accounts, teams or role grants of the node; use-case bindings do
  * not write or run agents of a team; relabelling a team agent needs node-level authority; node
  * limits are hidden from use-case callers; cost labels of agents elsewhere stay hidden. Runs on both
- * read paths (the first describe uses the default of the test run, the second forces `bindings`).
+ * read paths (forced to `bindings`; the legacy read path is in use-case-legacy.test.ts).
  */
 describe.each(sqlTargets)('use-case review findings (%s)', (_kind, enabled, open) => {
   if (!enabled()) {
@@ -265,6 +265,54 @@ describe.each(sqlTargets)('use-case review findings (%s)', (_kind, enabled, open
       await w.n.ctx.db.update(agents).set({ useCase: 'ops' }).where(eq(agents.id, a));
       expect((await names()).every((l) => l === null)).toBe(true);
       await w.n.ctx.db.update(agents).set({ useCase: 'sec' }).where(eq(agents.id, a));
+    });
+  });
+
+  describe('further review items', () => {
+    it('refuses team renames by an attached administrator (updateTeam is node-level)', async () => {
+      const t = await post(null, '/v1/teams', { slug: 'renamed', name: 'R' }, 'unit-1');
+      expect(t.statusCode, t.body).toBe(201);
+      const r = await w.req('uc-sec', 'PATCH', `/v1/teams/${t.json().id}`, { name: 'X' }, 'unit-1');
+      expect(r.statusCode).toBe(403);
+    });
+
+    it('keeps the roles within the permissions a token holds (bindings path)', async () => {
+      const p = await w.n.services.identity.authenticate(w.tok['root-admin']!);
+      const narrow = await w.n.services.identity.createApiToken(p, 'narrow2', ['users:write'], 30);
+      const asToken = (globalRoles: string[], email: string) =>
+        w.n.req({
+          method: 'POST',
+          url: '/v1/users',
+          token: narrow.token,
+          payload: { email, displayName: 'T', password: PW, globalRoles },
+        });
+      expect((await asToken(['viewer'], 'tok-viewer@example.org')).statusCode).toBe(403);
+      expect((await asToken(['admin'], 'tok-admin@example.org')).statusCode).toBe(403);
+      expect((await asToken([], 'tok-none@example.org')).statusCode).toBe(201);
+    });
+
+    it('does not let a writer bound to one agent relabel it into a use case', async () => {
+      const a = w.agent['a-none']!;
+      const put = await w.req(
+        null,
+        'PUT',
+        `/v1/agents/${a}/members`,
+        { members: [{ userId: w.uid['grantee'], role: 'agent-maintainer' }] },
+        'org-a',
+      );
+      expect(put.statusCode, put.body).toBe(204);
+      await w.relogin('grantee');
+      const src = (uc: string | null, version: string) =>
+        agentSource('a-none', 'nobody', version, uc ? `labels:\n  useCase: ${uc}` : '');
+      const stay = await w.req('grantee', 'PUT', `/v1/agents/${a}/draft`, {
+        source: src(null, '1.0.1'),
+      });
+      expect(stay.statusCode, stay.body).toBe(200);
+      const moved = await w.req('grantee', 'PUT', `/v1/agents/${a}/draft`, {
+        source: src('sec', '1.0.2'),
+      });
+      expect(moved.statusCode).toBe(403);
+      expect(moved.json().message).toContain('node-level');
     });
   });
 });
