@@ -7,6 +7,7 @@ import {
   type ManifestValidation,
 } from '../src/index.js';
 import { inspectValue } from '../src/awp/manifest-parse.js';
+import { semanticFindings } from '../src/awp/manifest-semantic.js';
 
 /**
  * A manifest is untrusted input (an agents.md from a pull request, an upload). These tests feed
@@ -339,6 +340,17 @@ describe('inputs that try to make the validator slow or crash', () => {
     expect(r.findings.length).toBeLessThanOrEqual(AWP_LIMITS.maxFindings + 1);
     expect(r.findings.at(-1)!.code).toBe('limit.findings');
     expect(r.valid).toBe(false);
+  });
+
+  it('the semantic phase stops collecting at the cap it is given', () => {
+    const ids = Array.from({ length: 50 }, (_, i) => `s${i}`);
+    const m = valid();
+    (m.spec as JsonObject).workflow = ids.map((id) => ({ id, agent: 'a', dependsOn: ids }));
+    const options = { profiles: new Set(['core']), verifyDigest: false };
+    const all = semanticFindings(m as never, options);
+    expect(all.length).toBeGreaterThan(20);
+    const capped = semanticFindings(m as never, { ...options, maxFindings: 7 });
+    expect(capped).toEqual(all.slice(0, 7));
   });
 
   it('keeps the invariant that makes EXPR_RE safe: the schema pattern rejects a malformed expression first', () => {
