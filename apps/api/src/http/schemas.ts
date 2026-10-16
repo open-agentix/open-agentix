@@ -214,6 +214,27 @@ export const VersionDetailSchema = VersionSchema.extend({
       'pinned tool definitions per MCP connection (ADR 0016 section 5); absent for versions published before pinning',
     ),
 });
+export const AwpManifestSchema = z
+  .record(z.string(), z.unknown())
+  .describe(
+    'AWP manifest (kind Workflow, API version v1alpha1, a draft) built to the pinned AWP JSON Schema. A mapping of the stored definition, not a conformance claim. Serialised in RFC 8785 form: `metadata.integrity.digest` is the SHA-256 of these bytes without `metadata.integrity`.',
+  );
+export const AwpExportFindingSchema = z.object({
+  code: z.string().describe('stable finding code, e.g. critical_extension, owner_team_required'),
+  path: z.string().describe('path of the source field in the stored definition'),
+  message: z.string(),
+  field: z.string().optional().describe('critical_extension: the source field'),
+  extension: z
+    .string()
+    .optional()
+    .describe('critical_extension: the extension that would carry it'),
+});
+export const AwpExportRefusalSchema = ErrorSchema.extend({
+  details: z.object({
+    findings: z.array(AwpExportFindingSchema),
+    warnings: z.array(z.object({ code: z.string(), path: z.string(), message: z.string() })),
+  }),
+});
 export const PublishResultSchema = z.object({
   version: VersionSchema,
   created: z.boolean(),

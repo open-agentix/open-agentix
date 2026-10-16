@@ -1,15 +1,19 @@
-import type { Principal } from '@openagentix/core';
+import { jcs, type Principal } from '@openagentix/core';
 import { createEvent, isCloudEvent, parseCloudEvent } from '@openagentix/events';
 import { z } from 'zod';
 import { AGENT_STATUSES } from '../../services/agent-filters.js';
 import type { AgentRow } from '../../services/agents.js';
 import { dryRunAgent } from '../../services/dry-run.js';
+import { HttpError } from '../../errors.js';
+import { exportVersionAsAwp } from '../../services/agent-awp.js';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import { agentDetailDto, agentDto, runDto, versionDetailDto, versionDto } from '../dto.js';
 import {
   AgentDetailSchema,
   AgentSchema,
+  AwpExportRefusalSchema,
+  AwpManifestSchema,
   AgentSourceBody,
   DisableBody,
   ErrorSchema,
@@ -273,6 +277,48 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
         'agents:read',
       );
       return versionDetailDto(await agents.getVersion(req.params.id, req.params.version));
+    },
+  );
+
+  app.get(
+    '/v1/agents/:id/versions/:version/awp',
+    {
+      config: { access: 'agents:read' },
+      schema: {
+        tags,
+        summary: 'Export a published version as an AWP manifest',
+        security: sec,
+        description:
+          'The effective manifest of the stored version as an AWP v1alpha1 Workflow, built to the pinned AWP schema (a draft; this is a mapping, not a conformance claim). Computed from the stored definition, so every call returns the same bytes (RFC 8785 form, `metadata.integrity.digest` per AWP spec 9.1). The header `x-oax-source-digest` carries the digest of the agents.md source. Restrictions AWP v1alpha1 cannot express (argument constraints, call limits, conditions, handovers, runner, ...) refuse the export with 422 `awp_export_refused` and one finding per field; nothing is dropped silently. An agent without a team, and a wildcard grant without a recorded reviewed tool list, are refused too.',
+        params: IdParams.extend({ version: z.string() }),
+        response: { 200: AwpManifestSchema, 404: ErrorSchema, 422: AwpExportRefusalSchema },
+      },
+    },
+    async (req, reply) => {
+      const principal = principalOf(req);
+      const agent = await agents.get(req.params.id, principal);
+      await agents.assertAccess(principal, agent, 'agents:read');
+      const result = exportVersionAsAwp(
+        agent,
+        await agents.getVersion(agent.id, req.params.version),
+      );
+      if (!result.ok)
+        throw new HttpError(
+          422,
+          'awp_export_refused',
+          `the version cannot be exported as an AWP manifest (${result.findings.length} finding(s))`,
+          { findings: result.findings, warnings: result.warnings },
+        );
+      reply
+        .type('application/json; charset=utf-8')
+        .header('x-oax-source-digest', result.sourceDigest);
+      if (result.warnings.length > 0)
+        reply.header(
+          'x-oax-export-warnings',
+          result.warnings.map((w) => `${w.code}@${w.path}`).join(','),
+        );
+      // A string payload is sent as is, so the RFC 8785 bytes (which the digest covers) are the body.
+      return reply.send(jcs(result.manifest) as unknown as Record<string, unknown>);
     },
   );
 
