@@ -2,8 +2,7 @@
 
 > Note (ADR 0017 S10): the role `agent-engineer` named below was renamed to `agent-maintainer` without an alias; `agent-developer` was added. Read `agent-engineer` as `agent-maintainer` in this document.
 
-- Status: Proposed. Slices S1, S1b, S2, S3, S4, S5 and S6 are implemented (see "Implementation status" below); S7 to S10 are open.
-- Status: Proposed. Slices S1, S1b, S2, S3, S4, S5, S6, S7 and S8 are implemented (see "Implementation status" below); S9 and S10 are open.
+- Status: Proposed. Slices S1, S1b, S2, S3, S4, S5, S6, S7, S8 and S9 are implemented (see "Implementation status" below); S10 is open.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
   resolver pattern); wave 13 of the [implementation plan](../IMPLEMENTATION-PLAN.md)
@@ -30,6 +29,7 @@
 | S6 | implemented (PR for #191) | `pentest` grantable with mandatory expiry, notices, `pentest.session_started`, expiry reaper. Migration **`0028_pentest_role`**. See "S6" below. |
 | S7 | implemented (PR for #192) | `GET /v1/locate/{kind}/{id}`; read permission of the kind at the owning node, identical 404, rate-limited `access.denied`. No migration. See `docs/tenancy.md`. |
 | S8 | implemented (PR for #193) | Use-case-scoped bindings and node attachment: `tenants.use_case`, `PATCH /v1/tenants/{id} { useCase }`, use-case filter in every service that filters by team, route registry (fail closed), `use_case_bindings_unsupported` lifted. Migration **`0031_tenant_use_case_attach`**. See "S8" below. |
+| S9 | implemented (PR for #194) | `GET/PUT/DELETE /v1/tenants/{id}/role-restrictions`, restrictions loaded with the principal's grants and applied by the resolver, `role_restricted` in the access views, audit, migration **`0033_role_restrictions_epoch`** (epoch triggers; the table itself is from 0018). See `docs/tenancy.md`, "Role restrictions". |
 | S5 | implemented (PR for #190) | Write inheritance (clamp removed), `POST /v1/tenants { parentId }` and `PATCH /v1/tenants/{id}` for tenant admins, `GET /v1/me/access` and `GET /v1/tenants/{id}/access`. No migration. See "S5" below. |
 
 Differences between the plan below and what S1 shipped:
@@ -619,6 +619,10 @@ permissions of a role for **bindings at the node and below**:
   locking out its own administrators), and never apply to platform admins.
 - Team and agent bindings in a node are restricted by the restrictions of that node's chain like
   direct bindings.
+- *Implementation note (S9).* Writing needs an inheriting `admin` binding on the node or an ancestor (or a
+  platform admin), because a restriction narrows the whole subtree; a binding that comes from above R
+  and also reaches a node below R keeps all its permissions there, so a user who holds the same role on
+  an ancestor and on R keeps what the ancestor binding gives. See `docs/tenancy.md`.
 
 ### 6. Caching and invalidation
 
