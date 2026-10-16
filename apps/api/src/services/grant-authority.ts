@@ -87,6 +87,21 @@ function inheritingOnChain(actor: Actor, node: RoleNode, now: Date) {
 }
 
 /**
+ * The refusal for a caller that is not an inheriting admin at `node`. A direct admin there is told
+ * what is missing (`inheritance_required`); anybody else gets a plain `403`. The node is visible
+ * to the caller at this point, so the difference reveals nothing about other nodes.
+ */
+export function notInheritingError(actor: Actor, node: RoleNode, now: Date): HttpError {
+  if (permissionsAt(actor, node, now).has('settings:write'))
+    return new HttpError(
+      403,
+      'inheritance_required',
+      'this needs an inheriting admin binding on the tenant or an ancestor',
+    );
+  return forbidden();
+}
+
+/**
  * Whether the actor's inheriting bindings on `node` or an ancestor together cover everything
  * `role` gives (ADR 0014 rule 2: a grant that inherits is a grant on the whole subtree).
  */

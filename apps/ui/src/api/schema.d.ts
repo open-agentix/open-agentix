@@ -10985,6 +10985,174 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/tenants/{id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move a tenant and its subtree below another parent of the same organisation
+         * @description ADR 0014 section 7 (slice S10) and ADR 0013 section 9.1. Needs an **inheriting** `admin` binding (without use case) that covers the tenant, its old parent and the new parent, or platform operator access (403 `inheritance_required` for a direct admin); the mover therefore gains no coverage it did not have. Both tenants must be visible to the caller (404 otherwise, the same as for an id that does not exist). Refused: an organisation root (403 `move_not_allowed`, 422 `move_not_supported` for operators), another organisation (422 `move_not_supported`), the tenant itself or a descendant as parent (422 `move_cycle`), the current parent (409 `move_noop`), a depth above the limit (422 `tenant_depth_exceeded`), a parent below a node with a monthly budget (403 `budget_capped`, operators excepted), leaving a node whose role restrictions narrow bindings inside the subtree without the authority to lift them (403 `restriction_removal_forbidden`, whatever the role: also for a role nobody holds yet), or loosening the agent lifecycle policy (ADR 0017) that applies inside the subtree because the ancestors that set it are left behind (403 `policy_widening_forbidden`; the widened keys are listed as `policiesWidened`). Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 `role_bindings_read_required`). Bindings on the moved tenants move with them; bindings inherited from the old ancestors stop, those inheriting from the new ancestors start; restrictions of the old ancestors stop narrowing the bindings inside, those of the new ancestors start. The tenant is detached from its use case (re-attach with PATCH). `dryRun: true` runs every check and lists the users the caller may see who gain or lose permissions inside the subtree (at most 100, computed with the resolver of the request path); users outside the caller's visible set are not listed. The applied move runs under the exclusive tree lock of the organisation, bumps its authz epoch (every cached principal is rebuilt on its next request) and is audited as `tenant.moved` in the partitions of the tenant, the old and the new parent (ids only). Open event streams keep the authorisation they were opened with until they end.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description the new parent: a tenant of the same organisation
+                         */
+                        parentId: string;
+                        /**
+                         * @description true: check everything and list who gains or loses access, change nothing
+                         * @default false
+                         */
+                        dryRun?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            dryRun: boolean;
+                            /** Format: uuid */
+                            nodeId: string;
+                            /** Format: uuid */
+                            fromParentId: string;
+                            /** Format: uuid */
+                            toParentId: string;
+                            /** @description tenants that move: the node and everything below it */
+                            nodes: number;
+                            /** @description new depth of the node minus its old depth */
+                            depthChange: number;
+                            slugPath: {
+                                from: string;
+                                to: string;
+                            };
+                            /** @description the use case of the old parent the node is detached from; null if none */
+                            detachesUseCase: string | null;
+                            /** @description restrictions of ancestors the node leaves: they stop narrowing bindings bound inside (only tenants the caller can see) */
+                            restrictionsDropped: {
+                                /**
+                                 * Format: uuid
+                                 * @description the tenant that sets the restriction
+                                 */
+                                nodeId: string;
+                                role: string;
+                                permissions: string[];
+                            }[];
+                            /** @description restrictions of ancestors the node joins: they start narrowing bindings bound inside */
+                            restrictionsApplied: {
+                                /**
+                                 * Format: uuid
+                                 * @description the tenant that sets the restriction
+                                 */
+                                nodeId: string;
+                                role: string;
+                                permissions: string[];
+                            }[];
+                            /** @description agent lifecycle policy keys (ADR 0017) that become looser inside the subtree because the ancestors that set them are left behind */
+                            policiesWidened: string[];
+                            /** @description dry run only: users the caller may see whose permissions inside the moved subtree change (at most 100) */
+                            principals: {
+                                /** Format: uuid */
+                                userId: string;
+                                gainedNodes: number;
+                                lostNodes: number;
+                                permissionsGained: string[];
+                                permissionsLost: string[];
+                            }[];
+                            /** @description more users changed than are listed */
+                            truncated: boolean;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tenants/{id}/role-bindings": {
         parameters: {
             query?: never;

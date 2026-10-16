@@ -204,6 +204,13 @@
       "when": 1792700000003,
       "tag": "0034_review_threads",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792700000004,
+      "tag": "0035_tenant_move",
+      "breakpoints": true
     }
   ]
 }
