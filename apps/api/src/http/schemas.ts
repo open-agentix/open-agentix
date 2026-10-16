@@ -954,6 +954,55 @@ export const RoleBindingSchema = z.object({
   createdAt: Iso,
 });
 export const RoleBindingParams = z.object({ id: Id, bindingId: Id });
+export const TenantMoveBody = z.object({
+  parentId: Id.describe('the new parent: a tenant of the same organisation'),
+  dryRun: z
+    .boolean()
+    .default(false)
+    .describe('true: check everything and list who gains or loses access, change nothing'),
+});
+const MoveRestrictionChange = z.object({
+  nodeId: Id.describe('the tenant that sets the restriction'),
+  role: z.string(),
+  permissions: z.array(z.string()),
+});
+export const TenantMoveSchema = z.object({
+  dryRun: z.boolean(),
+  nodeId: Id,
+  fromParentId: Id,
+  toParentId: Id,
+  nodes: z.number().int().describe('tenants that move: the node and everything below it'),
+  depthChange: z.number().int().describe('new depth of the node minus its old depth'),
+  slugPath: z.object({ from: z.string(), to: z.string() }),
+  detachesUseCase: z
+    .string()
+    .nullable()
+    .describe('the use case of the old parent the node is detached from; null if none'),
+  restrictionsDropped: z
+    .array(MoveRestrictionChange)
+    .describe(
+      'restrictions of ancestors the node leaves: they stop narrowing bindings bound inside (only tenants the caller can see)',
+    ),
+  restrictionsApplied: z
+    .array(MoveRestrictionChange)
+    .describe(
+      'restrictions of ancestors the node joins: they start narrowing bindings bound inside',
+    ),
+  principals: z
+    .array(
+      z.object({
+        userId: Id,
+        gainedNodes: z.number().int(),
+        lostNodes: z.number().int(),
+        permissionsGained: z.array(z.string()),
+        permissionsLost: z.array(z.string()),
+      }),
+    )
+    .describe(
+      'dry run only: users the caller may see whose permissions inside the moved subtree change (at most 100)',
+    ),
+  truncated: z.boolean().describe('more users changed than are listed'),
+});
 export const RoleRestrictionSchema = z.object({
   role: z.string(),
   permissions: z
