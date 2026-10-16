@@ -4,21 +4,26 @@ import {
   canonicalSecretRef,
   hasPermission,
   isValidUseCase,
-  pathIds,
   parseSecretRefPatterns,
   placeNode,
   slugsCollide,
   type Principal,
 } from '@openagentix/core';
-import { and, count, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { count, eq, inArray, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
-import { isInheritingAdminAt, loadActor, permissionsAt, type Actor } from './grant-authority.js';
+import {
+  isInheritingAdminAt,
+  loadActor,
+  notInheritingError,
+  type Actor,
+} from './grant-authority.js';
 import { TenantAccess } from './tenant-access.js';
 import { TenantTree } from './tenant-tree.js';
 import { TenantViews } from './tenant-views.js';
+import { assertNoCapAbove } from './budget-cap-guard.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 import type { AuditService } from './audit.js';
 import type { IdentityService, TenantRow } from './identity.js';
@@ -105,7 +110,7 @@ export class TenantsService {
 
   /**
    * Slug path of a tenant for the `X-OAX-Acting-Tenant` header of every authenticated response.
-   * Cached for 30 s (the placement of a node is fixed today; moves, W13-11, may show the old path
+   * Cached for 30 s (a move clears the entry; other replicas may show the old path
    * for that long in this informational header only).
    */
   async actingSlugPath(tenantId: string): Promise<string | undefined> {
@@ -204,38 +209,8 @@ export class TenantsService {
     });
   }
 
-  /**
-   * The refusal for a caller that is not an inheriting admin at `node`. A direct admin there is told
-   * what is missing (`inheritance_required`); anybody else gets a plain `403`. The node is visible
-   * to the caller at this point, so the difference reveals nothing about other nodes.
-   */
   private notInheriting(actor: Actor, node: TenantRow, now: Date): HttpError {
-    if (permissionsAt(actor, node, now).has('settings:write'))
-      return new HttpError(
-        403,
-        'inheritance_required',
-        'this needs an inheriting admin binding on the tenant or an ancestor',
-      );
-    return forbidden();
-  }
-
-  /**
-   * Budgets are per node until W13-4, so a child of a capped node would spend outside the cap of
-   * its parent. A tenant admin therefore cannot create below a node with a monthly cap on it or
-   * on an ancestor (`403 budget_capped`): an operator creates it (and may cap it).
-   */
-  private async assertNoCapAbove(tx: Db, parent: TenantRow): Promise<void> {
-    const chain = pathIds(parent.path);
-    const [capped] = await tx
-      .select({ n: count() })
-      .from(tenants)
-      .where(and(inArray(tenants.id, chain), isNotNull(tenants.monthlyBudgetMicros)));
-    if (Number(capped?.n ?? 0) > 0)
-      throw new HttpError(
-        403,
-        'budget_capped',
-        'a tenant below a node with a monthly budget can only be created by a platform operator',
-      );
+    return notInheritingError(actor, node, now);
   }
 
   /**
@@ -291,7 +266,7 @@ export class TenantsService {
               `an organisation can have at most ${maxNodesPerRoot} tenants`,
             );
         }
-        if (authority === 'inheriting_admin') await this.assertNoCapAbove(tx, current!);
+        if (authority === 'inheriting_admin') await assertNoCapAbove(tx, current!);
         // Until secret names are node-aware (W13-7) slugs must not overlap anywhere in the
         // installation: `acme.corp.x` and `acme-corp.x` are the same secret for the resolver, so
         // tenants whose slugs overlap in canonical form could read each other's secrets and cannot
