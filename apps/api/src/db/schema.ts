@@ -1292,3 +1292,85 @@ export const agentReviewDecisions = pgTable(
     ),
   ],
 );
+
+/**
+ * Review comment threads (ADR 0017 section 9, slice S2). A thread belongs to a review and is either
+ * about the review as a whole (`anchor_kind = 'review'`) or about one line of the diff: the revision
+ * (side `head`) or the base version (side `base`) it was written on, the line number and the SHA-256
+ * of the line text. The server computes the hash from the stored source. Whether a line anchor is
+ * outdated is derived when the thread is read, never stored. Comment text is tenant content and
+ * never leaves these two tables: not into the audit chain, telemetry or any model context.
+ */
+export const agentReviewThreads = pgTable(
+  'agent_review_threads',
+  {
+    id: uuid('id').primaryKey(),
+    reviewId: uuid('review_id')
+      .notNull()
+      .references(() => agentReviews.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    createdBy: uuid('created_by').notNull(),
+    anchorKind: text('anchor_kind').notNull(),
+    revisionId: uuid('revision_id').references(() => agentDraftRevisions.id),
+    side: text('side'),
+    line: integer('line'),
+    lineHash: text('line_hash'),
+    resolvedAt: ts('resolved_at'),
+    resolvedBy: uuid('resolved_by'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('agent_review_threads_review_idx').on(t.reviewId, t.createdAt),
+    check('agent_review_threads_kind_check', sql`${t.anchorKind} in ('review','line')`),
+    check(
+      'agent_review_threads_anchor_check',
+      sql`(${t.anchorKind} = 'review' and ${t.revisionId} is null and ${t.side} is null and ${t.line} is null and ${t.lineHash} is null)
+        or (${t.anchorKind} = 'line' and ${t.side} in ('base','head') and ${t.line} between 1 and 100000 and ${t.lineHash} ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      'agent_review_threads_resolved_check',
+      sql`(${t.resolvedAt} is null) = (${t.resolvedBy} is null)`,
+    ),
+  ],
+);
+
+/**
+ * One comment of a thread. Editing is the author's alone and sets `edited_at`; deleting is the
+ * author's alone and keeps the row as a tombstone (`deleted_at`, empty text), so that the thread
+ * keeps its shape and the text is gone.
+ */
+export const agentReviewComments = pgTable(
+  'agent_review_comments',
+  {
+    id: uuid('id').primaryKey(),
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => agentReviewThreads.id),
+    reviewId: uuid('review_id')
+      .notNull()
+      .references(() => agentReviews.id),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    authorId: uuid('author_id').notNull(),
+    body: text('body').notNull(),
+    createdAt: ts('created_at').notNull().defaultNow(),
+    editedAt: ts('edited_at'),
+    deletedAt: ts('deleted_at'),
+  },
+  (t) => [
+    index('agent_review_comments_thread_idx').on(t.threadId, t.createdAt),
+    // Backs the per-author rate limit of comment creation (counts rows, tombstones included).
+    index('agent_review_comments_author_idx').on(t.authorId, t.createdAt),
+    check('agent_review_comments_body_len', sql`char_length(${t.body}) <= 10000`),
+    check(
+      'agent_review_comments_deleted_check',
+      sql`(${t.deletedAt} is null and char_length(${t.body}) > 0) or (${t.deletedAt} is not null and ${t.body} = '')`,
+    ),
+  ],
+);
