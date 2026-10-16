@@ -631,7 +631,9 @@ export class TenantRoleBindingsService {
             role: next.role,
             inherit: next.inherit,
             expiresAt: next.expiresAt,
-            ...(widened ? { grantedBy: actor.userId } : {}),
+            ...(widened
+              ? { grantedBy: sql<string | null>`(select id from users where id = ${actor.userId})` }
+              : {}),
             ...(expiryChanged
               ? {
                   expiryWarnedAt:
@@ -830,7 +832,10 @@ export class TenantRoleBindingsService {
       await tx
         .update(tenantRoleBindings)
         // Wider reach is a new grant by the operator (ADR 0017 rule A4).
-        .set({ inherit: true, grantedBy: p.userId })
+        .set({
+          inherit: true,
+          grantedBy: sql<string | null>`(select id from users where id = ${p.userId})`,
+        })
         .where(
           inArray(
             tenantRoleBindings.id,

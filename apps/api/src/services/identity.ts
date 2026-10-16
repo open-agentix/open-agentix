@@ -1356,8 +1356,12 @@ export class IdentityService {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** `granted_by` is a foreign key to users: only a real user id is recorded. */
-const grantorOf = (userId: string): string | null => (UUID_RE.test(userId) ? userId : null);
+/**
+ * `granted_by` is a foreign key to users: only the id of an account that exists is recorded (a
+ * system actor, such as the demo seed or a script, has none and leaves it null).
+ */
+const grantorOf = (userId: string) =>
+  UUID_RE.test(userId) ? sql<string | null>`(select id from users where id = ${userId})` : null;
 
 function toTokenInfo(r: typeof apiTokens.$inferSelect): TokenInfo {
   return {
