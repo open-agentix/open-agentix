@@ -28,4 +28,27 @@ describe('review anchors', () => {
     expect(anchorMatches(anchor, sourceLines('zero\none\ntwo'))).toBe(false);
     expect(anchorMatches(anchor, sourceLines('one'))).toBe(false);
   });
+
+  it('hashes a very long line in linear time, trailing blanks or not', () => {
+    const blanks = ' '.repeat(500_000);
+    for (const line of [
+      `${blanks}x`,
+      blanks,
+      `x${blanks}`,
+      `${'\t'.repeat(500_000)}y`,
+      'a'.repeat(500_000),
+    ]) {
+      const started = performance.now();
+      lineHash(line);
+      expect(performance.now() - started).toBeLessThan(100);
+    }
+    expect(lineHash(`x${blanks}`)).toBe(lineHash('x'));
+  });
+
+  it('tells long lines apart by their length and their start', () => {
+    const a = 'a'.repeat(5000);
+    expect(lineHash(a)).not.toBe(lineHash(`${a}a`));
+    expect(lineHash(a)).not.toBe(lineHash(`b${a.slice(1)}`));
+    expect(lineHash(`${a}   `)).toBe(lineHash(a));
+  });
 });
