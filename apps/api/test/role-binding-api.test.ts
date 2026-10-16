@@ -199,10 +199,36 @@ describe.each(sqlTargets)('role-binding API (%s)', (_kind, enabled, open) => {
       expect(await bound('m1', 'org-a', 'viewer')).toHaveLength(0);
     });
 
-    it('rule 3: use-case bindings are refused until S8', async () => {
+    it('rule 3: a tenant admin binds a role to a use case (use-case administrators: use-case-bindings.test.ts)', async () => {
       const r = await post('admin-a', 'org-a', grant('m1', 'viewer', false, { useCase: 'secops' }));
-      expect(r.statusCode).toBe(422);
-      expect(r.json().error).toBe('use_case_bindings_unsupported');
+      if (n.ctx.config.auth.roleBindingsRead !== 'bindings') {
+        // a use-case binding would do nothing on the legacy read path: refused, nothing is written
+        expect(r.statusCode).toBe(409);
+        expect(r.json().error).toBe('use_case_requires_bindings_read');
+        expect(await bound('m1', 'org-a', 'viewer')).toHaveLength(0);
+        return;
+      }
+      expect(r.statusCode, r.body).toBe(201);
+      expect(r.json().useCase).toBe('secops');
+      // a malformed use case is refused, and so is a duplicate
+      const bad = await post(
+        'admin-a',
+        'org-a',
+        grant('m1', 'viewer', false, { useCase: 'sec ops' }),
+      );
+      expect(bad.statusCode).toBe(422);
+      const dup = await post(
+        'admin-a',
+        'org-a',
+        grant('m1', 'viewer', false, { useCase: 'secops' }),
+      );
+      expect(dup.statusCode).toBe(409);
+      const del = await n.req({
+        method: 'DELETE',
+        url: `/v1/tenants/${id['org-a']}/role-bindings/${r.json().id}`,
+        token: tok['admin-a']!,
+      });
+      expect(del.statusCode).toBe(204);
       expect(await bound('m1', 'org-a', 'viewer')).toHaveLength(0);
     });
 

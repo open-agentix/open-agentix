@@ -78,6 +78,7 @@ export const tenantRow = {
   depth: 0,
   monthlyBudgetUsd: null,
   secretRefs: [],
+  useCase: null,
   createdAt: new Date(Date.now() - 86_400_000 * 90).toISOString(),
 };
 

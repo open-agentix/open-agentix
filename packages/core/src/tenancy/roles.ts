@@ -1,5 +1,6 @@
 import {
   ROLE_PERMISSIONS,
+  USE_CASE_PERMISSIONS,
   bindingPermissions,
   isRole,
   type BindingSource,
@@ -8,6 +9,7 @@ import {
   type RoleBinding,
 } from '../rbac.js';
 import { MAX_TENANT_DEPTH, isValidPath, pathIds } from './path.js';
+import { isValidUseCase } from './use-case.js';
 
 /**
  * Role resolution over the tenant tree (ADR 0014 section 3.2).
@@ -29,8 +31,15 @@ import { MAX_TENANT_DEPTH, isValidPath, pathIds } from './path.js';
  *   decided by the grant rules, not here.
  * - **Union, minus restrictions.** Restrictions only ever remove permissions, never from `admin`
  *   and never for bindings that sit above the restricting node.
+ * - **Use-case bindings (slice S8).** A binding with a use case applies at its own node only, as a
+ *   binding limited to that use case (`useCase` stays on the result; it carries the permissions of
+ *   the role that resources with a use case have, never node-wide ones). With `inherit` it also
+ *   applies, **unrestricted**, in the child nodes attached to the use case and their whole subtree
+ *   (ADR 0014 section 3.3, owner decision 6: attached nodes only with `inherit = true`). The
+ *   attachment is data the loader resolved into `attachedNodeIds`; without it nothing is attached.
  * - **Fail closed.** Anything that does not look right (a malformed node path, an unknown role, a
- *   `pentest` binding without an expiry, a use-case binding before slice S8) contributes nothing.
+ *   `pentest` binding without an expiry, a malformed use case, a use-case `pentest`) contributes
+ *   nothing.
  */
 
 /** The placement of a node: what the resolver needs to know about the acting node. */
@@ -48,6 +57,13 @@ export interface NodeRoleGrant {
   useCase: string | null;
   inherit: boolean;
   expiresAt: Date | null;
+  /**
+   * For a use-case binding that inherits: the ids of the child nodes of `tenantId` whose
+   * `tenants.use_case` is the binding's use case or a sub-use case of it (ADR 0014 section 3.3),
+   * resolved by the loader. The binding applies in these nodes and their whole subtrees. Anything
+   * else (absent, not a list of child ids) means nothing is attached.
+   */
+  attachedNodeIds?: readonly string[] | undefined;
 }
 
 /** A team membership, tagged with the node that owns the team. */
@@ -191,8 +207,12 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
 
   for (const b of raw.nodeBindings) {
     if (!isRole(b.role)) continue;
-    // Use-case bindings are refused until the services can scope them (slice S8): fail closed.
-    if (b.useCase !== null) continue;
+    const useCase = b.useCase;
+    if (useCase !== null) {
+      // A use case that is not in the canonical syntax cannot scope anything (fail closed), and a
+      // use-case `pentest` does not exist: pentest is granted by tenant administrators for a node.
+      if (!isValidUseCase(useCase) || b.role === 'pentest') continue;
+    }
     // `pentest` is time-boxed by definition; without an expiry it never applies.
     if (b.role === 'pentest' && b.expiresAt === null) continue;
     // Expiry is evaluated per call, never at cache time. Only `null` means "no expiry"; anything
@@ -205,17 +225,38 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
     const at = position.get(b.tenantId);
     if (at === undefined) continue; // not in the chain: below, beside or in another organisation
     let source: BindingSource;
-    if (b.tenantId === node.id) source = 'direct';
-    else if (b.inherit) source = 'inherited';
-    else continue; // an ancestor's binding that did not opt in
+    if (b.tenantId === node.id) {
+      source = 'direct';
+    } else if (useCase !== null) {
+      // Attached nodes (section 3.3): only with `inherit`, only the child of the binding's node
+      // that is on the chain (the attachment is of that child and its whole subtree), and only
+      // when the loader listed that child as attached to this use case.
+      const child = chain[at + 1];
+      if (
+        !b.inherit ||
+        child === undefined ||
+        !Array.isArray(b.attachedNodeIds) ||
+        !b.attachedNodeIds.includes(child)
+      )
+        continue;
+      source = 'attached';
+    } else if (b.inherit) {
+      source = 'inherited';
+    } else {
+      continue; // an ancestor's binding that did not opt in
+    }
     // No further clamp for inherited bindings (slice S5): the role, minus restrictions, is the
-    // ceiling at the node where it applies, exactly as for a binding held there directly.
-    const permissions = permissionsFor(b.role, at);
+    // ceiling at the node where it applies, exactly as for a binding held there directly. A
+    // use-case binding is limited to the permissions that have a use case at its own node; in an
+    // attached node it is the unrestricted binding of the same role.
+    const scoped = useCase !== null && source === 'direct';
+    const base = permissionsFor(b.role, at);
+    const permissions = scoped ? base.filter((p) => USE_CASE_PERMISSIONS.includes(p)) : base;
     out.push({
       role: b.role,
       teamId: null,
       permissions,
-      useCase: null,
+      useCase: scoped ? useCase : null,
       source,
       tenantId: b.tenantId,
       inherit: b.inherit,
@@ -269,7 +310,7 @@ export function visibleNodeIds(
 
 /**
  * A canonical, order-independent description of what a list of bindings grants: one line per
- * distinct `(role, team, agent, permissions)`. Two lists with the same fingerprint are
+ * distinct `(role, team, agent, use case, permissions)`. Two lists with the same fingerprint are
  * indistinguishable to `hasPermission`, `visibleTeams`, `visibleAgents`, the approval role check
  * and `effectivePermissions`.
  */
@@ -279,6 +320,7 @@ export function bindingFingerprint(bindings: readonly RoleBinding[]): string[] {
       b.role,
       b.teamId ?? '',
       b.agentId ?? '',
+      b.useCase ?? '',
       [...new Set(bindingPermissions(b))].sort().join(','),
     ].join('|'),
   );

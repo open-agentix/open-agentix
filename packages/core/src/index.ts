@@ -37,3 +37,4 @@ export * from './tenancy/path.js';
 export * from './telemetry/index.js';
 export * from './tenancy/roles.js';
 export * from './tenancy/grants-codec.js';
+export * from './tenancy/use-case.js';

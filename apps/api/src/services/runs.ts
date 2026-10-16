@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import {
   bindingPermissions,
-  hasPermission,
+  hasPermissionIn,
   isTerminal,
   newRunTraceIdentity,
+  useCaseCovers,
+  useCaseScopes,
   visibleAgents,
   visibleTeams,
   type AgentDefinition,
@@ -29,6 +31,7 @@ import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
 import { triggerLabel } from '../metric-labels.js';
 import type { ResolvedScope } from './subtree-scope.js';
+import { useCaseMatch } from './use-case-scope.js';
 
 /** What `enqueue` reads before it opens its transaction. */
 interface AdmissionPlan {
@@ -280,9 +283,15 @@ export class RunsService {
     permission: 'runs:read' | 'runs:cancel' | 'runs:approve' | 'costs:read' = 'runs:read',
   ): Promise<RunRow> {
     const run = await this.get(id);
+    // A run belongs to the use case of its agent: looked up only for a caller who holds the
+    // permission through use cases (everybody else is decided by team and agent as before).
+    const useCase =
+      run.tenantId === principal.tenantId && useCaseScopes(principal, permission).length > 0
+        ? await this.agentUseCase(run.agentId)
+        : null;
     if (
       run.tenantId !== principal.tenantId ||
-      !hasPermission(principal, permission, run.teamId, run.agentId)
+      !hasPermissionIn(principal, permission, { teamId: run.teamId, agentId: run.agentId, useCase })
     ) {
       await this.audit.append({
         actor: principal.userId,
@@ -296,6 +305,25 @@ export class RunsService {
     }
     return run;
   }
+
+  /** The use case of an agent (its latest published version, or the draft); null for none. */
+  private async agentUseCase(agentId: string): Promise<string | null> {
+    const [a] = await this.ctx.db
+      .select({ useCase: agents.useCase })
+      .from(agents)
+      .where(eq(agents.id, agentId));
+    return a?.useCase ?? null;
+  }
+
+  /** Runs of the agents whose use case is one of `useCases` (or below one of them). */
+  private runsOfUseCases = (useCases: string[]): SQL =>
+    inArray(
+      runs.agentId,
+      this.ctx.db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(useCaseMatch(agents.useCase, useCases)),
+    );
 
   async list(
     principal: Principal,
@@ -337,13 +365,25 @@ export class RunsService {
     if (subtree)
       return subtree.isEmpty
         ? undefined
-        : subtree.predicate({ tenantId: runs.tenantId, teamId: runs.teamId, agent: runs.agentId });
+        : subtree.predicate({
+            tenantId: runs.tenantId,
+            teamId: runs.teamId,
+            agent: runs.agentId,
+            useCase: this.runsOfUseCases,
+          });
     const scope = visibleTeams(principal, 'runs:read');
     const scopedAgents = visibleAgents(principal, 'runs:read');
-    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return undefined;
+    const useCases = useCaseScopes(principal, 'runs:read');
+    if (
+      Array.isArray(scope) &&
+      scope.length === 0 &&
+      scopedAgents.length === 0 &&
+      useCases.length === 0
+    )
+      return undefined;
     return and(
       eq(runs.tenantId, principal.tenantId),
-      scope === 'all' ? undefined : this.runScope(scope, scopedAgents),
+      scope === 'all' ? undefined : this.runScope(scope, scopedAgents, useCases),
     );
   }
 
@@ -360,7 +400,14 @@ export class RunsService {
       avgDurationMs: null,
     };
     const scopedAgents = visibleAgents(principal, 'runs:read');
-    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return empty;
+    const useCases = useCaseScopes(principal, 'runs:read');
+    if (
+      Array.isArray(scope) &&
+      scope.length === 0 &&
+      scopedAgents.length === 0 &&
+      useCases.length === 0
+    )
+      return empty;
     const rows = await this.ctx.db
       .select({
         status: runs.status,
@@ -381,7 +428,7 @@ export class RunsService {
           filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
           filter.from ? gte(runs.createdAt, filter.from) : undefined,
           filter.to ? lt(runs.createdAt, filter.to) : undefined,
-          scope === 'all' ? undefined : this.runScope(scope, scopedAgents),
+          scope === 'all' ? undefined : this.runScope(scope, scopedAgents, useCases),
         ),
       )
       .groupBy(runs.status);
@@ -425,11 +472,12 @@ export class RunsService {
     return new Map(rows.map((r) => [r.id, r.name]));
   }
 
-  /** Team scope OR agent-scoped bindings. */
-  private runScope(teamsIn: string[], agentsIn: string[]) {
+  /** Team scope OR agent-scoped bindings OR use-case bindings. */
+  private runScope(teamsIn: string[], agentsIn: string[], useCases: string[] = []) {
     return or(
       teamsIn.length ? inArray(runs.teamId, teamsIn) : undefined,
       agentsIn.length ? inArray(runs.agentId, agentsIn) : undefined,
+      useCases.length ? this.runsOfUseCases(useCases) : undefined,
     );
   }
 
@@ -524,6 +572,12 @@ export class RunsService {
         approvals.runId,
         this.ctx.db.select({ id: runs.id }).from(runs).where(inArray(runs.agentId, agentIds)),
       );
+    // An approval belongs to the use case of the agent of its run.
+    const byUseCase = (useCases: string[]) =>
+      inArray(
+        approvals.runId,
+        this.ctx.db.select({ id: runs.id }).from(runs).where(this.runsOfUseCases(useCases)),
+      );
     if (subtree)
       return subtree.isEmpty
         ? undefined
@@ -531,10 +585,18 @@ export class RunsService {
             tenantId: approvals.tenantId,
             teamId: approvals.teamId,
             agent: byAgent,
+            useCase: byUseCase,
           });
     const scope = visibleTeams(principal, 'runs:read');
     const scopedAgents = visibleAgents(principal, 'runs:read');
-    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return undefined;
+    const useCases = useCaseScopes(principal, 'runs:read');
+    if (
+      Array.isArray(scope) &&
+      scope.length === 0 &&
+      scopedAgents.length === 0 &&
+      useCases.length === 0
+    )
+      return undefined;
     return and(
       eq(approvals.tenantId, principal.tenantId),
       scope === 'all'
@@ -542,6 +604,7 @@ export class RunsService {
         : or(
             scope.length ? inArray(approvals.teamId, scope) : undefined,
             scopedAgents.length ? byAgent(scopedAgents) : undefined,
+            useCases.length ? byUseCase(useCases) : undefined,
           ),
     );
   }
@@ -557,17 +620,33 @@ export class RunsService {
     const [run] = a
       ? await this.ctx.db.select({ agentId: runs.agentId }).from(runs).where(eq(runs.id, a.runId))
       : [];
+    const useCase =
+      a &&
+      run &&
+      a.tenantId === principal.tenantId &&
+      useCaseScopes(principal, 'runs:approve').length > 0
+        ? await this.agentUseCase(run.agentId)
+        : null;
     if (
       !a ||
       !run ||
       a.tenantId !== principal.tenantId ||
-      !hasPermission(principal, 'runs:approve', a.teamId, run.agentId)
+      !hasPermissionIn(principal, 'runs:approve', {
+        teamId: a.teamId,
+        agentId: run.agentId,
+        useCase,
+      })
     )
       throw notFound('approval');
     const roleOk = principal.bindings.some(
       (b) =>
         a.approverRoles.includes(b.role) &&
-        (b.agentId ? b.agentId === run.agentId : b.teamId === null || b.teamId === a.teamId) &&
+        // A use-case binding approves only the approvals of its use case; it is no team binding.
+        (b.useCase
+          ? useCaseCovers(b.useCase, useCase)
+          : b.agentId
+            ? b.agentId === run.agentId
+            : b.teamId === null || b.teamId === a.teamId) &&
         bindingPermissions(b).includes('runs:approve'),
     );
     if (!roleOk)

@@ -57,9 +57,25 @@ export const tenants = pgTable(
      * every change that can alter an effective permission; read by slice S2 onwards.
      */
     authzEpoch: bigint('authz_epoch', { mode: 'number' }).notNull().default(0),
+    /**
+     * The use case of the parent this node is attached to (ADR 0013 section 7.2, ADR 0014 section
+     * 3.3, slice S8): a use-case binding of the parent that inherits also applies in this node and its
+     * whole subtree. Null = not attached. Only a child can be attached (a root has no parent), and
+     * only an inheriting tenant administrator of the parent, or a platform operator, changes it
+     * (`PATCH /v1/tenants/{id}`); the epoch trigger of migration 0030 bumps the organisation.
+     */
+    useCase: text('use_case'),
     createdAt: created(),
   },
   (t) => [
+    check(
+      'tenants_use_case_check',
+      sql`${t.useCase} is null or (${t.parentId} is not null and char_length(${t.useCase}) between 1 and 200 and ${t.useCase} ~ '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$')`,
+    ),
+    // Which children of a node are attached to a use case (the loader of the grants asks this).
+    index('tenants_parent_use_case_idx')
+      .on(t.parentId, t.useCase)
+      .where(sql`${t.useCase} is not null`),
     // Slugs are unique among siblings. The global `tenants_slug_unique` stays until secret names
     // are node-aware (W13-7): the slug is the secret namespace and resolves X-OAX-Tenant.
     uniqueIndex('tenants_parent_slug_uq').on(

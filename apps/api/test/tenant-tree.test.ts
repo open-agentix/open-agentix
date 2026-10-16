@@ -159,7 +159,7 @@ describe.each(targets)('migration 0013 on existing flat data (%s)', (_kind, enab
 
   it('matches the drizzle snapshot of schema.ts (columns, indexes, constraints)', async () => {
     const snap = JSON.parse(
-      readFileSync(join(MIGRATIONS_FOLDER, 'meta/0018_snapshot.json'), 'utf8'),
+      readFileSync(join(MIGRATIONS_FOLDER, 'meta/0031_snapshot.json'), 'utf8'),
     ).tables['public.tenants'] as {
       columns: Record<string, { name: string; notNull: boolean }>;
       indexes: Record<string, unknown>;
@@ -371,6 +371,7 @@ describe('tenant tree service', () => {
         'secretRefs',
         'slug',
         'slugPath',
+        'useCase',
       ].sort(),
     );
     const root = await n.services.tenants.tree.node(res.json().id);

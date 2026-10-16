@@ -10817,6 +10817,11 @@ paths:
                           items:
                             type: string
                           description: secret reference globs the credential broker may hand out for this tenant
+                        useCase:
+                          description: the use case of the parent this tenant is attached to (inheriting use-case administrators of the parent also administer it); null when not attached
+                          type:
+                            - string
+                            - "null"
                         createdAt:
                           type: string
                           description: ISO 8601 timestamp
@@ -10829,6 +10834,7 @@ paths:
                         - name
                         - monthlyBudgetUsd
                         - secretRefs
+                        - useCase
                         - createdAt
                       additionalProperties: false
                 required:
@@ -10939,6 +10945,11 @@ paths:
                     items:
                       type: string
                     description: secret reference globs the credential broker may hand out for this tenant
+                  useCase:
+                    description: the use case of the parent this tenant is attached to (inheriting use-case administrators of the parent also administer it); null when not attached
+                    type:
+                      - string
+                      - "null"
                   createdAt:
                     type: string
                     description: ISO 8601 timestamp
@@ -10951,6 +10962,7 @@ paths:
                   - name
                   - monthlyBudgetUsd
                   - secretRefs
+                  - useCase
                   - createdAt
                 additionalProperties: false
         "401":
@@ -11354,6 +11366,11 @@ paths:
                     items:
                       type: string
                     description: secret reference globs the credential broker may hand out for this tenant
+                  useCase:
+                    description: the use case of the parent this tenant is attached to (inheriting use-case administrators of the parent also administer it); null when not attached
+                    type:
+                      - string
+                      - "null"
                   createdAt:
                     type: string
                     description: ISO 8601 timestamp
@@ -11366,6 +11383,7 @@ paths:
                   - name
                   - monthlyBudgetUsd
                   - secretRefs
+                  - useCase
                   - createdAt
                 additionalProperties: false
         "401":
@@ -11387,10 +11405,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
     patch:
-      summary: Rename a tenant; budget and secret references are platform operators only
+      summary: Rename a tenant or attach it to a use case; budget and secret references are platform operators only
       tags:
         - tenants
-      description: Platform operators with `settings:write` change any field. With `OAX_ROLE_BINDINGS_READ=bindings` a tenant admin renames (`name` only) a tenant where they hold an inheriting `admin` binding on it or an ancestor (403 `inheritance_required` for a direct admin); this is evaluated on the tenant in the path, never on the acting tenant. A tenant the caller cannot see is 404.
+      description: "Platform operators with `settings:write` change any field. With `OAX_ROLE_BINDINGS_READ=bindings` a tenant admin renames (`name`) a tenant where they hold an inheriting `admin` binding on it or an ancestor (403 `inheritance_required` for a direct admin); this is evaluated on the tenant in the path, never on the acting tenant. `useCase` attaches the tenant to a use case of its parent (or detaches it with null) and needs an inheriting `admin` binding without use case on the parent or an ancestor: a use-case administrator cannot attach a tenant (403). Attaching is a grant to every inheriting use-case administrator of that use case on the parent; it is audited as `tenant.attached` / `tenant.detached` at the tenant and the parent. An organisation (root) cannot be attached (422 `use_case_on_root`). A tenant the caller cannot see is 404."
       requestBody:
         required: true
         content:
@@ -11414,6 +11432,13 @@ paths:
                   items:
                     type: string
                     maxLength: 128
+                useCase:
+                  description: attach the tenant to a use case of its parent (segments of letters, digits, ".", "_" or "-" separated by "/"), or `null` to detach it. Needs an inheriting `admin` binding on the parent or an ancestor, or platform operator access; a use-case administrator cannot do this (403)
+                  anyOf:
+                    - type: string
+                      minLength: 1
+                      maxLength: 200
+                    - type: "null"
       parameters:
         - schema:
             type: string
@@ -11464,6 +11489,11 @@ paths:
                     items:
                       type: string
                     description: secret reference globs the credential broker may hand out for this tenant
+                  useCase:
+                    description: the use case of the parent this tenant is attached to (inheriting use-case administrators of the parent also administer it); null when not attached
+                    type:
+                      - string
+                      - "null"
                   createdAt:
                     type: string
                     description: ISO 8601 timestamp
@@ -11476,6 +11506,7 @@ paths:
                   - name
                   - monthlyBudgetUsd
                   - secretRefs
+                  - useCase
                   - createdAt
                 additionalProperties: false
         "401":
@@ -11594,7 +11625,7 @@ paths:
                         role:
                           type: string
                         useCase:
-                          description: always null until use-case bindings arrive (S8)
+                          description: the use case the role is limited to (it then applies to the resources of that use case and its sub-use cases, on this tenant only); null = the whole tenant
                           type:
                             - string
                             - "null"
@@ -11683,7 +11714,7 @@ paths:
       summary: Bind a role to a user on a tenant
       tags:
         - role-bindings
-      description: "The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. Use-case bindings are 422 `use_case_bindings_unsupported`. `pentest` (rule 7): only tenant admins of the tenant or above and platform operators (403 `pentest_grant_forbidden`); `expiresAt` is required (422 `expiry_required`) and at most `OAX_PENTEST_MAX_DAYS` ahead (422 `expiry_too_long`); the resolver read path only (409 `pentest_requires_bindings_read`). Audited as `tenant.role_bound` in the partition of the tenant."
+      description: "The grant rules of ADR 0014 section 7: `users:write` on the tenant, no grant above one's own permissions, an inheriting grant needs an inheriting binding of at least the same role on the tenant or above, no grant to oneself (platform operators excepted), the grantee must be visible to the caller (otherwise 404 `user`, as for an unknown id). `inherit` is required. A use-case binding (`useCase`) applies to the resources of the use case on this tenant; with `inherit` also in the child tenants attached to it. A use-case administrator grants for its own use case only (rule 3). `pentest` (rule 7): only tenant admins of the tenant or above and platform operators (403 `pentest_grant_forbidden`); `expiresAt` is required (422 `expiry_required`) and at most `OAX_PENTEST_MAX_DAYS` ahead (422 `expiry_too_long`); the resolver read path only (409 `pentest_requires_bindings_read`). Audited as `tenant.role_bound` in the partition of the tenant."
       requestBody:
         required: true
         content:
@@ -11717,7 +11748,7 @@ paths:
                       pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|([+-](?:[01]\d|2[0-3]):[0-5]\d)))$
                     - type: "null"
                 useCase:
-                  description: refused with 422 `use_case_bindings_unsupported` until ADR 0014 S8
+                  description: limit the role to a use case and its sub-use cases on this tenant (segments of letters, digits, ".", "_" or "-" separated by "/"; not for `pentest`); with `inherit` it also reaches the child tenants attached to the use case. Needs OAX_ROLE_BINDINGS_READ=bindings (409 `use_case_requires_bindings_read`)
                   anyOf:
                     - type: string
                       minLength: 1
@@ -11773,7 +11804,7 @@ paths:
                   role:
                     type: string
                   useCase:
-                    description: always null until use-case bindings arrive (S8)
+                    description: the use case the role is limited to (it then applies to the resources of that use case and its sub-use cases, on this tenant only); null = the whole tenant
                     type:
                       - string
                       - "null"
@@ -11967,7 +11998,7 @@ paths:
                   role:
                     type: string
                   useCase:
-                    description: always null until use-case bindings arrive (S8)
+                    description: the use case the role is limited to (it then applies to the resources of that use case and its sub-use cases, on this tenant only); null = the whole tenant
                     type:
                       - string
                       - "null"
@@ -12553,6 +12584,11 @@ paths:
                           description: the node the role is bound on
                         tenantSlugPath:
                           type: string
+                        useCase:
+                          description: the use case the role is limited to; null = the whole tenant
+                          type:
+                            - string
+                            - "null"
                         inherit:
                           type: boolean
                         expiresAt:
@@ -12576,6 +12612,7 @@ paths:
                         - agentId
                         - tenantId
                         - tenantSlugPath
+                        - useCase
                         - inherit
                         - expiresAt
                         - source
@@ -12601,9 +12638,15 @@ paths:
                               - platform
                             description: "`direct`: bound on the node; `inherited`: bound on an ancestor with `inherit = true`; `team` / `agent`: a team membership or agent binding of the node"
                           description: the kinds of binding that give it
+                        useCases:
+                          type: array
+                          items:
+                            type: string
+                          description: the use cases the permission is limited to (it then applies to the resources of those use cases only); empty when it is held for the whole tenant
                       required:
                         - permission
                         - sources
+                        - useCases
                       additionalProperties: false
                     description: effective permissions at the tenant (token scopes applied), with their sources
                 required:
@@ -12743,6 +12786,11 @@ paths:
                           description: the node the role is bound on
                         tenantSlugPath:
                           type: string
+                        useCase:
+                          description: the use case the role is limited to; null = the whole tenant
+                          type:
+                            - string
+                            - "null"
                         inherit:
                           type: boolean
                         expiresAt:
@@ -12766,6 +12814,7 @@ paths:
                         - agentId
                         - tenantId
                         - tenantSlugPath
+                        - useCase
                         - inherit
                         - expiresAt
                         - source
@@ -12791,9 +12840,15 @@ paths:
                               - platform
                             description: "`direct`: bound on the node; `inherited`: bound on an ancestor with `inherit = true`; `team` / `agent`: a team membership or agent binding of the node"
                           description: the kinds of binding that give it
+                        useCases:
+                          type: array
+                          items:
+                            type: string
+                          description: the use cases the permission is limited to (it then applies to the resources of those use cases only); empty when it is held for the whole tenant
                       required:
                         - permission
                         - sources
+                        - useCases
                       additionalProperties: false
                     description: effective permissions at the tenant (token scopes applied), with their sources
                 required:

@@ -1,6 +1,7 @@
-import { visibleAgents, visibleTeams, type Principal } from '@openagentix/core';
+import { useCaseScopes, visibleAgents, visibleTeams, type Principal } from '@openagentix/core';
 import { and, desc, eq, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { cached } from '../cache.js';
+import { useCaseMatch } from './use-case-scope.js';
 import type { AppContext } from '../context.js';
 import { agents, costLedger, teams, tenants } from '../db/schema.js';
 import { forbidden } from '../errors.js';
@@ -96,13 +97,25 @@ const COLUMN: Record<CostGroup, SQL> = {
 export class CostsService {
   constructor(private readonly ctx: AppContext) {}
 
-  private async labels(groupBy: CostGroup, keys: string[]): Promise<Map<string, string>> {
+  private async labels(
+    groupBy: CostGroup,
+    keys: string[],
+    /** Use cases a use-case-only caller is limited to: names of agents elsewhere stay hidden. */
+    onlyUseCases?: readonly string[],
+  ): Promise<Map<string, string>> {
     if (keys.length === 0) return new Map();
     if (groupBy === 'agent') {
+      // Costs keep the use case they were booked with; an agent that has since moved to another
+      // use case still has rows here, but its name is not for this caller.
       const rows = await this.ctx.db
         .select({ id: agents.id, name: agents.name })
         .from(agents)
-        .where(inArray(agents.id, keys));
+        .where(
+          and(
+            inArray(agents.id, keys),
+            onlyUseCases ? useCaseMatch(agents.useCase, onlyUseCases) : undefined,
+          ),
+        );
       return new Map(rows.map((r) => [r.id, r.name]));
     }
     if (groupBy === 'team') {
@@ -145,7 +158,14 @@ export class CostsService {
     const tenantFilter = this.tenantFilter(principal, allTenants);
     const scope = visibleTeams(principal, 'costs:read');
     const scopedAgents = visibleAgents(principal, 'costs:read');
-    if (Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0) return [];
+    const useCases = useCaseScopes(principal, 'costs:read');
+    if (
+      Array.isArray(scope) &&
+      scope.length === 0 &&
+      scopedAgents.length === 0 &&
+      useCases.length === 0
+    )
+      return [];
     const rows = await this.ctx.db
       .select({
         id: costLedger.id,
@@ -176,6 +196,7 @@ export class CostsService {
             : or(
                 scope.length ? inArray(costLedger.teamId, scope) : undefined,
                 scopedAgents.length ? inArray(costLedger.agentId, scopedAgents) : undefined,
+                useCases.length ? useCaseMatch(costLedger.useCase, useCases) : undefined,
               ),
         ),
       )
@@ -201,17 +222,21 @@ export class CostsService {
     const tenantFilter = subtree ? undefined : this.tenantFilter(principal, allTenants);
     const scope = visibleTeams(principal, 'costs:read');
     const scopedAgents = visibleAgents(principal, 'costs:read');
+    const useCases = useCaseScopes(principal, 'costs:read');
     if (
       subtree
         ? subtree.isEmpty
-        : Array.isArray(scope) && scope.length === 0 && scopedAgents.length === 0
+        : Array.isArray(scope) &&
+          scope.length === 0 &&
+          scopedAgents.length === 0 &&
+          useCases.length === 0
     )
       return [];
     // Aggregates are cached per scope: the digest of a subtree scope covers every node and role
     // the predicate is built from, so two callers share an entry only if they may read the same rows.
     const who = subtree
       ? `subtree:${subtree.digest()}`
-      : `${allTenants ? 'all' : principal.tenantId}:${scope === 'all' ? 'all' : [...scope, ...scopedAgents.map((a) => `agent:${a}`)].sort().join(',')}`;
+      : `${allTenants ? 'all' : principal.tenantId}:${scope === 'all' ? 'all' : [...scope, ...scopedAgents.map((a) => `agent:${a}`), ...useCases.map((u) => `usecase:${u}`)].sort().join(',')}`;
     const key = `costs:${who}:${groupBy}:${from ?? ''}:${to ?? ''}:${limit}`;
     return cached(this.ctx.cache, key, 30_000, async () => {
       const col = COLUMN[groupBy];
@@ -231,12 +256,14 @@ export class CostsService {
                   tenantId: costLedger.tenantId,
                   teamId: costLedger.teamId,
                   agent: costLedger.agentId,
+                  useCase: costLedger.useCase,
                 })
               : scope === 'all'
                 ? undefined
                 : or(
                     scope.length ? inArray(costLedger.teamId, scope) : undefined,
                     scopedAgents.length ? inArray(costLedger.agentId, scopedAgents) : undefined,
+                    useCases.length ? useCaseMatch(costLedger.useCase, useCases) : undefined,
                   ),
             from ? gte(costLedger.month, from) : undefined,
             to ? lte(costLedger.month, to) : undefined,
@@ -249,7 +276,17 @@ export class CostsService {
       const labels =
         subtree && groupBy === 'tenant'
           ? await this.tenantLabels(subtree, keys)
-          : await this.labels(groupBy, keys);
+          : await this.labels(
+              groupBy,
+              keys,
+              !subtree &&
+                useCases.length > 0 &&
+                scope !== 'all' &&
+                scope.length === 0 &&
+                scopedAgents.length === 0
+                ? useCases
+                : undefined,
+            );
       return rows.map((r) => ({
         key: r.key,
         label: (r.key && labels.get(r.key)) ?? null,

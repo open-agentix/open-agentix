@@ -1,5 +1,7 @@
 import {
+  hasPermissionIn,
   hasPermission,
+  useCaseScopes,
   percentUsed,
   visibleAgents,
   visibleTeams,
@@ -25,6 +27,7 @@ import type { TeamRow, TenantRow } from './identity.js';
 import { monthOf } from './runs.js';
 import type { ResolvedScope } from './subtree-scope.js';
 import { TenantTree } from './tenant-tree.js';
+import { useCaseMatch } from './use-case-scope.js';
 
 const MICROS_PER_USD = 1_000_000;
 const usd = (micros: number) => micros / MICROS_PER_USD;
@@ -120,6 +123,21 @@ export class AgentSummaryService {
     const ids = rows.map((r) => r.id);
     const mayCost = (r: AgentRow) =>
       subtree
+        ? subtree.costs.allows({
+            tenantId: r.tenantId,
+            teamId: r.teamId,
+            agentId: r.id,
+            useCase: r.useCase,
+          })
+        : hasPermissionIn(principal, 'costs:read', {
+            teamId: r.teamId,
+            agentId: r.id,
+            useCase: r.useCase,
+          });
+    // The budget of the tenant or the team spans more than the agent's use case: only a caller who
+    // reads the costs of the agent through its team, its node or the agent itself sees those.
+    const mayWideBudget = (r: AgentRow) =>
+      subtree
         ? subtree.costs.allows({ tenantId: r.tenantId, teamId: r.teamId, agentId: r.id })
         : hasPermission(principal, 'costs:read', r.teamId, r.id);
     const costIds = rows.filter(mayCost).map((r) => r.id);
@@ -136,6 +154,7 @@ export class AgentSummaryService {
       tenantRows.nodes,
       rows.filter((r) => costVisible.has(r.id)),
       teamRows,
+      new Set(rows.filter(mayWideBudget).map((r) => r.id)),
     );
     return rows.map((agent) => {
       const by = agent.disabledBy ? disabledBy.get(agent.disabledBy) : undefined;
@@ -237,7 +256,12 @@ export class AgentSummaryService {
     const visible = runsScope
       ? runsScope.isEmpty
         ? 'none'
-        : runsScope.predicate({ tenantId: runs.tenantId, teamId: runs.teamId, agent: runs.agentId })
+        : runsScope.predicate({
+            tenantId: runs.tenantId,
+            teamId: runs.teamId,
+            agent: runs.agentId,
+            useCase: runsOfUseCases,
+          })
       : runScope(principal);
     if (visible === 'none') return out;
     const list = (values: string[]) =>
@@ -297,6 +321,8 @@ export class AgentSummaryService {
     tenantNodes: Map<string, TenantRow>,
     rows: AgentRow[],
     teamRows: Map<string, TeamRow>,
+    /** Agents whose tenant and team budgets the caller may see (the others get the use case only). */
+    wide: ReadonlySet<string>,
   ) {
     const out = new Map<string, AgentBudgetInfo>();
     if (rows.length === 0) return out;
@@ -332,7 +358,7 @@ export class AgentSummaryService {
     for (const agent of rows) {
       const tenant = tenantNodes.get(agent.tenantId)!;
       const candidates: BudgetCandidate[] = [];
-      if (tenant.monthlyBudgetMicros !== null)
+      if (wide.has(agent.id) && tenant.monthlyBudgetMicros !== null)
         candidates.push({
           scope: 'tenant',
           name: tenant.name,
@@ -350,7 +376,7 @@ export class AgentSummaryService {
           spentMicros: useCaseSpent.get(`${agent.tenantId}|${agent.useCase}`) ?? 0,
         });
       const team = agent.teamId ? teamRows.get(agent.teamId) : undefined;
-      if (team && team.monthlyBudgetMicros !== null)
+      if (wide.has(agent.id) && team && team.monthlyBudgetMicros !== null)
         candidates.push({
           scope: 'team',
           name: team.name,
@@ -433,9 +459,18 @@ function runScope(principal: Principal): SQL | 'all' | 'none' {
   const teamsIn = visibleTeams(principal, 'runs:read');
   if (teamsIn === 'all') return 'all';
   const agentsIn = visibleAgents(principal, 'runs:read');
-  if (teamsIn.length === 0 && agentsIn.length === 0) return 'none';
+  const useCases = useCaseScopes(principal, 'runs:read');
+  if (teamsIn.length === 0 && agentsIn.length === 0 && useCases.length === 0) return 'none';
   return or(
     teamsIn.length ? inArray(runs.teamId, teamsIn) : undefined,
     agentsIn.length ? inArray(runs.agentId, agentsIn) : undefined,
+    useCases.length ? runsOfUseCases(useCases) : undefined,
   )!;
 }
+
+/** Runs of the agents whose use case is one of `useCases` (or below one of them). */
+const runsOfUseCases = (useCases: string[]): SQL =>
+  inArray(
+    runs.agentId,
+    sql`(select ${agents.id} from ${agents} where ${useCaseMatch(agents.useCase, useCases)})`,
+  );

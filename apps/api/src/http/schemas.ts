@@ -868,6 +868,12 @@ export const TenantSchema = z.object({
   secretRefs: z
     .array(z.string())
     .describe('secret reference globs the credential broker may hand out for this tenant'),
+  useCase: z
+    .string()
+    .nullable()
+    .describe(
+      'the use case of the parent this tenant is attached to (inheriting use-case administrators of the parent also administer it); null when not attached',
+    ),
   createdAt: Iso,
 });
 export const TenantCreateBody = z.object({
@@ -896,13 +902,27 @@ export const TenantPatchBody = z.object({
     .max(64)
     .optional()
     .describe('secret reference globs (`*` wildcard only); an empty list allows no secret'),
+  useCase: z
+    .string()
+    .min(1)
+    .max(200)
+    .nullable()
+    .optional()
+    .describe(
+      'attach the tenant to a use case of its parent (segments of letters, digits, ".", "_" or "-" separated by "/"), or `null` to detach it. Needs an inheriting `admin` binding on the parent or an ancestor, or platform operator access; a use-case administrator cannot do this (403)',
+    ),
 });
 export const RoleBindingSchema = z.object({
   id: Id,
   tenantId: Id.describe('the node the role is bound on'),
   user: z.object({ id: Id, email: z.string(), displayName: z.string() }),
   role: z.string(),
-  useCase: z.string().nullable().describe('always null until use-case bindings arrive (S8)'),
+  useCase: z
+    .string()
+    .nullable()
+    .describe(
+      'the use case the role is limited to (it then applies to the resources of that use case and its sub-use cases, on this tenant only); null = the whole tenant',
+    ),
   inherit: z
     .boolean()
     .describe('true: the role also applies at every descendant of the node (ADR 0014 section 2)'),
@@ -939,7 +959,9 @@ export const RoleBindingCreateBody = z.object({
     .min(1)
     .max(200)
     .nullish()
-    .describe('refused with 422 `use_case_bindings_unsupported` until ADR 0014 S8'),
+    .describe(
+      'limit the role to a use case and its sub-use cases on this tenant (segments of letters, digits, ".", "_" or "-" separated by "/"; not for `pentest`); with `inherit` it also reaches the child tenants attached to the use case. Needs OAX_ROLE_BINDINGS_READ=bindings (409 `use_case_requires_bindings_read`)',
+    ),
 });
 export const RoleBindingPatchBody = z
   .object({
@@ -1078,6 +1100,10 @@ export const AccessSchema = z.object({
         agentId: Id.nullable(),
         tenantId: Id.describe('the node the role is bound on'),
         tenantSlugPath: z.string(),
+        useCase: z
+          .string()
+          .nullable()
+          .describe('the use case the role is limited to; null = the whole tenant'),
         inherit: z.boolean(),
         expiresAt: Iso.nullable(),
         source: BindingSourceSchema,
@@ -1089,6 +1115,11 @@ export const AccessSchema = z.object({
       z.object({
         permission: z.string(),
         sources: z.array(BindingSourceSchema).describe('the kinds of binding that give it'),
+        useCases: z
+          .array(z.string())
+          .describe(
+            'the use cases the permission is limited to (it then applies to the resources of those use cases only); empty when it is held for the whole tenant',
+          ),
       }),
     )
     .describe('effective permissions at the tenant (token scopes applied), with their sources'),

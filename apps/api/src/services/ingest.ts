@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { OaxEvent, TenantActor } from '@openagentix/core';
+import {
+  hasPermission,
+  useCaseScopes,
+  type OaxEvent,
+  type Principal,
+  type TenantActor,
+} from '@openagentix/core';
 import {
   ChangeCheckSchema,
   decideChange,
@@ -15,11 +21,12 @@ import {
   type ReplayGuard,
   type WebhookScheme,
 } from '@openagentix/events';
-import { and, desc, eq, gt, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import { agents, changeChecks, eventSources, events, webhookDeliveries } from '../db/schema.js';
 import { createProxyAwareFetch } from '@openagentix/providers';
+import { useCaseMatch } from './use-case-scope.js';
 import { HttpError, conflict, notFound } from '../errors.js';
 import {
   decodeNameCursor,
@@ -386,8 +393,31 @@ export class IngestService {
     return { eventId, runId, reason, status: 'accepted' };
   }
 
+  /**
+   * Events of the sources whose agent belongs to one of `useCases` (ADR 0014 S8). An event belongs
+   * to the use case of the agent its source triggers; an event without a source (budget alerts,
+   * manual triggers) or a source without an agent belongs to the whole node and is never part of
+   * a use case.
+   */
+  private eventsOfUseCases = (useCases: string[]): SQL =>
+    inArray(
+      events.sourceId,
+      this.ctx.db
+        .select({ id: eventSources.id })
+        .from(eventSources)
+        .where(
+          inArray(
+            eventSources.agentId,
+            this.ctx.db
+              .select({ id: agents.id })
+              .from(agents)
+              .where(useCaseMatch(agents.useCase, useCases)),
+          ),
+        ),
+    );
+
   async listEvents(
-    actor: TenantActor,
+    actor: Principal,
     filter: { sourceId?: string | undefined },
     limit: number,
     cursor?: string,
@@ -395,12 +425,28 @@ export class IngestService {
   ) {
     const c = decodeTimeCursor(cursor);
     if (subtree?.isEmpty) return { items: [], nextCursor: null };
+    // Node-wide readers see every event of the node; a caller who holds events:read through use
+    // cases only sees the events of those use cases.
+    const useCases = useCaseScopes(actor, 'events:read');
+    const wide = hasPermission(actor, 'events:read');
+    if (!subtree && !wide && useCases.length === 0) return { items: [], nextCursor: null };
     const rows = await this.ctx.db
       .select()
       .from(events)
       .where(
         and(
-          subtree ? subtree.nodePredicate(events.tenantId) : eq(events.tenantId, actor.tenantId),
+          subtree
+            ? or(
+                subtree.nodePredicate(events.tenantId),
+                subtree.predicate({
+                  tenantId: events.tenantId,
+                  useCase: this.eventsOfUseCases,
+                }),
+              )
+            : and(
+                eq(events.tenantId, actor.tenantId),
+                wide ? undefined : this.eventsOfUseCases(useCases),
+              ),
           filter.sourceId ? eq(events.sourceId, filter.sourceId) : undefined,
           c
             ? or(lt(events.receivedAt, c.t), and(eq(events.receivedAt, c.t), lt(events.id, c.id)))
@@ -412,11 +458,20 @@ export class IngestService {
     return page(rows, limit, (r) => encodeTimeCursor(r.receivedAt, r.id));
   }
 
-  async getEvent(actor: TenantActor, id: string): Promise<EventRow> {
+  async getEvent(actor: Principal, id: string): Promise<EventRow> {
+    const useCases = useCaseScopes(actor, 'events:read');
+    const wide = hasPermission(actor, 'events:read');
     const [row] = await this.ctx.db
       .select()
       .from(events)
-      .where(and(eq(events.id, id), eq(events.tenantId, actor.tenantId)));
+      .where(
+        and(
+          eq(events.id, id),
+          eq(events.tenantId, actor.tenantId),
+          // Outside the caller's use cases an event does not exist (404, as for another tenant's).
+          wide ? undefined : useCases.length ? this.eventsOfUseCases(useCases) : sql`false`,
+        ),
+      );
     if (!row) throw notFound('event');
     return row;
   }

@@ -1,5 +1,6 @@
 import {
   hasPermission,
+  hasPermissionIn,
   type Permission,
   type Principal,
   type RoleBinding,
@@ -51,6 +52,8 @@ interface Owner {
   tenantId: string;
   teamId: string | null | undefined;
   agentId: string | null | undefined;
+  /** The use case of the resource's agent (use-case bindings of the caller apply to it). */
+  useCase?: string | null | undefined;
   /** Node-wide resources (no team or agent scoping) are checked without a resource scope. */
   nodeWide: boolean;
 }
@@ -85,12 +88,13 @@ export class LocateService {
     const allowed =
       owner !== undefined &&
       bindings !== undefined &&
-      hasPermission(
-        { ...p, bindings },
-        permission,
-        owner.nodeWide ? undefined : owner.teamId,
-        owner.nodeWide ? undefined : owner.agentId,
-      );
+      (owner.nodeWide
+        ? hasPermission({ ...p, bindings }, permission)
+        : hasPermissionIn({ ...p, bindings }, permission, {
+            teamId: owner.teamId,
+            agentId: owner.agentId,
+            useCase: owner.useCase,
+          }));
     // The node row (the name) is read on every path: the owner when the caller may know it, the
     // caller's own home node as a stand-in otherwise, so the statements do not depend on the outcome.
     const standIn = reach && reach.kind !== 'all' ? reach.home.id : p.tenantId;
@@ -135,15 +139,29 @@ export class LocateService {
     switch (kind) {
       case 'agent': {
         const [r] = await db
-          .select({ tenantId: agents.tenantId, teamId: agents.teamId })
+          .select({ tenantId: agents.tenantId, teamId: agents.teamId, useCase: agents.useCase })
           .from(agents)
           .where(eq(agents.id, id));
-        return r && { tenantId: r.tenantId, teamId: r.teamId, agentId: id, nodeWide: false };
+        return (
+          r && {
+            tenantId: r.tenantId,
+            teamId: r.teamId,
+            agentId: id,
+            useCase: r.useCase,
+            nodeWide: false,
+          }
+        );
       }
       case 'run': {
         const [r] = await db
-          .select({ tenantId: runs.tenantId, teamId: runs.teamId, agentId: runs.agentId })
+          .select({
+            tenantId: runs.tenantId,
+            teamId: runs.teamId,
+            agentId: runs.agentId,
+            useCase: agents.useCase,
+          })
           .from(runs)
+          .leftJoin(agents, eq(agents.id, runs.agentId))
           .where(eq(runs.id, id));
         return r && { ...r, nodeWide: false };
       }
@@ -154,9 +172,11 @@ export class LocateService {
             tenantId: approvals.tenantId,
             teamId: approvals.teamId,
             agentId: runs.agentId,
+            useCase: agents.useCase,
           })
           .from(approvals)
           .leftJoin(runs, eq(runs.id, approvals.runId))
+          .leftJoin(agents, eq(agents.id, runs.agentId))
           .where(eq(approvals.id, id));
         return r && { ...r, nodeWide: false };
       }

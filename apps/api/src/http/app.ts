@@ -8,7 +8,6 @@ import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import {
   MODEL_TOKEN_PREFIX,
-  hasPermission,
   verifyModelToken,
   verifyRunToken,
   type OaxError,
@@ -48,6 +47,7 @@ import { registerTenantRoutes } from './routes/tenants.js';
 import { registerUserRoutes } from './routes/users.js';
 import { registerWorkerRoutes } from './routes/worker.js';
 import { registerHttpSpans } from './otel-hook.js';
+import { USE_CASE_POLICY, routeAllows, type UseCasePolicy } from './use-case-policy.js';
 
 /** How a route authenticates: an RBAC permission, any signed-in principal, or a special scheme. */
 export type RouteAccess =
@@ -77,6 +77,11 @@ export interface Deps {
   services: Services;
   /** Destination of the request log (default stdout, minus registered secrets); for tests. */
   logSink?: LineSink;
+  /**
+   * The use-case decision of every route (default: {@link USE_CASE_POLICY}). Tests pass a smaller
+   * one to show that a route without a decision is refused to use-case administrators.
+   */
+  useCasePolicy?: Readonly<Record<string, UseCasePolicy>>;
 }
 
 export function bearerOf(req: FastifyRequest): string | null {
@@ -274,10 +279,15 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       req.principal = await deps.services.identity.principalForUser(claims.userId, ['runs:read']);
       req.principal = await actingIn(req, reply, req.principal);
       if (
-        access !== 'authenticated' &&
         access !== 'run-token' &&
         access !== 'model-token' &&
-        !hasPermission(req.principal, access)
+        !routeAllows(
+          req.principal,
+          access,
+          req.method,
+          req.routeOptions.url ?? '',
+          deps.useCasePolicy ?? USE_CASE_POLICY,
+        )
       )
         throw forbidden(`missing permission ${access}`);
       return;
@@ -315,7 +325,15 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
     // ADR 0014 section 8: the first request of a session with a pentest binding in effect is
     // audited, also when the request itself is refused below.
     await deps.services.pentest.noteSession(req.principal, token);
-    if (access !== 'authenticated' && !hasPermission(req.principal, access))
+    if (
+      !routeAllows(
+        req.principal,
+        access,
+        req.method,
+        req.routeOptions.url ?? '',
+        deps.useCasePolicy ?? USE_CASE_POLICY,
+      )
+    )
       throw forbidden(`missing permission ${access}`);
   });
   // Public demo: read-mostly. Mutations are refused except DEMO_ALLOWED_MUTATIONS.
