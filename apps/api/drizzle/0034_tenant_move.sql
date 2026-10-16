@@ -5,9 +5,12 @@
 --   * "tenants_tree_guard" (BEFORE, per row) accepts a placement change only for a node that has a
 --     parent before and after, inside the same organisation (root_id unchanged), and only in a
 --     transaction that declared the move with set_config('oax.tenant_move_root', <root id>, true)
---     (the application does it under the exclusive tree lock). A root never moves, an organisation
---     never changes (cross-organisation moves are W13-15), and a stray UPDATE of the placement
---     (an older application version, psql) is still refused.
+--     and that holds the organisation's exclusive tree advisory lock (namespace 734210, key
+--     hashtext(root id): see services/tree-lock.ts), which the application takes first. A root
+--     never moves, an organisation never changes (cross-organisation moves are W13-15), and a stray
+--     UPDATE of the placement (an older application version, psql) is still refused. This is a
+--     guard against stray writes, not a security boundary: whoever can run SQL as the application
+--     role can take the lock and set the variable. Authorisation is the application's.
 --   * "tenants_tree_verify" (AFTER, per row, DEFERRABLE INITIALLY DEFERRED) checks at commit that
 --     every row whose placement changed matches its parent's final placement (path = parent path +
 --     own id, depth = parent depth + 1, same root, no cycle) and that its children match its own
@@ -25,7 +28,12 @@ BEGIN
 		IF NEW."parent_id" IS DISTINCT FROM OLD."parent_id" OR NEW."root_id" <> OLD."root_id"
 			OR NEW."path" <> OLD."path" OR NEW."depth" <> OLD."depth" THEN
 			IF OLD."parent_id" IS NULL OR NEW."parent_id" IS NULL OR NEW."root_id" <> OLD."root_id"
-				OR current_setting('oax.tenant_move_root', true) IS DISTINCT FROM OLD."root_id"::text THEN
+				OR current_setting('oax.tenant_move_root', true) IS DISTINCT FROM OLD."root_id"::text
+				OR NOT EXISTS (
+					SELECT 1 FROM pg_locks l
+					WHERE l.locktype = 'advisory' AND l.granted AND l.mode = 'ExclusiveLock'
+						AND l.pid = pg_backend_pid() AND l.classid = 734210
+						AND l.objid = hashtext(OLD."root_id"::text)::oid) THEN
 				RAISE EXCEPTION 'tenant tree placement is immutable (id %)', OLD."id" USING ERRCODE = '23514';
 			END IF;
 		END IF;
