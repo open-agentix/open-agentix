@@ -38,6 +38,7 @@ export function errorKey(code: string): TKey | null {
     stale_view: 'reviews.errors.stale_view',
     review_closed: 'reviews.errors.review_closed',
     thread_limit_reached: 'reviews.errors.thread_limit_reached',
+    review_comment_budget_reached: 'reviews.errors.review_comment_budget_reached',
     comment_limit_reached: 'reviews.errors.comment_limit_reached',
     comment_too_long: 'reviews.errors.comment_too_long',
     rate_limited: 'reviews.errors.rate_limited',

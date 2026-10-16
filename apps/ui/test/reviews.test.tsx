@@ -4,9 +4,14 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { LifecycleBadge } from '../src/features/reviews/LifecycleBadge';
 import { lifecycleStatus } from '../src/features/reviews/lifecycleStatus';
 import { ineligibility } from '../src/features/reviews/decisionReasons';
-import { anchorOfLine, placeThreads } from '../src/features/reviews/threadPlacement';
+import {
+  MAX_RENDERED_LINES,
+  anchorOfLine,
+  placeThreads,
+  visibleRows,
+} from '../src/features/reviews/threadPlacement';
 import { I18nProvider, loadLocale } from '../src/i18n/i18n';
-import { diffLines } from '../src/lib/diff';
+import { MAX_DIFF_CELLS, diffIsCoarse, diffLines } from '../src/lib/diff';
 import * as f from './fixtures';
 import { api } from './handlers';
 import * as r from './review-fixtures';
@@ -714,5 +719,58 @@ describe('pure helpers', () => {
         'tenant',
       )?.scope,
     ).toBeUndefined();
+  });
+
+  it('keeps the diff exact below the size limit and trims the common ends', () => {
+    const a = ['keep', 'old', 'tail'].join('\n');
+    const b = ['keep', 'new', 'tail'].join('\n');
+    expect(diffIsCoarse(a, b)).toBe(false);
+    expect(diffLines(a, b).map((l) => `${l.type}:${l.text}`)).toEqual([
+      'same:keep',
+      'del:old',
+      'add:new',
+      'same:tail',
+    ]);
+    expect(diffLines(a, b).map((l) => [l.oldNo, l.newNo])).toEqual([
+      [1, 1],
+      [2, undefined],
+      [undefined, 2],
+      [3, 3],
+    ]);
+  });
+
+  it('falls back to removed-then-added lines for a diff too large to compute', () => {
+    const side = Math.ceil(Math.sqrt(MAX_DIFF_CELLS)) + 50;
+    const a = Array.from({ length: side }, (_, i) => `a${i}`).join('\n');
+    const b = Array.from({ length: side }, (_, i) => `b${i}`).join('\n');
+    expect(diffIsCoarse(a, b)).toBe(true);
+    const started = performance.now();
+    const lines = diffLines(a, b);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(lines).toHaveLength(2 * side);
+    expect(lines.slice(0, side).every((l) => l.type === 'del')).toBe(true);
+    expect(lines.slice(side).every((l) => l.type === 'add')).toBe(true);
+  });
+
+  it('renders changed lines with context, collapses the rest and bounds the list', () => {
+    const unchanged = Array.from({ length: 50 }, (_, i) => `line ${i}`);
+    const lines = diffLines(
+      unchanged.join('\n'),
+      [...unchanged.slice(0, 25), 'changed', ...unchanged.slice(26)].join('\n'),
+    );
+    const { rows, clipped } = visibleRows(lines, new Set());
+    expect(clipped).toBe(false);
+    expect(rows.filter((x) => typeof x === 'number').length).toBeLessThan(12);
+    expect(rows.some((x) => typeof x !== 'number')).toBe(true);
+    // a line with a thread stays visible
+    const withThread = visibleRows(lines, new Set([2]));
+    expect(withThread.rows).toContain(2);
+    const huge = diffLines(
+      '',
+      Array.from({ length: MAX_RENDERED_LINES + 10 }, (_, i) => `n${i}`).join('\n'),
+    );
+    const cut = visibleRows(huge, new Set());
+    expect(cut.clipped).toBe(true);
+    expect(cut.rows.filter((x) => typeof x === 'number')).toHaveLength(MAX_RENDERED_LINES);
   });
 });

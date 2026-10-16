@@ -26,6 +26,7 @@ const ALLOWED_TAGS = new Set([
   'PRE',
   'A',
   'SPAN',
+  'BDI',
   'BLOCKQUOTE',
 ]);
 
@@ -104,6 +105,11 @@ describe('safe Markdown rendering', () => {
     const { container } = renderMarkdown('<b>bold?</b> and <script>alert(1)</script>');
     expect(container.textContent).toContain('<b>bold?</b>');
     expect(container.querySelector('b, script')).toBeNull();
+  });
+
+  it('isolates the link text and the host so that they cannot reorder the line', () => {
+    const { container } = renderMarkdown('[evil](https://docs.example.org/)');
+    expect(container.querySelectorAll('bdi').length).toBe(2);
   });
 
   it('turns an http and an https link into an anchor and shows the host', () => {
@@ -245,5 +251,30 @@ describe('parser limits and speed', () => {
     const items = parseMarkdown('- a\n'.repeat(1_000));
     const list = items.blocks[0];
     expect(list?.kind === 'list' ? list.items.length : 0).toBeLessThanOrEqual(200);
+  });
+
+  it('parses long runs of blanks in linear time, before and after block markers', () => {
+    const blanks = ' '.repeat(10_000);
+    for (const source of [
+      blanks,
+      `-${blanks}x`,
+      `1.${blanks}x`,
+      `>${blanks}x`,
+      `${blanks}x`,
+      `${blanks}\n${blanks}\n${blanks}`,
+      `a${blanks}b${blanks}`,
+      `[a](${blanks})`,
+    ]) {
+      const started = performance.now();
+      parseMarkdown(source);
+      expect(performance.now() - started).toBeLessThan(200);
+    }
+  });
+
+  it('says so when blocks or list items are dropped', () => {
+    expect(parseMarkdown('x\n\n'.repeat(400)).truncated).toBe(false);
+    expect(parseMarkdown('x\n\n'.repeat(700)).truncated).toBe(true);
+    expect(parseMarkdown('- a\n'.repeat(150)).truncated).toBe(false);
+    expect(parseMarkdown('- a\n'.repeat(250)).truncated).toBe(true);
   });
 });

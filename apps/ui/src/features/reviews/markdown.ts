@@ -219,7 +219,7 @@ const NUMBERED = /^ {0,3}\d{1,9}[.)] +(.*)$/;
 const startsBlock = (line: string): boolean =>
   FENCE.test(line) || QUOTE.test(line) || BULLET.test(line) || NUMBERED.test(line);
 
-function parseBlocks(lines: string[], depth: number): Block[] {
+function parseBlocks(lines: string[], depth: number, state: { cut: boolean }): Block[] {
   const blocks: Block[] = [];
   let i = 0;
   while (i < lines.length && blocks.length < MAX_BLOCKS) {
@@ -237,14 +237,18 @@ function parseBlocks(lines: string[], depth: number): Block[] {
         body.push(lines[i]!.replace(/^ {0,3}> ?/, ''));
       if (depth >= MAX_BLOCK_DEPTH)
         blocks.push({ kind: 'paragraph', children: parseInline(body.join('\n')) });
-      else blocks.push({ kind: 'quote', children: parseBlocks(body, depth + 1) });
+      else blocks.push({ kind: 'quote', children: parseBlocks(body, depth + 1, state) });
     } else if (BULLET.test(line) || NUMBERED.test(line)) {
       const ordered = NUMBERED.test(line);
       const pattern = ordered ? NUMBERED : BULLET;
       const items: Inline[][] = [];
-      for (; i < lines.length && items.length < MAX_LIST_ITEMS; i++) {
+      for (; i < lines.length; i++) {
         const m = pattern.exec(lines[i]!);
         if (!m) break;
+        if (items.length >= MAX_LIST_ITEMS) {
+          state.cut = true;
+          continue;
+        }
         items.push(parseInline(m[1]!));
       }
       blocks.push({ kind: 'list', ordered, items });
@@ -261,6 +265,7 @@ function parseBlocks(lines: string[], depth: number): Block[] {
       blocks.push({ kind: 'paragraph', children: parseInline(body.join('\n')) });
     }
   }
+  if (i < lines.length && lines.slice(i).some((l) => l.trim() !== '')) state.cut = true;
   return blocks;
 }
 
@@ -268,5 +273,7 @@ function parseBlocks(lines: string[], depth: number): Block[] {
 export function parseMarkdown(source: string): ParsedMarkdown {
   const truncated = source.length > MAX_MARKDOWN_CHARS;
   const text = (truncated ? source.slice(0, MAX_MARKDOWN_CHARS) : source).replace(/\r\n?/g, '\n');
-  return { blocks: parseBlocks(text.split('\n'), 0), truncated };
+  const state = { cut: false };
+  const blocks = parseBlocks(text.split('\n'), 0, state);
+  return { blocks, truncated: truncated || state.cut };
 }

@@ -28,9 +28,12 @@ function renderInline(nodes: Inline[]): ReactNode[] {
         return (
           <span key={i}>
             <a href={n.href} target="_blank" rel="noopener noreferrer nofollow">
-              {renderInline(n.children)}
+              <bdi>{renderInline(n.children)}</bdi>
             </a>
-            <span className="md-host"> ({n.host})</span>
+            <span className="md-host">
+              {' '}
+              (<bdi>{n.host}</bdi>)
+            </span>
           </span>
         );
     }

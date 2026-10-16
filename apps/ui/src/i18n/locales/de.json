@@ -1297,6 +1297,9 @@
       "comment": "Kommentar",
       "commentOnAdded": "Hinzugefügte Zeile {line} kommentieren",
       "commentOnRemoved": "Entfernte Zeile {line} kommentieren",
+      "tooLarge": "Diese Datei ist zu groß für einen genauen Vergleich: der geänderte Mittelteil erscheint als entfernte Zeilen, gefolgt von neuen Zeilen.",
+      "clipped": "Die ersten {count} Zeilen des Vergleichs werden gezeigt. Der Rest wird nicht angezeigt.",
+      "skipped": "{count} unveränderte Zeilen",
       "startThread": "Thread starten"
     },
     "thread": {
@@ -1336,6 +1339,7 @@
       "stale_view": "Der Entwurf hat sich geändert, seit du diese Seite geöffnet hast. Lade neu und sieh ihn dir noch einmal an, bevor du entscheidest.",
       "review_closed": "Dieses Review ist geschlossen.",
       "thread_limit_reached": "Dieses Review hat die höchste Zahl an Threads. Antworte in einem bestehenden Thread.",
+      "review_comment_budget_reached": "Ein Review fasst höchstens 1.000 Kommentare und 1.000.000 Zeichen Diskussion. Kürze vorhandene Beiträge.",
       "comment_limit_reached": "Dieser Thread hat die höchste Zahl an Kommentaren.",
       "comment_too_long": "Ein Kommentar darf höchstens 10.000 Zeichen haben.",
       "rate_limited": "Du kommentierst zu schnell. Warte eine Minute und versuche es noch einmal.",

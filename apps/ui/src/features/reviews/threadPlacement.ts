@@ -43,3 +43,46 @@ export function anchorOfLine(line: DiffLine): { side: 'base' | 'head'; line: num
   if (line.newNo !== undefined) return { side: 'head', line: line.newNo };
   return null;
 }
+
+/** Lines of context kept around a change, and the most lines the review diff renders. */
+export const DIFF_CONTEXT = 3;
+export const MAX_RENDERED_LINES = 3000;
+
+export type DiffRow = number | { skipped: number };
+
+/**
+ * Which diff lines are rendered: changed lines, a few lines of context around them and every line
+ * with a thread; runs of other unchanged lines collapse into one `{ skipped }` row, and the list is
+ * cut at {@link MAX_RENDERED_LINES}, so that a huge source cannot create a huge page.
+ */
+export function visibleRows(
+  lines: readonly DiffLine[],
+  withThreads: ReadonlySet<number>,
+): { rows: DiffRow[]; clipped: boolean } {
+  const keep = new Uint8Array(lines.length);
+  lines.forEach((l, i) => {
+    if (l.type === 'same' && !withThreads.has(i)) return;
+    for (
+      let k = Math.max(0, i - DIFF_CONTEXT);
+      k <= Math.min(lines.length - 1, i + DIFF_CONTEXT);
+      k++
+    )
+      keep[k] = 1;
+  });
+  const rows: DiffRow[] = [];
+  let skipped = 0;
+  let shown = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (!keep[i]) {
+      skipped++;
+      continue;
+    }
+    if (shown >= MAX_RENDERED_LINES) return { rows, clipped: true };
+    if (skipped) rows.push({ skipped });
+    skipped = 0;
+    rows.push(i);
+    shown++;
+  }
+  if (skipped) rows.push({ skipped });
+  return { rows, clipped: false };
+}

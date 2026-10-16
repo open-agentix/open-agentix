@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
 import type { ReviewThread } from '../../api/types';
 import { useI18n } from '../../i18n/i18n';
-import { diffLines, diffStats, type DiffLine } from '../../lib/diff';
+import { diffIsCoarse, diffLines, diffStats, type DiffLine } from '../../lib/diff';
 import { Button } from '../../components/ui';
 import { CommentForm } from './CommentForm';
 import type { ReviewActions } from './reviewActions';
 import { ThreadCard } from './ThreadCard';
-import { anchorOfLine, placeThreads } from './threadPlacement';
+import { MAX_RENDERED_LINES, anchorOfLine, placeThreads, visibleRows } from './threadPlacement';
 
 interface Shared {
   open: boolean;
@@ -44,6 +44,11 @@ export function ReviewDiff({
   const { t } = useI18n();
   const lines = useMemo(() => diffLines(base, head), [base, head]);
   const placement = useMemo(() => placeThreads(lines, threads), [lines, threads]);
+  const { rows, clipped } = useMemo(
+    () => visibleRows(lines, new Set(placement.byLine.keys())),
+    [lines, placement],
+  );
+  const coarse = useMemo(() => diffIsCoarse(base, head), [base, head]);
   const [composing, setComposing] = useState<number | null>(null);
   const stats = diffStats(lines);
   if (stats.added === 0 && stats.removed === 0)
@@ -54,8 +59,20 @@ export function ReviewDiff({
         <span className="diff-add-text">{t('agents.diff.added', { count: stats.added })}</span>,{' '}
         <span className="diff-del-text">{t('agents.diff.removed', { count: stats.removed })}</span>
       </figcaption>
+      {coarse ? <p className="muted">{t('reviews.diff.tooLarge')}</p> : null}
+      {clipped ? (
+        <p className="muted">{t('reviews.diff.clipped', { count: MAX_RENDERED_LINES })}</p>
+      ) : null}
       <ol className="diff-body review-diff-body" aria-label={t('reviews.diff.label')}>
-        {lines.map((l, i) => {
+        {rows.map((row, r) => {
+          if (typeof row !== 'number')
+            return (
+              <li key={`skip${r}`} className="review-diff-item diff-skipped muted">
+                {t('reviews.diff.skipped', { count: row.skipped })}
+              </li>
+            );
+          const i = row;
+          const l = lines[i]!;
           const anchor = anchorOfLine(l);
           const commentable = shared.open && l.type !== 'same' && anchor !== null;
           const commentLabel = anchor
