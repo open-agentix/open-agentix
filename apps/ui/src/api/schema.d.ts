@@ -2063,6 +2063,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agents/{id}/versions/{version}/awp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export a published version as an AWP manifest
+         * @description The effective manifest of the stored version as an AWP v1alpha1 Workflow, built to the pinned AWP schema (a draft; this is a mapping, not a conformance claim). Computed from the stored definition, so every call returns the same bytes (RFC 8785 form, `metadata.integrity.digest` per AWP spec 9.1). The header `x-oax-source-digest` carries the digest of the agents.md source. Bytes are recomputed from the stored definition; a later exporter version may change them. Restrictions AWP v1alpha1 cannot express (argument constraints, call limits, conditions, handovers, runner, ...) refuse the export with 422 `awp_export_refused` and one finding per field; nothing is dropped silently. An agent without a team (or whose owner slug is not its team), and a wildcard grant without a recorded approved snapshot, are refused too.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    version: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description AWP manifest (kind Workflow, API version v1alpha1, a draft) built to the pinned AWP JSON Schema. A mapping of the stored definition, not a conformance claim. Serialised in RFC 8785 form: `metadata.integrity.digest` is the SHA-256 of these bytes without `metadata.integrity`. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details: {
+                                findings: {
+                                    /** @description stable finding code, e.g. critical_extension, owner_team_required */
+                                    code: string;
+                                    /** @description path of the source field in the stored definition */
+                                    path: string;
+                                    message: string;
+                                    /** @description critical_extension: the source field */
+                                    field?: string;
+                                    /** @description critical_extension: the extension that would carry it */
+                                    extension?: string;
+                                }[];
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents/{id}/members": {
         parameters: {
             query?: never;

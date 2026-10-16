@@ -47,6 +47,18 @@ export interface ExpansionRecord {
   connectionVersion: string;
 }
 
+/**
+ * A wildcard tool grant (`get_*`, `*`) as enumerated at publish (decision D4 of the AWP alignment:
+ * exports carry explicit tool lists, never a wildcard). The list comes from the approved snapshot
+ * of a pinned connection only: at run time the pin check (`toolsDigest`) blocks a tool added later,
+ * whereas for an unpinned connection nothing bounds a prefix grant, so no list is recorded.
+ */
+export interface WildcardExpansionRecord {
+  source: 'pinned-snapshot';
+  /** Sorted tool names the pattern matched at publish time. */
+  tools: string[];
+}
+
 /** The part of a published version that profile expansion adds (stored in `definition`). */
 export interface PublishedExpansion {
   expansion: ExpansionRecord[];
@@ -56,6 +68,13 @@ export interface PublishedExpansion {
   expansionDigest: string;
   /** Pinned tool definitions per connection (ADR 0016 section 5); absent without pinned servers. */
   toolPins?: Record<string, ToolPinRecord>;
+  /**
+   * Enumeration of wildcard grants, keyed `server/pattern`. Not part of `expansionDigest`: it is a
+   * function of inputs that digest already covers (the snapshot digest, the tool classification).
+   * Absent for versions published before it existed and when no reviewed tool list covers a
+   * pattern; the AWP export refuses those.
+   */
+  wildcardExpansion?: Record<string, WildcardExpansionRecord>;
 }
 
 /** A stored definition may carry the expansion next to the parsed agents.md. */
@@ -230,6 +249,24 @@ function pinTools(
   return out;
 }
 
+/** Enumerates every wildcard grant from the approved snapshot of its pinned connection, if any. */
+function enumerateWildcards(
+  agents: readonly AgentSpec[],
+  catalog: AccessCatalog,
+): Record<string, WildcardExpansionRecord> {
+  const out: Record<string, WildcardExpansionRecord> = {};
+  for (const a of agents)
+    for (const t of a.tools) {
+      const key = `${t.server}/${t.tool}`;
+      const snapshot = catalog[t.server]?.pin?.snapshot;
+      if (!t.tool.includes('*') || !snapshot || key in out) continue;
+      const names = snapshot.tools.map((p) => p.name);
+      const tools = [...new Set(names.filter((n) => matchesGrant(t.tool, n)))].sort();
+      if (tools.length > 0) out[key] = { source: 'pinned-snapshot', tools };
+    }
+  return out;
+}
+
 /**
  * Expands profile grants into concrete grants and enforces `access: read-only`. Pure: the caller
  * passes the connection catalog. Returns every error (unknown connection/profile, write tool for a
@@ -253,6 +290,7 @@ export function expandProfiles(def: AgentDefinition, catalog: AccessCatalog): Ex
         toolAccess[`${server}/${tool}`] = access;
   }
   const toolPins = pinTools(agents, catalog, errors);
+  const wildcardExpansion = enumerateWildcards(agents, catalog);
   const hasPins = Object.keys(toolPins).length > 0;
   // `toolPins` only enters the digest when there are pins, so the digest of a definition without
   // pinned connections is the one it always had.
@@ -272,6 +310,7 @@ export function expandProfiles(def: AgentDefinition, catalog: AccessCatalog): Ex
       toolAccess,
       expansionDigest,
       ...(hasPins ? { toolPins } : {}),
+      ...(Object.keys(wildcardExpansion).length > 0 ? { wildcardExpansion } : {}),
     },
     errors,
   };
