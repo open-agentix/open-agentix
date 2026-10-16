@@ -1,0 +1,18 @@
+# Conformance case 6-agent-with-workflow-field
+# Spec section 6: An Agent manifest has no spec.workflow (unknown field).
+# Expected: invalid (schema.additionalProperties at /spec/workflow)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Agent
+metadata:
+  name: conformance-agent
+  version: 1.0.0
+  owner: conformance-team
+  classification: internal
+spec:
+  model:
+    provider: ollama
+    name: qwen3
+  instructions: Extract fields.
+  permissions:
+    default: deny
+  workflow: []

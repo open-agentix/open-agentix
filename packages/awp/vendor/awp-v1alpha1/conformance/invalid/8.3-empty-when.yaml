@@ -1,0 +1,18 @@
+# Conformance case 8.3-empty-when
+# Spec section 8.3: A condition has at least one attribute.
+# Expected: invalid (schema.minProperties at /spec/rules/0/when)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec:
+  rules:
+    - id: deploy-needs-approval
+      when: {}
+      effect: requireApproval
+      approval:
+        approvers:
+          - role: release-manager

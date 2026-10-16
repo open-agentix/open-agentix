@@ -1,0 +1,5 @@
+# Conformance case 3.1-syntax-error
+# Spec section 3.1: A document that is not well-formed YAML is rejected.
+# Expected: invalid (yaml.parse-error at /)
+apiVersion: [unclosed
+kind: Workflow

@@ -4,7 +4,14 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', 'apps/api/drizzle/**'],
+    ignores: [
+      '**/dist/**',
+      '**/coverage/**',
+      '**/node_modules/**',
+      'apps/api/drizzle/**',
+      // vendored AWP copy: hash-pinned, never edited or linted (scripts/awp/verify-pin.mjs)
+      'packages/awp/vendor/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

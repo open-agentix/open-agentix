@@ -1,0 +1,20 @@
+# Conformance case 6-agent-instructions-and-prompt-ref
+# Spec section 6: promptRef MUST NOT be combined with instructions.
+# Expected: invalid (schema.not at /spec)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Agent
+metadata:
+  name: conformance-agent
+  version: 1.0.0
+  owner: conformance-team
+  classification: internal
+spec:
+  model:
+    provider: ollama
+    name: qwen3
+  instructions: Extract fields.
+  permissions:
+    default: deny
+  promptRef:
+    name: p
+    version: "1"

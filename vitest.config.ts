@@ -26,7 +26,7 @@ export default defineConfig({
     hookTimeout: 60_000,
     coverage: {
       provider: 'v8',
-      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.ts'],
+      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.ts', 'scripts/awp/verify-pin.mjs'],
       exclude: ['apps/ui/**', '**/*.d.ts', '**/main.ts', '**/*-cli.ts', '**/types.ts'],
       reporter: ['text', 'json-summary', 'lcov'],
       thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 },

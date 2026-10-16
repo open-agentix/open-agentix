@@ -1,0 +1,914 @@
+{
+  "schemaVersion": 1,
+  "description": "Vendored copy of the AWP schema and conformance suite. Never edit by hand: replace it with scripts/awp/vendor-awp.mjs and review the diff.",
+  "awpVersion": "v1alpha1",
+  "status": "draft",
+  "source": {
+    "repository": "https://github.com/open-agentix/agenticWorkflowProtocol.org",
+    "commit": "16be8b02565b3f8fb871c3c3affc7f9bb48ef553",
+    "commitDate": "2026-10-10T06:47:23+02:00",
+    "tag": null
+  },
+  "retrievedAt": "2026-10-16",
+  "licenses": {
+    "Apache-2.0": "code, JSON schema, conformance manifests and tooling (LICENSE)",
+    "CC-BY-4.0": "Markdown prose (LICENSE-SPEC)"
+  },
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "LICENSE-SPEC",
+      "sha256": "b1e301262ccdcbdb169d84443ae55e96299cbb41a6017181f50997063cd6b6dd",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "conformance/README.md",
+      "sha256": "56647bb90b5f42fc6439c0d07161b4ade77f6fb32873abfc1fcfd6dd53b7cd38",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "conformance/awp-check.mjs",
+      "sha256": "243ae488ce39d5b08eaff0a2a2b2978c42aa576974b82534d8690a85444c1dca",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/index.json",
+      "sha256": "696e301df7c50b1d11735d91bdec0508a49c4eebb486d54af475347ffdeb0df1",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/10.2-invalid-integrity-mode.yaml",
+      "sha256": "afa448844a9312f4f6e3eff6ce25a9811cec53c0f28585b85853cc823ec9940c",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/10.2-invalid-payload.yaml",
+      "sha256": "cc270c6653f7bd0a5b04372dc9d9b61c34f063e7fe1ab91335acc5fcb6ddefc0",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/10.2-invalid-retention.yaml",
+      "sha256": "4413df1413d03ef93626f49726850b0e4c1e578958b7e929601c18df843eda6b",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.1-custom-tag.yaml",
+      "sha256": "810718daf2f37c4b17e0759a3c8e976800a9a7e72fa94496c7290f9b2dff9b1a",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.1-non-string-key.yaml",
+      "sha256": "4dd6fb6921506d13b0db7008c5902c3e77b0215e6a632b60f9a5dde993ca7b27",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.1-syntax-error.yaml",
+      "sha256": "3dd4d076eb9f7e1e8df35fad430f544be001ec32f232e777d3e89aa0f5a4b148",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.2-missing-api-version.yaml",
+      "sha256": "552418d23c19d2f572231f6811d650c49c513837c22e48a57bc232dbb41a6c88",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.2-missing-metadata.yaml",
+      "sha256": "fd4cf0611c9a671c17665782b30ed2e3216a579a8ab51ccc3ac6624aad0af05a",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.2-missing-spec.yaml",
+      "sha256": "687efd0a273c3eccf119a942c9d187ba0b3d27f957ffcb02975ec951536a4a92",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.2-unsupported-api-version.yaml",
+      "sha256": "d5281b0c11e36462aec4a42dc4a38c58f6bbf3a146f0f3b79228d5e70882b9a9",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.2-unsupported-kind.yaml",
+      "sha256": "4dc1eaaf512004fccc242b9e8ea92d2211d7c96fa3ce8576aff42105887d4c9e",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-profile-a2a-agent.yaml",
+      "sha256": "e5a658058840d9dc0e109195f134921916bfadb4f30063517579f934e1c5292a",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-profile-approval-step.yaml",
+      "sha256": "4e65deb84184e3246be64a0b3bdc4a8563548c28475b04b505e74d78da79331a",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-profile-audit-field.yaml",
+      "sha256": "9930564705020d1ab74fb500be29354a12337a0d2154c687ba69e1e5cd8fe5a2",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-profile-governance-field.yaml",
+      "sha256": "f4f93decb49a835c15ca9b0997cfab8e412d3ffc287b340322999f3e90d0895f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-profile-high-risk.yaml",
+      "sha256": "54cf1102e4e263bde0a80477423c4971db24ed2f9d63f8291bb2bea983383161",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-profile-mcp-field.yaml",
+      "sha256": "8f0a81e350e7b3565429ddceede54fc80aa394a2fd3d6a22ff5ceceee2a187a7",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-profile-policy-kind.yaml",
+      "sha256": "dfbbcf26e4aa07aa7b0871e126495d4ebbdf573738326a2943c14ff731af9d75",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-profile-security-field.yaml",
+      "sha256": "7f44c24db34f68cfc59f6ceeb072e180fb795510758bc8533dd46d3a22910ea8",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-unknown-field-near-extension.yaml",
+      "sha256": "fa78be8d5590f2293eba66c3e5e326da2cdbac10bb63ce1ebf3dab36104d9863",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-unknown-metadata-field.yaml",
+      "sha256": "f1057e1d71d5405c327023b14e53f0b2f6d3508e6888a086dc1e7e2ae42f25d2",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-unknown-step-field.yaml",
+      "sha256": "071fe50e02d43822ceab0b56f5197148164226a4f86e970a5bd3166d60c86680",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.3-unknown-top-level-field.yaml",
+      "sha256": "bf8cd7259af39ed286f5402c26ba378c09048e9ffd8fa3d0e241db3d83b91fe0",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.4-duplicate-agent-id.yaml",
+      "sha256": "a2fe131bc3603fb69591b408d0653d68579395abeaad2d089835c4c38274e663",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.4-duplicate-rule-id.yaml",
+      "sha256": "f0ec2cb9bf18a1846be4834b8dff957d324e725007de85c1c38ffa198d99762a",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.4-invalid-metadata-name.yaml",
+      "sha256": "b9c49871732cffe4d38fd3a1ac24c02b57401618055c286eb02aab76b30d2f7f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.4-uppercase-agent-id.yaml",
+      "sha256": "c08056cc54940bcc127a888fbe55dc6ce2a4ac5ddcf573b21e193b91269a7a25",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.5-version-leading-zero.yaml",
+      "sha256": "7ec8e96c328549d27d9a5055d90b4cf4f663ceefe51e38ab5f33849ccb6e71f4",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.5-version-not-semver.yaml",
+      "sha256": "f5c95a601cdf11a440a72ff0869e47cf0ec117e12ef9b7c9d01b229a69dcb61d",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.6-duration-unknown-unit.yaml",
+      "sha256": "07fbb6c4b8c44610e4bb1ee5bde666eab5f75a06981ffe47cec0f328311ff5a2",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.6-duration-zero.yaml",
+      "sha256": "73da5b6416c343c505a88b530fb5cc32ebf82847c29a030a9b36bba60ebe334b",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.7-date-not-calendar-valid.yaml",
+      "sha256": "ec0f02773b6109de266a6d9dea149086a9edbddc964a63bf0a30dd573ca85392",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.7-date-wrong-format.yaml",
+      "sha256": "69bc5313e287cbd963f80367b0a7e18e0bacab86dd7b2e3acf2659d1da26be42",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.8-digest-uppercase-hex.yaml",
+      "sha256": "7b3a9f0b671e7c7145cfdcfee5bd9172596b4cab123e8f4beba7c0064f956ed8",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.8-digest-wrong-length.yaml",
+      "sha256": "5f23d7737f9f7808ff2813c8bf00905032582e356dc7ccd945f5107506a38957",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.9-expression-function.yaml",
+      "sha256": "b1d6c908e8fb027e5e5f5bc0d5173b65b95b43dc320cb3c1665e6313b8b024a3",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.9-expression-in-env-key-ref-bad.yaml",
+      "sha256": "692360d9d6333da7aac4fbc1f215dd59fa3efd6bbc78c45ec815d306ae87a848",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.9-expression-operator.yaml",
+      "sha256": "a4ebefe0fe8a50713b18e61cbf423313d5d36650fbdd52fbdfc172945b139ede",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.9-expression-unknown-root.yaml",
+      "sha256": "9801e7acba406c9771cdf083bb85ffd82c55b7029e5467144a93d8ad89e116cf",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.9-expression-unterminated.yaml",
+      "sha256": "685c6a0565a1f7e31b0bb52bf643bc5959a2c05356b56cbec1e9d930dbfc7e25",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.9-step-reference-in-permissions.yaml",
+      "sha256": "07388bdb3622a6d3f7e53bc2d59875e9203e7387ddd061d07d595da269aad39f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.9-step-reference-unknown-step.yaml",
+      "sha256": "803bd90a21340a2d528b3f628d7169da6a4d07efbd6afab91eceed03380fa521",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/3.9-step-reference-without-dependency.yaml",
+      "sha256": "6f289028ac9c9d3f0b40ec6b537959d94d9cc4954f28e92456ddf08d030c9498",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/4-invalid-label-key.yaml",
+      "sha256": "338c00dcfa33af4a9766a0b4e49f9db4954cb3c66ce72463478ffebbccb88003",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/4-invalid-risk-level.yaml",
+      "sha256": "8c438b965191dbd3140f63a828e5340f0738fbc24715d830621c01651a59c07b",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/4-label-value-not-string.yaml",
+      "sha256": "cacee40b70f49d6f5befd042e9a69b3f676ef4882dd8754853a46fd953eef5b8",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/4-missing-owner.yaml",
+      "sha256": "089c3f0e7e41cef34f54b09362ae287d6acd3aca03f091e2353c709fee4095e9",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/4-missing-version.yaml",
+      "sha256": "aba7fcefeb0c3bff5a7077b3b898ae10196e2661faae279e62ad8f63faf434ec",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/4-owner-without-team.yaml",
+      "sha256": "7d8d0e7b259917c774f94badf36e615fb839a6ebc19d026438d1285559c8dd15",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.2-cron-not-five-fields.yaml",
+      "sha256": "2f775a89868cd7528338606f878f3a808c3e9a87ae7ce42a5256af8a4af6d048",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.2-event-without-event-type.yaml",
+      "sha256": "47d5dc0b282191a956802ba79fe872e37b7249d932dc489d9e0a741ea601c9a8",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.2-schedule-without-cron.yaml",
+      "sha256": "9443cd221e736007bb7f8889c0dd02d7f1627ee26bd12a2f7554e081b99ea915",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.2-unknown-trigger-type.yaml",
+      "sha256": "2c6d5f0394236093bae818d9a35b9c4caf0cf48174cbc5c27593e3dc3ca33ae2",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.3-default-wrong-type.yaml",
+      "sha256": "7ec9be770d90b6b0e7da3349b944af69463217b2ac930c5a09c74352fe36b188",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.3-invalid-pattern.yaml",
+      "sha256": "b627bd5b20720f5b6afe1ee9aae4e5ad1221636dd8744731b8036035533cba70",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.3-required-input-with-default.yaml",
+      "sha256": "90c3e396c44180143e48e4093adfcebe9833fdf922f70d7c40fb0bf67cc3b70f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.3-unknown-input-type.yaml",
+      "sha256": "554568b858a0b769f76c98da41e3a1cea2c1ec9f66c638ee6e6086c300ce0434",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.1-inline-agent-without-model.yaml",
+      "sha256": "61bd52be365f4bc1f44b2971be11c65d3c0d34c864b108dc37fc62bd1d8354f8",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.1-instructions-and-prompt-ref.yaml",
+      "sha256": "f1513c161e3dc59dfe222071083c20f08c1fb2f64de7e911004f35f921f2d1ea",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.2-reference-version-range.yaml",
+      "sha256": "32e6960893d8182e5ad6d53651c069a0a31ba1132a4b1561258a330269409bca",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.2-reference-with-instructions.yaml",
+      "sha256": "9af9d9427d415caba4d7fde43915cb969c4346bf4c71abd2d0add2275dd32841",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.2-reference-with-model.yaml",
+      "sha256": "bade3186ea882b3b61fca5e7d4e3d0283849b50c31d7981a30dd100dd2498d34",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.2-reference-without-version.yaml",
+      "sha256": "3175248e21f4dc774ec4a2d52af9f63c8bc7187d8eed1667755a8dea8a86c6fe",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.3-invalid-model-approval-status.yaml",
+      "sha256": "321a828840310e18d7470268906ee4b5263d75e66b9c5571d8ac2c35517e8912",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.3-model-without-name.yaml",
+      "sha256": "d548e72e1280ed548617abd849ae433bd6cdab90b0bfd520b00751fcd03459ed",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.4-remote-agent-http-endpoint.yaml",
+      "sha256": "35c6171a56b2783764b1ab4f14ddd263044030f407a4823605b1b181864ff870",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.4-remote-agent-with-model.yaml",
+      "sha256": "5e5d7c23284d45219e12084a92e1ef7b9ef83f8bbaeaa700ecd31e5368bda372",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.4-remote-agent-without-endpoint.yaml",
+      "sha256": "50e3da478118346b448d16af0622b8fb81928fff6054d46cef1d7c273d229e9b",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.4.4-remote-agent-wrong-protocol.yaml",
+      "sha256": "1740bdc98f250f222acfc955b952ff671c17b9dcadc5608a90f021b6d551f2b3",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.1-duplicate-server-name.yaml",
+      "sha256": "79461fb89d1fccfb2c0a64aae59ca32d2fdbf859a835efa0ee52fd052fb42a38",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.1-mcp-url-not-https.yaml",
+      "sha256": "8262c8f5055f0401b2c0ac6e1c1e67a7c5a0ea0c4edbba935e2aac70d0108b91",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.1-streamable-http-without-url.yaml",
+      "sha256": "841c813f8972b41b71c735060cad107adbc00ff653fbffa13cc2c28b876df9b3",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.1-unknown-transport.yaml",
+      "sha256": "566768998933e3e6c9965c5d4669cc20ebd35878fef36d41a37d8e567dff8df9",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.2-builtin-tool-source-without-name.yaml",
+      "sha256": "9e3d4a0975972cef2ed4eab83197a1a3c37fd33d4c7f2089c9458d9bcb87ded9",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.2-mcp-tool-source-without-server.yaml",
+      "sha256": "de5a3799438722b04a76f7f3a1b6227e12195d66e120137ebae1a12e819350a2",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.3-invalid-action-identifier-in-permissions.yaml",
+      "sha256": "edccb3200e56fa4159c9e2418fb83b1773e82c0a18684a09ed064faaa95ea79a",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.3-wildcard-not-final-segment.yaml",
+      "sha256": "00f0b85b4e82908ff6a523ab8a150f4696474b0ff6ec8e09f6f9808e551724ef",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.4-group-contains-group.yaml",
+      "sha256": "7e7dba4c4a92c301a646a14f0ba075bfe2b1d837c7a0931fc7336fde93f9ad40",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.5.4-invalid-group-identifier.yaml",
+      "sha256": "7671c16b2929df350996a37f9462e8a194bde903e7ae532596726b0e63ede474",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.1-agent-step-with-command.yaml",
+      "sha256": "2bbdc47dbb69406302bb0359c2a74d5a7b2b030b4404edbd5eb1cbc6cc66686c",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.1-agent-step-without-agent.yaml",
+      "sha256": "508a90bb85d5791c889dd58f484a69d61af646b40424beb47d993d37a6938cee",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.1-approval-step-without-approval.yaml",
+      "sha256": "1510ac554ce872c1692f36482cc144dffeefb2641688959146121276ae05668f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.1-command-step-with-agent.yaml",
+      "sha256": "1ac2ecd73080101d89f14fb3b444d857fe7f80efc92be2ddbfd7fc92136a78df",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.1-command-step-without-command.yaml",
+      "sha256": "283f5d3cca206ba65e62bbfcf0b10a9b545bced69d190062ec11b08d98567a4b",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.1-negative-retries.yaml",
+      "sha256": "f73e98bee845200138477116c63b1a03bd189337a0c0b7e2c5eb16c26b32652d",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.1-retries-exceed-max-retries.yaml",
+      "sha256": "28c3f14906ac2e045581363b0155ad4328474f6130f1660bcbb94a5e78ec5474",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.1-unknown-step-type.yaml",
+      "sha256": "b53c9d7fcabab905e8bd2652a1146c97c19cbce883c871ab3e70630123e2d927",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.2-env-key-invalid.yaml",
+      "sha256": "95962266fe1ddd7ea76fa521fe28ab98634dab3d61ddd46de4674d0e8b3d405e",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.3-dependency-cycle.yaml",
+      "sha256": "c41b7ddf258c61e5fc89e591ae8efdb58ac34f3619034c0dac32eaa135ed1b85",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.3-depends-on-unknown-step.yaml",
+      "sha256": "e39d68a34410f5f2ca904bb9e3279fe4ea0818db88c5e968f31f12078d8a4f8d",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.3-duplicate-step-id.yaml",
+      "sha256": "7f303f1836d35fe948912e2a0a5e25b399c0bc486e448336d747a6d16b19462b",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.3-self-dependency.yaml",
+      "sha256": "b5d09e7fb88bf57e268eec26bb933442982a389f790f19d415cda652562e3b99",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.3-undeclared-step-output.yaml",
+      "sha256": "31dcc2d6ea14e7810a47ef9fda2ef1894e9ff42978f9272c6005ce1ec1b00de2",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.6.3-unknown-agent.yaml",
+      "sha256": "e8ef35d7821dc78446b626f8abca9a1cdee083f189545e0691b05ae81cde4b07",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.7-negative-cost.yaml",
+      "sha256": "c599475d1f8be863ea5d534b646da92924fcfc4ed130e7c5fba8b8a7b2e8dc5c",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.7-unknown-budget-field.yaml",
+      "sha256": "3ceeecb895b94847e2cb77b4d7220b8292c0e1f104bdfb10776d391cc4ab4f5e",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.7-zero-concurrency.yaml",
+      "sha256": "3918d0c013192c71cc14835877902a55b8a81939f7f40a815f815ca35a1b6340",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/5.7-zero-max-steps.yaml",
+      "sha256": "0b0df25a3ac0cb777de570f0b7d8dcf728a33d71c197cc9a35abb88a35e0601e",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/6-agent-instructions-and-prompt-ref.yaml",
+      "sha256": "7e15944faff207f8a1696e80b54130860a67f04b47cbfac421218970f82cfc1f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/6-agent-kind-with-workflow-spec.yaml",
+      "sha256": "3e7a1c65c2706e4cda396d7a28d640bcfc1fab48ecec11b1416936bfa2cd6f5c",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/6-agent-with-workflow-field.yaml",
+      "sha256": "789a386b23fe4a475414a6ea140d9dc1aa3c546e1925ad51275ca2c0b2f70318",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/6-agent-without-model.yaml",
+      "sha256": "4a5fd50a110831607582caaa31898a05d7b74f1cadebd031299abec08c61922d",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.1-governance-requires-classification.yaml",
+      "sha256": "b592cced05da83c77ebc389a7f5e59a9516ebc60b7f6a7042e03552b3cbcffc3",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.10-environment-without-autonomy.yaml",
+      "sha256": "f3e25953278ad538bc833d933d49b7bcd02719f0ef7e764710b70eb1911e6d64",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.10-invalid-autonomy.yaml",
+      "sha256": "aaaa8815750c6f6981ce20fa002acd6b3616761a191fca610e57e569b4470a08",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.2-invalid-classification.yaml",
+      "sha256": "92d60edbcfac77c78f7a9343479c197de62a37a2c7c1264235acfe8b9ddce50d",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.2-invalid-external-transfer.yaml",
+      "sha256": "9828f60489884e724613e0440a8de1c59810f8603f5fadc9cc6a1b4bdfa2b393",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.4-invalid-model-policy-status.yaml",
+      "sha256": "f77c50494bd341af1d0dac407f54ed19c8ff21e751895f81ff4ee177cb7b9469",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.5-allow-not-boolean.yaml",
+      "sha256": "834a65f887d6dcef20eaed8b56d85a83f10ca294fd7bc03015a37b43e79d7b56",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.5-invalid-default.yaml",
+      "sha256": "48789969cf217601e61e9c66c699145e6b6df88f541884b55e9b05fa76327935",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.5-invalid-egress.yaml",
+      "sha256": "ad8698881c1e77a39a730feec7690b7c92fa71191da8ffa0856ca3ec6e559aa1",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.5-tool-without-allow.yaml",
+      "sha256": "0b9d5b5fa6a577d2a2f2080ded2455339bfa903b87c36255ea35ec15884de33b",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.6-approver-empty.yaml",
+      "sha256": "7e4e6a1e58730e2aa865c9c3dde2a7bb605fc15e187678d2671864ac3f6dc36f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.6-approver-role-and-user.yaml",
+      "sha256": "d9bf59e06c0472d901205622993fbba7288602e471a1cfb56691458b8e582629",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.6-invalid-on-timeout.yaml",
+      "sha256": "cb24f50d3b36b345d42d8e4f20d80e656989d1db60982bb84e7713b58260ef2d",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.6-min-approvals-zero.yaml",
+      "sha256": "0e8321f314555c6350e78d314b28b543583f5df7733b1b71eda26db093ac7f77",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.6-required-for-invalid-key.yaml",
+      "sha256": "90a0cf1b0519c6d437cd43794c7d11b1716c96f310c86577ff09eae5afadb738",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.8-unknown-separation-rule.yaml",
+      "sha256": "fe656b19a4edf12e70ac49f6b9b90e12c0dca957bc4fa6a77c277fa7adf24796",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.9-literal-password-in-free-form-value.yaml",
+      "sha256": "d675b3096c037508f556db4d7b5ad599af7ed8135e09329f6eed8a8a6b2642e7",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.9-literal-token-field.yaml",
+      "sha256": "e2b059dd1d8e3b9c6b74ce99c73680af39f42528dd58d09609be8c0e374a718d",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.9-remote-agent-secret-ref-out-of-scope.yaml",
+      "sha256": "fca6abbdf320b870a8ea0b022256375f755ec3b2ab9f3dc2b8268bf3f6746d45",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.9-secret-ref-empty-scope.yaml",
+      "sha256": "39b84a9cd58b7dd831215a6966424d2760be433e5ff20b9d4211acd996c7e8b7",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.9-secret-ref-out-of-scope.yaml",
+      "sha256": "391bceecbe548ffdca68215080c7b5f89d68c9b94d687925a5f23b59a3da8e28",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.9-secret-ref-undeclared.yaml",
+      "sha256": "6338e8f6d9836dced00718b3f0c93811d0b0bffa6b60cee9914081c5fdee20f1",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/7.9-secret-without-source.yaml",
+      "sha256": "430b485f1c0308a1e07089cffbd7ec9bfe02f43e572e46bdee860c4d2e9ad85f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.1-include-without-version.yaml",
+      "sha256": "6a60c77d749bf144a0f94ca14975dad617b7cf125b375b25d45c3a123ac4f4d7",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.1-shorthand-not-boolean.yaml",
+      "sha256": "41394c31663e945dcd94f10536583b71db863e52deda2a500149eb6104b3627a",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.1-unknown-shorthand.yaml",
+      "sha256": "908c7162e95359180390b5cc4ba76d2464100a5486ecccba87bfbfc06bd2810d",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.2-no-allow-effect.yaml",
+      "sha256": "f61512746956a82a6a3ba09bdbd8391f5fec3a8b60f5319ca4c1c70b799ac14f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.2-policy-without-rules.yaml",
+      "sha256": "d9a132a17c23ccc4604c5d20a30c8075669b8fea94afbb0bcd81c257868658e6",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.2-require-approval-without-approval.yaml",
+      "sha256": "ce7fc0082786c663c36ddc347b264adbfed85e075f6ebe4d179e856d1befe9df",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.2-rule-without-when.yaml",
+      "sha256": "ea73f9aa9e16c1a8ff0cf46489e7f1bc809f06590d0b764c409728f7949d589a",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.3-empty-when.yaml",
+      "sha256": "17d591dd0f4708903d310b706f94af52cee051d80439f4e9614a8eec59c40890",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.3-in-not-a-list.yaml",
+      "sha256": "828cc534706527e299614f7fc59873cc6f09dca1dc99f07c6968932a1f267a03",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.3-invalid-actor-type.yaml",
+      "sha256": "0ec5b7dcb62e030a42120af478ac65506cc35c7d377423b40ff88d95f3042010",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.3-invalid-classification-value.yaml",
+      "sha256": "cf52417a60f8fd74e05d3f7eec0e0698807f7c3e4af729da05a8cb4f70718629",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.3-ordering-operator-on-unordered-attribute.yaml",
+      "sha256": "5fbcba965328aa2d91acb1bc2cb4c8f02ad07a3acd48076a57ca09b62eda3b81",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/8.3-unknown-attribute.yaml",
+      "sha256": "5442a718fd2f3a69a4ce1958158d140f7a9479ebb4360fa7327564d2e1188f0d",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/9.1-digest-mismatch.yaml",
+      "sha256": "26daa2eb21873bfde0ab81c7a8a12d0f3a1391636edaf660558105f0c346c7c0",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/9.4-unpinned-command-image-security-profile.yaml",
+      "sha256": "3ec3e5c30c79a2dcca348aada0ad1aee9f08987a3d9fbe0dc0e7e7b69edad03f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/invalid/9.4-unpinned-mcp-image-security-profile.yaml",
+      "sha256": "538f119cffac7447379a231b1ce8561833c72a2874fabe39f8757a6e95ecb33b",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/semantic.mjs",
+      "sha256": "93dd62a4929b75ae10fa8813b5c5b87ffb21fc365e9fc78ad84687c83e89ba2e",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/10.2-audit-configuration.yaml",
+      "sha256": "8e4611fc7d344b6b865839925bc21607fe03fb2db4bd20ffddcaa237a510d2b8",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/3.1-json-serialization.json",
+      "sha256": "8afdccbf155e63c2d1c973f338d4baffd3e388aff476d9987866cb9e11338725",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/3.1-multi-document.yaml",
+      "sha256": "1181d895f502a4e4fad68d21df8fe9976aa30a32c7b30802c6c07cdca1bb6136",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/3.2-minimal-workflow.yaml",
+      "sha256": "4ef42f765290810d46e2effc71d3c50f8e58e92f12cf28a7846490231c4b05ab",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/3.3-core-profile-only.yaml",
+      "sha256": "65a400457df80c60cb1bc732e7a6a28e9e6f2a86af61fa436bd4d15a2e5f04be",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/3.3-extension-fields.yaml",
+      "sha256": "c3be32dcbcb1e2c1ecffcf1f3a90c042704b637e6efe8819cb65f6e18a3a8b18",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/3.6-durations.yaml",
+      "sha256": "31dd76eb34de3e136d5894ac71a76a732a5498ec1ba7a029278039cfb60315f3",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/3.9-expression-references.yaml",
+      "sha256": "f782f1634716c8c26b63b6deac47c96981898dbaa25cd8c88f84b74b324fa0f3",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/4-owner-string-shorthand.yaml",
+      "sha256": "0d9e1d6a98f5e5a96e5354f4510fb42b0fa809b4083a6ccaa6845deed16a9057",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/5.2-triggers.yaml",
+      "sha256": "3fa7e8c0e82923b1c07420e4d7151c783d4de9e17a13139a23e43fdec3eb967f",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/5.3-inputs.yaml",
+      "sha256": "b39fb2dab59817db689b2e3428ad3424ae8973a02ad58dd394556f838c1676d1",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/5.4.2-agent-reference.yaml",
+      "sha256": "159c4b147f0291e922be0b8b6b0f36bc4cdfd9a3021538a91c1587b56ae1ad32",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/5.4.4-remote-agent.yaml",
+      "sha256": "c9786ce7a5250adb2e89fed497401ccb1b35032914ff65bd07e845655ba90052",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/5.5.4-action-groups.yaml",
+      "sha256": "c06fc3e2499d063e9d25f3117b2cf446b642e9acb55981e394ac46b7966788f3",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/5.6.2-command-step-env.yaml",
+      "sha256": "65c8ff773f2e8bb40442d440c3013adf7e31ecdcf725dd18b2a3c9236499764c",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/5.6.3-transitive-step-reference.yaml",
+      "sha256": "8f8191c33e6acf280d884fe4309f79485223a7b79e8c91963dbedc0a46867e0e",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/5.7-nested-budgets.yaml",
+      "sha256": "c3e3152b695891a5c9cdfbd898547ba8626c7e3e8fc0e0b77bf5572f4dabbc0e",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/6-agent-manifest.yaml",
+      "sha256": "b0c88b99c2623ff842f62992b24930755395161e7e008b874f1edb930742e109",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/6-agent-prompt-ref.yaml",
+      "sha256": "32c0c78cbfbeb6473a738d614206bc6897978c9f5669b24250cd25079e7fdb34",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/7.10-environments.yaml",
+      "sha256": "5de7ed9a8760eea61216e2b7794e5421d03c9622d2543722ac8c6bbce3e89486",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/7.2-data-and-model-policy.yaml",
+      "sha256": "c3268e41674f7b812b6422fac0655b8c78e14e0b9ab03128a3e456cb18b882c3",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/7.5-permissions.yaml",
+      "sha256": "a79cf137d8b9ef31a795b13724a52ee83e852058b7768d8a3a39dccd3d78fcdb",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/7.6-approval-and-separation-of-duties.yaml",
+      "sha256": "e41e2fdb009654065f8c51c2a99f3e411eaf2878ca3d45bc493460b474ef0637",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/8.1-policy-shorthands.yaml",
+      "sha256": "5998b335dc5902754a8158f111b8f879caa1409f4563e0ac3dfc419ddf106cab",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/8.2-policy-manifest.yaml",
+      "sha256": "9b25ad53ae14be45eb518b1e4ce45eebfdee16a3171bc4a39b4949d26fee5867",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/8.3-conditions.yaml",
+      "sha256": "9a865b28f054aace828a8048a56f5fbae6a964621d8e8f5c1ad69e4f1a9bca69",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/9.1-digest-verified.yaml",
+      "sha256": "4c589bc90b998d5c14242156ca58d2084705b58da222befa80abd1efdfb79a37",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "conformance/valid/9.4-pinned-images-security-profile.yaml",
+      "sha256": "c4887838b64c07ded8024f68223337354175e362b7c09aba83fbc2d2d25986b3",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "6d03b76ef4c23b64885b5c1ffe0cff08ceaa6812e6ec164455b9443a23babe22",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "package.json",
+      "sha256": "491d7d69d5c76c03f1f2b6453228d3742db8d2800f0f0d5c621431be49252596",
+      "license": "Apache-2.0"
+    },
+    {
+      "path": "schema/README.md",
+      "sha256": "0aab4ec8a24045945c6ded74c3f04eed6731e69b3ce81b2a3bf2ac8bc8c645c9",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "schema/awp.v1alpha1.json",
+      "sha256": "834fa4256f471a81b273254cfeaebc379c62aa435d558b214fca07b67070ff56",
+      "license": "Apache-2.0"
+    }
+  ]
+}

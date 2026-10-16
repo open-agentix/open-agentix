@@ -1,0 +1,105 @@
+# Conformance case 7.2-data-and-model-policy
+# Spec section 7.2: Data policy, residency, processing and model policy.
+# Expected: valid
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Workflow
+metadata:
+  name: conformance-base
+  version: 1.0.0
+  owner:
+    team: conformance-team
+  classification: internal
+  risk:
+    level: low
+spec:
+  inputs:
+    - name: repo
+      type: string
+      required: true
+  budget:
+    maxCostUsd: 1
+    maxSteps: 10
+    maxDuration: 10m
+    resources:
+      maxRetries: 2
+      maxConcurrency: 1
+  secrets:
+    - name: TOOLS_TOKEN
+      source: secret-manager
+      scope:
+        - tools
+  mcpServers:
+    - name: tools
+      transport: streamable-http
+      url: https://mcp.example.com/tools
+      auth:
+        secretRef: TOOLS_TOKEN
+  actionGroups:
+    tools.read:
+      - tools.read_file
+  agents:
+    - id: worker
+      model:
+        provider: ollama
+        name: qwen3
+        version: "3.0"
+        region: EU
+        approval:
+          status: approved
+          expires: 2027-01-01
+          approvedBy: model-board
+        riskClassification: low
+        evaluation:
+          status: passed
+          ref: https://reports.example.com/e1
+        allowedUseCases:
+          - analysis
+      tools:
+        - type: mcp
+          server: tools
+  workflow:
+    - id: analyze
+      agent: worker
+      task: Analyze ${{ inputs.repo }}.
+      outputs:
+        - name: report
+    - id: apply
+      agent: worker
+      task: Apply ${{ steps.analyze.outputs.report }}.
+      dependsOn:
+        - analyze
+  permissions:
+    default: deny
+    tools:
+      tools.read:
+        allow: true
+  dataPolicy:
+    classification: confidential
+    inputs:
+      - name: repo
+        classification: internal
+    outputs:
+      - name: report
+        classification: internal
+    restrictions:
+      externalTransfer: deny
+    residency:
+      allowed:
+        - EU
+    processing:
+      allowedProviders:
+        - ollama
+      forbiddenProviders:
+        - public-cloud-us
+  modelPolicy:
+    allowedProviders:
+      - ollama
+    allowedModels:
+      - qwen3
+    forbiddenModels:
+      - unapproved
+    requirements:
+      approvalStatus: approved
+      encryption: true
+      region: EU
+      evaluationStatus: passed

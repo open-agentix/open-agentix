@@ -1,0 +1,23 @@
+# Conformance case 3.3-core-profile-only
+# Spec section 3.3: A manifest using only core fields is valid for a validator that supports only the core profile.
+# Expected: valid
+# Profiles supported by the validator for this case: core
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Workflow
+metadata:
+  name: hello
+  version: 0.1.0
+  owner: platform-team
+  risk:
+    level: medium
+spec:
+  agents:
+    - id: assistant
+      model:
+        provider: ollama
+        name: qwen3
+  workflow:
+    - id: greet
+      agent: assistant
+  permissions:
+    default: deny

@@ -1,0 +1,21 @@
+# Conformance case 3.2-minimal-workflow
+# Spec section 3.2: Minimal Workflow of the specification (hello); metadata.classification is only REQUIRED under the governance profile.
+# Expected: valid
+# Profiles supported by the validator for this case: core
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Workflow
+metadata:
+  name: hello
+  version: 0.1.0
+  owner:
+    team: platform-team
+spec:
+  agents:
+    - id: assistant
+      model:
+        provider: ollama
+        name: qwen3
+  workflow:
+    - id: greet
+      agent: assistant
+      task: Say hello.

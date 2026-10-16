@@ -1,0 +1,73 @@
+# Conformance case 9.4-pinned-images-security-profile
+# Spec section 9.4: Under the security profile images are pinned by digest.
+# Expected: valid
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Workflow
+metadata:
+  name: conformance-base
+  version: 1.0.0
+  owner:
+    team: conformance-team
+  classification: internal
+  risk:
+    level: low
+  signature:
+    format: sigstore-bundle
+    ref: https://registry.example.com/sig.json
+    identity: release@example.com
+  provenance:
+    format: slsa-provenance-v1
+    ref: https://registry.example.com/prov.json
+spec:
+  inputs:
+    - name: repo
+      type: string
+      required: true
+  budget:
+    maxCostUsd: 1
+    maxSteps: 10
+    maxDuration: 10m
+    resources:
+      maxRetries: 2
+      maxConcurrency: 1
+  secrets:
+    - name: TOOLS_TOKEN
+      source: secret-manager
+      scope:
+        - tools
+  mcpServers:
+    - name: tools
+      transport: streamable-http
+      url: https://mcp.example.com/tools
+      auth:
+        secretRef: TOOLS_TOKEN
+    - name: local
+      transport: stdio
+      image: registry.example.com/mcp/local@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  actionGroups:
+    tools.read:
+      - tools.read_file
+  agents:
+    - id: worker
+      model:
+        provider: ollama
+        name: qwen3
+      tools:
+        - type: mcp
+          server: tools
+  workflow:
+    - id: analyze
+      agent: worker
+      task: Analyze ${{ inputs.repo }}.
+      outputs:
+        - name: report
+    - id: apply
+      agent: worker
+      task: Apply ${{ steps.analyze.outputs.report }}.
+      dependsOn:
+        - analyze
+  permissions:
+    default: deny
+    tools:
+      tools.read:
+        allow: true

@@ -1,0 +1,20 @@
+# Conformance case 8.3-ordering-operator-on-unordered-attribute
+# Spec section 8.3: gt, gte, lt, lte are for data.classification and risk.level only.
+# Expected: invalid (schema.oneOf at /spec/rules/0/when/action)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec:
+  rules:
+    - id: deploy-needs-approval
+      when:
+        action:
+          gt: a.b
+      effect: requireApproval
+      approval:
+        approvers:
+          - role: release-manager

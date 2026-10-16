@@ -1,0 +1,14 @@
+# Conformance case 6-agent-without-model
+# Spec section 6: An Agent manifest REQUIRES spec.model.
+# Expected: invalid (schema.required at /spec)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Agent
+metadata:
+  name: conformance-agent
+  version: 1.0.0
+  owner: conformance-team
+  classification: internal
+spec:
+  instructions: Extract fields.
+  permissions:
+    default: deny

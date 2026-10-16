@@ -1,0 +1,19 @@
+# Conformance case 8.3-unknown-attribute
+# Spec section 8.3: Only the defined attributes may be used in conditions.
+# Expected: invalid (schema.additionalProperties at /spec/rules/0/when/user.name)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec:
+  rules:
+    - id: deploy-needs-approval
+      when:
+        user.name: x
+      effect: requireApproval
+      approval:
+        approvers:
+          - role: release-manager

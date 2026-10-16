@@ -1,0 +1,19 @@
+# Conformance case 8.2-no-allow-effect
+# Spec section 8.2: Policy rules can only restrict: effect is deny or requireApproval.
+# Expected: invalid (schema.enum at /spec/rules/0/effect)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec:
+  rules:
+    - id: deploy-needs-approval
+      when:
+        action: production.deploy
+      effect: allow
+      approval:
+        approvers:
+          - role: release-manager
