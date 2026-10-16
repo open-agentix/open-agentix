@@ -110,7 +110,7 @@ export const DEMO_USERS: DemoUser[] = [
     displayName: 'Erin Engineer',
     tenant: 'security',
     globalRoles: [],
-    teams: [{ slug: 'team-security', role: 'agent-engineer' }],
+    teams: [{ slug: 'team-security', role: 'agent-maintainer' }],
   },
   {
     email: 'integrator@example.org',
@@ -145,7 +145,7 @@ export const DEMO_USERS: DemoUser[] = [
     displayName: 'Casey Contractor',
     tenant: 'platform',
     globalRoles: [],
-    agents: [{ name: 'feature-builder', role: 'agent-engineer' }],
+    agents: [{ name: 'feature-builder', role: 'agent-maintainer' }],
   },
 ];
 

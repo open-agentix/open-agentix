@@ -8,7 +8,8 @@ import { minimalUseCases, useCaseCovers } from './tenancy/use-case.js';
  */
 export const GRANTABLE_ROLES = [
   'admin',
-  'agent-engineer',
+  'agent-developer',
+  'agent-maintainer',
   'integrator',
   'operator',
   'auditor',
@@ -32,6 +33,9 @@ export const PERMISSIONS = [
   'agents:read',
   'agents:write',
   'agents:publish',
+  'agents:review',
+  'agents:approve',
+  'agents:rules',
   'runs:read',
   'runs:execute',
   'runs:cancel',
@@ -58,22 +62,33 @@ export type Permission = (typeof PERMISSIONS)[number];
 
 const READ_BASICS: Permission[] = ['agents:read', 'runs:read', 'events:read', 'costs:read'];
 
+/**
+ * What an Agent Developer may do (ADR 0017 section 5.2): build and change agents, open reviews and
+ * comment, run published versions. `agents:approve` is held but only counts where the tenant or an
+ * agent rule lists the role; it never includes `agents:publish`, `users:write`, `settings:write`
+ * or anything that grants access. The Agent Maintainer adds publish and rules on top.
+ */
+const AGENT_DEVELOPER_PERMISSIONS: readonly Permission[] = [
+  ...READ_BASICS,
+  'agents:write',
+  'agents:review',
+  'agents:approve',
+  'runs:execute',
+  'runs:cancel',
+  'sources:read',
+  'connections:read',
+  'policies:read',
+  'tokens:read',
+  'tokens:write',
+];
+
 export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   admin: PERMISSIONS,
-  'agent-engineer': [
-    ...READ_BASICS,
-    'agents:write',
-    'agents:publish',
-    'runs:execute',
-    'runs:cancel',
-    'sources:read',
-    'connections:read',
-    'policies:read',
-    'tokens:read',
-    'tokens:write',
-  ],
+  'agent-developer': AGENT_DEVELOPER_PERMISSIONS,
+  'agent-maintainer': [...AGENT_DEVELOPER_PERMISSIONS, 'agents:publish', 'agents:rules'],
   integrator: [
     ...READ_BASICS,
+    'agents:review',
     'sources:read',
     'sources:write',
     'connections:read',
@@ -84,6 +99,8 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   ],
   operator: [
     ...READ_BASICS,
+    'agents:review',
+    'agents:approve',
     'runs:execute',
     'runs:cancel',
     'runs:approve',
@@ -92,6 +109,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   ],
   auditor: [
     ...READ_BASICS,
+    'agents:review',
     'audit:read',
     'audit:verify',
     'audit:export',
@@ -165,7 +183,7 @@ export interface RoleBinding {
   teamId: string | null;
   /**
    * Resource-scoped binding: the role applies to exactly this agent and grants no team-wide
-   * visibility (person A may be agent-engineer for agent 1 without seeing agents 3-5).
+   * visibility (person A may be agent-maintainer for agent 1 without seeing agents 3-5).
    */
   agentId?: string | null;
   /**

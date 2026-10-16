@@ -320,7 +320,7 @@ describe('permissions and tenant isolation', () => {
   it('honours the team of the agent for agent engineers, and hides foreign teams (404)', async () => {
     const mine = await createAgent(alice, 'eng-own', 'team-security');
     const other = await createAgent(alice, 'eng-other', 'team-ops');
-    const eng = await userWithRole('eng@org-a.example.org', teamSecA, 'agent-engineer');
+    const eng = await userWithRole('eng@org-a.example.org', teamSecA, 'agent-maintainer');
     expect((await disable(eng, mine)).statusCode).toBe(200);
     // team-ops is not visible to this engineer: existence is not revealed.
     expect((await disable(eng, other)).statusCode).toBe(404);

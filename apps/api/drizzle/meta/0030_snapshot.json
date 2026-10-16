@@ -1,5 +1,5 @@
 {
-  "id": "18a48202-aa57-4185-99e0-11e0a6e77946",
+  "id": "7edd4bb8-1c78-4c53-8c67-4404286e26d7",
   "prevId": "38111fbc-33b6-40ca-8e68-16011a76ad6e",
   "version": "7",
   "dialect": "postgresql",
@@ -4281,7 +4281,7 @@
       "checkConstraints": {
         "trb_role_check": {
           "name": "trb_role_check",
-          "value": "\"tenant_role_bindings\".\"role\" in ('admin','agent-engineer','integrator','operator','auditor','viewer','pentest')"
+          "value": "\"tenant_role_bindings\".\"role\" in ('admin','agent-developer','agent-maintainer','integrator','operator','auditor','viewer','pentest')"
         },
         "trb_source_check": {
           "name": "trb_source_check",
@@ -4378,7 +4378,7 @@
       "checkConstraints": {
         "trr_role_check": {
           "name": "trr_role_check",
-          "value": "\"tenant_role_restrictions\".\"role\" in ('admin','agent-engineer','integrator','operator','auditor','viewer','pentest')"
+          "value": "\"tenant_role_restrictions\".\"role\" in ('admin','agent-developer','agent-maintainer','integrator','operator','auditor','viewer','pentest')"
         },
         "trr_not_admin": {
           "name": "trr_not_admin",
@@ -4454,12 +4454,6 @@
           "notNull": true,
           "default": 0
         },
-        "use_case": {
-          "name": "use_case",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -4469,28 +4463,6 @@
         }
       },
       "indexes": {
-        "tenants_parent_use_case_idx": {
-          "name": "tenants_parent_use_case_idx",
-          "columns": [
-            {
-              "expression": "parent_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "use_case",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"tenants\".\"use_case\" is not null",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "tenants_parent_slug_uq": {
           "name": "tenants_parent_slug_uq",
           "columns": [
@@ -4599,10 +4571,6 @@
       },
       "policies": {},
       "checkConstraints": {
-        "tenants_use_case_check": {
-          "name": "tenants_use_case_check",
-          "value": "\"tenants\".\"use_case\" is null or (\"tenants\".\"parent_id\" is not null and char_length(\"tenants\".\"use_case\") between 1 and 200 and \"tenants\".\"use_case\" ~ '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$')"
-        },
         "tenants_tree_check": {
           "name": "tenants_tree_check",
           "value": "\"tenants\".\"depth\" >= 0 AND \"tenants\".\"depth\" <= 32\n\tAND (\"tenants\".\"parent_id\" IS NULL) = (\"tenants\".\"depth\" = 0)\n\tAND (\"tenants\".\"parent_id\" IS NULL) = (\"tenants\".\"root_id\" = \"tenants\".\"id\")\n\tAND \"tenants\".\"parent_id\" IS DISTINCT FROM \"tenants\".\"id\"\n\tAND \"tenants\".\"path\" ~ '^(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})+/$'\n\tAND char_length(\"tenants\".\"path\") = 37 * (\"tenants\".\"depth\" + 1) + 1\n\tAND \"tenants\".\"path\" LIKE '%/' || \"tenants\".\"id\"::text || '/'\n\tAND \"tenants\".\"path\" LIKE '/' || \"tenants\".\"root_id\"::text || '/%'"

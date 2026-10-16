@@ -19,7 +19,7 @@ describe('users, teams and roles', () => {
     await heading('Users & teams');
     expect(await screen.findByText('ada@example.org · local')).toBeInTheDocument();
     expect(screen.getByText('Disabled')).toBeInTheDocument();
-    expect(await screen.findByText('Security (agent-engineer)')).toBeInTheDocument();
+    expect(await screen.findByText('Security (agent-maintainer)')).toBeInTheDocument();
     await expectNoA11yViolations();
     await user.click(screen.getByRole('button', { name: 'Edit Ada Admin' }));
     const dialog = await screen.findByRole('dialog', { name: 'Edit Ada Admin' });
@@ -76,13 +76,13 @@ describe('users, teams and roles', () => {
 
     await user.click(screen.getByRole('button', { name: 'Members' }));
     const mdialog = await screen.findByRole('dialog', { name: 'Members of Security' });
-    expect(within(mdialog).getByLabelText(/Ada Admin/)).toHaveValue('agent-engineer');
+    expect(within(mdialog).getByLabelText(/Ada Admin/)).toHaveValue('agent-maintainer');
     await user.selectOptions(within(mdialog).getByLabelText(/Vic Viewer/), 'operator');
     await user.click(within(mdialog).getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(members).toEqual({
         members: [
-          { userId: f.ids.admin, role: 'agent-engineer' },
+          { userId: f.ids.admin, role: 'agent-maintainer' },
           { userId: f.ids.viewer, role: 'operator' },
         ],
       }),

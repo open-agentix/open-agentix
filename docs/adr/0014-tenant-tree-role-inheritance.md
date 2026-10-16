@@ -1,5 +1,8 @@
 # ADR 0014: Role inheritance over the tenant tree
 
+> Note (ADR 0017 S10): the role `agent-engineer` named below was renamed to `agent-maintainer` without an alias; `agent-developer` was added. Read `agent-engineer` as `agent-maintainer` in this document.
+
+- Status: Proposed. Slices S1, S1b, S2, S3, S4, S5 and S6 are implemented (see "Implementation status" below); S7 to S10 are open.
 - Status: Proposed. Slices S1, S1b, S2, S3, S4, S5, S6, S7 and S8 are implemented (see "Implementation status" below); S9 and S10 are open.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
@@ -26,7 +29,7 @@
 | S4 | implemented (PR for #189, #226) | Role-binding API, grant rules 1 to 9, audit, bulk opt-in; migration **`0023_trb_source`** (mirror rows get their own key). See "S4" below. |
 | S6 | implemented (PR for #191) | `pentest` grantable with mandatory expiry, notices, `pentest.session_started`, expiry reaper. Migration **`0028_pentest_role`**. See "S6" below. |
 | S7 | implemented (PR for #192) | `GET /v1/locate/{kind}/{id}`; read permission of the kind at the owning node, identical 404, rate-limited `access.denied`. No migration. See `docs/tenancy.md`. |
-| S8 | implemented (PR for #193) | Use-case-scoped bindings and node attachment: `tenants.use_case`, `PATCH /v1/tenants/{id} { useCase }`, use-case filter in every service that filters by team, route registry (fail closed), `use_case_bindings_unsupported` lifted. Migration **`0030_tenant_use_case_attach`**. See "S8" below. |
+| S8 | implemented (PR for #193) | Use-case-scoped bindings and node attachment: `tenants.use_case`, `PATCH /v1/tenants/{id} { useCase }`, use-case filter in every service that filters by team, route registry (fail closed), `use_case_bindings_unsupported` lifted. Migration **`0031_tenant_use_case_attach`**. See "S8" below. |
 | S5 | implemented (PR for #190) | Write inheritance (clamp removed), `POST /v1/tenants { parentId }` and `PATCH /v1/tenants/{id}` for tenant admins, `GET /v1/me/access` and `GET /v1/tenants/{id}/access`. No migration. See "S5" below. |
 
 Differences between the plan below and what S1 shipped:
@@ -273,7 +276,7 @@ S6 (`pentest`; #191), details in `docs/tenancy.md` ("The `pentest` role"):
 
 S8 (use-case bindings and attached nodes; #193), details in `docs/tenancy.md` ("Use-case bindings and attached nodes"):
 
-- **Migration `0030_tenant_use_case_attach`** (additive; follows `0029_mcp_oauth_authorization_code`):
+- **Migration `0031_tenant_use_case_attach`** (additive; follows `0029_mcp_oauth_authorization_code`):
   `tenants.use_case` (child nodes only, syntax check), an index on `(parent_id, use_case)`, and the epoch
   trigger `authz_bump_tenant` also fires on a change of `use_case`. Down script included.
 - **Resolver.** A use-case binding applies at its own node, limited to `USE_CASE_PERMISSIONS`
@@ -314,6 +317,7 @@ S8 (use-case bindings and attached nodes; #193), details in `docs/tenancy.md` ("
   Attach takes the binding lock after the tree lock; node limits are hidden from use-case callers; agent
   names of the cost summary follow the agent's current use case. Accepted: team-less agents of use-case
   writers use team-less node connections.
+- **Agent lifecycle permissions (ADR 0017).** `agents:review`, `agents:approve` and `agents:rules` are deliberately **not** part of `USE_CASE_PERMISSIONS`: a use-case binding never carries them (fail closed) until ADR 0017 S1 decides how reviews and rules scope to a use case. The renamed `agent-maintainer` role keeps its write/publish permissions inside a use case on agents without a team.
 - Tests: `use-case-review.test.ts`, `use-case-scope.test.ts` (the service walk), `use-case-routes.test.ts` (registry, fail-closed walk),
   `use-case-bindings.test.ts` (grants, attach, acting node), the resolver and the attach-invariant property
   tests in `packages/core/test/tenant-roles.test.ts`, `rbac.test.ts`.

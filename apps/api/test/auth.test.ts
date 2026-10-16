@@ -213,7 +213,7 @@ describe('API tokens', () => {
         email: 'eng@example.com',
         displayName: 'Eng',
         password: 'engineer-password',
-        globalRoles: ['agent-engineer'],
+        globalRoles: ['agent-maintainer'],
       },
     });
     const eng = await n.login('eng@example.com', 'engineer-password');

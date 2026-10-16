@@ -106,6 +106,43 @@ Not yet: `status` is always `active` (blocking comes with budget caps, W13-4), a
 of a node needs storage that arrives with W13-2 and W13-8. The use case a node is attached to is stored
 (`tenants.use_case`, slice S8) and shown as `useCase` on the tenant.
 
+## Fixed roles and the agent roles (ADR 0017, slice S10)
+
+The role set is fixed (it is not a custom-role feature). `pentest` is bound through the role-binding
+API only (see below); the other seven are granted everywhere a role can be granted: `users.global_roles`,
+node bindings (with and without `inherit`), team members, agent members and the installation-wide group
+mapping (`role` or `role@team-slug`). The console shows the display names in English and German.
+
+| Role | Display name | Permissions (besides the read basics `agents:read`, `runs:read`, `events:read`, `costs:read`) |
+| --- | --- | --- |
+| `admin` | Admin | every permission |
+| `agent-developer` | Agent Developer | `agents:write`, `agents:review`, `agents:approve`, `runs:execute`, `runs:cancel`, `sources:read`, `connections:read`, `policies:read`, `tokens:read`, `tokens:write` |
+| `agent-maintainer` | Agent Maintainer | everything of `agent-developer` plus `agents:publish` and `agents:rules` |
+| `integrator` | Integrator | `agents:review`, `sources:read`, `sources:write`, `connections:read`, `connections:write`, `policies:read`, `tokens:read`, `tokens:write` |
+| `operator` | Operator | `agents:review`, `agents:approve`, `runs:execute`, `runs:cancel`, `runs:approve`, `sources:read`, `tokens:read` |
+| `auditor` | Auditor | `agents:review`, `audit:read`, `audit:verify`, `audit:export`, `policies:read`, `connections:read`, `sources:read`, `users:read`, `settings:read` |
+| `viewer` | Viewer | the read basics only |
+| `pentest` | Pentest | read-only, time-boxed (see below) |
+
+- `agents:review`, `agents:approve` and `agents:rules` are **permissions only** in this slice. Nothing
+  enforces a review or an approval yet (that comes with ADR 0017 S1 and S3); publishing behaves as before.
+  An Agent Developer cannot publish (`agents:publish`), an Agent Maintainer can. Neither role holds
+  `users:write`, `settings:write`, `connections:write`, `sources:write`, `policies:write` or any audit
+  permission, so neither can grant a role or change settings. The grant rules of ADR 0014 (a grant needs
+  every permission of the role, no self-grant, subtree coverage for `inherit`) are unchanged.
+- Agent Developers are not approvers by default: the planned default approver roles are `admin` and
+  `agent-maintainer`.
+- **Breaking: `agent-engineer` is now `agent-maintainer`.** There is no alias. Migration
+  `0030_agent_roles` rewrites every stored `agent-engineer` (`users.global_roles` and the mirror rows,
+  node bindings, role restrictions, team members, agent bindings and the approver roles of pending
+  approvals) to `agent-maintainer`, which holds exactly the old permissions plus the three new agent
+  permissions. Afterwards `agent-engineer` is an unknown role: the API answers `400`, the check
+  constraints refuse it, and `OAX_OIDC_ROLE_MAPPING` / `OAX_LDAP_ROLE_MAPPING` values naming it are
+  refused at start. Published agent versions are immutable and keep their text; an `approverRoles` list
+  in an **already published** `agents.md` that names `agent-engineer` no longer matches any role: publish
+  a new version with `agent-maintainer`. Revert: `apps/api/drizzle/down/0030_agent_roles.down.sql`
+  (maps back; refuses while `agent-developer` bindings exist).
+
 ## Role bindings (ADR 0014, slice S1)
 
 Migration `0018_tenant_role_bindings` adds the tables the next slices build on. **Nothing authorises
@@ -668,7 +705,7 @@ its own node only (the same use case on a sibling node is not covered), and an a
 unrestricted. `GET /v1/tenants/{id}/access` and `GET /v1/me/access` show the `useCase` of each binding and,
 per permission, the use cases it is limited to.
 
-Migration `0030_tenant_use_case_attach` adds `tenants.use_case` (nullable, syntax check, a root cannot
+Migration `0031_tenant_use_case_attach` adds `tenants.use_case` (nullable, syntax check, a root cannot
 carry one), an index on `(parent_id, use_case)` and makes the epoch trigger fire on a change of
 `use_case`. The grants loader lists the attached children of every inheriting use-case binding (cache wire
 version 2).

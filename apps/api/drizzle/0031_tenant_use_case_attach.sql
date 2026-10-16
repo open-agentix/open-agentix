@@ -1,5 +1,5 @@
 -- ADR 0014 / W13-6 slice S8: use-case-scoped bindings and node attachment. Additive; the down path is
--- drizzle/down/0030_tenant_use_case_attach.down.sql.
+-- drizzle/down/0031_tenant_use_case_attach.down.sql.
 --
 -- tenants.use_case attaches a child node to a use case of its parent (ADR 0013 section 7.2, ADR 0014
 -- section 3.3): a use-case binding of the parent that inherits also applies in the child and its

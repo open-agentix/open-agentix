@@ -2108,7 +2108,7 @@ export interface paths {
                             /** Format: uuid */
                             userId: string;
                             /** @enum {string} */
-                            role: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer";
+                            role: "admin" | "agent-developer" | "agent-maintainer" | "integrator" | "operator" | "auditor" | "viewer";
                         }[];
                     };
                 };
@@ -6893,7 +6893,7 @@ export interface paths {
                         displayName: string;
                         password: string;
                         /** @default [] */
-                        globalRoles?: ("admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer")[];
+                        globalRoles?: ("admin" | "agent-developer" | "agent-maintainer" | "integrator" | "operator" | "auditor" | "viewer")[];
                     };
                 };
             };
@@ -7058,7 +7058,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         displayName?: string;
-                        globalRoles?: ("admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer")[];
+                        globalRoles?: ("admin" | "agent-developer" | "agent-maintainer" | "integrator" | "operator" | "auditor" | "viewer")[];
                         disabled?: boolean;
                     };
                 };
@@ -7204,7 +7204,7 @@ export interface paths {
                             /** Format: uuid */
                             userId: string;
                             /** @enum {string} */
-                            role: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer";
+                            role: "admin" | "agent-developer" | "agent-maintainer" | "integrator" | "operator" | "auditor" | "viewer";
                         }[];
                     };
                 };
@@ -7597,7 +7597,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         name: string;
-                        scopes?: ("agents:read" | "agents:write" | "agents:publish" | "runs:read" | "runs:execute" | "runs:cancel" | "runs:approve" | "events:read" | "sources:read" | "sources:write" | "connections:read" | "connections:write" | "policies:read" | "policies:write" | "audit:read" | "audit:verify" | "audit:export" | "costs:read" | "users:read" | "users:write" | "tokens:read" | "tokens:write" | "settings:read" | "settings:write")[];
+                        scopes?: ("agents:read" | "agents:write" | "agents:publish" | "agents:review" | "agents:approve" | "agents:rules" | "runs:read" | "runs:execute" | "runs:cancel" | "runs:approve" | "events:read" | "sources:read" | "sources:write" | "connections:read" | "connections:write" | "policies:read" | "policies:write" | "audit:read" | "audit:verify" | "audit:export" | "costs:read" | "users:read" | "users:write" | "tokens:read" | "tokens:write" | "settings:read" | "settings:write")[];
                         /** @default 90 */
                         expiresInDays?: number;
                     };
@@ -8385,7 +8385,7 @@ export interface paths {
                         /** Format: uuid */
                         userId: string;
                         /** @enum {string} */
-                        role: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer" | "pentest";
+                        role: "admin" | "agent-developer" | "agent-maintainer" | "integrator" | "operator" | "auditor" | "viewer" | "pentest";
                         /** @description required: `false` = this tenant only, `true` = this tenant and all sub-tenants */
                         inherit: boolean;
                         /** @description required for `pentest` (at most `OAX_PENTEST_MAX_DAYS` ahead, default 30); optional otherwise */
@@ -8605,7 +8605,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        role?: "admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer" | "pentest";
+                        role?: "admin" | "agent-developer" | "agent-maintainer" | "integrator" | "operator" | "auditor" | "viewer" | "pentest";
                         inherit?: boolean;
                         expiresAt?: string | null;
                     };
@@ -8739,7 +8739,7 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        roles: ("admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer")[];
+                        roles: ("admin" | "agent-developer" | "agent-maintainer" | "integrator" | "operator" | "auditor" | "viewer")[];
                         /**
                          * @description report who and which nodes would gain access without changing anything
                          * @default true
@@ -8757,7 +8757,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             dryRun: boolean;
-                            roles: ("admin" | "agent-engineer" | "integrator" | "operator" | "auditor" | "viewer")[];
+                            roles: ("admin" | "agent-developer" | "agent-maintainer" | "integrator" | "operator" | "auditor" | "viewer")[];
                             /** @description bindings that become (or would become) inheriting */
                             bindings: number;
                             users: number;

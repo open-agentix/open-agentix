@@ -62,7 +62,8 @@
   },
   "roles": {
     "admin": "everything, incl. users and settings",
-    "agent-engineer": "builds, tests and publishes agents",
+    "agent-developer": "builds and changes agents, opens reviews, comments",
+    "agent-maintainer": "approves and publishes agents, owns agent rules",
     "integrator": "provides connections and event sources",
     "operator": "runs agents, approves tool calls",
     "auditor": "reads audit trail, verifies and exports",
@@ -115,7 +116,8 @@
       "platformAdmin": "Platform admin",
       "tenantAdmin": "Tenant admin",
       "useCaseAdmin": "Use-case admin",
-      "agentEngineer": "Agent engineer",
+      "agentDeveloper": "Agent developer",
+      "agentMaintainer": "Agent maintainer",
       "integrator": "Integrator",
       "operator": "Operator",
       "auditor": "Auditor",
@@ -1093,7 +1095,7 @@
       "role": {
         "owner": "Platform admin: sees all tenants and the tenant switcher.",
         "admin": "Admin of the Security tenant.",
-        "engineer": "Agent engineer in Security: agents and their versions.",
+        "engineer": "Agent maintainer in Security: agents and their versions.",
         "integrator": "Integrator in Security: connections, policies and event sources.",
         "operator": "Operator in Security: runs and approvals.",
         "auditor": "Auditor in Security: audit log and costs.",

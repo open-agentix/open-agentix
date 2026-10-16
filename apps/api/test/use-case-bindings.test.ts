@@ -82,7 +82,7 @@ describe.each(sqlTargets)('use-case bindings and attachment (%s)', (_kind, enabl
         ).statusCode,
       ).toBe(201);
       expect(
-        (await grant('root-admin', 'org-a', 'uc-eng', { role: 'agent-engineer', useCase: 'sec' }))
+        (await grant('root-admin', 'org-a', 'uc-eng', { role: 'agent-maintainer', useCase: 'sec' }))
           .statusCode,
       ).toBe(201);
       expect(
@@ -135,7 +135,7 @@ describe.each(sqlTargets)('use-case bindings and attachment (%s)', (_kind, enabl
         expect(same.statusCode).toBe(201);
         // an inheriting grant needs an inheriting binding of its own: uc-sec has one
         const inh = await grant('uc-sec', 'org-a', 'grantee', {
-          role: 'agent-engineer',
+          role: 'agent-maintainer',
           useCase: 'sec',
           inherit: true,
         });

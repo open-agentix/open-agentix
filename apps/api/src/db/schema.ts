@@ -143,9 +143,9 @@ export const users = pgTable('users', {
   lastLoginAt: ts('last_login_at'),
 });
 
-/** The seven fixed roles as the database accepts them (check constraints below, migration 0018). */
+/** The eight fixed roles as the database accepts them (check constraints below, migration 0030). */
 const ROLE_SQL = sql.raw(
-  "('admin','agent-engineer','integrator','operator','auditor','viewer','pentest')",
+  "('admin','agent-developer','agent-maintainer','integrator','operator','auditor','viewer','pentest')",
 );
 
 /**

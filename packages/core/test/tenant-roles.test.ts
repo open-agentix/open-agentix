@@ -252,7 +252,7 @@ describe('effectiveAt', () => {
   it('applies team and agent bindings at their own node only (they never inherit)', () => {
     const raw = rawOf(f.a, {
       teamBindings: [{ tenantId: f.a.id, teamId: 't1', role: 'operator' }],
-      agentBindings: [{ tenantId: f.a.id, agentId: 'g1', teamId: null, role: 'agent-engineer' }],
+      agentBindings: [{ tenantId: f.a.id, agentId: 'g1', teamId: null, role: 'agent-maintainer' }],
     });
     expect(effectiveAt(raw, f.a, opts).map((b) => [b.source, b.teamId, b.agentId ?? null])).toEqual(
       [

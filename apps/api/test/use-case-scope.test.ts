@@ -52,7 +52,7 @@ describe.each(sqlTargets)('use-case scope in the services (%s)', (_kind, enabled
     await w.bind('uc-sec', 'org-a', 'admin', { inherit: true, useCase: 'sec' });
     await w.bind('uc-ops', 'org-a', 'admin', { useCase: 'ops' });
     await w.bind('uc-appsec', 'org-a', 'viewer', { useCase: 'sec/appsec' });
-    await w.bind('uc-eng', 'org-a', 'agent-engineer', { useCase: 'sec' });
+    await w.bind('uc-eng', 'org-a', 'agent-maintainer', { useCase: 'sec' });
     await w.bind('uc-oper', 'org-a', 'operator', { useCase: 'sec' });
     for (const k of ['uc-sec', 'uc-ops', 'uc-appsec', 'uc-eng', 'uc-oper']) await w.relogin(k);
   }, 240_000);

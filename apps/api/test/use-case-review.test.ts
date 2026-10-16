@@ -25,7 +25,7 @@ describe.each(sqlTargets)('use-case review findings (%s)', (_kind, enabled, open
   beforeAll(async () => {
     w = await buildWorld(await open(), { OAX_ROLE_BINDINGS_READ: 'bindings' });
     await w.bind('uc-sec', 'org-a', 'admin', { inherit: true, useCase: 'sec' });
-    await w.bind('uc-eng', 'org-a', 'agent-engineer', { useCase: 'sec' });
+    await w.bind('uc-eng', 'org-a', 'agent-maintainer', { useCase: 'sec' });
     await w.bind('uc-oper', 'org-a', 'operator', { useCase: 'sec' });
     for (const k of ['uc-sec', 'uc-eng', 'uc-oper']) await w.relogin(k);
     await w.mkUser('u1-plain', 'unit-1');
@@ -202,7 +202,7 @@ describe.each(sqlTargets)('use-case review findings (%s)', (_kind, enabled, open
       await w.mkUser('team-eng', 'org-a');
       await w.n.ctx.db
         .insert(teamMembers)
-        .values({ teamId: w.id['blue']!, userId: w.uid['team-eng']!, role: 'agent-engineer' });
+        .values({ teamId: w.id['blue']!, userId: w.uid['team-eng']!, role: 'agent-maintainer' });
       await w.relogin('team-eng');
       const a = w.agent['t-agent']!;
       const stay = await w.req('team-eng', 'PUT', `/v1/agents/${a}/draft`, {

@@ -253,7 +253,7 @@ send secrets to `tools/list` in the first place.
 | `POST .../{digest}/approve` `{ "scope" }` | `connections:write` | `new-versions` or `existing-versions` (below). Audited as `mcp.tools.approved`. |
 | `POST .../{digest}/reject` | `connections:write` | Marks a pending snapshot `rejected` (`mcp.tools.rejected`). A later explicit refresh that sees the same list reopens it. |
 
-Approving needs `connections:write` (admin and integrator), which agent engineers, who publish, do not
+Approving needs `connections:write` (admin and integrator), which agent maintainers, who publish, do not
 have: whoever publishes an agent cannot approve the tools it will use. A platform connection can only
 be refreshed, approved and rejected by platform operators; tenants can read its snapshots. A
 connection or digest of another tenant answers `404`, exactly like one that does not exist.

@@ -173,8 +173,15 @@
     {
       "idx": 24,
       "version": "7",
+      "when": 1792600000002,
+      "tag": "0030_agent_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
       "when": 1792700000000,
-      "tag": "0030_tenant_use_case_attach",
+      "tag": "0031_tenant_use_case_attach",
       "breakpoints": true
     }
   ]

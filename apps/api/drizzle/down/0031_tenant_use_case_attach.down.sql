@@ -1,6 +1,6 @@
--- Reverts 0030_tenant_use_case_attach.sql (ADR 0014 slice S8).
+-- Reverts 0031_tenant_use_case_attach.sql (ADR 0014 slice S8).
 -- Not part of the drizzle journal: run it by hand (psql) after rolling the application back, then
--- delete the row of migration 0030 from drizzle.__drizzle_migrations. Loses the attachments
+-- delete the row of migration 0031 from drizzle.__drizzle_migrations. Loses the attachments
 -- (tenants.use_case); use-case role bindings (tenant_role_bindings.use_case) stay, and an application
 -- version before this slice ignores them (the resolver of S1 to S7 never applies a use-case binding).
 CREATE OR REPLACE FUNCTION "authz_bump_tenant"() RETURNS trigger LANGUAGE plpgsql AS $$

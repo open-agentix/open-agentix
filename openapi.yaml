@@ -3108,7 +3108,8 @@ paths:
                         type: string
                         enum:
                           - admin
-                          - agent-engineer
+                          - agent-developer
+                          - agent-maintainer
                           - integrator
                           - operator
                           - auditor
@@ -9811,7 +9812,8 @@ paths:
                     type: string
                     enum:
                       - admin
-                      - agent-engineer
+                      - agent-developer
+                      - agent-maintainer
                       - integrator
                       - operator
                       - auditor
@@ -10030,7 +10032,8 @@ paths:
                     type: string
                     enum:
                       - admin
-                      - agent-engineer
+                      - agent-developer
+                      - agent-maintainer
                       - integrator
                       - operator
                       - auditor
@@ -10218,7 +10221,8 @@ paths:
                         type: string
                         enum:
                           - admin
-                          - agent-engineer
+                          - agent-developer
+                          - agent-maintainer
                           - integrator
                           - operator
                           - auditor
@@ -10627,6 +10631,9 @@ paths:
                       - agents:read
                       - agents:write
                       - agents:publish
+                      - agents:review
+                      - agents:approve
+                      - agents:rules
                       - runs:read
                       - runs:execute
                       - runs:cancel
@@ -11723,7 +11730,8 @@ paths:
                   type: string
                   enum:
                     - admin
-                    - agent-engineer
+                    - agent-developer
+                    - agent-maintainer
                     - integrator
                     - operator
                     - auditor
@@ -11922,7 +11930,8 @@ paths:
                   type: string
                   enum:
                     - admin
-                    - agent-engineer
+                    - agent-developer
+                    - agent-maintainer
                     - integrator
                     - operator
                     - auditor
@@ -12192,13 +12201,14 @@ paths:
               properties:
                 roles:
                   minItems: 1
-                  maxItems: 6
+                  maxItems: 7
                   type: array
                   items:
                     type: string
                     enum:
                       - admin
-                      - agent-engineer
+                      - agent-developer
+                      - agent-maintainer
                       - integrator
                       - operator
                       - auditor
@@ -12235,7 +12245,8 @@ paths:
                       type: string
                       enum:
                         - admin
-                        - agent-engineer
+                        - agent-developer
+                        - agent-maintainer
                         - integrator
                         - operator
                         - auditor

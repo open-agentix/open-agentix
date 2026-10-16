@@ -6,7 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Breaking
+
+- **`agent-engineer` is renamed to `agent-maintainer` without an alias (ADR 0017 S10, #290)**: the role
+  `agent-engineer` no longer exists. Migration `0030_agent_roles` rewrites every stored binding
+  (`users.global_roles` and the mirror rows, node bindings, role restrictions, team members, agent
+  bindings, approver roles of pending approvals) to `agent-maintainer`, which holds exactly the old
+  permissions plus `agents:review`, `agents:approve` and `agents:rules`. API clients, scripts and
+  directory mappings that send `agent-engineer` now get `400`, and `OAX_OIDC_ROLE_MAPPING` /
+  `OAX_LDAP_ROLE_MAPPING` values naming it are refused at start with an error that names
+  `agent-maintainer`: **change those variables before upgrading**. An `approverRoles` list of an
+  already published `agents.md` that names `agent-engineer` matches nothing; publish a new version with
+  `agent-maintainer`. Revert with `apps/api/drizzle/down/0030_agent_roles.down.sql` (refuses while
+  `agent-developer` bindings exist). The OpenAPI role enums changed accordingly.
+
 ### Added
+
+- **Agent Developer and Agent Maintainer roles (ADR 0017 S10, #290)**: the fixed roles `agent-developer`
+  (write drafts, review, comment, run; cannot publish) and `agent-maintainer` (everything of the developer
+  plus `agents:publish` and `agents:rules`), grantable on nodes (with and without `inherit`), teams, agents,
+  as global roles and in the group mappings (also as `role@team-slug`); new permissions `agents:review`,
+  `agents:approve` and `agents:rules` (operator also holds review and approve, integrator and auditor review).
+  Permissions only: publishing and approvals behave as before until ADR 0017 S1 and S3. Console names in
+  English and German. See [docs/tenancy.md](docs/tenancy.md#fixed-roles-and-the-agent-roles-adr-0017-slice-s10).
 
 - **Use-case-scoped bindings and node attachment (ADR 0014 S8, #193)**: `POST /v1/tenants/{id}/role-bindings`
   accepts `useCase` (`use_case_bindings_unsupported` is gone). A use-case binding limits a role to the
@@ -19,7 +41,7 @@ All notable changes to this project are documented here. The format follows
   is declared `scoped`, `denied` or `self` in a route registry and a missing declaration fails CI and is
   refused at run time; hidden objects are a plain `404`. Use-case bindings need
   `OAX_ROLE_BINDINGS_READ=bindings`. `GET /v1/me/access` and the access views show `useCase`. Migration
-  `0030_tenant_use_case_attach` (additive).
+  `0031_tenant_use_case_attach` (additive).
 - **MCP abuse suite and threat model (ADR 0016 S8, #238)**: an opt-in real-engine suite
   (`apps/api/test/mcp-abuse-{egress,network,leak}.integration.test.ts`, `OAX_TEST_DOCKER=1`, never part of
   `pnpm test`) that proves with a real container engine zero unexpected connections from a run node and

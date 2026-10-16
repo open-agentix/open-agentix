@@ -80,7 +80,7 @@ describe('rbac', () => {
 
 describe('agent-scoped bindings', () => {
   const p = user([
-    { role: 'agent-engineer', teamId: 'sec', agentId: 'agent-1' },
+    { role: 'agent-maintainer', teamId: 'sec', agentId: 'agent-1' },
     { role: 'viewer', teamId: 'ops' },
   ]);
 
