@@ -2,7 +2,7 @@
 
 > Note (ADR 0017 S10): the role `agent-engineer` named below was renamed to `agent-maintainer` without an alias; `agent-developer` was added. Read `agent-engineer` as `agent-maintainer` in this document.
 
-- Status: Proposed. Slices S1, S1b, S2, S3, S4, S5, S6, S7, S8 and S9 are implemented (see "Implementation status" below); S10 is open.
+- Status: Proposed. Slices S1, S1b, S2, S3, S4, S5, S6, S7, S8, S9 and S10 are implemented (see "Implementation status" below); the cross-organisation half of S10 waits for W13-15.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
   resolver pattern); wave 13 of the [implementation plan](../IMPLEMENTATION-PLAN.md)
@@ -30,6 +30,7 @@
 | S7 | implemented (PR for #192) | `GET /v1/locate/{kind}/{id}`; read permission of the kind at the owning node, identical 404, rate-limited `access.denied`. No migration. See `docs/tenancy.md`. |
 | S8 | implemented (PR for #193) | Use-case-scoped bindings and node attachment: `tenants.use_case`, `PATCH /v1/tenants/{id} { useCase }`, use-case filter in every service that filters by team, route registry (fail closed), `use_case_bindings_unsupported` lifted. Migration **`0031_tenant_use_case_attach`**. See "S8" below. |
 | S9 | implemented (PR for #194) | `GET/PUT/DELETE /v1/tenants/{id}/role-restrictions`, restrictions loaded with the principal's grants and applied by the resolver, `role_restricted` in the access views, audit, migration **`0033_role_restrictions_epoch`** (epoch triggers; the table itself is from 0018). See `docs/tenancy.md`, "Role restrictions". |
+| S10 | implemented for moves inside an organisation (PR for #195, with W13-11) | `POST /v1/tenants/{id}/move { parentId, dryRun }`: inheriting-admin coverage of the node, the old and the new parent, dry run of who gains or loses access, exclusive tree lock, epoch bump, restriction and use-case handling, move invariant property tests. Migration **`0034_tenant_move`**. **Not in this slice:** moves into another organisation and the removal of other-organisation users' bindings (W13-15, request and approval, two-root locking, hand-over audit entries), budget counters (W13-4) and root moves. See `docs/tenancy.md`, "Moving a tenant". |
 | S5 | implemented (PR for #190) | Write inheritance (clamp removed), `POST /v1/tenants { parentId }` and `PATCH /v1/tenants/{id}` for tenant admins, `GET /v1/me/access` and `GET /v1/tenants/{id}/access`. No migration. See "S5" below. |
 
 Differences between the plan below and what S1 shipped:

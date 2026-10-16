@@ -22,6 +22,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Move a tenant and its subtree inside an organisation (ADR 0014 S10, #195, with W13-11)**:
+  `POST /v1/tenants/{id}/move { parentId, dryRun }`. Needs an inheriting `admin` (no use case) that
+  covers the tenant, its old parent and the new parent, or a platform operator, so the mover gains no
+  coverage; both tenants must be visible (the same `404` as for an unknown id). The depth limit is
+  re-checked, a cycle, the current parent, an organisation root and another organisation are refused
+  (cross-organisation moves stay with W13-15), a tenant admin cannot move below a capped node, and
+  leaving a node whose role restrictions narrow bindings inside the subtree needs the authority to
+  lift them. Bindings on moved tenants move with them, bindings inherited from the old ancestors stop
+  and those inheriting from the new ancestors start; the tenant is detached from its use case. The dry
+  run lists, from the same resolver as every request, the users the caller may see who gain or lose
+  permissions, and the restrictions that stop or start applying. The applied move runs under the
+  exclusive tree lock, bumps the authz epoch (cached principals are rebuilt) and is audited as
+  `tenant.moved` in the partitions of the tenant and both parents (ids only). Needs
+  `OAX_ROLE_BINDINGS_READ=bindings` (`409 role_bindings_read_required`). Migration `0034_tenant_move`
+  lets the tree guard accept a declared move inside one organisation and verifies the final placement
+  at commit. See [docs/tenancy.md](docs/tenancy.md#moving-a-tenant-adr-0014-slice-s10).
 - **Role restrictions per node (ADR 0014 S9, #194)**: `GET/PUT/DELETE /v1/tenants/{id}/role-restrictions`
   remove permissions from a role for the bindings bound on that tenant or below (never `admin`, never for
   platform operators, never narrowing a binding that comes from an ancestor of the restricting node,
