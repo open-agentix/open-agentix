@@ -1330,7 +1330,7 @@ export const agentReviewThreads = pgTable(
     check(
       'agent_review_threads_anchor_check',
       sql`(${t.anchorKind} = 'review' and ${t.revisionId} is null and ${t.side} is null and ${t.line} is null and ${t.lineHash} is null)
-        or (${t.anchorKind} = 'line' and ${t.side} in ('base','head') and ${t.line} between 1 and 100000 and ${t.lineHash} ~ '^[0-9a-f]{64}$')`,
+        or (${t.anchorKind} = 'line' and ${t.side} is not null and ${t.side} in ('base','head') and ${t.line} is not null and ${t.line} between 1 and 100000 and ${t.lineHash} is not null and ${t.lineHash} ~ '^[0-9a-f]{64}$')`,
     ),
     check(
       'agent_review_threads_resolved_check',

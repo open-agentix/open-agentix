@@ -717,7 +717,7 @@
         },
         "agent_review_threads_anchor_check": {
           "name": "agent_review_threads_anchor_check",
-          "value": "(\"agent_review_threads\".\"anchor_kind\" = 'review' and \"agent_review_threads\".\"revision_id\" is null and \"agent_review_threads\".\"side\" is null and \"agent_review_threads\".\"line\" is null and \"agent_review_threads\".\"line_hash\" is null)\n        or (\"agent_review_threads\".\"anchor_kind\" = 'line' and \"agent_review_threads\".\"side\" in ('base','head') and \"agent_review_threads\".\"line\" between 1 and 100000 and \"agent_review_threads\".\"line_hash\" ~ '^[0-9a-f]{64}$')"
+          "value": "(\"agent_review_threads\".\"anchor_kind\" = 'review' and \"agent_review_threads\".\"revision_id\" is null and \"agent_review_threads\".\"side\" is null and \"agent_review_threads\".\"line\" is null and \"agent_review_threads\".\"line_hash\" is null)\n        or (\"agent_review_threads\".\"anchor_kind\" = 'line' and \"agent_review_threads\".\"side\" is not null and \"agent_review_threads\".\"side\" in ('base','head') and \"agent_review_threads\".\"line\" is not null and \"agent_review_threads\".\"line\" between 1 and 100000 and \"agent_review_threads\".\"line_hash\" is not null and \"agent_review_threads\".\"line_hash\" ~ '^[0-9a-f]{64}$')"
         },
         "agent_review_threads_resolved_check": {
           "name": "agent_review_threads_resolved_check",

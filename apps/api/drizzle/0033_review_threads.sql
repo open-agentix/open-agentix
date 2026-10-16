@@ -28,7 +28,7 @@ CREATE TABLE "agent_review_threads" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "agent_review_threads_kind_check" CHECK ("agent_review_threads"."anchor_kind" in ('review','line')),
 	CONSTRAINT "agent_review_threads_anchor_check" CHECK (("agent_review_threads"."anchor_kind" = 'review' and "agent_review_threads"."revision_id" is null and "agent_review_threads"."side" is null and "agent_review_threads"."line" is null and "agent_review_threads"."line_hash" is null)
-        or ("agent_review_threads"."anchor_kind" = 'line' and "agent_review_threads"."side" in ('base','head') and "agent_review_threads"."line" between 1 and 100000 and "agent_review_threads"."line_hash" ~ '^[0-9a-f]{64}$')),
+        or ("agent_review_threads"."anchor_kind" = 'line' and "agent_review_threads"."side" is not null and "agent_review_threads"."side" in ('base','head') and "agent_review_threads"."line" is not null and "agent_review_threads"."line" between 1 and 100000 and "agent_review_threads"."line_hash" is not null and "agent_review_threads"."line_hash" ~ '^[0-9a-f]{64}$')),
 	CONSTRAINT "agent_review_threads_resolved_check" CHECK (("agent_review_threads"."resolved_at" is null) = ("agent_review_threads"."resolved_by" is null))
 );
 --> statement-breakpoint
