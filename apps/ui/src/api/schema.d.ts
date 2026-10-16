@@ -1424,7 +1424,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Publish the draft as an immutable version */
+        /**
+         * Publish the draft as an immutable version
+         * @description Needs `agents:publish`. Not yet refused without an approval: `shadow` reports whether publish would have been refused (ADR 0017 S1 shadow mode); the same report is in the audit entry `agent.published`.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1455,6 +1458,23 @@ export interface paths {
                                 publishedAt: string;
                             };
                             created: boolean;
+                            /** @description shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed */
+                            shadow?: {
+                                /**
+                                 * @description this version only reports; publish is not refused
+                                 * @enum {boolean}
+                                 */
+                                enforced: false;
+                                approvalRequired: boolean;
+                                /** @description publish would have been refused if approvals were enforced (ADR 0017 S1) */
+                                wouldRefuse: boolean;
+                                reviewId: string | null;
+                                state: string | null;
+                                reasons: {
+                                    code: string;
+                                    message: string;
+                                }[];
+                            };
                         };
                     };
                 };
@@ -1477,6 +1497,23 @@ export interface paths {
                                 publishedAt: string;
                             };
                             created: boolean;
+                            /** @description shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed */
+                            shadow?: {
+                                /**
+                                 * @description this version only reports; publish is not refused
+                                 * @enum {boolean}
+                                 */
+                                enforced: false;
+                                approvalRequired: boolean;
+                                /** @description publish would have been refused if approvals were enforced (ADR 0017 S1) */
+                                wouldRefuse: boolean;
+                                reviewId: string | null;
+                                state: string | null;
+                                reasons: {
+                                    code: string;
+                                    message: string;
+                                }[];
+                            };
                         };
                     };
                 };
@@ -2365,6 +2402,1413 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the draft revisions of an agent, newest first
+         * @description Every save of the draft that changes its normalised content is an immutable revision with its author (ADR 0017 section 4.1). Identical content creates none. Needs `agents:read` on the agent; an agent the caller cannot read is 404.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                agentId: string;
+                                /** @description 1 for the first revision of the draft; grows by one per change */
+                                seq: number;
+                                /** @description SHA-256 of the normalised source, as `agent_versions.digest` */
+                                digest: string;
+                                /** @description null for the upgrade revision (author unknown) and Git commits */
+                                authorId: string | null;
+                                /** @enum {string} */
+                                authorKind: "user" | "repo" | "system";
+                                parentId: string | null;
+                                sourceCommit: string | null;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            }[];
+                            nextCursor: string | null;
+                            /** @description the newest revision, the one the draft is */
+                            head: string | null;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/revisions/{seq}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one draft revision with its source */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    seq: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            agentId: string;
+                            /** @description 1 for the first revision of the draft; grows by one per change */
+                            seq: number;
+                            /** @description SHA-256 of the normalised source, as `agent_versions.digest` */
+                            digest: string;
+                            /** @description null for the upgrade revision (author unknown) and Git commits */
+                            authorId: string | null;
+                            /** @enum {string} */
+                            authorKind: "user" | "repo" | "system";
+                            parentId: string | null;
+                            sourceCommit: string | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            source: string;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the reviews of an agent, newest first */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                agentId: string;
+                                /** @enum {string} */
+                                status: "open" | "withdrawn" | "rejected" | "published";
+                                /** @enum {string} */
+                                state: "review_requested" | "changes_requested" | "approved" | "withdrawn" | "rejected" | "published";
+                                /** Format: uuid */
+                                openedBy: string;
+                                /** @description ISO 8601 timestamp */
+                                openedAt: string;
+                                /** Format: uuid */
+                                openedRevisionId: string;
+                                closedAt: string | null;
+                                closedBy: string | null;
+                                /** @description what the diff is computed against: the latest published version when it was opened */
+                                baseVersion: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    version: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    digest: string;
+                                } | null;
+                                revision: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    seq: number;
+                                    /** @description SHA-256, lower-case hex */
+                                    digest: string;
+                                    authorId: string | null;
+                                    authorKind: string;
+                                    /** @description ISO 8601 timestamp */
+                                    createdAt: string;
+                                };
+                                requiredApprovals: number;
+                                /** @description whether the tenant policy requires an approval to publish this agent */
+                                approvalRequired: boolean;
+                                digests: {
+                                    /** @description SHA-256, lower-case hex */
+                                    digest: string;
+                                    expansionDigest: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    resolutionDigest: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    policyDigest: string;
+                                };
+                                /** @description everybody who can never approve this review */
+                                contributors: string[];
+                                /** @description a revision of the window has no known author; the audit chain stands in for it */
+                                unknownAuthor: boolean;
+                                approvals: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    /** Format: uuid */
+                                    reviewerId: string;
+                                    /** @enum {string} */
+                                    decision: "approve" | "request_changes" | "reject";
+                                    /** Format: uuid */
+                                    revisionId: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    digest: string;
+                                    expansionDigest: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    resolutionDigest: string;
+                                    baseVersionId: string | null;
+                                    /** @description SHA-256, lower-case hex */
+                                    policyDigest: string;
+                                    /** @description `session` or `token:<id>` */
+                                    reviewerAuth: string;
+                                    /** Format: uuid */
+                                    actingTenantId: string;
+                                    bindingRefs: {
+                                        id: string;
+                                        role: string;
+                                        /** @description `mirror`, `grant`, `directory`, `team`, `agent` or `platform` */
+                                        source: string;
+                                        grantedBy: string | null;
+                                    }[];
+                                    comment: string | null;
+                                    /** @description ISO 8601 timestamp */
+                                    decidedAt: string;
+                                    expiresAt: string | null;
+                                    /** @description the reviewer's latest decision on the head revision */
+                                    current: boolean;
+                                    /** @description counts towards the required approvals now */
+                                    counted: boolean;
+                                    /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
+                                    reasons: string[];
+                                }[];
+                                you: {
+                                    eligible: boolean;
+                                    code: string | null;
+                                    message: string | null;
+                                };
+                            }[];
+                            nextCursor: string | null;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Open a review of the current draft
+         * @description Needs `agents:write` on the agent. One review per agent at a time (`409 review_open`); a draft equal to the latest published version has nothing to review (`409 nothing_to_review`). The review follows the draft: a new revision makes every earlier decision stale. Records the digests an approval binds to (revision, profile expansion, secret resolution, policy) and the required number of approvals. In this version publishing is not yet refused without an approval (shadow mode): the publish response reports what it would have been refused for.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            agentId: string;
+                            /** @enum {string} */
+                            status: "open" | "withdrawn" | "rejected" | "published";
+                            /** @enum {string} */
+                            state: "review_requested" | "changes_requested" | "approved" | "withdrawn" | "rejected" | "published";
+                            /** Format: uuid */
+                            openedBy: string;
+                            /** @description ISO 8601 timestamp */
+                            openedAt: string;
+                            /** Format: uuid */
+                            openedRevisionId: string;
+                            closedAt: string | null;
+                            closedBy: string | null;
+                            /** @description what the diff is computed against: the latest published version when it was opened */
+                            baseVersion: {
+                                /** Format: uuid */
+                                id: string;
+                                version: string;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                            } | null;
+                            revision: {
+                                /** Format: uuid */
+                                id: string;
+                                seq: number;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                authorId: string | null;
+                                authorKind: string;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            };
+                            requiredApprovals: number;
+                            /** @description whether the tenant policy requires an approval to publish this agent */
+                            approvalRequired: boolean;
+                            digests: {
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                expansionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                resolutionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                policyDigest: string;
+                            };
+                            /** @description everybody who can never approve this review */
+                            contributors: string[];
+                            /** @description a revision of the window has no known author; the audit chain stands in for it */
+                            unknownAuthor: boolean;
+                            approvals: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                reviewerId: string;
+                                /** @enum {string} */
+                                decision: "approve" | "request_changes" | "reject";
+                                /** Format: uuid */
+                                revisionId: string;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                expansionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                resolutionDigest: string;
+                                baseVersionId: string | null;
+                                /** @description SHA-256, lower-case hex */
+                                policyDigest: string;
+                                /** @description `session` or `token:<id>` */
+                                reviewerAuth: string;
+                                /** Format: uuid */
+                                actingTenantId: string;
+                                bindingRefs: {
+                                    id: string;
+                                    role: string;
+                                    /** @description `mirror`, `grant`, `directory`, `team`, `agent` or `platform` */
+                                    source: string;
+                                    grantedBy: string | null;
+                                }[];
+                                comment: string | null;
+                                /** @description ISO 8601 timestamp */
+                                decidedAt: string;
+                                expiresAt: string | null;
+                                /** @description the reviewer's latest decision on the head revision */
+                                current: boolean;
+                                /** @description counts towards the required approvals now */
+                                counted: boolean;
+                                /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
+                                reasons: string[];
+                            }[];
+                            you: {
+                                eligible: boolean;
+                                code: string | null;
+                                message: string | null;
+                            };
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reviews/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a review with its state, approvals and what you may do
+         * @description Every approval is re-checked against the bindings, policy and digests of now: `counted` says whether it counts and `reasons` why not. `you` tells whether the caller could decide the review (rules A1 to A7). A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            agentId: string;
+                            /** @enum {string} */
+                            status: "open" | "withdrawn" | "rejected" | "published";
+                            /** @enum {string} */
+                            state: "review_requested" | "changes_requested" | "approved" | "withdrawn" | "rejected" | "published";
+                            /** Format: uuid */
+                            openedBy: string;
+                            /** @description ISO 8601 timestamp */
+                            openedAt: string;
+                            /** Format: uuid */
+                            openedRevisionId: string;
+                            closedAt: string | null;
+                            closedBy: string | null;
+                            /** @description what the diff is computed against: the latest published version when it was opened */
+                            baseVersion: {
+                                /** Format: uuid */
+                                id: string;
+                                version: string;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                            } | null;
+                            revision: {
+                                /** Format: uuid */
+                                id: string;
+                                seq: number;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                authorId: string | null;
+                                authorKind: string;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            };
+                            requiredApprovals: number;
+                            /** @description whether the tenant policy requires an approval to publish this agent */
+                            approvalRequired: boolean;
+                            digests: {
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                expansionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                resolutionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                policyDigest: string;
+                            };
+                            /** @description everybody who can never approve this review */
+                            contributors: string[];
+                            /** @description a revision of the window has no known author; the audit chain stands in for it */
+                            unknownAuthor: boolean;
+                            approvals: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                reviewerId: string;
+                                /** @enum {string} */
+                                decision: "approve" | "request_changes" | "reject";
+                                /** Format: uuid */
+                                revisionId: string;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                expansionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                resolutionDigest: string;
+                                baseVersionId: string | null;
+                                /** @description SHA-256, lower-case hex */
+                                policyDigest: string;
+                                /** @description `session` or `token:<id>` */
+                                reviewerAuth: string;
+                                /** Format: uuid */
+                                actingTenantId: string;
+                                bindingRefs: {
+                                    id: string;
+                                    role: string;
+                                    /** @description `mirror`, `grant`, `directory`, `team`, `agent` or `platform` */
+                                    source: string;
+                                    grantedBy: string | null;
+                                }[];
+                                comment: string | null;
+                                /** @description ISO 8601 timestamp */
+                                decidedAt: string;
+                                expiresAt: string | null;
+                                /** @description the reviewer's latest decision on the head revision */
+                                current: boolean;
+                                /** @description counts towards the required approvals now */
+                                counted: boolean;
+                                /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
+                                reasons: string[];
+                            }[];
+                            you: {
+                                eligible: boolean;
+                                code: string | null;
+                                message: string | null;
+                            };
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reviews/{id}/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve, request changes on, or reject a review
+         * @description Needs `agents:approve` on the agent through a role the tenant lists in `allowedApproverRoles` (default `admin`, `agent-maintainer`), with a binding that no contributor of the review granted. Refusals: `403 self_approval` (the caller is an author since the base version or the opener, in any role, with any token, platform administrators included), `403 actor_not_human`, `403 token_approval_disabled` (API tokens decide only when the tenant sets `allowTokenApprovals`), `403 identity_source_not_allowed`, `403 not_eligible`, `403 binding_granted_by_contributor`, `403 approver_scope`, `409 stale_view` (the digest you looked at is not the digest of the revision now; reload), `409 review_closed`. `expectedDigest` is required; the optional expected digests bind the decision to the expansion, secret resolution and policy you saw. Use-case bindings never carry `agents:approve` (fail closed). A comment is required to request changes or reject, is limited to 10 000 characters and never copied to the audit chain. A reject closes the review.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        decision: "approve" | "request_changes" | "reject";
+                        /** @description the digest of the revision you looked at (`revision.digest`) */
+                        expectedDigest: string;
+                        expectedExpansionDigest?: string;
+                        /** @description SHA-256, lower-case hex */
+                        expectedResolutionDigest?: string;
+                        /** @description SHA-256, lower-case hex */
+                        expectedPolicyDigest?: string;
+                        /** @description required for `request_changes` and `reject`; never copied to the audit chain */
+                        comment?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            review: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                agentId: string;
+                                /** @enum {string} */
+                                status: "open" | "withdrawn" | "rejected" | "published";
+                                /** @enum {string} */
+                                state: "review_requested" | "changes_requested" | "approved" | "withdrawn" | "rejected" | "published";
+                                /** Format: uuid */
+                                openedBy: string;
+                                /** @description ISO 8601 timestamp */
+                                openedAt: string;
+                                /** Format: uuid */
+                                openedRevisionId: string;
+                                closedAt: string | null;
+                                closedBy: string | null;
+                                /** @description what the diff is computed against: the latest published version when it was opened */
+                                baseVersion: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    version: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    digest: string;
+                                } | null;
+                                revision: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    seq: number;
+                                    /** @description SHA-256, lower-case hex */
+                                    digest: string;
+                                    authorId: string | null;
+                                    authorKind: string;
+                                    /** @description ISO 8601 timestamp */
+                                    createdAt: string;
+                                };
+                                requiredApprovals: number;
+                                /** @description whether the tenant policy requires an approval to publish this agent */
+                                approvalRequired: boolean;
+                                digests: {
+                                    /** @description SHA-256, lower-case hex */
+                                    digest: string;
+                                    expansionDigest: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    resolutionDigest: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    policyDigest: string;
+                                };
+                                /** @description everybody who can never approve this review */
+                                contributors: string[];
+                                /** @description a revision of the window has no known author; the audit chain stands in for it */
+                                unknownAuthor: boolean;
+                                approvals: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    /** Format: uuid */
+                                    reviewerId: string;
+                                    /** @enum {string} */
+                                    decision: "approve" | "request_changes" | "reject";
+                                    /** Format: uuid */
+                                    revisionId: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    digest: string;
+                                    expansionDigest: string;
+                                    /** @description SHA-256, lower-case hex */
+                                    resolutionDigest: string;
+                                    baseVersionId: string | null;
+                                    /** @description SHA-256, lower-case hex */
+                                    policyDigest: string;
+                                    /** @description `session` or `token:<id>` */
+                                    reviewerAuth: string;
+                                    /** Format: uuid */
+                                    actingTenantId: string;
+                                    bindingRefs: {
+                                        id: string;
+                                        role: string;
+                                        /** @description `mirror`, `grant`, `directory`, `team`, `agent` or `platform` */
+                                        source: string;
+                                        grantedBy: string | null;
+                                    }[];
+                                    comment: string | null;
+                                    /** @description ISO 8601 timestamp */
+                                    decidedAt: string;
+                                    expiresAt: string | null;
+                                    /** @description the reviewer's latest decision on the head revision */
+                                    current: boolean;
+                                    /** @description counts towards the required approvals now */
+                                    counted: boolean;
+                                    /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
+                                    reasons: string[];
+                                }[];
+                                you: {
+                                    eligible: boolean;
+                                    code: string | null;
+                                    message: string | null;
+                                };
+                            };
+                            decision: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                reviewerId: string;
+                                /** @enum {string} */
+                                decision: "approve" | "request_changes" | "reject";
+                                /** Format: uuid */
+                                revisionId: string;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                expansionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                resolutionDigest: string;
+                                baseVersionId: string | null;
+                                /** @description SHA-256, lower-case hex */
+                                policyDigest: string;
+                                /** @description `session` or `token:<id>` */
+                                reviewerAuth: string;
+                                /** Format: uuid */
+                                actingTenantId: string;
+                                bindingRefs: {
+                                    id: string;
+                                    role: string;
+                                    /** @description `mirror`, `grant`, `directory`, `team`, `agent` or `platform` */
+                                    source: string;
+                                    grantedBy: string | null;
+                                }[];
+                                comment: string | null;
+                                /** @description ISO 8601 timestamp */
+                                decidedAt: string;
+                                expiresAt: string | null;
+                                /** @description the reviewer's latest decision on the head revision */
+                                current: boolean;
+                                /** @description counts towards the required approvals now */
+                                counted: boolean;
+                                /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
+                                reasons: string[];
+                            };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reviews/{id}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw an open review
+         * @description The person who opened the review or an administrator; the agent returns to development. A closed review is `409 review_closed`.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            agentId: string;
+                            /** @enum {string} */
+                            status: "open" | "withdrawn" | "rejected" | "published";
+                            /** @enum {string} */
+                            state: "review_requested" | "changes_requested" | "approved" | "withdrawn" | "rejected" | "published";
+                            /** Format: uuid */
+                            openedBy: string;
+                            /** @description ISO 8601 timestamp */
+                            openedAt: string;
+                            /** Format: uuid */
+                            openedRevisionId: string;
+                            closedAt: string | null;
+                            closedBy: string | null;
+                            /** @description what the diff is computed against: the latest published version when it was opened */
+                            baseVersion: {
+                                /** Format: uuid */
+                                id: string;
+                                version: string;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                            } | null;
+                            revision: {
+                                /** Format: uuid */
+                                id: string;
+                                seq: number;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                authorId: string | null;
+                                authorKind: string;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                            };
+                            requiredApprovals: number;
+                            /** @description whether the tenant policy requires an approval to publish this agent */
+                            approvalRequired: boolean;
+                            digests: {
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                expansionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                resolutionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                policyDigest: string;
+                            };
+                            /** @description everybody who can never approve this review */
+                            contributors: string[];
+                            /** @description a revision of the window has no known author; the audit chain stands in for it */
+                            unknownAuthor: boolean;
+                            approvals: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                reviewerId: string;
+                                /** @enum {string} */
+                                decision: "approve" | "request_changes" | "reject";
+                                /** Format: uuid */
+                                revisionId: string;
+                                /** @description SHA-256, lower-case hex */
+                                digest: string;
+                                expansionDigest: string;
+                                /** @description SHA-256, lower-case hex */
+                                resolutionDigest: string;
+                                baseVersionId: string | null;
+                                /** @description SHA-256, lower-case hex */
+                                policyDigest: string;
+                                /** @description `session` or `token:<id>` */
+                                reviewerAuth: string;
+                                /** Format: uuid */
+                                actingTenantId: string;
+                                bindingRefs: {
+                                    id: string;
+                                    role: string;
+                                    /** @description `mirror`, `grant`, `directory`, `team`, `agent` or `platform` */
+                                    source: string;
+                                    grantedBy: string | null;
+                                }[];
+                                comment: string | null;
+                                /** @description ISO 8601 timestamp */
+                                decidedAt: string;
+                                expiresAt: string | null;
+                                /** @description the reviewer's latest decision on the head revision */
+                                current: boolean;
+                                /** @description counts towards the required approvals now */
+                                counted: boolean;
+                                /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
+                                reasons: string[];
+                            }[];
+                            you: {
+                                eligible: boolean;
+                                code: string | null;
+                                message: string | null;
+                            };
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tenants/{id}/settings/agent-lifecycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the agent lifecycle policy of a tenant
+         * @description The values the node stores itself (`own`) and the effective policy (`effective`) with its digest. Needs `settings:read` on the node; a node the caller cannot see is 404.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            tenantId: string;
+                            /** @description the values this node stores itself */
+                            own: {
+                                /** @enum {string} */
+                                requireApprovalForPublish?: "off" | "production-only" | "on";
+                                productionUseCases?: string[];
+                                /** @enum {string} */
+                                selfApproval?: "never";
+                                minApprovals?: number;
+                                allowedApproverRoles?: ("admin" | "agent-maintainer" | "agent-developer" | "operator")[];
+                                /** @enum {string} */
+                                approverScope?: "tenant" | "team" | "other-team";
+                                approvalExpiryHours?: number;
+                                allowTokenApprovals?: boolean;
+                                approverIdentitySources?: ("local" | "oidc" | "ldap")[];
+                                /** @enum {string} */
+                                publishBy?: "any-publisher" | "approver-only";
+                                /** @enum {string} */
+                                allowDraftRuns?: "off" | "development-credentials" | "on";
+                                allowPersonalSecretsInDevRuns?: boolean;
+                                /** @enum {string} */
+                                allowPersonalSecretsInPublishedAgents?: "never" | "with-approval";
+                                allowProductionSecretsInDraftRuns?: boolean;
+                                /** @enum {string} */
+                                gitUnsignedContributors?: "declared-non-production" | "refuse";
+                            };
+                            /** @description what applies at this node: the chain resolved, never looser than the parent */
+                            effective: {
+                                /** @enum {string} */
+                                requireApprovalForPublish: "off" | "production-only" | "on";
+                                productionUseCases: string[];
+                                /** @enum {string} */
+                                selfApproval: "never";
+                                minApprovals: number;
+                                allowedApproverRoles: ("admin" | "agent-maintainer" | "agent-developer" | "operator")[];
+                                /** @enum {string} */
+                                approverScope: "tenant" | "team" | "other-team";
+                                approvalExpiryHours: number;
+                                allowTokenApprovals: boolean;
+                                approverIdentitySources: ("local" | "oidc" | "ldap")[];
+                                /** @enum {string} */
+                                publishBy: "any-publisher" | "approver-only";
+                                /** @enum {string} */
+                                allowDraftRuns: "off" | "development-credentials" | "on";
+                                allowPersonalSecretsInDevRuns: boolean;
+                                /** @enum {string} */
+                                allowPersonalSecretsInPublishedAgents: "never" | "with-approval";
+                                allowProductionSecretsInDraftRuns: boolean;
+                                /** @enum {string} */
+                                gitUnsignedContributors: "declared-non-production" | "refuse";
+                            };
+                            /** @description SHA-256, lower-case hex */
+                            policyDigest: string;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the agent lifecycle policy of a tenant
+         * @description Send the keys to change; `null` removes a value (the node then inherits). Needs `settings:write` on the node. Narrowing only: below a parent a value that would make the effective policy looser than the parent's is refused with `422 not_narrowing` and the keys named (the root of an organisation chooses freely). Keys that do not exist, `breakGlass*` and `approverBindingMinAgeHours` included, are 400. Audited as `tenant.lifecycle_policy_changed`.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            tenantId: string;
+                            /** @description the values this node stores itself */
+                            own: {
+                                /** @enum {string} */
+                                requireApprovalForPublish?: "off" | "production-only" | "on";
+                                productionUseCases?: string[];
+                                /** @enum {string} */
+                                selfApproval?: "never";
+                                minApprovals?: number;
+                                allowedApproverRoles?: ("admin" | "agent-maintainer" | "agent-developer" | "operator")[];
+                                /** @enum {string} */
+                                approverScope?: "tenant" | "team" | "other-team";
+                                approvalExpiryHours?: number;
+                                allowTokenApprovals?: boolean;
+                                approverIdentitySources?: ("local" | "oidc" | "ldap")[];
+                                /** @enum {string} */
+                                publishBy?: "any-publisher" | "approver-only";
+                                /** @enum {string} */
+                                allowDraftRuns?: "off" | "development-credentials" | "on";
+                                allowPersonalSecretsInDevRuns?: boolean;
+                                /** @enum {string} */
+                                allowPersonalSecretsInPublishedAgents?: "never" | "with-approval";
+                                allowProductionSecretsInDraftRuns?: boolean;
+                                /** @enum {string} */
+                                gitUnsignedContributors?: "declared-non-production" | "refuse";
+                            };
+                            /** @description what applies at this node: the chain resolved, never looser than the parent */
+                            effective: {
+                                /** @enum {string} */
+                                requireApprovalForPublish: "off" | "production-only" | "on";
+                                productionUseCases: string[];
+                                /** @enum {string} */
+                                selfApproval: "never";
+                                minApprovals: number;
+                                allowedApproverRoles: ("admin" | "agent-maintainer" | "agent-developer" | "operator")[];
+                                /** @enum {string} */
+                                approverScope: "tenant" | "team" | "other-team";
+                                approvalExpiryHours: number;
+                                allowTokenApprovals: boolean;
+                                approverIdentitySources: ("local" | "oidc" | "ldap")[];
+                                /** @enum {string} */
+                                publishBy: "any-publisher" | "approver-only";
+                                /** @enum {string} */
+                                allowDraftRuns: "off" | "development-credentials" | "on";
+                                allowPersonalSecretsInDevRuns: boolean;
+                                /** @enum {string} */
+                                allowPersonalSecretsInPublishedAgents: "never" | "with-approval";
+                                allowProductionSecretsInDraftRuns: boolean;
+                                /** @enum {string} */
+                                gitUnsignedContributors: "declared-non-production" | "refuse";
+                            };
+                            /** @description SHA-256, lower-case hex */
+                            policyDigest: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/v1/event-sources": {

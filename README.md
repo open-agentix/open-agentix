@@ -147,6 +147,7 @@ flowchart LR
 - [Configuration (environment contract)](docs/configuration.md)
 - [Models, providers and keys](docs/providers.md)
 - [Tenants and access](docs/tenancy.md)
+- [Agent lifecycle: revisions, reviews and approval records](docs/agent-lifecycle.md)
 - [Architecture](docs/architecture.md) and [ADRs](docs/adr/)
 - [Performance and benchmark](docs/performance.md)
 - [Toolbox images](toolboxes/README.md)

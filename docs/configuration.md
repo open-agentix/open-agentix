@@ -102,6 +102,20 @@ Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
 | `OAX_LDAP_ROLE_MAPPING` | `{}` | JSON: group DN -> `role` / `role@team-slug`. |
 | `OAX_LDAP_TLS_REJECT_UNAUTHORIZED` | `true` | Verify the LDAP server certificate. |
 
+
+### Agent lifecycle policy
+
+Installation defaults of the tenant policy `settings.agentLifecycle` ([agent-lifecycle.md](agent-lifecycle.md), ADR 0017 S1). A tenant's own values replace them for the tenant and its subtree (a root chooses freely, every node below only narrows).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OAX_LIFECYCLE_REQUIRE_APPROVAL` | `auto` | `off`, `production-only`, `on`, or `auto` (= `on` when the installation has more than one tenant, `off` for a single tenant). In this version only reported (shadow mode), not enforced. |
+| `OAX_LIFECYCLE_MIN_APPROVALS` | `1` | Approvals a review needs, 1 to 5. The documentation recommends 2 for production use cases. |
+| `OAX_LIFECYCLE_ALLOWED_APPROVER_ROLES` | `admin,agent-maintainer` | Comma separated, from `admin`, `agent-maintainer`, `agent-developer`, `operator`. Anything else refuses to start. |
+| `OAX_LIFECYCLE_APPROVAL_EXPIRY_HOURS` | `168` | How long an approval counts, 1 to 720. |
+| `OAX_LIFECYCLE_ALLOW_TOKEN_APPROVALS` | `false` | Whether API tokens may decide reviews. A contributor can never approve, with a token either. |
+
+
 Roles: `admin`, `agent-developer`, `agent-maintainer`, `integrator`, `operator`, `auditor`, `viewer`
 (permissions: `GET /v1/settings` or `packages/core/src/rbac.ts`; the role table is in
 [tenancy.md](tenancy.md#fixed-roles-and-the-agent-roles-adr-0017-slice-s10)). Both mappings accept

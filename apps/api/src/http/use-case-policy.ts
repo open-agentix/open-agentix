@@ -38,6 +38,13 @@ const SCOPED = [
   'POST /v1/agents/:id/enable',
   'GET /v1/agents/:id/versions',
   'GET /v1/agents/:id/versions/:version',
+  // draft revisions and reviews (ADR 0017 S1): through the agent, like its versions
+  'GET /v1/agents/:id/revisions',
+  'GET /v1/agents/:id/revisions/:seq',
+  'POST /v1/agents/:id/reviews',
+  'GET /v1/agents/:id/reviews',
+  'GET /v1/reviews/:id',
+  'POST /v1/reviews/:id/withdraw',
   'GET /v1/agents/:id/members',
   'POST /v1/agents/:id/dry-run',
   'POST /v1/agents/:id/runs',
@@ -148,6 +155,11 @@ const DENIED = [
   'PATCH /v1/tenants/:id',
   'GET /v1/tenants/:id/access',
   'POST /v1/tenants/:id/role-bindings/enable-inheritance',
+  // ADR 0017 S1: deciding a review needs `agents:approve`, which no use-case binding carries (a
+  // maintainer bound to a use case only loses it, fail closed: #336 item 7); the policy is node-wide
+  'POST /v1/reviews/:id/decisions',
+  'GET /v1/tenants/:id/settings/agent-lifecycle',
+  'PATCH /v1/tenants/:id/settings/agent-lifecycle',
 ] as const;
 
 export const USE_CASE_POLICY: Readonly<Record<string, UseCasePolicy>> = Object.freeze({

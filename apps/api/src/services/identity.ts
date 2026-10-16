@@ -447,11 +447,27 @@ export class IdentityService {
         actor,
         members.map((m) => m.role),
       );
+      // A membership that stays keeps its original grantor; a new one is granted by the actor
+      // (ADR 0017 rule A4 asks who created a binding).
+      const kept = new Map(
+        (
+          await tx.select().from(agentRoleBindings).where(eq(agentRoleBindings.agentId, agentId))
+        ).map((r) => [`${r.userId}|${r.role}`, r.grantedBy] as const),
+      );
       await tx.delete(agentRoleBindings).where(eq(agentRoleBindings.agentId, agentId));
       if (members.length)
         await tx
           .insert(agentRoleBindings)
-          .values(members.map((m) => ({ agentId, userId: m.userId, role: m.role })))
+          .values(
+            members.map((m) => ({
+              agentId,
+              userId: m.userId,
+              role: m.role,
+              grantedBy: kept.has(`${m.userId}|${m.role}`)
+                ? kept.get(`${m.userId}|${m.role}`)!
+                : grantorOf(actor.userId),
+            })),
+          )
           .onConflictDoNothing();
     });
     await Promise.all(
@@ -516,6 +532,12 @@ export class IdentityService {
   async authenticate(bearer: string): Promise<Principal> {
     const parsed = parseToken(bearer);
     if (!parsed) throw unauthenticated('invalid token');
+    // The id of the token travels with the principal (never in the cache entry, which is keyed by
+    // it): approval records name the credential a decision was made with (ADR 0017 section 4.2).
+    return { ...(await this.authenticateParsed(parsed)), tokenId: parsed.id };
+  }
+
+  private async authenticateParsed(parsed: { id: string; secret: string }): Promise<Principal> {
     const key = `auth:${parsed.id}`;
     const now = this.ctx.now().getTime();
     const hit = await this.ctx.cache.get<CachedPrincipal>(key);
@@ -1311,11 +1333,25 @@ export class IdentityService {
         actor,
         members.map((m) => m.role),
       );
+      const kept = new Map(
+        (await tx.select().from(teamMembers).where(eq(teamMembers.teamId, teamId))).map(
+          (r) => [`${r.userId}|${r.role}`, r.grantedBy] as const,
+        ),
+      );
       await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
       if (members.length)
         await tx
           .insert(teamMembers)
-          .values(members.map((m) => ({ teamId, userId: m.userId, role: m.role })))
+          .values(
+            members.map((m) => ({
+              teamId,
+              userId: m.userId,
+              role: m.role,
+              grantedBy: kept.has(`${m.userId}|${m.role}`)
+                ? kept.get(`${m.userId}|${m.role}`)!
+                : grantorOf(actor.userId),
+            })),
+          )
           .onConflictDoNothing();
     });
     await Promise.all(
@@ -1330,6 +1366,14 @@ export class IdentityService {
     });
   }
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * `granted_by` is a foreign key to users: only the id of an account that exists is recorded (a
+ * system actor, such as the demo seed or a script, has none and leaves it null).
+ */
+const grantorOf = (userId: string) =>
+  UUID_RE.test(userId) ? sql<string | null>`(select id from users where id = ${userId})` : null;
 
 function toTokenInfo(r: typeof apiTokens.$inferSelect): TokenInfo {
   return {

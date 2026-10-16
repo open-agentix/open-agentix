@@ -1,9 +1,609 @@
 {
-  "id": "1779673f-27a9-499b-abc4-7b1426012178",
-  "prevId": "9a1527ec-417e-4a39-b7f9-cb8132fa5c0d",
+  "id": "9a923abc-b9f9-4632-be96-ed5b338152af",
+  "prevId": "8fa219a6-5c61-4918-8446-f55fdddd21ef",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.agent_draft_revisions": {
+      "name": "agent_draft_revisions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "digest": {
+          "name": "digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "author_id": {
+          "name": "author_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "author_kind": {
+          "name": "author_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parent_id": {
+          "name": "parent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_commit": {
+          "name": "source_commit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "agent_draft_revisions_agent_seq_uq": {
+          "name": "agent_draft_revisions_agent_seq_uq",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "seq",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_draft_revisions_agent_digest_idx": {
+          "name": "agent_draft_revisions_agent_digest_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "digest",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_draft_revisions_agent_id_agents_id_fk": {
+          "name": "agent_draft_revisions_agent_id_agents_id_fk",
+          "tableFrom": "agent_draft_revisions",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_draft_revisions_tenant_id_tenants_id_fk": {
+          "name": "agent_draft_revisions_tenant_id_tenants_id_fk",
+          "tableFrom": "agent_draft_revisions",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_draft_revisions_author_kind": {
+          "name": "agent_draft_revisions_author_kind",
+          "value": "\"agent_draft_revisions\".\"author_kind\" in ('user','repo','system')"
+        },
+        "agent_draft_revisions_author_check": {
+          "name": "agent_draft_revisions_author_check",
+          "value": "(\"agent_draft_revisions\".\"author_kind\" = 'user' and \"agent_draft_revisions\".\"author_id\" is not null) or \"agent_draft_revisions\".\"author_kind\" <> 'user'"
+        },
+        "agent_draft_revisions_digest_check": {
+          "name": "agent_draft_revisions_digest_check",
+          "value": "\"agent_draft_revisions\".\"digest\" ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.agent_review_decisions": {
+      "name": "agent_review_decisions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "review_id": {
+          "name": "review_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_id": {
+          "name": "revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "digest": {
+          "name": "digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expansion_digest": {
+          "name": "expansion_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resolution_digest": {
+          "name": "resolution_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_version_id": {
+          "name": "base_version_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "policy_digest": {
+          "name": "policy_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reviewer_id": {
+          "name": "reviewer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reviewer_auth": {
+          "name": "reviewer_auth",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "acting_tenant_id": {
+          "name": "acting_tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_refs": {
+          "name": "binding_refs",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision": {
+          "name": "decision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "comment": {
+          "name": "comment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "satisfies": {
+          "name": "satisfies",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_review_decisions_review_idx": {
+          "name": "agent_review_decisions_review_idx",
+          "columns": [
+            {
+              "expression": "review_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "decided_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_review_decisions_reviewer_idx": {
+          "name": "agent_review_decisions_reviewer_idx",
+          "columns": [
+            {
+              "expression": "review_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "reviewer_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "decided_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_review_decisions_review_id_agent_reviews_id_fk": {
+          "name": "agent_review_decisions_review_id_agent_reviews_id_fk",
+          "tableFrom": "agent_review_decisions",
+          "tableTo": "agent_reviews",
+          "columnsFrom": [
+            "review_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_review_decisions_revision_id_agent_draft_revisions_id_fk": {
+          "name": "agent_review_decisions_revision_id_agent_draft_revisions_id_fk",
+          "tableFrom": "agent_review_decisions",
+          "tableTo": "agent_draft_revisions",
+          "columnsFrom": [
+            "revision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_review_decisions_base_version_id_agent_versions_id_fk": {
+          "name": "agent_review_decisions_base_version_id_agent_versions_id_fk",
+          "tableFrom": "agent_review_decisions",
+          "tableTo": "agent_versions",
+          "columnsFrom": [
+            "base_version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_review_decisions_decision_check": {
+          "name": "agent_review_decisions_decision_check",
+          "value": "\"agent_review_decisions\".\"decision\" in ('approve','request_changes','reject')"
+        },
+        "agent_review_decisions_comment_len": {
+          "name": "agent_review_decisions_comment_len",
+          "value": "char_length(\"agent_review_decisions\".\"comment\") <= 10000"
+        },
+        "agent_review_decisions_expiry_check": {
+          "name": "agent_review_decisions_expiry_check",
+          "value": "(\"agent_review_decisions\".\"decision\" = 'approve') = (\"agent_review_decisions\".\"expires_at\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.agent_reviews": {
+      "name": "agent_reviews",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "opened_by": {
+          "name": "opened_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "opened_revision_id": {
+          "name": "opened_revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_version_id": {
+          "name": "base_version_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "policy_snapshot": {
+          "name": "policy_snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "policy_digest": {
+          "name": "policy_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "required_approvals": {
+          "name": "required_approvals",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "opened_at": {
+          "name": "opened_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "closed_by": {
+          "name": "closed_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_reviews_one_open_uq": {
+          "name": "agent_reviews_one_open_uq",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"agent_reviews\".\"status\" = 'open'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_reviews_agent_idx": {
+          "name": "agent_reviews_agent_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "opened_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_reviews_tenant_status_idx": {
+          "name": "agent_reviews_tenant_status_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_reviews_agent_id_agents_id_fk": {
+          "name": "agent_reviews_agent_id_agents_id_fk",
+          "tableFrom": "agent_reviews",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_reviews_tenant_id_tenants_id_fk": {
+          "name": "agent_reviews_tenant_id_tenants_id_fk",
+          "tableFrom": "agent_reviews",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_reviews_opened_revision_id_agent_draft_revisions_id_fk": {
+          "name": "agent_reviews_opened_revision_id_agent_draft_revisions_id_fk",
+          "tableFrom": "agent_reviews",
+          "tableTo": "agent_draft_revisions",
+          "columnsFrom": [
+            "opened_revision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_reviews_base_version_id_agent_versions_id_fk": {
+          "name": "agent_reviews_base_version_id_agent_versions_id_fk",
+          "tableFrom": "agent_reviews",
+          "tableTo": "agent_versions",
+          "columnsFrom": [
+            "base_version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_reviews_status_check": {
+          "name": "agent_reviews_status_check",
+          "value": "\"agent_reviews\".\"status\" in ('open','withdrawn','rejected','published')"
+        },
+        "agent_reviews_required_check": {
+          "name": "agent_reviews_required_check",
+          "value": "\"agent_reviews\".\"required_approvals\" between 1 and 5"
+        },
+        "agent_reviews_closed_check": {
+          "name": "agent_reviews_closed_check",
+          "value": "(\"agent_reviews\".\"status\" = 'open') = (\"agent_reviews\".\"closed_at\" is null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.agent_role_bindings": {
       "name": "agent_role_bindings",
       "schema": "",
@@ -25,6 +625,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "granted_by": {
+          "name": "granted_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -69,6 +675,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_role_bindings_granted_by_users_id_fk": {
+          "name": "agent_role_bindings_granted_by_users_id_fk",
+          "tableFrom": "agent_role_bindings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "granted_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -139,6 +758,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "revision_id": {
+          "name": "revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -287,6 +912,12 @@
         "disabled_reason": {
           "name": "disabled_reason",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "draft_revision_id": {
+          "name": "draft_revision_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
@@ -3847,6 +4478,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "granted_by": {
+          "name": "granted_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -3891,6 +4528,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "team_members_granted_by_users_id_fk": {
+          "name": "team_members_granted_by_users_id_fk",
+          "tableFrom": "team_members",
+          "tableTo": "users",
+          "columnsFrom": [
+            "granted_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -4459,6 +5109,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "settings": {
+          "name": "settings",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
         },
         "created_at": {
           "name": "created_at",

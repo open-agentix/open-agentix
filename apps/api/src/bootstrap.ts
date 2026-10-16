@@ -26,6 +26,11 @@ export async function createControlNode(
       : 'role authorisation reads users.global_roles (OAX_ROLE_BINDINGS_READ=legacy)',
   );
   await services.identity.ensureBootstrapAdmin();
+  // ADR 0017 S1: every agent from before the draft revisions gets its one system revision.
+  await services.agentReviews.backfillRevisions().then(
+    (n) => n > 0 && ctx.logger.info({ agents: n }, 'draft revisions created for existing agents'),
+    (e: unknown) => ctx.logger.error({ err: e }, 'draft revision backfill failed'),
+  );
   if (config.demo.enabled) {
     const r = await seedDemo(ctx, services, { password: config.demo.password });
     ctx.logger.info(r, 'demo mode: seed checked');
