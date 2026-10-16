@@ -283,7 +283,7 @@ export class AgentReviewsService {
    * before a transaction takes its locks and handed in: the catalog service uses its own connection,
    * which a transaction that holds the only connection (PGlite) would wait for forever.
    */
-  private catalogOf(agent: AgentRow) {
+  catalogOf(agent: AgentRow) {
     return this.catalog.accessCatalog({
       tenantId: agent.tenantId,
       teamId: agent.teamId,
@@ -320,7 +320,7 @@ export class AgentReviewsService {
 
   // ------------------------------------------------------------------ contributors
 
-  private async contributorsOf(
+  async contributorsOf(
     db: Db,
     agent: AgentRow,
     review: Pick<ReviewRow, 'openedBy' | 'baseVersionId'>,
@@ -582,7 +582,7 @@ export class AgentReviewsService {
 
   // ------------------------------------------------------------------ reads
 
-  private async loadReview(p: Principal, reviewId: string, db: Db = this.ctx.db) {
+  async loadReview(p: Principal, reviewId: string, db: Db = this.ctx.db) {
     const [review] = await db.select().from(agentReviews).where(eq(agentReviews.id, reviewId));
     // One answer for an unknown id and for the review of another tenant.
     if (!review || review.tenantId !== p.tenantId) {
@@ -600,6 +600,11 @@ export class AgentReviewsService {
       throw e instanceof HttpError && e.statusCode === 404 ? notFound('review') : e;
     });
     return { review, agent };
+  }
+
+  /** The view of a review the caller already loaded and may read (the inbox). */
+  async viewFor(p: Principal, agent: AgentRow, review: ReviewRow, policy: LifecyclePolicy) {
+    return this.viewOf(p, agent, await this.evaluate(this.ctx.db, agent, review, policy));
   }
 
   async get(p: Principal, reviewId: string): Promise<ReviewView> {
@@ -1016,7 +1021,7 @@ export class AgentReviewsService {
  * revision of its last decision (or the one it was opened on), so that a closed review keeps
  * showing what was decided and not what the draft became afterwards.
  */
-async function reviewHead(db: Db, agent: AgentRow, review: ReviewRow): Promise<RevisionRow> {
+export async function reviewHead(db: Db, agent: AgentRow, review: ReviewRow): Promise<RevisionRow> {
   if (review.status === 'open') return ensureHeadReadOnly(db, agent);
   const [last] = await db
     .select({ revisionId: agentReviewDecisions.revisionId })

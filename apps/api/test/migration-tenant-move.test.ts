@@ -7,18 +7,18 @@ import { MIGRATIONS_FOLDER } from '../src/db/client.js';
 import { failure, sqlTargets, type Sql } from './db-targets.js';
 
 /**
- * Migration 0034 (ADR 0014 slice S10, #195): the tree guard accepts a placement change only for a
+ * Migration 0035 (ADR 0014 slice S10, #195): the tree guard accepts a placement change only for a
  * node that has a parent before and after, inside one organisation, in a transaction that declared
  * the move, and a deferred trigger verifies the final placement of every changed row at commit.
  * Runs on PGlite and, with OAX_TEST_DATABASE_URL, on a real PostgreSQL.
  */
-const TAG = '0034_tenant_move';
+const TAG = '0035_tenant_move';
 const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta/_journal.json'), 'utf8')) as {
   entries: { idx: number; tag: string; when: number }[];
 };
 const DOWN = readFileSync(join(MIGRATIONS_FOLDER, `down/${TAG}.down.sql`), 'utf8');
 
-describe('migration 0034 files', () => {
+describe('migration 0035 files', () => {
   it('is ordered in the journal and has a snapshot chained to the previous one and a down script', () => {
     const tags = journal.entries.map((e) => e.tag);
     const at = tags.indexOf(TAG);
@@ -29,12 +29,12 @@ describe('migration 0034 files', () => {
     expect(new Set(tags).size).toBe(tags.length);
     const read = (n: string) =>
       JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, `meta/${n}_snapshot.json`), 'utf8'));
-    expect(read('0034').prevId).toBe(read('0033').id);
+    expect(read('0035').prevId).toBe(read('0034').id);
     expect(existsSync(join(MIGRATIONS_FOLDER, `down/${TAG}.down.sql`))).toBe(true);
   });
 });
 
-describe.each(sqlTargets)('migration 0034 on a database (%s)', (_kind, enabled, open) => {
+describe.each(sqlTargets)('migration 0035 on a database (%s)', (_kind, enabled, open) => {
   if (!enabled()) {
     it.skip('needs OAX_TEST_DATABASE_URL', () => undefined);
     return;

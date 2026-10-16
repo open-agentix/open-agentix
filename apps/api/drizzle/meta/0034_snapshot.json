@@ -1,5 +1,5 @@
 {
-  "id": "2cb3854b-a473-49cf-b6d5-1d8accc7263f",
+  "id": "58784c93-59e3-46f5-8997-f66c48c0b3b6",
   "prevId": "9a923abc-b9f9-4632-be96-ed5b338152af",
   "version": "7",
   "dialect": "postgresql",
@@ -163,6 +163,165 @@
         "agent_draft_revisions_digest_check": {
           "name": "agent_draft_revisions_digest_check",
           "value": "\"agent_draft_revisions\".\"digest\" ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.agent_review_comments": {
+      "name": "agent_review_comments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "thread_id": {
+          "name": "thread_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "review_id": {
+          "name": "review_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "author_id": {
+          "name": "author_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "edited_at": {
+          "name": "edited_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "agent_review_comments_review_idx": {
+          "name": "agent_review_comments_review_idx",
+          "columns": [
+            {
+              "expression": "review_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_review_comments_thread_idx": {
+          "name": "agent_review_comments_thread_idx",
+          "columns": [
+            {
+              "expression": "thread_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_review_comments_author_idx": {
+          "name": "agent_review_comments_author_idx",
+          "columns": [
+            {
+              "expression": "author_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_review_comments_thread_fk": {
+          "name": "agent_review_comments_thread_fk",
+          "tableFrom": "agent_review_comments",
+          "tableTo": "agent_review_threads",
+          "columnsFrom": [
+            "thread_id",
+            "review_id",
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id",
+            "review_id",
+            "tenant_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_review_comments_body_len": {
+          "name": "agent_review_comments_body_len",
+          "value": "char_length(\"agent_review_comments\".\"body\") <= 10000"
+        },
+        "agent_review_comments_deleted_check": {
+          "name": "agent_review_comments_deleted_check",
+          "value": "(\"agent_review_comments\".\"deleted_at\" is null and char_length(\"agent_review_comments\".\"body\") > 0) or (\"agent_review_comments\".\"deleted_at\" is not null and \"agent_review_comments\".\"body\" = '')"
         }
       },
       "isRLSEnabled": false
@@ -386,6 +545,200 @@
       },
       "isRLSEnabled": false
     },
+    "public.agent_review_threads": {
+      "name": "agent_review_threads",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "review_id": {
+          "name": "review_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "anchor_kind": {
+          "name": "anchor_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_id": {
+          "name": "revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "side": {
+          "name": "side",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "line": {
+          "name": "line",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "line_hash": {
+          "name": "line_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_by": {
+          "name": "resolved_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "agent_review_threads_review_idx": {
+          "name": "agent_review_threads_review_idx",
+          "columns": [
+            {
+              "expression": "review_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_review_threads_agent_id_agents_id_fk": {
+          "name": "agent_review_threads_agent_id_agents_id_fk",
+          "tableFrom": "agent_review_threads",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_review_threads_tenant_id_tenants_id_fk": {
+          "name": "agent_review_threads_tenant_id_tenants_id_fk",
+          "tableFrom": "agent_review_threads",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_review_threads_revision_id_agent_draft_revisions_id_fk": {
+          "name": "agent_review_threads_revision_id_agent_draft_revisions_id_fk",
+          "tableFrom": "agent_review_threads",
+          "tableTo": "agent_draft_revisions",
+          "columnsFrom": [
+            "revision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_review_threads_review_fk": {
+          "name": "agent_review_threads_review_fk",
+          "tableFrom": "agent_review_threads",
+          "tableTo": "agent_reviews",
+          "columnsFrom": [
+            "review_id",
+            "agent_id",
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id",
+            "agent_id",
+            "tenant_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "agent_review_threads_id_review_tenant_uq": {
+          "name": "agent_review_threads_id_review_tenant_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "review_id",
+            "tenant_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "agent_review_threads_kind_check": {
+          "name": "agent_review_threads_kind_check",
+          "value": "\"agent_review_threads\".\"anchor_kind\" in ('review','line')"
+        },
+        "agent_review_threads_anchor_check": {
+          "name": "agent_review_threads_anchor_check",
+          "value": "(\"agent_review_threads\".\"anchor_kind\" = 'review' and \"agent_review_threads\".\"revision_id\" is null and \"agent_review_threads\".\"side\" is null and \"agent_review_threads\".\"line\" is null and \"agent_review_threads\".\"line_hash\" is null)\n        or (\"agent_review_threads\".\"anchor_kind\" = 'line' and \"agent_review_threads\".\"side\" is not null and \"agent_review_threads\".\"side\" in ('base','head') and \"agent_review_threads\".\"line\" is not null and \"agent_review_threads\".\"line\" between 1 and 100000 and \"agent_review_threads\".\"line_hash\" is not null and \"agent_review_threads\".\"line_hash\" ~ '^[0-9a-f]{64}$')"
+        },
+        "agent_review_threads_resolved_check": {
+          "name": "agent_review_threads_resolved_check",
+          "value": "(\"agent_review_threads\".\"resolved_at\" is null) = (\"agent_review_threads\".\"resolved_by\" is null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.agent_reviews": {
       "name": "agent_reviews",
       "schema": "",
@@ -586,7 +939,17 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "agent_reviews_id_agent_tenant_uq": {
+          "name": "agent_reviews_id_agent_tenant_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "agent_id",
+            "tenant_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "agent_reviews_status_check": {

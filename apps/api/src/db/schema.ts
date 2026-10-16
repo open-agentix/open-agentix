@@ -14,6 +14,7 @@ import {
   smallint,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
@@ -1236,6 +1237,8 @@ export const agentReviews = pgTable(
       .where(sql`${t.status} = 'open'`),
     index('agent_reviews_agent_idx').on(t.agentId, t.openedAt.desc()),
     index('agent_reviews_tenant_status_idx').on(t.tenantId, t.status),
+    // Target of the composite foreign key of the review threads (review, agent and tenant agree).
+    unique('agent_reviews_id_agent_tenant_uq').on(t.id, t.agentId, t.tenantId),
     check(
       'agent_reviews_status_check',
       sql`${t.status} in ('open','withdrawn','rejected','published')`,
@@ -1293,6 +1296,100 @@ export const agentReviewDecisions = pgTable(
     check(
       'agent_review_decisions_expiry_check',
       sql`(${t.decision} = 'approve') = (${t.expiresAt} is not null)`,
+    ),
+  ],
+);
+
+/**
+ * Review comment threads (ADR 0017 section 9, slice S2). A thread belongs to a review and is either
+ * about the review as a whole (`anchor_kind = 'review'`) or about one line of the diff: the revision
+ * (side `head`) or the base version (side `base`) it was written on, the line number and the SHA-256
+ * of the line text. The server computes the hash from the stored source. Whether a line anchor is
+ * outdated is derived when the thread is read, never stored. Comment text is tenant content and
+ * never leaves these two tables: not into the audit chain, telemetry or any model context.
+ */
+export const agentReviewThreads = pgTable(
+  'agent_review_threads',
+  {
+    id: uuid('id').primaryKey(),
+    reviewId: uuid('review_id').notNull(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    createdBy: uuid('created_by').notNull(),
+    anchorKind: text('anchor_kind').notNull(),
+    revisionId: uuid('revision_id').references(() => agentDraftRevisions.id),
+    side: text('side'),
+    line: integer('line'),
+    lineHash: text('line_hash'),
+    resolvedAt: ts('resolved_at'),
+    resolvedBy: uuid('resolved_by'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    // The thread agrees with its review on agent and tenant.
+    foreignKey({
+      columns: [t.reviewId, t.agentId, t.tenantId],
+      foreignColumns: [agentReviews.id, agentReviews.agentId, agentReviews.tenantId],
+      name: 'agent_review_threads_review_fk',
+    }),
+    // Target of the composite foreign key of the comments.
+    unique('agent_review_threads_id_review_tenant_uq').on(t.id, t.reviewId, t.tenantId),
+    index('agent_review_threads_review_idx').on(t.reviewId, t.createdAt),
+    check('agent_review_threads_kind_check', sql`${t.anchorKind} in ('review','line')`),
+    check(
+      'agent_review_threads_anchor_check',
+      sql`(${t.anchorKind} = 'review' and ${t.revisionId} is null and ${t.side} is null and ${t.line} is null and ${t.lineHash} is null)
+        or (${t.anchorKind} = 'line' and ${t.side} is not null and ${t.side} in ('base','head') and ${t.line} is not null and ${t.line} between 1 and 100000 and ${t.lineHash} is not null and ${t.lineHash} ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      'agent_review_threads_resolved_check',
+      sql`(${t.resolvedAt} is null) = (${t.resolvedBy} is null)`,
+    ),
+  ],
+);
+
+/**
+ * One comment of a thread. Editing is the author's alone and sets `edited_at`; deleting is the
+ * author's alone and keeps the row as a tombstone (`deleted_at`, empty text), so that the thread
+ * keeps its shape and the text is gone.
+ */
+export const agentReviewComments = pgTable(
+  'agent_review_comments',
+  {
+    id: uuid('id').primaryKey(),
+    threadId: uuid('thread_id').notNull(),
+    reviewId: uuid('review_id').notNull(),
+    tenantId: uuid('tenant_id').notNull(),
+    authorId: uuid('author_id').notNull(),
+    body: text('body').notNull(),
+    createdAt: ts('created_at').notNull().defaultNow(),
+    editedAt: ts('edited_at'),
+    deletedAt: ts('deleted_at'),
+  },
+  (t) => [
+    // A comment agrees with its thread on review and tenant.
+    foreignKey({
+      columns: [t.threadId, t.reviewId, t.tenantId],
+      foreignColumns: [
+        agentReviewThreads.id,
+        agentReviewThreads.reviewId,
+        agentReviewThreads.tenantId,
+      ],
+      name: 'agent_review_comments_thread_fk',
+    }),
+    // Backs the per-review reads and budget (every comment of a review).
+    index('agent_review_comments_review_idx').on(t.reviewId, t.createdAt),
+    index('agent_review_comments_thread_idx').on(t.threadId, t.createdAt),
+    // Backs the per-author rate limit of comment creation (counts rows, tombstones included).
+    index('agent_review_comments_author_idx').on(t.authorId, t.createdAt),
+    check('agent_review_comments_body_len', sql`char_length(${t.body}) <= 10000`),
+    check(
+      'agent_review_comments_deleted_check',
+      sql`(${t.deletedAt} is null and char_length(${t.body}) > 0) or (${t.deletedAt} is not null and ${t.body} = '')`,
     ),
   ],
 );

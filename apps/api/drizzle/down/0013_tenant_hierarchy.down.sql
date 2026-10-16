@@ -12,7 +12,7 @@ BEGIN
 	END IF;
 END
 $$;
--- 0034 (tenant moves) adds a verify trigger on these columns; it goes first (a no-op without it).
+-- 0035 (tenant moves) adds a verify trigger on these columns; it goes first (a no-op without it).
 DROP TRIGGER IF EXISTS "tenants_tree_verify_trg" ON "tenants";
 DROP FUNCTION IF EXISTS "tenants_tree_verify"();
 DROP TRIGGER IF EXISTS "tenants_tree_guard_trg" ON "tenants";

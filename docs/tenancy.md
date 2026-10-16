@@ -933,12 +933,12 @@ grant, rename and child-creation paths wait for it (lock order: tree, binding, a
   partitions of the tenant, the old and the new parent (ids and numbers only).
 - Open event streams keep the authorisation they were opened with until they end (as after any
   other revocation); new requests see the new tree.
-- Migration `0034_tenant_move` replaces the tree guard: a placement change is accepted only for a node
+- Migration `0035_tenant_move` replaces the tree guard: a placement change is accepted only for a node
   with a parent before and after, inside one organisation, in a transaction that declared the move
   (`set_config('oax.tenant_move_root', ...)`) and holds the organisation's exclusive tree advisory
   lock (a guard against stray writes, not a security boundary); a deferred constraint trigger verifies at commit that
   every changed row matches its parent's final placement. A stray `UPDATE` of the placement (older
-  application version, `psql`) is still refused. Down path: `drizzle/down/0034_tenant_move.down.sql`.
+  application version, `psql`) is still refused. Down path: `drizzle/down/0035_tenant_move.down.sql`.
 
 ## Audit
 

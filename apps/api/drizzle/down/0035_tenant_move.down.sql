@@ -1,6 +1,6 @@
--- Reverts 0034_tenant_move.sql (ADR 0014 slice S10, #195).
+-- Reverts 0035_tenant_move.sql (ADR 0014 slice S10, #195).
 -- Not part of the drizzle journal: run it by hand (psql) after rolling the application back, then
--- delete the row of migration 0034 from drizzle.__drizzle_migrations. Loses no data: tenants that
+-- delete the row of migration 0035 from drizzle.__drizzle_migrations. Loses no data: tenants that
 -- were moved keep their new placement, which is consistent. Afterwards the placement is frozen
 -- again (a move is refused by the guard), exactly as before the migration.
 DROP TRIGGER IF EXISTS "tenants_tree_verify_trg" ON "tenants";

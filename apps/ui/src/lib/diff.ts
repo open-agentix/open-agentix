@@ -7,10 +7,71 @@ export interface DiffLine {
   newNo?: number;
 }
 
-/** Line diff based on the longest common subsequence. Good enough for agents.md sized files. */
-export function diffLines(oldText: string, newText: string): DiffLine[] {
+/**
+ * Above this many cells (changed old lines times changed new lines) the exact diff is not computed:
+ * the table of the longest common subsequence would take too much memory and time for a hostile or
+ * generated file (sources can have hundreds of thousands of lines).
+ */
+export const MAX_DIFF_CELLS = 4_000_000;
+
+/** Common leading and trailing lines of two texts. */
+function commonEnds(a: string[], b: string[]): { head: number; tail: number } {
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (
+    tail < a.length - head &&
+    tail < b.length - head &&
+    a[a.length - 1 - tail] === b[b.length - 1 - tail]
+  )
+    tail++;
+  return { head, tail };
+}
+
+/** Whether {@link diffLines} will fall back to "everything between the common ends changed". */
+export function diffIsCoarse(oldText: string, newText: string): boolean {
   const a = oldText.split('\n');
   const b = newText.split('\n');
+  const { head, tail } = commonEnds(a, b);
+  return (a.length - head - tail + 1) * (b.length - head - tail + 1) > MAX_DIFF_CELLS;
+}
+
+/**
+ * Line diff based on the longest common subsequence, after trimming the common ends. When the
+ * changed middle is too large (see {@link MAX_DIFF_CELLS}) it is shown as removed lines followed by
+ * added lines, which is correct but not minimal.
+ */
+export function diffLines(oldText: string, newText: string): DiffLine[] {
+  const all = { a: oldText.split('\n'), b: newText.split('\n') };
+  const { head, tail } = commonEnds(all.a, all.b);
+  const a = all.a.slice(head, all.a.length - tail);
+  const b = all.b.slice(head, all.b.length - tail);
+  const middle = (a.length + 1) * (b.length + 1) > MAX_DIFF_CELLS ? coarse(a, b) : lcsDiff(a, b);
+  const out: DiffLine[] = [];
+  for (let i = 0; i < head; i++)
+    out.push({ type: 'same', text: all.a[i] ?? '', oldNo: i + 1, newNo: i + 1 });
+  for (const l of middle)
+    out.push({
+      ...l,
+      ...(l.oldNo !== undefined ? { oldNo: l.oldNo + head } : {}),
+      ...(l.newNo !== undefined ? { newNo: l.newNo + head } : {}),
+    });
+  for (let k = 0; k < tail; k++) {
+    const oi = all.a.length - tail + k;
+    const ni = all.b.length - tail + k;
+    out.push({ type: 'same', text: all.a[oi] ?? '', oldNo: oi + 1, newNo: ni + 1 });
+  }
+  return out;
+}
+
+function coarse(a: string[], b: string[]): DiffLine[] {
+  return [
+    ...a.map((text, i): DiffLine => ({ type: 'del', text, oldNo: i + 1 })),
+    ...b.map((text, j): DiffLine => ({ type: 'add', text, newNo: j + 1 })),
+  ];
+}
+
+function lcsDiff(a: string[], b: string[]): DiffLine[] {
   const n = a.length;
   const m = b.length;
   const width = m + 1;

@@ -35,9 +35,24 @@ All notable changes to this project are documented here. The format follows
   permissions, and the restrictions that stop or start applying. The applied move runs under the
   exclusive tree lock, bumps the authz epoch (cached principals are rebuilt) and is audited as
   `tenant.moved` in the partitions of the tenant and both parents (ids only). Needs
-  `OAX_ROLE_BINDINGS_READ=bindings` (`409 role_bindings_read_required`). Migration `0034_tenant_move`
+  `OAX_ROLE_BINDINGS_READ=bindings` (`409 role_bindings_read_required`). Migration `0035_tenant_move`
   lets the tree guard accept a declared move inside one organisation and verifies the final placement
   at commit. See [docs/tenancy.md](docs/tenancy.md#moving-a-tenant-adr-0014-slice-s10).
+
+- **Review comment threads, the Review tab, decision bar, status badges and inbox (ADR 0017 S2, #245)**:
+  threads and comments on a review (`/v1/reviews/{id}/threads`, permission `agents:review`; viewer and
+  pentest cannot read comment text, use-case bindings never carry it), anchored to a line of the diff
+  with a server-computed line hash and marked **outdated** when the line changed in a later revision;
+  resolve and reopen by the thread starter or a contributor; edit and delete by the author only; limits of
+  10,000 characters per comment, 200 threads and 1,000 comments (1,000,000 characters) per review and 30 new
+  comments or edits per user and minute (`OAX_RATE_LIMIT_COMMENT_MAX`). Comment text never enters the audit chain (ids and lengths only),
+  logs, spans, metrics or any model context. `GET /v1/reviews/{id}/changes` returns the sources, a
+  semantic summary (tools with access class, egress, secret references by name, budget,
+  classification, runtime, owner) and the policy summary; `GET /v1/me/reviews` is the review inbox. The
+  console gets an agent tab "Review" with the diff and its threads, the decision bar that says why
+  somebody may not decide, status badges (In development, Review requested, Changes requested,
+  Approved, Published), a `/reviews` inbox, and a Markdown subset renderer without HTML, images or
+  unsafe links (English and German). Migration `0034_review_threads` (additive).
 - **Role restrictions per node (ADR 0014 S9, #194)**: `GET/PUT/DELETE /v1/tenants/{id}/role-restrictions`
   remove permissions from a role for the bindings bound on that tenant or below (never `admin`, never for
   platform operators, never narrowing a binding that comes from an ancestor of the restricting node,

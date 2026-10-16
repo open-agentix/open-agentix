@@ -76,6 +76,47 @@ export const agentVersionQuery = (id: string, version: string) =>
     staleTime: Infinity,
   });
 
+/** Reviews of an agent, newest first; the open one (if any) comes first. Part of the agent's keys, so a draft save refreshes them. */
+export const agentReviewsQuery = (agentId: string) =>
+  queryOptions({
+    queryKey: ['agents', agentId, 'reviews'],
+    queryFn: () =>
+      call(
+        api.GET('/v1/agents/{id}/reviews', {
+          params: { path: { id: agentId }, query: { limit: 5 } },
+        }),
+      ),
+  });
+
+export const reviewThreadsQuery = (agentId: string, reviewId: string) =>
+  queryOptions({
+    queryKey: ['agents', agentId, 'reviews', reviewId, 'threads'],
+    queryFn: () =>
+      call(api.GET('/v1/reviews/{id}/threads', { params: { path: { id: reviewId } } })),
+  });
+
+export const reviewChangesQuery = (agentId: string, reviewId: string) =>
+  queryOptions({
+    queryKey: ['agents', agentId, 'reviews', reviewId, 'changes'],
+    queryFn: () =>
+      call(api.GET('/v1/reviews/{id}/changes', { params: { path: { id: reviewId } } })),
+  });
+
+/** Display names of the people a review involves (id to name). */
+export const reviewPeopleQuery = (agentId: string, reviewId: string) =>
+  queryOptions({
+    queryKey: ['agents', agentId, 'reviews', reviewId, 'people'],
+    queryFn: () => call(api.GET('/v1/reviews/{id}/people', { params: { path: { id: reviewId } } })),
+    staleTime: 60_000,
+  });
+
+/** The review inbox: open reviews the caller could decide. */
+export const myReviewsQuery = queryOptions({
+  queryKey: ['reviews', 'inbox'],
+  queryFn: () => call(api.GET('/v1/me/reviews', { params: { query: { limit: 50 } } })),
+  refetchInterval: 60_000,
+});
+
 export interface RunFilters {
   status?: RunStatus | undefined;
   agentId?: string | undefined;

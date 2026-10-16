@@ -19,7 +19,7 @@
 --
 -- The authz epoch of the organisation is bumped by "authz_bump_tenant" (0021) for every row whose
 -- parent_id or path changes, in the same transaction. Additive; no data change. Down path:
--- drizzle/down/0034_tenant_move.down.sql
+-- drizzle/down/0035_tenant_move.down.sql
 CREATE OR REPLACE FUNCTION "tenants_tree_guard"() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
 	p "tenants"%ROWTYPE;

@@ -72,6 +72,7 @@ export const EnvSchema = z.object({
   OAX_RATE_LIMIT_MAX: int(600),
   OAX_RATE_LIMIT_LOGIN_MAX: int(10),
   OAX_RATE_LIMIT_PLAN_MAX: int(30),
+  OAX_RATE_LIMIT_COMMENT_MAX: int(30),
   OAX_RATE_LIMIT_RESTRICTION_MAX: int(30),
   OAX_BODY_LIMIT_BYTES: int(1_048_576),
 
@@ -384,7 +385,13 @@ export interface Config {
   trustProxy: boolean;
   database: DatabaseConfig;
   cache: { url: string | undefined; maxEntries: number };
-  rateLimit: { max: number; loginMax: number; planMax: number; restrictionMax: number };
+  rateLimit: {
+    max: number;
+    loginMax: number;
+    planMax: number;
+    commentMax: number;
+    restrictionMax: number;
+  };
   bodyLimit: number;
   /** Tenant tree guards (ADR 0013): levels below a root (1 to 32) and nodes per organisation. */
   tenancy: {
@@ -694,6 +701,7 @@ function buildConfig(
       max: e.OAX_RATE_LIMIT_MAX,
       loginMax: e.OAX_RATE_LIMIT_LOGIN_MAX,
       planMax: e.OAX_RATE_LIMIT_PLAN_MAX,
+      commentMax: e.OAX_RATE_LIMIT_COMMENT_MAX,
       restrictionMax: e.OAX_RATE_LIMIT_RESTRICTION_MAX,
     },
     bodyLimit: e.OAX_BODY_LIMIT_BYTES,

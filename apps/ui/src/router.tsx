@@ -18,6 +18,7 @@ import {
   auditQuery,
   connectionsQuery,
   eventSourcesQuery,
+  myReviewsQuery,
   policiesQuery,
   runQuery,
   runsQuery,
@@ -134,7 +135,7 @@ const agentNewRoute = createRoute({
   component: lazyRouteComponent(() => import('./features/agents/NewAgentPage'), 'NewAgentPage'),
 });
 
-export const AGENT_TABS = ['overview', 'editor', 'versions', 'diff', 'test'] as const;
+export const AGENT_TABS = ['overview', 'editor', 'versions', 'diff', 'review', 'test'] as const;
 export type AgentTab = (typeof AGENT_TABS)[number];
 
 const agentDetailRoute = createRoute({
@@ -153,6 +154,15 @@ const agentDetailRoute = createRoute({
   component: lazyRouteComponent(
     () => import('./features/agents/AgentDetailPage'),
     'AgentDetailPage',
+  ),
+});
+
+const reviewsRoute = createRoute({
+  ...child('/reviews'),
+  loader: ({ context }) => void context.queryClient.prefetchQuery(myReviewsQuery),
+  component: lazyRouteComponent(
+    () => import('./features/reviews/ReviewsInboxPage'),
+    'ReviewsInboxPage',
   ),
 });
 
@@ -271,6 +281,7 @@ export const routeTree = rootRoute.addChildren([
     agentsRoute,
     agentNewRoute,
     agentDetailRoute,
+    reviewsRoute,
     wizardRoute,
     plansRoute,
     eventsRoute,
