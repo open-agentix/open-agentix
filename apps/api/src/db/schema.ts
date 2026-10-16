@@ -1273,6 +1273,15 @@ export const agentReviews = pgTable(
     openedAt: ts('opened_at').notNull().defaultNow(),
     closedAt: ts('closed_at'),
     closedBy: uuid('closed_by'),
+    /**
+     * The head revision of the agent when the review was withdrawn or rejected (#356): the window of
+     * contributors of a closed review ends here, so later editors of the agent do not become
+     * contributors of an old held review. `null` for open and published reviews and when no revision
+     * existed.
+     */
+    closedRevisionId: uuid('closed_revision_id').references(
+      (): AnyPgColumn => agentDraftRevisions.id,
+    ),
   },
   (t) => [
     // At most one open review per agent; also the lock-free guard against two openers.

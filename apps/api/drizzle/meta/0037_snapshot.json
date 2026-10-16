@@ -1,5 +1,5 @@
 {
-  "id": "8ee5bbae-60f2-4248-9ee9-e7939f49efdb",
+  "id": "638bf32a-cad9-4787-b511-81f4f886d0e0",
   "prevId": "16859ec1-2761-454e-9c2d-96f7df96b66f",
   "version": "7",
   "dialect": "postgresql",
@@ -874,6 +874,12 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
+        },
+        "closed_revision_id": {
+          "name": "closed_revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -982,6 +988,19 @@
           "tableTo": "agent_versions",
           "columnsFrom": [
             "base_version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_reviews_closed_revision_id_agent_draft_revisions_id_fk": {
+          "name": "agent_reviews_closed_revision_id_agent_draft_revisions_id_fk",
+          "tableFrom": "agent_reviews",
+          "tableTo": "agent_draft_revisions",
+          "columnsFrom": [
+            "closed_revision_id"
           ],
           "columnsTo": [
             "id"

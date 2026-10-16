@@ -100,7 +100,10 @@ export async function followGrantChain(
     if (s.stored) addStored(s.stored.users);
   }
   for (let hop = 1; frontier.length > 0; hop++) {
-    if (hop > maxDepth) {
+    // Hop h expands the nodes of depth h-1 into depth h. Nodes of depth 1..maxDepth are followed;
+    // anything that still has to be expanded at depth maxDepth+1 is a chain that is too long (the
+    // backfill of migration 0037 draws the same line).
+    if (hop > maxDepth + 1) {
       unknown = true;
       break;
     }

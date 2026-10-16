@@ -17,11 +17,10 @@ import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { agentReviewHoldClears, agentReviews, agents, tenants } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
-import { revisionById } from './agent-revisions.js';
 import { followGrantChain } from './approver-facts.js';
 import type { AuditService } from './audit.js';
 import { loadActor, permissionsAt } from './grant-authority.js';
-import { reviewContributors } from './review-contributors.js';
+import { reviewContributors, reviewHeadOf } from './review-contributors.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 import { TenantAccess } from './tenant-access.js';
 
@@ -221,9 +220,7 @@ export class LifecyclePolicyService {
           throw refuse(
             `more than ${LOOSENING_LIMITS.max} agents with unfinished reviews in this subtree, they cannot all be checked`,
           );
-        const head = agent.draftRevisionId
-          ? await revisionById(db, agent.draftRevisionId)
-          : undefined;
+        const head = await reviewHeadOf(db, agent, review);
         const contributors = head ? (await reviewContributors(db, agent, review, head)).set : null;
         if (contributors)
           for (const o of openers) if (o.agentId === agent.id) contributors.add(o.openedBy);

@@ -50,7 +50,7 @@ import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import { isTenantAdminAt, loadActor } from './grant-authority.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
-import { reviewContributors } from './review-contributors.js';
+import { reviewContributors, reviewHeadOf } from './review-contributors.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 
 /**
@@ -886,7 +886,12 @@ export class AgentReviewsService {
       if (input.decision === 'reject') {
         await tx
           .update(agentReviews)
-          .set({ status: 'rejected', closedAt: now, closedBy: p.userId })
+          .set({
+            status: 'rejected',
+            closedAt: now,
+            closedBy: p.userId,
+            closedRevisionId: agent.draftRevisionId,
+          })
           .where(eq(agentReviews.id, review.id));
         await this.audit.append(
           {
@@ -982,7 +987,12 @@ export class AgentReviewsService {
         throw new HttpError(409, 'review_closed', `the review is ${review.status}`);
       await tx
         .update(agentReviews)
-        .set({ status: 'withdrawn', closedAt: this.ctx.now(), closedBy: p.userId })
+        .set({
+          status: 'withdrawn',
+          closedAt: this.ctx.now(),
+          closedBy: p.userId,
+          closedRevisionId: locked.draftRevisionId,
+        })
         .where(eq(agentReviews.id, reviewId));
       await this.audit.append(
         {
@@ -1044,12 +1054,16 @@ export class AgentReviewsService {
         this.ctx.now(),
       );
       const mine = new Set([p.userId, ...chain.users]);
-      const head = locked.draftRevisionId
-        ? await revisionById(tx, locked.draftRevisionId)
-        : undefined;
+      const head = await reviewHeadOf(tx, locked, review);
       const contributors = head ? (await reviewContributors(tx, locked, review, head)).set : null;
       const untraceable = chain.unknown && this.ctx.config.lifecycle.unknownGrantor !== 'allow';
-      if (contributors === null || untraceable || [...contributors].some((c) => mine.has(c)))
+      // A review whose head cannot be read cannot be shown to be free of the caller; a platform
+      // operator may still release it (the way out of an unreadable head, #356).
+      const unreadableButOperator = contributors === null && p.platformAdmin;
+      if (
+        !unreadableButOperator &&
+        (contributors === null || untraceable || [...contributors].some((c) => mine.has(c)))
+      )
         throw new HttpError(
           403,
           'hold_clear_by_contributor',

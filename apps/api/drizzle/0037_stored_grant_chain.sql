@@ -8,6 +8,8 @@
 -- * users.creator_unknown: "nobody made this account" (bootstrap, identity provider) versus "the
 --   creator is not known" (created before the creator was recorded, creator deleted before a chain was
 --   stored).
+-- * agent_reviews.closed_revision_id: the head revision when a review was withdrawn or rejected; the
+--   contributors of a closed review are those up to it, not those who edit the agent later.
 -- * agent_review_hold_clears: an administrator's explicit, audited release of a withdrawn or rejected
 --   review from the policy-loosening hold.
 -- * The chain of every existing row is backfilled TRANSITIVELY (a bounded recursive walk over the
@@ -32,6 +34,18 @@ CREATE TABLE "agent_review_hold_clears" (
 	"reason" text NOT NULL
 );--> statement-breakpoint
 ALTER TABLE "agent_review_hold_clears" ADD CONSTRAINT "agent_review_hold_clears_review_id_agent_reviews_id_fk" FOREIGN KEY ("review_id") REFERENCES "public"."agent_reviews"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "agent_reviews" ADD COLUMN "closed_revision_id" uuid;--> statement-breakpoint
+ALTER TABLE "agent_reviews" ADD CONSTRAINT "agent_reviews_closed_revision_id_agent_draft_revisions_id_fk" FOREIGN KEY ("closed_revision_id") REFERENCES "public"."agent_draft_revisions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+-- The contributor window of a withdrawn or rejected review ends at the revision that was the head when
+-- it closed: the newest revision of the agent saved before `closed_at`. (A closed review is final for
+-- the consistency trigger, so it is disabled for this one update.)
+ALTER TABLE "agent_reviews" DISABLE TRIGGER "agent_reviews_consistency";--> statement-breakpoint
+UPDATE "agent_reviews" r SET "closed_revision_id" = (
+	SELECT v."id" FROM "agent_draft_revisions" v
+	WHERE v."agent_id" = r."agent_id" AND v."created_at" <= r."closed_at"
+	ORDER BY v."seq" DESC LIMIT 1)
+WHERE r."status" IN ('withdrawn', 'rejected') AND r."closed_at" IS NOT NULL;--> statement-breakpoint
+ALTER TABLE "agent_reviews" ENABLE TRIGGER "agent_reviews_consistency";--> statement-breakpoint
 -- The functions below look up the audit chain by (target, action, seq) once per row: without an index
 -- that is a scan of audit_log per row (only (action, seq) is indexed). Built here, dropped at the end.
 -- It takes a SHARE lock on audit_log (audit appends wait) for the duration of the migration.
@@ -131,17 +145,38 @@ CREATE TEMP TABLE "oax_tmp_edges" AS
 	UNION ALL SELECT b."user_id", NULL::uuid, true FROM "tenant_role_bindings" b
 		WHERE b."role" = 'admin' AND b."grantor_unknown" AND (b."expires_at" IS NULL OR b."expires_at" > now());--> statement-breakpoint
 CREATE INDEX "oax_tmp_edges_src_idx" ON "oax_tmp_edges" ("src");--> statement-breakpoint
+-- Breadth first, one level at a time, each (origin, node) once (the walk is linear in the number of
+-- edges per level, not in the number of paths). A node first reached at hop 7 is an overflow: the
+-- origin is unknown. A link with an unknown creator or grantor makes the origin unknown.
+CREATE TEMP TABLE "oax_tmp_reach_nodes" ("origin" uuid NOT NULL, "node" uuid NOT NULL, "depth" integer NOT NULL, PRIMARY KEY ("origin", "node"));--> statement-breakpoint
+CREATE TEMP TABLE "oax_tmp_reach_unknown" ("origin" uuid PRIMARY KEY);--> statement-breakpoint
+INSERT INTO "oax_tmp_reach_nodes" SELECT u."id", u."id", 0 FROM "users" u;--> statement-breakpoint
+DO $$
+DECLARE d integer := 0; added integer;
+BEGIN
+	LOOP
+		d := d + 1;
+		EXIT WHEN d > 7;
+		INSERT INTO "oax_tmp_reach_unknown"
+			SELECT DISTINCT r."origin" FROM "oax_tmp_reach_nodes" r JOIN "oax_tmp_edges" e ON e."src" = r."node"
+			WHERE r."depth" = d - 1 AND e."unk"
+			ON CONFLICT DO NOTHING;
+		INSERT INTO "oax_tmp_reach_nodes"
+			SELECT DISTINCT r."origin", e."dst", d FROM "oax_tmp_reach_nodes" r JOIN "oax_tmp_edges" e ON e."src" = r."node"
+			WHERE r."depth" = d - 1 AND e."dst" IS NOT NULL
+			ON CONFLICT DO NOTHING;
+		GET DIAGNOSTICS added = ROW_COUNT;
+		IF d = 7 AND added > 0 THEN
+			INSERT INTO "oax_tmp_reach_unknown" SELECT DISTINCT "origin" FROM "oax_tmp_reach_nodes" WHERE "depth" = 7 ON CONFLICT DO NOTHING;
+		END IF;
+		EXIT WHEN added = 0;
+	END LOOP;
+END;
+$$;--> statement-breakpoint
 CREATE TEMP TABLE "oax_tmp_reach" AS
-	WITH RECURSIVE r(origin, node, depth, unk, path) AS (
-		SELECT u."id", u."id", 0, false, ARRAY[u."id"] FROM "users" u
-		UNION ALL
-		SELECT r.origin, e.dst, r.depth + 1, r.unk OR e.unk, r.path || e.dst
-		FROM r JOIN "oax_tmp_edges" e ON e.src = r.node
-		WHERE r.depth < 7 AND r.node IS NOT NULL AND (e.dst IS NULL OR NOT e.dst = ANY (r.path))
-	)
-	SELECT origin, array_agg(DISTINCT node) FILTER (WHERE node IS NOT NULL) AS chain,
-		(bool_or(unk) OR bool_or(depth >= 7)) AS unknown
-	FROM r GROUP BY origin;--> statement-breakpoint
+	SELECT n."origin", array_agg(n."node") AS chain, (k."origin" IS NOT NULL) AS unknown
+	FROM "oax_tmp_reach_nodes" n LEFT JOIN "oax_tmp_reach_unknown" k ON k."origin" = n."origin"
+	GROUP BY n."origin", k."origin";--> statement-breakpoint
 CREATE INDEX "oax_tmp_reach_origin_idx" ON "oax_tmp_reach" ("origin");--> statement-breakpoint
 UPDATE "tenant_role_bindings" b SET "grant_chain" = r.chain
 FROM "oax_tmp_reach" r WHERE b."granted_by" IS NOT NULL AND NOT b."grantor_unknown" AND r.origin = b."granted_by" AND NOT r.unknown;--> statement-breakpoint
@@ -154,6 +189,8 @@ FROM "oax_tmp_reach" r WHERE u."created_by" IS NOT NULL AND r.origin = u."create
 -- An account whose creator is known but whose chain is not (a link above it is unknown): unknown.
 UPDATE "users" SET "creator_unknown" = true WHERE "created_by" IS NOT NULL AND "grant_chain" IS NULL;--> statement-breakpoint
 DROP TABLE "oax_tmp_reach";--> statement-breakpoint
+DROP TABLE "oax_tmp_reach_nodes";--> statement-breakpoint
+DROP TABLE "oax_tmp_reach_unknown";--> statement-breakpoint
 DROP TABLE "oax_tmp_edges";--> statement-breakpoint
 DROP FUNCTION "oax_tmp_set_actor"(text, text, uuid, uuid, text);--> statement-breakpoint
 DROP FUNCTION "oax_tmp_mirror_actor"(uuid, text);--> statement-breakpoint
