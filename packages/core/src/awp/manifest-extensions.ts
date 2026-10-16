@@ -236,12 +236,7 @@ export function extensionFindings(doc: Obj, opts: ExtensionOptions): ManifestFin
           `"${name}" is not defined for this object (it belongs on: ${definedAt.join(', ')})`,
         );
       } else {
-        Object.defineProperty(own, name, {
-          value: node[name],
-          enumerable: true,
-          writable: true,
-          configurable: true,
-        });
+        own[name] = node[name]; // the name starts with x-openagentix-: never a prototype key
       }
     }
     if (!location || Object.keys(own).length === 0) continue;

@@ -36,13 +36,25 @@ function timed<T>(fn: () => T, maxMs = 5000): T {
 }
 
 describe('size and structure limits', () => {
+  it('has the documented limits (docs/awp.md changes with them)', () => {
+    expect(AWP_LIMITS).toEqual({
+      maxSourceBytes: 524_288,
+      maxNodes: 50_000,
+      maxDocuments: 16,
+      maxDepth: 64,
+      maxAliasCount: 50,
+      maxFindings: 200,
+    });
+  });
+
   it('rejects a source above the size limit before parsing it', () => {
-    const r = timed(() => doc(`# ${'x'.repeat(AWP_LIMITS.maxSourceBytes)}`));
+    const r = timed(() => doc(`# ${'x'.repeat(530_000)}`));
     expect(codes(r)).toEqual(['limit.size']);
     expect(r.valid).toBe(false);
     // multi-byte characters count as bytes, not characters
-    const wide = `# ${'ä'.repeat(AWP_LIMITS.maxSourceBytes / 2)}`;
-    expect(codes(doc(wide))).toEqual(['limit.size']);
+    expect(codes(doc(`# ${'\u00e4'.repeat(270_000)}`))).toEqual(['limit.size']);
+    // just below the limit the text is read (here: a comment only, so no document)
+    expect(codes(doc(`# ${'x'.repeat(500_000)}`))).toEqual(['yaml.empty']);
   });
 
   it('rejects too many nodes (a flat array of 100 000 numbers)', () => {
