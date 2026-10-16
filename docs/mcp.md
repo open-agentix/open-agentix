@@ -543,6 +543,8 @@ authorization (a server that wants more answers `insufficient_scope`: `mcp_insuf
   other types are refused.
 - `scopes: "from-profiles"` requests the union of `tools.<name>.scopes` over the tools of the connection's
   profiles; without a mapping the challenge `scope`, else the `scopes_supported` of the resource metadata.
+  Both are untrusted: values that are not valid scope tokens (1 to 128 printable ASCII characters without
+  space, quote or backslash) are dropped, duplicates removed and at most 32 are taken.
   An explicit list wins. The granted scopes are what the server returns (or what was requested). The
   status flags `scopesWider` when they exceed what the profiles need.
 - A server-issued token (access and refresh) must satisfy the
@@ -574,6 +576,35 @@ deletion of the tokens (disconnect, URL or client change) takes the same advisor
 neither overlap a deletion nor bring the token back afterwards. Errors are reduced to the
 closed RFC 6749 error code; `error_description` is dropped.
 
+The lock is held across the call to the authorization server (up to the 10 s token timeout), and so is a
+database connection. Three bounds keep that from starving the rest of the API:
+
+- **Concurrency.** At most `OAX_MCP_OAUTH_RENEWALS` renewals (default 4) run at once in a process and
+  `OAX_MCP_OAUTH_RENEWALS_PER_TENANT` (default 2) per tenant. A renewal never waits for a slot: when none is
+  free it fails at once with `mcp_auth_refresh_failed`, records nothing (the credentials are not at fault),
+  counts as `busy` in the metric and is not tried again for one second for that connection. A token that
+  has not expired is used meanwhile; an expired one fails that request and the next one renews.
+- **Lock wait.** Every transaction that takes the credential lock (renewal, disconnect, URL or client
+  change) sets `lock_timeout` to 10 s and answers `503 mcp_credential_busy` beyond it, instead of holding a
+  connection for as long as a stalled server takes.
+- **Compare-and-swap.** The new tokens are written only over the row the renewal read (`updated_at`). A
+  write that loses (a status write or a re-authorization got in) is retried once, which re-reads the row
+  under the lock and finds it renewed or renews it; if it loses again the renewal fails as transient
+  (`mcp_auth_refresh_failed`), never as `mcp_auth_required`.
+  A rotated authorization-code pair that could not be stored for this reason is kept in memory and written
+  by the retry (the stored refresh token is already dead), and the retry first re-reads the status under the
+  lock: only `active` and `refresh_failed` rows are renewed, so a step-up requirement or
+  `reauthorization_required` is never cleared by a renewal, and what the server issued meanwhile is revoked.
+- **Disconnect.** `POST .../oauth/disconnect` deletes the rows first. If the credential lock cannot be had
+  within the timeout the request fails with `503 mcp_credential_busy`, nothing is revoked or audited as done,
+  and the same request can be repeated. A failure is recorded in the same way, only over
+  the row the renewal saw, so a permanent failure of the old tokens cannot mark tokens a parallel
+  authorization has just stored.
+
+The signing algorithms the authorization server published are kept in memory next to the one-hour
+verification of the pinned endpoints, so a `private_key_jwt` assertion in that window uses the same
+algorithm as one after a fresh discovery (an RSA key signs `PS256` for a PS256-only server).
+
 | Outcome | Stored status | Effect |
 | --- | --- | --- |
 | success | `active` | new token used |
@@ -582,7 +613,7 @@ closed RFC 6749 error code; `error_description` is dropped.
 
 Audit: `mcp.oauth.refreshed` / `mcp.oauth.refresh_failed` (connection and closed code). Metric:
 `oax_mcp_oauth_refresh_total{outcome}` (`ok`, `invalid_grant`, `reauthorization_required`, `failed`,
-`skipped`; no tenant or connection label).
+`skipped`, `busy`; no tenant or connection label).
 
 ### Revocation
 

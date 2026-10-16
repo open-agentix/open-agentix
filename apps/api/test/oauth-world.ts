@@ -101,7 +101,7 @@ export class FakeAs {
   issueRefresh = false;
   rotate = true;
   /** Overrides the next token response. */
-  nextToken: (() => Response) | undefined;
+  nextToken: (() => Response | undefined) | undefined;
   nextRevoke: (() => Response) | undefined;
   metadata: Record<string, unknown>;
   validRefresh = new Set<string>();
@@ -214,7 +214,8 @@ export class FakeAs {
     const form = new URLSearchParams(r.body);
     this.tokenRequests.push({ form, headers: r.headers });
     if (this.latency) await new Promise((res) => setTimeout(res, this.latency));
-    if (this.nextToken) return this.nextToken();
+    const forced = this.nextToken?.();
+    if (forced) return forced;
     let issuedScope = form.get('scope');
     if (form.get('grant_type') === 'authorization_code') {
       const code = form.get('code') ?? '';

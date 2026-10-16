@@ -499,6 +499,23 @@ All notable changes to this project are documented here. The format follows
   connection need platform operator access (`403` for other administrators of the operator's home
   tenant).
 
+### Fixed
+
+- **MCP OAuth renewals are bounded and no longer lock out or mislabel connections (#313, #319)**: a
+  renewal holds a database connection across the call to the authorization server, so renewals now run
+  under a process-wide bound (`OAX_MCP_OAUTH_RENEWALS`, default 4) and a per-tenant bound
+  (`OAX_MCP_OAUTH_RENEWALS_PER_TENANT`, default 2). A renewal that finds no free slot fails at once with
+  `mcp_auth_refresh_failed` (the stored token keeps being used while it lasts), is not recorded as a
+  failure and is not tried again for a second, so stalled authorization servers cannot drain the pool;
+  new metric outcome `busy`. Waits for the credential lock (renewal, disconnect, configuration change)
+  end after 10 s with `503 mcp_credential_busy`. The signing algorithms the server published are kept next
+  to the one-hour verification of the pinned endpoints, so an RSA key keeps signing `PS256` for a
+  PS256-only server instead of `RS256` (permanent `invalid_client`). A failed renewal is recorded only
+  over the row it saw: it no longer marks tokens written by a parallel authorization. A renewal whose
+  write lost the compare-and-swap is retried once and otherwise fails as transient
+  (`mcp_auth_refresh_failed`) instead of `mcp_auth_required`. `scopes_supported` of the resource and the
+  `scope` of a challenge keep only valid scope tokens and at most 32 values. No migration. A disconnect behind a held credential lock answers `503 mcp_credential_busy` instead of reporting success, a renewal that lost the swap no longer clears a step-up requirement, and a rotated authorization-code refresh token is kept for the retry instead of being revoked.
+
 ## [0.2.0-alpha.1] - 2026-10-10
 
 This is the first pre-release that ships release images (signed `api`, `worker` and `ui` images on
