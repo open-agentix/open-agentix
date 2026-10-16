@@ -66,11 +66,6 @@ describe.each(sqlTargets)(
         (await w.req('team-admin', 'POST', '/v1/teams', { slug: 'red', name: 'R' })).statusCode,
       ).toBe(403);
       expect((await w.req('team-admin', 'DELETE', `/v1/teams/${teamId}`)).statusCode).toBe(403);
-      // and an agent labelled into a use case with the team as owner
-      const agent = await w.req('team-admin', 'POST', '/v1/agents', {
-        source: `---\napiVersion: openagentix.io/v1alpha1\nkind: Agent\nname: t-labelled\nversion: 1.0.0\nowner: blue\nlabels:\n  useCase: sec\nagents:\n  - id: a\n    provider: simulated\n    model: sim-1\n    instructions: x\n---\n`,
-      });
-      expect(agent.statusCode).toBe(403);
     });
 
     it('still lets an administrator with a global role do all of it', async () => {

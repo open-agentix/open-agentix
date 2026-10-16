@@ -233,14 +233,6 @@ export class AgentsService {
             : `no write access for team "${def.owner}"`,
         );
     }
-    // A labelled agent of a team lands in that use case: its administrators get its runs and costs.
-    if (
-      teamId !== null &&
-      useCaseOf(def) !== null &&
-      !hasPermission(principal, 'agents:write', null) &&
-      !useCaseScopes(principal, 'agents:write').some((s) => useCaseCovers(s, useCaseOf(def)))
-    )
-      throw forbidden('creating a team agent in a use case needs node-level authority');
     const [exists] = await this.ctx.db
       .select({ id: agents.id })
       .from(agents)
