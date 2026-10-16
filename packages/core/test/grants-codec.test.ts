@@ -287,3 +287,46 @@ describe('raw grants cache representation', () => {
     });
   });
 });
+
+describe('role restrictions on the wire (slice S9)', () => {
+  const restriction = {
+    tenantId: CHILD,
+    role: 'operator' as Role,
+    permission: 'runs:approve' as const,
+  };
+  const base = () => {
+    const g = loaded([grant('viewer')]);
+    return serializeGrants({ ...g, raw: { ...g.raw, restrictions: [restriction] } });
+  };
+
+  it('survive a JSON round trip', () => {
+    const back = reviveGrants(viaJson(base()), { userId: 'u1' });
+    expect(back?.raw.restrictions).toEqual([restriction]);
+  });
+
+  it('make the whole entry unusable when one is not exactly a restriction', () => {
+    for (const bad of [
+      { ...restriction, role: 'nope' },
+      { ...restriction, permission: 'runs:fly' },
+      { ...restriction, tenantId: '' },
+      'x',
+    ]) {
+      const w = viaJson(base()) as { raw: { restrictions: unknown[] } };
+      w.raw.restrictions.push(bad);
+      expect(reviveGrants(w, { userId: 'u1' })).toBeUndefined();
+    }
+    const w = viaJson(base()) as { raw: { restrictions?: unknown } };
+    delete w.raw.restrictions;
+    expect(reviveGrants(w, { userId: 'u1' })).toBeUndefined();
+  });
+});
+
+describe('wire version (slice S9)', () => {
+  it('is pinned to 3 and rejects entries of version 2 (restrictions would be missing)', () => {
+    expect(GRANTS_WIRE_VERSION).toBe(3);
+    const w = viaJson(serializeGrants(loaded([grant('viewer')]))) as { v: number };
+    expect(reviveGrants(w, { userId: 'u1' })).toBeDefined();
+    w.v = 2;
+    expect(reviveGrants(w, { userId: 'u1' })).toBeUndefined();
+  });
+});

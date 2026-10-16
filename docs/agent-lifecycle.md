@@ -301,7 +301,7 @@ sources.
 ## Limits of this slice
 
 - Publish is not refused (slice S3); agent rules are S8; notifications are S13.
-- Revert migration `0033_review_threads` before `0032_agent_lifecycle_reviews`: the thread tables
+- Revert migration `0034_review_threads` before `0032_agent_lifecycle_reviews`: the thread tables
   reference the review tables.
 - Directory-mapped bindings (S11) do not exist yet; the rule module already treats the mapping creator
   as the grantor, and rows of the other sources record who granted them. Bindings written before

@@ -158,7 +158,7 @@ authoritative, so upgrading changes nobody's access.
   while bindings of the old one exist. A binding can sit on any node of the organisation (an
   organisation admin may live in a child and be bound on the root); that it can never apply upward,
   sideways or across organisations is a property of the resolver, which has property tests for it.
-- `tenant_role_restrictions` and `tenants.authz_epoch` exist but are unused until later slices.
+- `tenant_role_restrictions` (role restrictions, see "Role restrictions" below) and `tenants.authz_epoch` exist.
 - **Backfill**: every role in `users.global_roles` became a non-inheriting binding on the user's
   home tenant. Roles the application ignores (unknown ones, `pentest`) are not backfilled.
 - **Write-through**: user create (also the first admin of a new tenant and the bootstrap admin),
@@ -722,6 +722,124 @@ Migration `0031_tenant_use_case_attach` adds `tenants.use_case` (nullable, synta
 carry one), an index on `(parent_id, use_case)` and makes the epoch trigger fire on a change of
 `use_case`. The grants loader lists the attached children of every inheriting use-case binding (cache wire
 version 2).
+
+## Role restrictions (ADR 0014 section 5, slice S9)
+
+A restriction **removes permissions from a role** for the bindings at a node and below. It is the tool to
+say "operators of this division may run agents but not approve" without inventing a new role.
+
+```text
+GET    /v1/tenants/{id}/role-restrictions                          the restrictions set on this tenant, by role
+PUT    /v1/tenants/{id}/role-restrictions   { role, permissions }  set the complete list for one role (idempotent)
+DELETE /v1/tenants/{id}/role-restrictions?role=operator[&permission=runs:approve]
+```
+
+**Which bindings a restriction at R narrows.** A binding b is narrowed iff R is on the chain of the node
+b is **bound on**: b is bound on R or on a descendant of R. It does not matter where b is felt.
+
+| Binding | Restriction at R | Narrowed? |
+| --- | --- | --- |
+| bound on R (direct, or inheriting into R's subtree) | R | yes, at R and everywhere it applies below |
+| bound on a descendant of R | R | yes |
+| bound on an **ancestor** of R, inheriting through R | R | **no**: a descendant cannot restrict the oversight of its ancestors |
+| bound on a sibling, cousin or another organisation | R | no (it does not apply there at all) |
+| team or agent binding on R or below (node-local) | R or an ancestor of that node | yes |
+| `pentest` binding on R or below | R or an ancestor | yes (it is a role like any other) |
+| `admin` binding | any | **never**; the table refuses `admin` and the resolver ignores it |
+| platform operator | any | **never** (they are `admin` everywhere) |
+
+Consequences, spelled out because they surprise:
+
+- **Restrictions never add**. They only remove from the permissions the role gives; the resolver computes
+  `role permissions minus restrictions` and nothing else (property tests: adding a restriction never adds a
+  permission anywhere; a restriction never changes what a binding from above its node grants; platform admins
+  and `admin` are never narrowed; seeded, against the parent-walking reference of the resolver tests).
+- **A user can hold the permission through another binding.** Someone with an inheriting `operator` binding on
+  the root *and* a direct `operator` binding on a division that restricts `runs:approve` keeps `runs:approve`
+  in the division through the root binding. A restriction narrows what is bound there and below, not what an
+  ancestor grants. To take the permission away from that user, restrict `operator` at the node where the root
+  binding sits (or narrow the binding itself).
+- **A node can drop out of sight.** A node is visible when the principal holds at least one *permission*
+  there (`TenantAccess.reach`). Restricting every permission of the only role a user holds somewhere leaves
+  the binding in place (`GET /v1/me` still lists it, with no permissions) but the node is no longer
+  reachable through it. (The pure helper `visibleNodeIds` in the core package counts bindings, not
+  permissions; the API's reach is the authority.)
+- **Use-case bindings** are narrowed at the node they are bound on; in an attached child they are the
+  unrestricted binding of the same role (ADR 0014 section 3.3), so a restriction on the attached child does not
+  narrow them. Restrict at the node the use-case binding sits on.
+- **Locate, access views, grant rules, `scope=subtree`, the approval role checks and the console's visible
+  nodes** all read the same resolver output, so they apply restrictions the same way. The restrictions are
+  loaded with the principal's grants (`RawGrants.restrictions`, cache wire version 3): there is no second
+  implementation.
+
+**Who may write.** An inheriting `admin` binding (without use case) on the tenant or an ancestor, or a platform
+operator; an API token additionally needs the `users:write` scope. A restriction narrows every binding of the
+role in the whole subtree, so the writer must administer the whole subtree, like for an inheriting grant:
+
+- a non-inheriting administrator of the node: `403 inheritance_required`;
+- a use-case administrator, an administrator reached only through an attached node, team and agent admins and
+  every other role: `403`; the restricted role itself cannot lift its restriction (only `admin` writes, and
+  `admin` cannot be restricted);
+- a node the caller cannot see (unknown, sibling, ancestor, other organisation): `404 tenant`, the same
+  answer as an unknown id, before any other check. An administrator of a division cannot restrict the roles
+  of the parent.
+
+**Validation.** `role` is any role but `admin` (`422 restriction_on_admin`); unknown roles are
+`422 unknown_role`. Every permission must exist (`422 unknown_permission`) and be one the role holds
+(`422 permission_not_in_role`). `pentest`, `agent-developer` and `agent-maintainer` are restrictable like the
+other roles. At most `OAX_MAX_ROLE_RESTRICTIONS_PER_NODE` (default 100) entries per tenant
+(`422 restriction_limit_exceeded`). `PUT` replaces the list of the role at that tenant; an empty list removes
+it. `PUT` and `DELETE` are idempotent: a call that changes nothing writes no audit entry and does not bump the
+epoch. `GET` needs `users:read` on the tenant and lists the tenant's own restrictions; restrictions of
+ancestors appear as `denied` entries in the access views.
+
+**Explanation (A6).** `GET /v1/me/access` and `GET /v1/tenants/{id}/access` add `denied[]`: every permission
+that a role binding would give if a restriction had not removed it and that no other binding gives, as
+`{ permission, reason: "role_restricted", role, restrictedAt: { tenantId, tenantSlugPath } }`. When several
+nodes remove the same permission the deepest one is named.
+
+**Read path.** Restrictions are applied only with `OAX_ROLE_BINDINGS_READ=bindings`, like inheritance. With
+`legacy`, `PUT` and `DELETE` are refused with `409 role_restrictions_require_bindings_read` (a restriction
+that does nothing would be a false promise), `GET` works and reports `enforced: false`, and rows written
+before a switch back to `legacy` are ignored; the shadow comparison of the two read paths ignores
+restrictions too.
+
+**Caches and races.** Migration `0033_role_restrictions_epoch` makes the database bump the authz epoch of the
+organisation on every insert, update or delete of `tenant_role_restrictions` (any code path, a cascade
+excepted: deleting a node bumps through the node itself). A cached principal built under the old epoch is
+rebuilt on its next request (the epoch is read from the database on every request, so there is no TTL window,
+also without a shared cache). Writes run in one transaction that takes the tree lock
+(shared) and the binding lock of the organisation, in the same order as the grant paths, and re-read the
+writer's grants from the database, so a restriction write cannot race a change of the writer's own
+administrator binding or a node move. Replicas of the previous version do not know restrictions: during a
+rolling deploy they ignore them, so drain old pods before writing the first restriction.
+
+**Audit.** `tenant.role_restricted { role, permissions }` (the permissions added) and
+`tenant.role_restriction_removed { role, permissions }`, in the partition of the restricted tenant, actor =
+the writer. Names only.
+
+**Approvals.** Reviewer eligibility (ADR 0017 S1, `approver-facts.ts`) reads the grants with `loadRawGrants`
+and `appliedAt`, so a restricted `agents:approve` makes the reviewer neither eligible nor allowed through the
+route (tested).
+
+**Platform operators** are never narrowed: the loader does not fetch restrictions for them and the resolver
+ignores them, also while an operator acts with the roles of the home tenant.
+
+**Limits and throttling.** Per tenant `OAX_MAX_ROLE_RESTRICTIONS_PER_NODE` (default 100) and per organisation
+`OAX_MAX_ROLE_RESTRICTIONS_PER_ORG` (default 1000; `422 restriction_limit_exceeded` for either). A non-admin role
+holds at most 82 permissions, so the per-node cap alone would still allow 82 x nodes rows; the organisation cap
+bounds the size of a cached principal and the cost of one resolution (restrictions are indexed once per
+principal; a resolution walks only the chain of the binding). Every write bumps the authz epoch of the whole
+organisation, so `PUT` and `DELETE` are throttled per caller (`OAX_RATE_LIMIT_RESTRICTION_MAX`, default 30 per
+minute).
+
+**Stored but not enforced (fail-open guard).** Restrictions are the one kind of grant data whose loss widens
+access. With `OAX_ROLE_BINDINGS_READ=legacy` (also after an application rollback to a version that does not
+read them, or on old pods during a rolling deploy) stored restrictions are ignored. Therefore, when the read
+path is `legacy` and `tenant_role_restrictions` is not empty, start-up logs an error, the gauge
+`oax_unenforced_role_restrictions` is set, and `/readyz` answers `503` with `checks.restrictions: false`,
+unless `OAX_ALLOW_UNENFORCED_RESTRICTIONS=1` accepts it. Before rolling back, lift the restrictions you rely
+on or accept the wider access explicitly.
 
 ## Audit
 

@@ -20,9 +20,9 @@ const DOWN = readFileSync(join(MIGRATIONS_FOLDER, `down/${TAG}.down.sql`), 'utf8
 const HEX = (c: string) => c.repeat(64);
 
 describe('migration 0032 files', () => {
-  it('is in the journal, newer than every earlier migration, and chains its snapshot', () => {
+  it('follows 0031 in the journal, is newer than every earlier migration, and chains its snapshot', () => {
     const at = journal.entries.findIndex((e) => e.tag === TAG);
-    expect(at).toBeGreaterThan(0);
+    expect(journal.entries[at - 1]!.tag).toBe('0031_tenant_use_case_attach');
     const whens = journal.entries.map((e) => e.when);
     expect([...whens].sort((a, b) => a - b)).toEqual(whens);
     expect(new Set(whens).size).toBe(whens.length);
@@ -289,9 +289,9 @@ describe.each(sqlTargets)('migration 0032 on existing data (%s)', (_kind, enable
   });
 
   it('is reverted by the down script', async () => {
-    // later migrations first: 0033 depends on the review tables
+    // later migrations first: 0034 depends on the review tables
     await c.script(
-      readFileSync(join(MIGRATIONS_FOLDER, 'down/0033_review_threads.down.sql'), 'utf8'),
+      readFileSync(join(MIGRATIONS_FOLDER, 'down/0034_review_threads.down.sql'), 'utf8'),
     );
     await c.script(DOWN);
     const cols = async (t: string) =>

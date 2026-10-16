@@ -17432,6 +17432,349 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/tenants/{id}/role-restrictions:
+    get:
+      summary: List the role restrictions set on a tenant
+      tags:
+        - role-restrictions
+      description: Needs `users:read` on the tenant (directly or through an inheriting binding above it). Lists the restrictions set on this tenant only, grouped by role; restrictions set on ancestors show up as `denied` (reason `role_restricted`, with the restricting tenant) in `GET /v1/me/access` and `GET /v1/tenants/{id}/access`. A tenant the caller cannot see is 404. `enforced` is false while `OAX_ROLE_BINDINGS_READ=legacy`.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        role:
+                          type: string
+                        permissions:
+                          type: array
+                          items:
+                            type: string
+                          description: the permissions removed from the role for bindings at this tenant and below
+                        updatedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                          description: null when the role has no restriction here
+                        updatedBy:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                      required:
+                        - role
+                        - permissions
+                        - updatedAt
+                        - updatedBy
+                      additionalProperties: false
+                  enforced:
+                    type: boolean
+                    description: "false while OAX_ROLE_BINDINGS_READ=legacy: the legacy read path ignores restrictions"
+                required:
+                  - items
+                  - enforced
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    put:
+      summary: Remove permissions from a role for the bindings at a tenant and below
+      tags:
+        - role-restrictions
+      description: Sets the complete list of permissions removed from `role` for bindings **bound on this tenant or below** (ADR 0014 section 5); idempotent, an empty list removes them. A binding granted on an ancestor of this tenant is never narrowed by it, a restriction never adds a permission, never applies to platform operators and never to `admin` (422 `restriction_on_admin`). Needs an inheriting `admin` binding on this tenant or an ancestor, or platform operator access (403 `inheritance_required` for an administrator whose binding does not inherit; never a use-case administrator). At most `OAX_MAX_ROLE_RESTRICTIONS_PER_NODE` entries per tenant (422 `restriction_limit_exceeded`). Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 `role_restrictions_require_bindings_read`). Audited as `tenant.role_restricted` and `tenant.role_restriction_removed` in the partition of the tenant; takes effect on the next request of every user of the organisation (authz epoch).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                  description: "any role but `admin` (422 `restriction_on_admin`; unknown roles: 422 `unknown_role`)"
+                permissions:
+                  maxItems: 27
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                  description: the complete set of permissions to remove from the role here (replaces the current set; empty = none). Each must be a permission the role holds (422 `unknown_permission`, `permission_not_in_role`)
+              required:
+                - role
+                - permissions
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  permissions:
+                    type: array
+                    items:
+                      type: string
+                    description: the permissions removed from the role for bindings at this tenant and below
+                  updatedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                    description: null when the role has no restriction here
+                  updatedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                required:
+                  - role
+                  - permissions
+                  - updatedAt
+                  - updatedBy
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    delete:
+      summary: Lift the restrictions of a role on a tenant
+      tags:
+        - role-restrictions
+      description: Removes every restriction of `role` set on this tenant, or only `permission`. Idempotent (204 also when there was nothing to remove). Same authority and read-path rules as `PUT`. Audited as `tenant.role_restriction_removed`.
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+          in: query
+          name: role
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+          in: query
+          name: permission
+          required: false
+          description: remove only this permission; omitted = every restriction of the role here
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "204":
+          description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/tenants/{id}/role-bindings/enable-inheritance:
     post:
       summary: "Bulk opt-in: make the plain bindings of some roles inherit (platform operators)"
@@ -17864,6 +18207,41 @@ paths:
                         - source
                       additionalProperties: false
                     description: the grants that apply at the tenant, with the node each one is bound on
+                  denied:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        permission:
+                          type: string
+                        reason:
+                          type: string
+                          enum:
+                            - role_restricted
+                        role:
+                          type: string
+                          description: the role whose permission was removed
+                        restrictedAt:
+                          type: object
+                          properties:
+                            tenantId:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            tenantSlugPath:
+                              type: string
+                          required:
+                            - tenantId
+                            - tenantSlugPath
+                          additionalProperties: false
+                          description: the tenant whose role restriction removed it (on the chain of the answered tenant)
+                      required:
+                        - permission
+                        - reason
+                        - role
+                        - restrictedAt
+                      additionalProperties: false
+                    description: permissions a role binding would give if a role restriction (ADR 0014 section 5) had not removed them, and that no other binding gives
                   permissions:
                     type: array
                     items:
@@ -17901,6 +18279,7 @@ paths:
                   - platformAdmin
                   - limitedByToken
                   - bindings
+                  - denied
                   - permissions
                 additionalProperties: false
         "401":
@@ -18066,6 +18445,41 @@ paths:
                         - source
                       additionalProperties: false
                     description: the grants that apply at the tenant, with the node each one is bound on
+                  denied:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        permission:
+                          type: string
+                        reason:
+                          type: string
+                          enum:
+                            - role_restricted
+                        role:
+                          type: string
+                          description: the role whose permission was removed
+                        restrictedAt:
+                          type: object
+                          properties:
+                            tenantId:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            tenantSlugPath:
+                              type: string
+                          required:
+                            - tenantId
+                            - tenantSlugPath
+                          additionalProperties: false
+                          description: the tenant whose role restriction removed it (on the chain of the answered tenant)
+                      required:
+                        - permission
+                        - reason
+                        - role
+                        - restrictedAt
+                      additionalProperties: false
+                    description: permissions a role binding would give if a role restriction (ADR 0014 section 5) had not removed them, and that no other binding gives
                   permissions:
                     type: array
                     items:
@@ -18103,6 +18517,7 @@ paths:
                   - platformAdmin
                   - limitedByToken
                   - bindings
+                  - denied
                   - permissions
                 additionalProperties: false
         "401":

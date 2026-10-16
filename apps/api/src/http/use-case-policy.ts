@@ -92,6 +92,10 @@ const SELF = [
 ] as const;
 
 const DENIED = [
+  // restricting a role narrows every binding below the node: tenant administrators only
+  'GET /v1/tenants/:id/role-restrictions',
+  'PUT /v1/tenants/:id/role-restrictions',
+  'DELETE /v1/tenants/:id/role-restrictions',
   // node-wide configuration and credentials
   'GET /v1/connections',
   'POST /v1/connections',

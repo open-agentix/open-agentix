@@ -19,7 +19,7 @@ export function airgapState(): { enabled: boolean; allowlist: number; blockedAtt
   return { enabled: s.airgapped, allowlist: s.allowlist, blockedAttempts: s.blocked };
 }
 
-export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
+export function registerSystemRoutes(app: ZApp, { ctx, services }: Deps): void {
   const ops = ['ops'];
   app.get(
     '/healthz',
@@ -43,10 +43,19 @@ export function registerSystemRoutes(app: ZApp, { ctx }: Deps): void {
     async (_req, reply) => {
       const db = await ctx.database.ping().catch(() => false);
       const schema = db ? await ctx.database.schemaStatus().catch(() => null) : null;
-      const ok = db && !!schema?.ok;
+      // Stored role restrictions the legacy read path ignores widen access silently: not ready
+      // (unless accepted with OAX_ALLOW_UNENFORCED_RESTRICTIONS), ADR 0014 S9.
+      const unenforced = db ? await services.roleRestrictions.countUnenforced().catch(() => 0) : 0;
+      if (db) ctx.metrics.unenforcedRestrictions.set(unenforced);
+      const restricted = unenforced > 0 && !ctx.config.auth.allowUnenforcedRestrictions;
+      const ok = db && !!schema?.ok && !restricted;
       return reply.status(ok ? 200 : 503).send({
         status: ok ? 'ok' : 'unavailable',
-        checks: { database: db, schema: !!schema?.ok },
+        checks: {
+          database: db,
+          schema: !!schema?.ok,
+          ...(restricted ? { restrictions: false } : {}),
+        },
         schema: schema ?? { expected: 0, applied: 0, ok: false },
         airgapped: airgapState(),
       });

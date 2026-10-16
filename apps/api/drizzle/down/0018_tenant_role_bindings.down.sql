@@ -6,6 +6,10 @@
 -- which can be created before the next slices.
 -- Run 0021_authz_epoch.down.sql and 0019_trb_home_move.down.sql first if they were applied (this also
 -- drops their objects: the epoch triggers read tenants.authz_epoch, which goes away here).
+-- (0033_role_restrictions_epoch puts its epoch triggers on tenant_role_restrictions; they use the functions below)
+DROP TRIGGER IF EXISTS "authz_epoch_trr_ins" ON "tenant_role_restrictions";
+DROP TRIGGER IF EXISTS "authz_epoch_trr_del" ON "tenant_role_restrictions";
+DROP TRIGGER IF EXISTS "authz_epoch_trr_upd" ON "tenant_role_restrictions";
 DROP TRIGGER IF EXISTS "authz_epoch_trb_ins" ON "tenant_role_bindings";
 DROP TRIGGER IF EXISTS "authz_epoch_trb_del" ON "tenant_role_bindings";
 DROP TRIGGER IF EXISTS "authz_epoch_trb_upd" ON "tenant_role_bindings";

@@ -8,36 +8,36 @@ import { DEFAULT_TENANT_ID } from '../src/db/schema.js';
 import { failure, sqlTargets, type Sql } from './db-targets.js';
 
 /**
- * Migration 0033 (ADR 0017 slice S2): review comment threads and comments. Runs on PGlite and,
+ * Migration 0034 (ADR 0017 slice S2): review comment threads and comments. Runs on PGlite and,
  * with OAX_TEST_DATABASE_URL, on a real PostgreSQL.
  */
-const TAG = '0033_review_threads';
+const TAG = '0034_review_threads';
 const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta/_journal.json'), 'utf8')) as {
   entries: { idx: number; tag: string; when: number }[];
 };
 const DOWN = readFileSync(join(MIGRATIONS_FOLDER, `down/${TAG}.down.sql`), 'utf8');
 const HEX = (c: string) => c.repeat(64);
 
-describe('migration 0033 files', () => {
-  it('is newer than the lifecycle migration, strictly ordered, and chains its snapshot', () => {
+describe('migration 0034 files', () => {
+  it('is newer than the role restrictions migration, strictly ordered, and chains its snapshot', () => {
     const at = journal.entries.findIndex((e) => e.tag === TAG);
     expect(at).toBeGreaterThan(0);
-    expect(journal.entries[at - 1]!.tag).toBe('0032_agent_lifecycle_reviews');
+    expect(journal.entries[at - 1]!.tag).toBe('0033_role_restrictions_epoch');
     const whens = journal.entries.map((e) => e.when);
     expect([...whens].sort((a, b) => a - b)).toEqual(whens);
     expect(new Set(whens).size).toBe(whens.length);
-    expect(whens[at]!).toBeGreaterThan(1_792_700_000_001);
+    expect(whens[at]!).toBeGreaterThan(1_792_700_000_002);
     const read = (n: string) =>
       JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, `meta/${n}_snapshot.json`), 'utf8'));
-    expect(read('0033').prevId).toBe(read('0032').id);
-    expect(Object.keys(read('0033').tables)).toEqual(
+    expect(read('0034').prevId).toBe(read('0033').id);
+    expect(Object.keys(read('0034').tables)).toEqual(
       expect.arrayContaining(['public.agent_review_threads', 'public.agent_review_comments']),
     );
     expect(existsSync(join(MIGRATIONS_FOLDER, `down/${TAG}.down.sql`))).toBe(true);
   });
 });
 
-describe.each(sqlTargets)('migration 0033 on existing data (%s)', (_kind, enabled, open) => {
+describe.each(sqlTargets)('migration 0034 on existing data (%s)', (_kind, enabled, open) => {
   if (!enabled()) {
     it.skip('needs OAX_TEST_DATABASE_URL', () => undefined);
     return;

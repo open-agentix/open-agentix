@@ -11437,6 +11437,283 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/tenants/{id}/role-restrictions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the role restrictions set on a tenant
+         * @description Needs `users:read` on the tenant (directly or through an inheriting binding above it). Lists the restrictions set on this tenant only, grouped by role; restrictions set on ancestors show up as `denied` (reason `role_restricted`, with the restricting tenant) in `GET /v1/me/access` and `GET /v1/tenants/{id}/access`. A tenant the caller cannot see is 404. `enforced` is false while `OAX_ROLE_BINDINGS_READ=legacy`.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                role: string;
+                                /** @description the permissions removed from the role for bindings at this tenant and below */
+                                permissions: string[];
+                                /** @description null when the role has no restriction here */
+                                updatedAt: string | null;
+                                updatedBy: string | null;
+                            }[];
+                            /** @description false while OAX_ROLE_BINDINGS_READ=legacy: the legacy read path ignores restrictions */
+                            enforced: boolean;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        /**
+         * Remove permissions from a role for the bindings at a tenant and below
+         * @description Sets the complete list of permissions removed from `role` for bindings **bound on this tenant or below** (ADR 0014 section 5); idempotent, an empty list removes them. A binding granted on an ancestor of this tenant is never narrowed by it, a restriction never adds a permission, never applies to platform operators and never to `admin` (422 `restriction_on_admin`). Needs an inheriting `admin` binding on this tenant or an ancestor, or platform operator access (403 `inheritance_required` for an administrator whose binding does not inherit; never a use-case administrator). At most `OAX_MAX_ROLE_RESTRICTIONS_PER_NODE` entries per tenant (422 `restriction_limit_exceeded`). Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 `role_restrictions_require_bindings_read`). Audited as `tenant.role_restricted` and `tenant.role_restriction_removed` in the partition of the tenant; takes effect on the next request of every user of the organisation (authz epoch).
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description any role but `admin` (422 `restriction_on_admin`; unknown roles: 422 `unknown_role`) */
+                        role: string;
+                        /** @description the complete set of permissions to remove from the role here (replaces the current set; empty = none). Each must be a permission the role holds (422 `unknown_permission`, `permission_not_in_role`) */
+                        permissions: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            role: string;
+                            /** @description the permissions removed from the role for bindings at this tenant and below */
+                            permissions: string[];
+                            /** @description null when the role has no restriction here */
+                            updatedAt: string | null;
+                            updatedBy: string | null;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        /**
+         * Lift the restrictions of a role on a tenant
+         * @description Removes every restriction of `role` set on this tenant, or only `permission`. Idempotent (204 also when there was nothing to remove). Same authority and read-path rules as `PUT`. Audited as `tenant.role_restriction_removed`.
+         */
+        delete: {
+            parameters: {
+                query: {
+                    role: string;
+                    /** @description remove only this permission; omitted = every restriction of the role here */
+                    permission?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tenants/{id}/role-bindings/enable-inheritance": {
         parameters: {
             query?: never;
@@ -11722,6 +11999,20 @@ export interface paths {
                                  */
                                 source: "direct" | "inherited" | "attached" | "team" | "agent" | "platform";
                             }[];
+                            /** @description permissions a role binding would give if a role restriction (ADR 0014 section 5) had not removed them, and that no other binding gives */
+                            denied: {
+                                permission: string;
+                                /** @enum {string} */
+                                reason: "role_restricted";
+                                /** @description the role whose permission was removed */
+                                role: string;
+                                /** @description the tenant whose role restriction removed it (on the chain of the answered tenant) */
+                                restrictedAt: {
+                                    /** Format: uuid */
+                                    tenantId: string;
+                                    tenantSlugPath: string;
+                                };
+                            }[];
                             /** @description effective permissions at the tenant (token scopes applied), with their sources */
                             permissions: {
                                 permission: string;
@@ -11843,6 +12134,20 @@ export interface paths {
                                  * @enum {string}
                                  */
                                 source: "direct" | "inherited" | "attached" | "team" | "agent" | "platform";
+                            }[];
+                            /** @description permissions a role binding would give if a role restriction (ADR 0014 section 5) had not removed them, and that no other binding gives */
+                            denied: {
+                                permission: string;
+                                /** @enum {string} */
+                                reason: "role_restricted";
+                                /** @description the role whose permission was removed */
+                                role: string;
+                                /** @description the tenant whose role restriction removed it (on the chain of the answered tenant) */
+                                restrictedAt: {
+                                    /** Format: uuid */
+                                    tenantId: string;
+                                    tenantSlugPath: string;
+                                };
                             }[];
                             /** @description effective permissions at the tenant (token scopes applied), with their sources */
                             permissions: {

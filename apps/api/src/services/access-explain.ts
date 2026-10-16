@@ -42,6 +42,20 @@ export interface AccessBinding {
   source: BindingSource;
 }
 
+/**
+ * A permission the user would hold through a role binding if a role restriction (ADR 0014 section 5)
+ * had not removed it, and that no other binding gives. The `role_restricted` reason of the actions
+ * block (A6 #160).
+ */
+export interface AccessDenial {
+  permission: Permission;
+  reason: 'role_restricted';
+  /** The role whose permission was removed. */
+  role: string;
+  /** The node whose restriction removed it; on the chain of the answered node. */
+  restrictedAt: { tenantId: string; tenantSlugPath: string };
+}
+
 export interface AccessView {
   tenant: { id: string; slug: string; slugPath: string; name: string };
   user: { id: string; email: string; displayName: string } | null;
@@ -58,6 +72,8 @@ export interface AccessView {
      */
     useCases: string[];
   }[];
+  /** Permissions removed by role restrictions; see {@link AccessDenial}. */
+  denied: AccessDenial[];
 }
 
 const SOURCE_ORDER: BindingSource[] = [
@@ -135,6 +151,7 @@ export class AccessExplainService {
         tenantId: node.id,
         inherit: false,
         expiresAt: null,
+        restrictedBy: [],
       }));
     }
     const loaded = await loadRawGrants(this.ctx.db, {
@@ -176,6 +193,7 @@ export class AccessExplainService {
       tenantId: node.id,
       inherit: false,
       expiresAt: null,
+      restrictedBy: [],
     }));
   }
 
@@ -222,6 +240,20 @@ export class AccessExplainService {
         sources: SOURCE_ORDER.filter((s) => bySource.get(permission)!.has(s)),
         useCases: [...(useCasesOf.get(permission) ?? [])].sort(),
       }));
+    // Permissions only a restriction keeps from the user: listed when no other binding gives them.
+    const denied = new Map<string, AccessDenial>();
+    for (const b of applied)
+      for (const r of b.restrictedBy) {
+        if (bySource.has(r.permission)) continue;
+        const key = `${r.permission}|${b.role}|${r.tenantId}`;
+        if (!denied.has(key))
+          denied.set(key, {
+            permission: r.permission,
+            reason: 'role_restricted',
+            role: b.role,
+            restrictedAt: { tenantId: r.tenantId, tenantSlugPath: anchorPath(r.tenantId) },
+          });
+      }
     return {
       tenant: { id: node.id, slug: node.slug, slugPath, name: node.name },
       user,
@@ -239,6 +271,11 @@ export class AccessExplainService {
         source: b.source,
       })),
       permissions,
+      denied: [...denied.values()].sort(
+        (a, b) =>
+          PERMISSIONS.indexOf(a.permission) - PERMISSIONS.indexOf(b.permission) ||
+          a.role.localeCompare(b.role),
+      ),
     };
   }
 }

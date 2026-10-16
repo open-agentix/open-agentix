@@ -126,6 +126,21 @@ export function isTenantAdminAt(actor: Actor, node: RoleNode, now: Date): boolea
   );
 }
 
+/**
+ * Whether the actor's authority covers the whole subtree of `node` as a tenant administrator: an
+ * unexpired `admin` binding without use case that inherits and sits on `node` or an ancestor, or a
+ * platform admin (a token needs the `users:write` scope). This is the authority to change
+ * **role restrictions** at `node` (ADR 0014 section 5): a restriction narrows the bindings of every
+ * node below, so the writer must administer all of them, exactly like an inheriting grant. A
+ * non-inheriting administrator of the node, a use-case administrator, an administrator reached
+ * only through an attached node and a team or agent admin do not qualify.
+ */
+export function mayManageRestrictions(actor: Actor, node: RoleNode, now: Date): boolean {
+  if (actor.scopes && !actor.scopes.includes('users:write')) return false;
+  if (actor.platformAdmin) return true;
+  return inheritingOnChain(actor, node, now).some((b) => b.role === 'admin');
+}
+
 /** One use case an actor may grant roles for (ADR 0014 section 7, rule 3). */
 export interface UseCaseGrantAuthority {
   useCase: string;

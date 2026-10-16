@@ -3,6 +3,10 @@
 -- delete the row of migration 0021 from drizzle.__drizzle_migrations. Loses no data: tenants.authz_epoch
 -- stays (column of 0018) but nothing bumps it any more, so an application version that compares the
 -- epoch would no longer see revocations made outside it.
+-- (0033_role_restrictions_epoch puts its epoch triggers on tenant_role_restrictions; they use the functions below)
+DROP TRIGGER IF EXISTS "authz_epoch_trr_ins" ON "tenant_role_restrictions";
+DROP TRIGGER IF EXISTS "authz_epoch_trr_del" ON "tenant_role_restrictions";
+DROP TRIGGER IF EXISTS "authz_epoch_trr_upd" ON "tenant_role_restrictions";
 DROP TRIGGER IF EXISTS "authz_epoch_trb_ins" ON "tenant_role_bindings";
 DROP TRIGGER IF EXISTS "authz_epoch_trb_del" ON "tenant_role_bindings";
 DROP TRIGGER IF EXISTS "authz_epoch_trb_upd" ON "tenant_role_bindings";

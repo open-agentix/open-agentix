@@ -267,7 +267,11 @@ export const userNotices = pgTable(
   ],
 );
 
-/** Permissions removed from a role at a node and below (ADR 0014 section 5); unused until S9. */
+/**
+ * Permissions removed from a role at a node and below (ADR 0014 section 5, slice S9). Written by
+ * `PUT/DELETE /v1/tenants/{id}/role-restrictions`; read with the principal's grants. Changes bump
+ * the authz epoch of the organisation (migration 0033).
+ */
 export const tenantRoleRestrictions = pgTable(
   'tenant_role_restrictions',
   {

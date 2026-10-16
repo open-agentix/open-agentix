@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import {
   GRANTABLE_ROLES,
+  PERMISSIONS,
   isGrantableRole,
   isRole,
   type AgentRoleGrant,
   type NodeRoleGrant,
+  type Permission,
   type RawGrants,
   type Role,
   type RoleNode,
+  type RoleRestriction,
   type TeamRoleGrant,
 } from '@openagentix/core';
 import { and, eq, inArray, notInArray, sql } from 'drizzle-orm';
@@ -18,6 +21,7 @@ import {
   teamMembers,
   teams,
   tenantRoleBindings,
+  tenantRoleRestrictions,
   tenants,
   users,
 } from '../db/schema.js';
@@ -206,7 +210,40 @@ export async function loadRawGrants(
         from ${agentRoleBindings} join ${agents} on ${agents.id} = ${agentRoleBindings.agentId}
         where ${agentRoleBindings.userId} = ${user.id}
           and ${agents.tenantId} in (${orgNodes(sql`t.root_id`)})
-      ), '[]'::json) as agent_rows
+      ), '[]'::json) as agent_rows,
+      coalesce((
+        select json_agg(json_build_object(
+          'tenantId', ${tenantRoleRestrictions.tenantId}, 'role', ${tenantRoleRestrictions.role},
+          'permission', ${tenantRoleRestrictions.permission}))
+        from ${tenantRoleRestrictions}
+        join ${tenants} rn on rn.id = ${tenantRoleRestrictions.tenantId}
+        where rn.root_id = t.root_id
+          -- platform operators are never narrowed (ADR 0014 section 5)
+          and not ${user.platformAdmin}
+          -- only restrictions of roles the user holds can matter
+          and ${tenantRoleRestrictions.role} in (
+            select ${tenantRoleBindings.role} from ${tenantRoleBindings}
+              where ${tenantRoleBindings.userId} = ${user.id}
+            union select ${teamMembers.role} from ${teamMembers}
+              where ${teamMembers.userId} = ${user.id}
+            union select ${agentRoleBindings.role} from ${agentRoleBindings}
+              where ${agentRoleBindings.userId} = ${user.id})
+          and exists (
+            -- a restriction can narrow a binding only if its node is the binding's node or an
+            -- ancestor of it (ADR 0014 section 5); the node path of an ancestor is a prefix
+            select 1 from ${tenants} a
+            where a.root_id = t.root_id and starts_with(a.path, rn.path)
+              and (
+                a.id in (select ${tenantRoleBindings.tenantId} from ${tenantRoleBindings}
+                  where ${tenantRoleBindings.userId} = ${user.id})
+                or a.id in (select ${teams.tenantId} from ${teamMembers}
+                  join ${teams} on ${teams.id} = ${teamMembers.teamId}
+                  where ${teamMembers.userId} = ${user.id})
+                or a.id in (select ${agents.tenantId} from ${agentRoleBindings}
+                  join ${agents} on ${agents.id} = ${agentRoleBindings.agentId}
+                  where ${agentRoleBindings.userId} = ${user.id})
+              ))
+      ), '[]'::json) as restriction_rows
     from ${tenants} t
     where t.id = ${user.tenantId}
   `)) as unknown as { rows: Record<string, unknown>[] };
@@ -225,6 +262,7 @@ export async function loadRawGrants(
     attached?: unknown;
   };
   type TeamRow = { tenantId: string; teamId: string; role: string };
+  type RestrictionRow = { tenantId: string; role: string; permission: string };
   type AgentRow = { tenantId: string; agentId: string; teamId: string | null; role: string };
   // Unknown role strings are dropped here (fail closed). `pentest` is granted through node
   // bindings only, so it is dropped from the legacy team and agent tables.
@@ -260,6 +298,17 @@ export async function loadRawGrants(
       teamId: r.teamId,
       role: r.role as Role,
     }));
+  // Unknown roles and permissions are dropped (a restriction can only ever remove something known).
+  const restrictions: RoleRestriction[] = [];
+  for (const r of json(row.restriction_rows) as RestrictionRow[]) {
+    if (!isRole(r.role) || r.role === 'admin') continue;
+    if (!(PERMISSIONS as readonly string[]).includes(r.permission)) continue;
+    restrictions.push({
+      tenantId: r.tenantId,
+      role: r.role as Role,
+      permission: r.permission as Permission,
+    });
+  }
   const id = String(row.id);
   const rootId = String(row.root_id);
   return {
@@ -271,6 +320,7 @@ export async function loadRawGrants(
       nodeBindings,
       teamBindings,
       agentBindings,
+      restrictions,
     },
     home: { id, rootId, path: String(row.path) },
   };

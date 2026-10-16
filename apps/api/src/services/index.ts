@@ -29,6 +29,7 @@ import { RunNodesService } from './run-nodes.js';
 import { RunsService } from './runs.js';
 import { SubtreeScopes } from './subtree-scope.js';
 import { AccessExplainService } from './access-explain.js';
+import { RoleRestrictionsService } from './role-restrictions.js';
 import { TenantRoleBindingsService } from './tenant-role-bindings.js';
 import { TenantsService } from './tenants.js';
 
@@ -56,6 +57,8 @@ export interface Services {
   guidelines: GuidelinesService;
   tenants: TenantsService;
   roleBindings: TenantRoleBindingsService;
+  /** Role restrictions per node (ADR 0014 section 5, S9). */
+  roleRestrictions: RoleRestrictionsService;
   /** Notices, session audit and expiry reaper of the `pentest` role (ADR 0014 S6). */
   pentest: PentestService;
   accessExplain: AccessExplainService;
@@ -160,6 +163,7 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     guidelines,
     tenants,
     roleBindings: new TenantRoleBindingsService(ctx, audit, identity, pentest),
+    roleRestrictions: new RoleRestrictionsService(ctx, audit),
     pentest,
     accessExplain: new AccessExplainService(ctx),
     locate: new LocateService(ctx, audit),
@@ -198,6 +202,7 @@ export {
   RunNodesService,
   RunsService,
   SubtreeScopes,
+  RoleRestrictionsService,
   TenantRoleBindingsService,
   TenantsService,
 };
