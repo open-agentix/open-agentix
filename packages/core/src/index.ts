@@ -16,6 +16,14 @@ export * from './agents/handover.js';
 export * from './awp/types.js';
 export * from './awp/manifest-digest.js';
 export * from './awp/export.js';
+export * from './awp/generated/awp-types.js';
+export * from './awp/manifest-types.js';
+export { validateManifestSource, validateManifestValue } from './awp/manifest-validate.js';
+export { isAwpApiVersion } from './awp/manifest-parse.js';
+export {
+  CRITICAL_EXTENSIONS as OAX_CRITICAL_EXTENSIONS,
+  knownExtensionNames,
+} from './awp/manifest-extensions.js';
 export * from './policy/engine.js';
 export * from './control/controller.js';
 export * from './redact.js';
