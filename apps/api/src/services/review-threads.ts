@@ -7,7 +7,7 @@ import {
   type AnchorSide,
   type Principal,
 } from '@openagentix/core';
-import { and, asc, count, eq, gt, inArray } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import {
@@ -45,6 +45,9 @@ import type { AuditService } from './audit.js';
 
 export const MAX_THREADS_PER_REVIEW = 200;
 export const MAX_COMMENTS_PER_THREAD = 200;
+/** Bounds what one list call reads and returns: comments and characters of a whole review. */
+export const MAX_COMMENTS_PER_REVIEW = 1000;
+export const MAX_COMMENT_CHARS_PER_REVIEW = 1_000_000;
 const RATE_WINDOW_MS = 60_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -160,19 +163,47 @@ export class ReviewThreadsService {
     return thread;
   }
 
-  /** Per user and minute, counted over every session and token and over deleted comments too. */
+  /** Per user and minute, counted over every session and token, deleted comments and edits included. */
   private async assertRate(tx: Db, userId: string) {
     const since = new Date(this.ctx.now().getTime() - RATE_WINDOW_MS);
     const [row] = await tx
       .select({ n: count() })
       .from(agentReviewComments)
       .where(
-        and(eq(agentReviewComments.authorId, userId), gt(agentReviewComments.createdAt, since)),
+        and(
+          eq(agentReviewComments.authorId, userId),
+          or(gt(agentReviewComments.createdAt, since), gt(agentReviewComments.editedAt, since)),
+        ),
       );
     if ((row?.n ?? 0) >= this.ctx.config.rateLimit.commentMax)
       throw new HttpError(429, 'rate_limited', 'too many comments, try again in a minute', {
         retryAfterSeconds: RATE_WINDOW_MS / 1000,
       });
+  }
+
+  /**
+   * The size of a review's discussion is bounded, so that listing it reads and returns a bounded
+   * amount: at most {@link MAX_COMMENTS_PER_REVIEW} comments and {@link MAX_COMMENT_CHARS_PER_REVIEW}
+   * characters. `adding` is the new text; `replacing` the length of the text an edit replaces.
+   */
+  private async assertBudget(tx: Db, reviewId: string, adding: number, replacing = 0) {
+    const [row] = await tx
+      .select({
+        n: count(),
+        chars: sql<number>`coalesce(sum(char_length(${agentReviewComments.body})), 0)::int`,
+      })
+      .from(agentReviewComments)
+      .where(eq(agentReviewComments.reviewId, reviewId));
+    const newComment = replacing === 0 ? 1 : 0;
+    if (
+      (row?.n ?? 0) + newComment > MAX_COMMENTS_PER_REVIEW ||
+      (row?.chars ?? 0) - replacing + adding > MAX_COMMENT_CHARS_PER_REVIEW
+    )
+      throw new HttpError(
+        409,
+        'review_comment_budget_reached',
+        `a review holds at most ${MAX_COMMENTS_PER_REVIEW} comments and ${MAX_COMMENT_CHARS_PER_REVIEW} characters of discussion`,
+      );
   }
 
   private async auditComment(
@@ -251,6 +282,7 @@ export class ReviewThreadsService {
           'thread_limit_reached',
           `a review has at most ${MAX_THREADS_PER_REVIEW} threads`,
         );
+      await this.assertBudget(tx, review.id, body.length);
       const anchor = input.anchor ? await this.anchorOf(tx, agent, review, input.anchor) : null;
       const now = this.ctx.now();
       const id = randomUUID();
@@ -306,6 +338,7 @@ export class ReviewThreadsService {
           'comment_limit_reached',
           `a thread has at most ${MAX_COMMENTS_PER_THREAD} comments`,
         );
+      await this.assertBudget(tx, review.id, body.length);
       const id = randomUUID();
       await tx.insert(agentReviewComments).values({
         id,
@@ -337,6 +370,8 @@ export class ReviewThreadsService {
       const thread = await this.loadThread(tx, review, threadId);
       const comment = await this.ownComment(tx, p, thread, commentId, 'edit');
       if (comment.deletedAt) throw new HttpError(409, 'comment_deleted', 'the comment was deleted');
+      await this.assertRate(tx, p.userId);
+      await this.assertBudget(tx, review.id, body.length, comment.body.length);
       await tx
         .update(agentReviewComments)
         .set({ body, editedAt: this.ctx.now() })
@@ -481,25 +516,47 @@ export class ReviewThreadsService {
 
   private async thread(p: Principal, reviewId: string, threadId: string): Promise<ThreadView> {
     const { review, agent } = await this.open(p, reviewId);
-    const found = (await this.views(p, agent, review)).find((v) => v.id === threadId);
+    const found = (await this.views(p, agent, review, threadId))[0];
     if (!found) throw notFound('thread');
     return found;
   }
 
-  private async views(p: Principal, agent: AgentRow, review: ReviewRow): Promise<ThreadView[]> {
+  private async views(
+    p: Principal,
+    agent: AgentRow,
+    review: ReviewRow,
+    onlyThread?: string,
+  ): Promise<ThreadView[]> {
     const db = this.ctx.db;
     const threads = await db
       .select()
       .from(agentReviewThreads)
-      .where(eq(agentReviewThreads.reviewId, review.id))
+      .where(
+        and(
+          eq(agentReviewThreads.reviewId, review.id),
+          onlyThread ? eq(agentReviewThreads.id, onlyThread) : undefined,
+        ),
+      )
       .orderBy(asc(agentReviewThreads.createdAt), asc(agentReviewThreads.id))
       .limit(MAX_THREADS_PER_REVIEW);
     if (threads.length === 0) return [];
     const comments = await db
       .select()
       .from(agentReviewComments)
-      .where(eq(agentReviewComments.reviewId, review.id))
-      .orderBy(asc(agentReviewComments.createdAt), asc(agentReviewComments.id));
+      .where(
+        and(
+          eq(agentReviewComments.reviewId, review.id),
+          onlyThread ? eq(agentReviewComments.threadId, onlyThread) : undefined,
+        ),
+      )
+      .orderBy(asc(agentReviewComments.createdAt), asc(agentReviewComments.id))
+      .limit(MAX_COMMENTS_PER_REVIEW);
+    const byThread = new Map<string, CommentRow[]>();
+    for (const c of comments) {
+      const list = byThread.get(c.threadId);
+      if (list) list.push(c);
+      else byThread.set(c.threadId, [c]);
+    }
     const head = await reviewHead(db, agent, review);
     const { set: contributors } = await this.reviews.contributorsOf(db, agent, review, head);
     const sources = await this.sourcesFor(db, review, head, threads);
@@ -528,7 +585,7 @@ export class ReviewThreadsService {
         resolvedBy: th.resolvedBy,
         canResolve: th.createdBy === p.userId || contributors.has(p.userId),
         createdAt: th.createdAt,
-        comments: comments.filter((c) => c.threadId === th.id).map(commentView),
+        comments: (byThread.get(th.id) ?? []).map(commentView),
       };
     });
   }

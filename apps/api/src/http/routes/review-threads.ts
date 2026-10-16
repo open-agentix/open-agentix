@@ -38,8 +38,11 @@ const READ_NOTE =
 const WRITE_NOTE =
   ' Comment text is a Markdown subset shown without HTML, is limited to 10 000 characters (`400 comment_too_long`), a review holds at most 200 threads (`409 thread_limit_reached`) and a thread 200 comments (`409 comment_limit_reached`); creating comments is rate-limited per user (`429 rate_limited`). The review must be open (`409 review_closed`). The audit chain records ids and the length, never the text.';
 
-export function registerReviewThreadRoutes(app: ZApp, { services }: Deps): void {
+export function registerReviewThreadRoutes(app: ZApp, { ctx, services }: Deps): void {
   const { reviewThreads, reviewChanges, reviewInbox } = services;
+  // A second line next to the per-user count in the database: per token (or address) and minute,
+  // for every write, edits and deletes included. Read live so that a test can change the limit.
+  const writeLimit = { max: () => ctx.config.rateLimit.commentMax, timeWindow: '1 minute' };
 
   app.get(
     '/v1/reviews/:id/threads',
@@ -62,7 +65,7 @@ export function registerReviewThreadRoutes(app: ZApp, { services }: Deps): void 
   app.post(
     '/v1/reviews/:id/threads',
     {
-      config: { access: 'agents:review' },
+      config: { access: 'agents:review', rateLimit: writeLimit },
       schema: {
         tags,
         summary: 'Start a comment thread on a line or on the review',
@@ -91,7 +94,7 @@ export function registerReviewThreadRoutes(app: ZApp, { services }: Deps): void 
   app.post(
     '/v1/reviews/:id/threads/:tid/comments',
     {
-      config: { access: 'agents:review' },
+      config: { access: 'agents:review', rateLimit: writeLimit },
       schema: {
         tags,
         summary: 'Reply in a comment thread',
@@ -127,7 +130,7 @@ export function registerReviewThreadRoutes(app: ZApp, { services }: Deps): void 
   app.patch(
     '/v1/reviews/:id/threads/:tid',
     {
-      config: { access: 'agents:review' },
+      config: { access: 'agents:review', rateLimit: writeLimit },
       schema: {
         tags,
         summary: 'Resolve or reopen a comment thread',
@@ -152,7 +155,7 @@ export function registerReviewThreadRoutes(app: ZApp, { services }: Deps): void 
   app.patch(
     '/v1/reviews/:id/threads/:tid/comments/:cid',
     {
-      config: { access: 'agents:review' },
+      config: { access: 'agents:review', rateLimit: writeLimit },
       schema: {
         tags,
         summary: 'Edit your own comment',
@@ -184,7 +187,7 @@ export function registerReviewThreadRoutes(app: ZApp, { services }: Deps): void 
   app.delete(
     '/v1/reviews/:id/threads/:tid/comments/:cid',
     {
-      config: { access: 'agents:review' },
+      config: { access: 'agents:review', rateLimit: writeLimit },
       schema: {
         tags,
         summary: 'Delete your own comment',

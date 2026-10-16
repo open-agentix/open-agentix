@@ -291,7 +291,7 @@ describe('limits', () => {
       threadId: t.id as string,
       reviewId: review.id as string,
       tenantId: orgA,
-      authorId: uid['rev2']!,
+      authorId: randomUUID(),
       body: 'x',
     }));
     await n.ctx.db.insert(agentReviewComments).values(rows);
@@ -416,16 +416,77 @@ describe('who may do what', () => {
       ['PATCH', `${base(review.id)}/${t.id}`],
     ] as const)
       expect((await req(adminB, m, u, { body: 'x', resolved: true })).statusCode, u).toBe(404);
-    // a thread id of another review is not found through this review
+    // a thread id of another review (or tenant) is not found through this review, and nothing is
+    // written to it: the 404 must come from the lookup, not from the final read
     const other = await reviewed();
+    const untouched = async () => {
+      const [row] = await n.ctx.db
+        .select()
+        .from(agentReviewThreads)
+        .where(eq(agentReviewThreads.id, t.id));
+      const rows = await n.ctx.db
+        .select()
+        .from(agentReviewComments)
+        .where(eq(agentReviewComments.threadId, t.id));
+      expect(row!.resolvedAt).toBeNull();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.body).toBe('x');
+    };
     const res = await req(tok['rev1']!, 'POST', `${base(other.review.id)}/${t.id}/comments`, {
-      body: 'x',
+      body: 'sneaked in',
     });
     expect(res.statusCode).toBe(404);
     expect(
       (await req(tok['rev1']!, 'PATCH', `${base(other.review.id)}/${t.id}`, { resolved: true }))
         .statusCode,
     ).toBe(404);
+    await untouched();
+    // the same from a review of another tenant
+    const nameB = `thr-b-${++agentSeq}`;
+    const agentB = j(
+      await req(adminB, 'POST', '/v1/agents', { source: agentSource(nameB, 'team-b', '1.0.0') }),
+    ).id;
+    const reviewB = j(await req(adminB, 'POST', `/v1/agents/${agentB}/reviews`));
+    expect(
+      (await req(adminB, 'POST', `${base(reviewB.id)}/${t.id}/comments`, { body: 'sneaked in' }))
+        .statusCode,
+    ).toBe(404);
+    expect(
+      (await req(adminB, 'PATCH', `${base(reviewB.id)}/${t.id}`, { resolved: true })).statusCode,
+    ).toBe(404);
+    await untouched();
+    // a comment id of another thread of the same review is not editable or deletable through this one
+    const t2 = j(await startThread(tok['rev1']!, review.id, { body: 'second' }));
+    const cid2 = t2.comments[0].id as string;
+    const via = `${base(review.id)}/${t.id}/comments/${cid2}`;
+    expect((await req(tok['rev1']!, 'PATCH', via, { body: 'rewritten' })).statusCode).toBe(404);
+    expect((await req(tok['rev1']!, 'DELETE', via)).statusCode).toBe(404);
+    const [c2] = await n.ctx.db
+      .select()
+      .from(agentReviewComments)
+      .where(eq(agentReviewComments.id, cid2));
+    expect(c2).toMatchObject({ body: 'second', deletedAt: null, editedAt: null });
+  });
+
+  it('needs agents:review on this agent, not just somewhere (service level)', async () => {
+    const { review } = await reviewed();
+    // viewer here, maintainer of another team: the route lets the request in, the agent check refuses
+    await mkUser('split', ['viewer']);
+    const teamB = j(
+      await req(adminA, 'POST', '/v1/teams', { slug: 'team-other', name: 'Other' }),
+    ).id;
+    const added = await req(adminA, 'PUT', `/v1/teams/${teamB}/members`, {
+      members: [{ userId: uid['split'], role: 'agent-maintainer' }],
+    });
+    expect(added.statusCode, added.body).toBe(204);
+    tok['split'] = await n.login('split@org-a.example.org', PW);
+    expect((await startThread(tok['split']!, review.id, { body: 'x' })).statusCode).toBe(403);
+    expect((await req(tok['split']!, 'GET', base(review.id))).statusCode).toBe(403);
+    const rows = await n.ctx.db
+      .select()
+      .from(agentReviewThreads)
+      .where(eq(agentReviewThreads.reviewId, review.id));
+    expect(rows).toHaveLength(0);
   });
 
   it('lets only the author edit and delete a comment, and keeps a tombstone without text', async () => {
@@ -696,5 +757,130 @@ describe('the audit trail of comments', () => {
     expect(JSON.stringify(entries)).not.toContain('secret-looking');
     const verify = await n.req({ method: 'POST', url: '/v1/audit/verify', payload: {} });
     expect(verify.json().valid).toBe(true);
+  });
+});
+
+describe('bounds on what a review costs to read', () => {
+  it('stops a review at 1,000 comments and answers with a clear 409', async () => {
+    const { review } = await reviewed();
+    const t = j(await startThread(tok['rev1']!, review.id, { body: 'first' }));
+    const thread2 = randomUUID();
+    await n.ctx.db.insert(agentReviewThreads).values({
+      id: thread2,
+      reviewId: review.id,
+      agentId: review.agentId,
+      tenantId: orgA,
+      createdBy: uid['rev1']!,
+      anchorKind: 'review',
+    });
+    // 999 more comments spread over threads (a thread holds at most 200)
+    const rows = Array.from({ length: 999 }, () => ({
+      id: randomUUID(),
+      threadId: thread2,
+      reviewId: review.id as string,
+      tenantId: orgA,
+      authorId: randomUUID(),
+      body: 'x',
+    }));
+    await n.ctx.db.insert(agentReviewComments).values(rows);
+    const res = await req(tok['rev1']!, 'POST', `${base(review.id)}/${t.id}/comments`, {
+      body: 'one more',
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('review_comment_budget_reached');
+    expect((await startThread(tok['rev1']!, review.id, { body: 'new thread' })).statusCode).toBe(
+      409,
+    );
+    // deleting your own comment still works at the limit
+    expect(
+      (await req(tok['rev1']!, 'DELETE', `${base(review.id)}/${t.id}/comments/${t.comments[0].id}`))
+        .statusCode,
+    ).toBe(200);
+  }, 60_000);
+
+  it('stops a review at one million characters, edits included', async () => {
+    const { review } = await reviewed();
+    const t = j(await startThread(tok['rev1']!, review.id, { body: 'small' }));
+    const thread2 = randomUUID();
+    await n.ctx.db.insert(agentReviewThreads).values({
+      id: thread2,
+      reviewId: review.id,
+      agentId: review.agentId,
+      tenantId: orgA,
+      createdBy: uid['rev1']!,
+      anchorKind: 'review',
+    });
+    await n.ctx.db.insert(agentReviewComments).values(
+      Array.from({ length: 99 }, () => ({
+        id: randomUUID(),
+        threadId: thread2,
+        reviewId: review.id as string,
+        tenantId: orgA,
+        authorId: randomUUID(),
+        body: 'y'.repeat(10_000),
+      })),
+    );
+    // 990,005 characters in: room for one more 9,995, not for 10,000
+    const url = `${base(review.id)}/${t.id}`;
+    expect(
+      (await req(tok['rev1']!, 'POST', `${url}/comments`, { body: 'z'.repeat(10_000) })).statusCode,
+    ).toBe(409);
+    expect(
+      (await req(tok['rev1']!, 'POST', `${url}/comments`, { body: 'z'.repeat(9_995) })).statusCode,
+    ).toBe(201);
+    const edit = await req(tok['rev1']!, 'PATCH', `${url}/comments/${t.comments[0].id}`, {
+      body: 'q'.repeat(100),
+    });
+    expect(edit.statusCode).toBe(409);
+    expect(edit.json().error).toBe('review_comment_budget_reached');
+  }, 60_000);
+
+  it('reads one thread without reading the whole discussion', async () => {
+    const { review } = await reviewed();
+    const a = j(await startThread(tok['rev1']!, review.id, { body: 'a' }));
+    await startThread(tok['rev1']!, review.id, { body: 'b' });
+    const reply = await req(tok['rev2']!, 'POST', `${base(review.id)}/${a.id}/comments`, {
+      body: 'c',
+    });
+    expect(j(reply).comments.map((c: Json) => c.body)).toEqual(['a', 'c']);
+  });
+
+  it('handles a source line of 200,000 blanks in a bounded time, creating and listing', async () => {
+    const long = `description: "${' '.repeat(200_000)}x"`;
+    const name = `thr-long-${++agentSeq}`;
+    const created = await req(tok['author']!, 'POST', '/v1/agents', {
+      source: sourceOf(name, '1.0.0', long),
+    });
+    expect(created.statusCode, created.body.slice(0, 200)).toBe(201);
+    const review = j(await req(tok['author']!, 'POST', `/v1/agents/${j(created).id}/reviews`));
+    const rev = j(await req(tok['author']!, 'GET', `/v1/agents/${j(created).id}/revisions/1`));
+    const line = lineOf(rev.source, 'description:');
+    let started = performance.now();
+    const res = await startThread(tok['rev1']!, review.id, {
+      body: 'long',
+      anchor: { side: 'head', line },
+    });
+    expect(res.statusCode, res.body.slice(0, 200)).toBe(201);
+    expect(performance.now() - started).toBeLessThan(3000);
+    started = performance.now();
+    expect((await req(tok['rev1']!, 'GET', base(review.id))).statusCode).toBe(200);
+    expect(performance.now() - started).toBeLessThan(3000);
+  }, 60_000);
+
+  it('limits edits too: the route and the per-user count both apply', async () => {
+    const { review } = await reviewed();
+    const t = j(await startThread(tok['fresh']!, review.id, { body: 'v0' }));
+    const cfg = n.ctx.config.rateLimit;
+    const before = cfg.commentMax;
+    cfg.commentMax = 2;
+    try {
+      const url = `${base(review.id)}/${t.id}/comments/${t.comments[0].id}`;
+      const codes: number[] = [];
+      for (let i = 1; i <= 4; i++)
+        codes.push((await req(tok['fresh']!, 'PATCH', url, { body: `v${i}` })).statusCode);
+      expect(codes).toContain(429);
+    } finally {
+      cfg.commentMax = before;
+    }
   });
 });
