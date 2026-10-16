@@ -6351,6 +6351,2253 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/reviews/{id}/threads:
+    get:
+      summary: List the comment threads of a review
+      tags:
+        - lifecycle
+      description: Threads with their comments, oldest first. A thread on a line is `outdated` when the line no longer holds the same text in the current source of its side; it is kept, anchored to the revision it was written on. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        reviewId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        createdBy:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        anchor:
+                          anyOf:
+                            - type: object
+                              properties:
+                                side:
+                                  type: string
+                                  enum:
+                                    - base
+                                    - head
+                                line:
+                                  type: integer
+                                  minimum: -9007199254740991
+                                  maximum: 9007199254740991
+                                lineHash:
+                                  type: string
+                                  description: SHA-256 of the line text, computed by the server
+                                revisionId:
+                                  anyOf:
+                                    - type: string
+                                      format: uuid
+                                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                    - type: "null"
+                                  description: the revision a `head` anchor was written on
+                                revisionSeq:
+                                  anyOf:
+                                    - type: integer
+                                      minimum: -9007199254740991
+                                      maximum: 9007199254740991
+                                    - type: "null"
+                              required:
+                                - side
+                                - line
+                                - lineHash
+                                - revisionId
+                                - revisionSeq
+                              additionalProperties: false
+                            - type: "null"
+                          description: "`null` for a thread about the review as a whole"
+                        outdated:
+                          type: boolean
+                          description: the anchored line no longer holds the same text in the current source of its side
+                        resolved:
+                          type: boolean
+                        resolvedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        resolvedBy:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                        canResolve:
+                          type: boolean
+                          description: the caller started the thread or is an author of the review
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        comments:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              authorId:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              body:
+                                type: string
+                                description: empty when the comment was deleted
+                              deleted:
+                                type: boolean
+                              createdAt:
+                                type: string
+                                description: ISO 8601 timestamp
+                              editedAt:
+                                anyOf:
+                                  - type: string
+                                    description: ISO 8601 timestamp
+                                  - type: "null"
+                            required:
+                              - id
+                              - authorId
+                              - body
+                              - deleted
+                              - createdAt
+                              - editedAt
+                            additionalProperties: false
+                      required:
+                        - id
+                        - reviewId
+                        - createdBy
+                        - anchor
+                        - outdated
+                        - resolved
+                        - resolvedAt
+                        - resolvedBy
+                        - canResolve
+                        - createdAt
+                        - comments
+                      additionalProperties: false
+                required:
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    post:
+      summary: Start a comment thread on a line or on the review
+      tags:
+        - lifecycle
+      description: "With `anchor` the thread is about one line of the diff (side `head`: the revision shown; side `base`: the base version); the server stores the SHA-256 of that line (`400 anchor_invalid` when the source has no such line). Without it the thread is about the review as a whole. Comment text is a Markdown subset shown without HTML, is limited to 10 000 characters (`400 comment_too_long`), a review holds at most 200 threads (`409 thread_limit_reached`) and a thread 200 comments (`409 comment_limit_reached`); creating comments is rate-limited per user (`429 rate_limited`). The review must be open (`409 review_closed`). The audit chain records ids and the length, never the text. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 10000
+                  description: Markdown subset (no HTML, no images); at most 10000 characters after invisible characters are removed. Never copied to the audit chain, telemetry or a model context.
+                anchor:
+                  description: omit for a thread about the review as a whole
+                  type: object
+                  properties:
+                    side:
+                      type: string
+                      enum:
+                        - base
+                        - head
+                    line:
+                      type: integer
+                      minimum: 1
+                      maximum: 100000
+                    revisionId:
+                      description: "side `head`: the revision shown; defaults to the head"
+                      type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  required:
+                    - side
+                    - line
+              required:
+                - body
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "201":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  reviewId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  createdBy:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  anchor:
+                    anyOf:
+                      - type: object
+                        properties:
+                          side:
+                            type: string
+                            enum:
+                              - base
+                              - head
+                          line:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          lineHash:
+                            type: string
+                            description: SHA-256 of the line text, computed by the server
+                          revisionId:
+                            anyOf:
+                              - type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              - type: "null"
+                            description: the revision a `head` anchor was written on
+                          revisionSeq:
+                            anyOf:
+                              - type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              - type: "null"
+                        required:
+                          - side
+                          - line
+                          - lineHash
+                          - revisionId
+                          - revisionSeq
+                        additionalProperties: false
+                      - type: "null"
+                    description: "`null` for a thread about the review as a whole"
+                  outdated:
+                    type: boolean
+                    description: the anchored line no longer holds the same text in the current source of its side
+                  resolved:
+                    type: boolean
+                  resolvedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  resolvedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  canResolve:
+                    type: boolean
+                    description: the caller started the thread or is an author of the review
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  comments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        authorId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        body:
+                          type: string
+                          description: empty when the comment was deleted
+                        deleted:
+                          type: boolean
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        editedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                      required:
+                        - id
+                        - authorId
+                        - body
+                        - deleted
+                        - createdAt
+                        - editedAt
+                      additionalProperties: false
+                required:
+                  - id
+                  - reviewId
+                  - createdBy
+                  - anchor
+                  - outdated
+                  - resolved
+                  - resolvedAt
+                  - resolvedBy
+                  - canResolve
+                  - createdAt
+                  - comments
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/reviews/{id}/threads/{tid}/comments:
+    post:
+      summary: Reply in a comment thread
+      tags:
+        - lifecycle
+      description: Returns the thread. Comment text is a Markdown subset shown without HTML, is limited to 10 000 characters (`400 comment_too_long`), a review holds at most 200 threads (`409 thread_limit_reached`) and a thread 200 comments (`409 comment_limit_reached`); creating comments is rate-limited per user (`429 rate_limited`). The review must be open (`409 review_closed`). The audit chain records ids and the length, never the text. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 10000
+                  description: Markdown subset (no HTML, no images); at most 10000 characters after invisible characters are removed. Never copied to the audit chain, telemetry or a model context.
+              required:
+                - body
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: tid
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "201":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  reviewId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  createdBy:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  anchor:
+                    anyOf:
+                      - type: object
+                        properties:
+                          side:
+                            type: string
+                            enum:
+                              - base
+                              - head
+                          line:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          lineHash:
+                            type: string
+                            description: SHA-256 of the line text, computed by the server
+                          revisionId:
+                            anyOf:
+                              - type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              - type: "null"
+                            description: the revision a `head` anchor was written on
+                          revisionSeq:
+                            anyOf:
+                              - type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              - type: "null"
+                        required:
+                          - side
+                          - line
+                          - lineHash
+                          - revisionId
+                          - revisionSeq
+                        additionalProperties: false
+                      - type: "null"
+                    description: "`null` for a thread about the review as a whole"
+                  outdated:
+                    type: boolean
+                    description: the anchored line no longer holds the same text in the current source of its side
+                  resolved:
+                    type: boolean
+                  resolvedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  resolvedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  canResolve:
+                    type: boolean
+                    description: the caller started the thread or is an author of the review
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  comments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        authorId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        body:
+                          type: string
+                          description: empty when the comment was deleted
+                        deleted:
+                          type: boolean
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        editedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                      required:
+                        - id
+                        - authorId
+                        - body
+                        - deleted
+                        - createdAt
+                        - editedAt
+                      additionalProperties: false
+                required:
+                  - id
+                  - reviewId
+                  - createdBy
+                  - anchor
+                  - outdated
+                  - resolved
+                  - resolvedAt
+                  - resolvedBy
+                  - canResolve
+                  - createdAt
+                  - comments
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/reviews/{id}/threads/{tid}:
+    patch:
+      summary: Resolve or reopen a comment thread
+      tags:
+        - lifecycle
+      description: Only the person who started the thread or a contributor of the review (an author of a revision since the base version, or the opener) can change the state (`403` otherwise). Idempotent. The review must be open. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                resolved:
+                  type: boolean
+              required:
+                - resolved
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: tid
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  reviewId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  createdBy:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  anchor:
+                    anyOf:
+                      - type: object
+                        properties:
+                          side:
+                            type: string
+                            enum:
+                              - base
+                              - head
+                          line:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          lineHash:
+                            type: string
+                            description: SHA-256 of the line text, computed by the server
+                          revisionId:
+                            anyOf:
+                              - type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              - type: "null"
+                            description: the revision a `head` anchor was written on
+                          revisionSeq:
+                            anyOf:
+                              - type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              - type: "null"
+                        required:
+                          - side
+                          - line
+                          - lineHash
+                          - revisionId
+                          - revisionSeq
+                        additionalProperties: false
+                      - type: "null"
+                    description: "`null` for a thread about the review as a whole"
+                  outdated:
+                    type: boolean
+                    description: the anchored line no longer holds the same text in the current source of its side
+                  resolved:
+                    type: boolean
+                  resolvedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  resolvedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  canResolve:
+                    type: boolean
+                    description: the caller started the thread or is an author of the review
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  comments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        authorId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        body:
+                          type: string
+                          description: empty when the comment was deleted
+                        deleted:
+                          type: boolean
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        editedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                      required:
+                        - id
+                        - authorId
+                        - body
+                        - deleted
+                        - createdAt
+                        - editedAt
+                      additionalProperties: false
+                required:
+                  - id
+                  - reviewId
+                  - createdBy
+                  - anchor
+                  - outdated
+                  - resolved
+                  - resolvedAt
+                  - resolvedBy
+                  - canResolve
+                  - createdAt
+                  - comments
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/reviews/{id}/threads/{tid}/comments/{cid}:
+    patch:
+      summary: Edit your own comment
+      tags:
+        - lifecycle
+      description: Only the author (`403` otherwise); a deleted comment is `409 comment_deleted`. Returns the thread. Comment text is a Markdown subset shown without HTML, is limited to 10 000 characters (`400 comment_too_long`), a review holds at most 200 threads (`409 thread_limit_reached`) and a thread 200 comments (`409 comment_limit_reached`); creating comments is rate-limited per user (`429 rate_limited`). The review must be open (`409 review_closed`). The audit chain records ids and the length, never the text.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 10000
+                  description: Markdown subset (no HTML, no images); at most 10000 characters after invisible characters are removed. Never copied to the audit chain, telemetry or a model context.
+              required:
+                - body
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: tid
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: cid
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  reviewId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  createdBy:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  anchor:
+                    anyOf:
+                      - type: object
+                        properties:
+                          side:
+                            type: string
+                            enum:
+                              - base
+                              - head
+                          line:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          lineHash:
+                            type: string
+                            description: SHA-256 of the line text, computed by the server
+                          revisionId:
+                            anyOf:
+                              - type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              - type: "null"
+                            description: the revision a `head` anchor was written on
+                          revisionSeq:
+                            anyOf:
+                              - type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              - type: "null"
+                        required:
+                          - side
+                          - line
+                          - lineHash
+                          - revisionId
+                          - revisionSeq
+                        additionalProperties: false
+                      - type: "null"
+                    description: "`null` for a thread about the review as a whole"
+                  outdated:
+                    type: boolean
+                    description: the anchored line no longer holds the same text in the current source of its side
+                  resolved:
+                    type: boolean
+                  resolvedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  resolvedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  canResolve:
+                    type: boolean
+                    description: the caller started the thread or is an author of the review
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  comments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        authorId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        body:
+                          type: string
+                          description: empty when the comment was deleted
+                        deleted:
+                          type: boolean
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        editedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                      required:
+                        - id
+                        - authorId
+                        - body
+                        - deleted
+                        - createdAt
+                        - editedAt
+                      additionalProperties: false
+                required:
+                  - id
+                  - reviewId
+                  - createdBy
+                  - anchor
+                  - outdated
+                  - resolved
+                  - resolvedAt
+                  - resolvedBy
+                  - canResolve
+                  - createdAt
+                  - comments
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    delete:
+      summary: Delete your own comment
+      tags:
+        - lifecycle
+      description: Only the author (`403` otherwise). The comment stays as an empty tombstone so that the thread keeps its shape; the text is gone. Allowed on a closed review too. Returns the thread. Needs `agents:review` on the agent (roles admin, agent-maintainer, agent-developer, integrator, operator and auditor; not viewer or pentest, who cannot read comment text). Use-case bindings never carry it. A review of another tenant, or of an agent the caller cannot read, is 404 like an unknown id.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: tid
+          required: true
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: cid
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  reviewId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  createdBy:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  anchor:
+                    anyOf:
+                      - type: object
+                        properties:
+                          side:
+                            type: string
+                            enum:
+                              - base
+                              - head
+                          line:
+                            type: integer
+                            minimum: -9007199254740991
+                            maximum: 9007199254740991
+                          lineHash:
+                            type: string
+                            description: SHA-256 of the line text, computed by the server
+                          revisionId:
+                            anyOf:
+                              - type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              - type: "null"
+                            description: the revision a `head` anchor was written on
+                          revisionSeq:
+                            anyOf:
+                              - type: integer
+                                minimum: -9007199254740991
+                                maximum: 9007199254740991
+                              - type: "null"
+                        required:
+                          - side
+                          - line
+                          - lineHash
+                          - revisionId
+                          - revisionSeq
+                        additionalProperties: false
+                      - type: "null"
+                    description: "`null` for a thread about the review as a whole"
+                  outdated:
+                    type: boolean
+                    description: the anchored line no longer holds the same text in the current source of its side
+                  resolved:
+                    type: boolean
+                  resolvedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  resolvedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  canResolve:
+                    type: boolean
+                    description: the caller started the thread or is an author of the review
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  comments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        authorId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        body:
+                          type: string
+                          description: empty when the comment was deleted
+                        deleted:
+                          type: boolean
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        editedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                      required:
+                        - id
+                        - authorId
+                        - body
+                        - deleted
+                        - createdAt
+                        - editedAt
+                      additionalProperties: false
+                required:
+                  - id
+                  - reviewId
+                  - createdBy
+                  - anchor
+                  - outdated
+                  - resolved
+                  - resolvedAt
+                  - resolvedBy
+                  - canResolve
+                  - createdAt
+                  - comments
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/reviews/{id}/changes:
+    get:
+      summary: "What a review changes: sources, semantic summary and expanded grants"
+      tags:
+        - lifecycle
+      description: "The base version and the reviewed revision (sources for the diff), the semantic summary of both (tools with their access class and the profile they came from, egress hosts, secret references by name, budget, classification, runtime, owner) and the changes between them. The head is expanded against the connection catalog of now. Secret references carry no scope or owning node until the secret store exists (`scope: legacy`). `rules` is empty until agent rules exist. Needs `agents:read` on the agent; another tenant or an unreadable agent is 404."
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reviewId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  revision:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      seq:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      digest:
+                        type: string
+                    required:
+                      - id
+                      - seq
+                      - digest
+                    additionalProperties: false
+                  base:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          version:
+                            type: string
+                          digest:
+                            type: string
+                          source:
+                            type: string
+                        required:
+                          - id
+                          - version
+                          - digest
+                          - source
+                        additionalProperties: false
+                      - type: "null"
+                  headSource:
+                    type: string
+                  facts:
+                    type: object
+                    properties:
+                      base:
+                        anyOf:
+                          - type: object
+                            properties:
+                              name:
+                                type: string
+                              version:
+                                type: string
+                              owner:
+                                type: string
+                              classification:
+                                type: string
+                              useCase:
+                                type:
+                                  - string
+                                  - "null"
+                              runtime:
+                                type: object
+                                properties:
+                                  runner:
+                                    type: string
+                                  toolbox:
+                                    type:
+                                      - string
+                                      - "null"
+                                required:
+                                  - runner
+                                  - toolbox
+                                additionalProperties: false
+                              egress:
+                                type: array
+                                items:
+                                  type: string
+                              budget:
+                                type: object
+                                propertyNames:
+                                  type: string
+                                additionalProperties:
+                                  type:
+                                    - number
+                                    - "null"
+                              stepBudgets:
+                                type: object
+                                propertyNames:
+                                  type: string
+                                additionalProperties:
+                                  type: object
+                                  propertyNames:
+                                    type: string
+                                  additionalProperties:
+                                    type:
+                                      - number
+                                      - "null"
+                              tools:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    key:
+                                      type: string
+                                    server:
+                                      type: string
+                                    tool:
+                                      type: string
+                                    access:
+                                      type: string
+                                      enum:
+                                        - read
+                                        - write
+                                        - unclassified
+                                    approval:
+                                      type: string
+                                      enum:
+                                        - none
+                                        - required
+                                    maxCallsPerRun:
+                                      anyOf:
+                                        - type: integer
+                                          minimum: -9007199254740991
+                                          maximum: 9007199254740991
+                                        - type: "null"
+                                    classification:
+                                      type:
+                                        - string
+                                        - "null"
+                                    profile:
+                                      description: "`server:profile` when the grant came from a profile"
+                                      type:
+                                        - string
+                                        - "null"
+                                    steps:
+                                      type: array
+                                      items:
+                                        type: string
+                                  required:
+                                    - key
+                                    - server
+                                    - tool
+                                    - access
+                                    - approval
+                                    - maxCallsPerRun
+                                    - classification
+                                    - profile
+                                    - steps
+                                  additionalProperties: false
+                              secretReferences:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    name:
+                                      type: string
+                                    scope:
+                                      type: string
+                                      description: scoped references arrive with the secret store (ADR 0017 S4)
+                                      enum:
+                                        - legacy
+                                    ownerNode:
+                                      type: "null"
+                                    env:
+                                      type:
+                                        - string
+                                        - "null"
+                                    steps:
+                                      type: array
+                                      items:
+                                        type: string
+                                  required:
+                                    - name
+                                    - scope
+                                    - ownerNode
+                                    - env
+                                    - steps
+                                  additionalProperties: false
+                              steps:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                    provider:
+                                      type: string
+                                    model:
+                                      type: string
+                                    access:
+                                      type:
+                                        - string
+                                        - "null"
+                                  required:
+                                    - id
+                                    - provider
+                                    - model
+                                    - access
+                                  additionalProperties: false
+                            required:
+                              - name
+                              - version
+                              - owner
+                              - classification
+                              - useCase
+                              - runtime
+                              - egress
+                              - budget
+                              - stepBudgets
+                              - tools
+                              - secretReferences
+                              - steps
+                            additionalProperties: false
+                          - type: "null"
+                      head:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          version:
+                            type: string
+                          owner:
+                            type: string
+                          classification:
+                            type: string
+                          useCase:
+                            type:
+                              - string
+                              - "null"
+                          runtime:
+                            type: object
+                            properties:
+                              runner:
+                                type: string
+                              toolbox:
+                                type:
+                                  - string
+                                  - "null"
+                            required:
+                              - runner
+                              - toolbox
+                            additionalProperties: false
+                          egress:
+                            type: array
+                            items:
+                              type: string
+                          budget:
+                            type: object
+                            propertyNames:
+                              type: string
+                            additionalProperties:
+                              type:
+                                - number
+                                - "null"
+                          stepBudgets:
+                            type: object
+                            propertyNames:
+                              type: string
+                            additionalProperties:
+                              type: object
+                              propertyNames:
+                                type: string
+                              additionalProperties:
+                                type:
+                                  - number
+                                  - "null"
+                          tools:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                key:
+                                  type: string
+                                server:
+                                  type: string
+                                tool:
+                                  type: string
+                                access:
+                                  type: string
+                                  enum:
+                                    - read
+                                    - write
+                                    - unclassified
+                                approval:
+                                  type: string
+                                  enum:
+                                    - none
+                                    - required
+                                maxCallsPerRun:
+                                  anyOf:
+                                    - type: integer
+                                      minimum: -9007199254740991
+                                      maximum: 9007199254740991
+                                    - type: "null"
+                                classification:
+                                  type:
+                                    - string
+                                    - "null"
+                                profile:
+                                  description: "`server:profile` when the grant came from a profile"
+                                  type:
+                                    - string
+                                    - "null"
+                                steps:
+                                  type: array
+                                  items:
+                                    type: string
+                              required:
+                                - key
+                                - server
+                                - tool
+                                - access
+                                - approval
+                                - maxCallsPerRun
+                                - classification
+                                - profile
+                                - steps
+                              additionalProperties: false
+                          secretReferences:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                scope:
+                                  type: string
+                                  description: scoped references arrive with the secret store (ADR 0017 S4)
+                                  enum:
+                                    - legacy
+                                ownerNode:
+                                  type: "null"
+                                env:
+                                  type:
+                                    - string
+                                    - "null"
+                                steps:
+                                  type: array
+                                  items:
+                                    type: string
+                              required:
+                                - name
+                                - scope
+                                - ownerNode
+                                - env
+                                - steps
+                              additionalProperties: false
+                          steps:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                provider:
+                                  type: string
+                                model:
+                                  type: string
+                                access:
+                                  type:
+                                    - string
+                                    - "null"
+                              required:
+                                - id
+                                - provider
+                                - model
+                                - access
+                              additionalProperties: false
+                        required:
+                          - name
+                          - version
+                          - owner
+                          - classification
+                          - useCase
+                          - runtime
+                          - egress
+                          - budget
+                          - stepBudgets
+                          - tools
+                          - secretReferences
+                          - steps
+                        additionalProperties: false
+                    required:
+                      - base
+                      - head
+                    additionalProperties: false
+                  changes:
+                    type: object
+                    properties:
+                      tools:
+                        type: object
+                        properties:
+                          added:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                key:
+                                  type: string
+                                server:
+                                  type: string
+                                tool:
+                                  type: string
+                                access:
+                                  type: string
+                                  enum:
+                                    - read
+                                    - write
+                                    - unclassified
+                                approval:
+                                  type: string
+                                  enum:
+                                    - none
+                                    - required
+                                maxCallsPerRun:
+                                  anyOf:
+                                    - type: integer
+                                      minimum: -9007199254740991
+                                      maximum: 9007199254740991
+                                    - type: "null"
+                                classification:
+                                  type:
+                                    - string
+                                    - "null"
+                                profile:
+                                  description: "`server:profile` when the grant came from a profile"
+                                  type:
+                                    - string
+                                    - "null"
+                                steps:
+                                  type: array
+                                  items:
+                                    type: string
+                              required:
+                                - key
+                                - server
+                                - tool
+                                - access
+                                - approval
+                                - maxCallsPerRun
+                                - classification
+                                - profile
+                                - steps
+                              additionalProperties: false
+                          removed:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                key:
+                                  type: string
+                                server:
+                                  type: string
+                                tool:
+                                  type: string
+                                access:
+                                  type: string
+                                  enum:
+                                    - read
+                                    - write
+                                    - unclassified
+                                approval:
+                                  type: string
+                                  enum:
+                                    - none
+                                    - required
+                                maxCallsPerRun:
+                                  anyOf:
+                                    - type: integer
+                                      minimum: -9007199254740991
+                                      maximum: 9007199254740991
+                                    - type: "null"
+                                classification:
+                                  type:
+                                    - string
+                                    - "null"
+                                profile:
+                                  description: "`server:profile` when the grant came from a profile"
+                                  type:
+                                    - string
+                                    - "null"
+                                steps:
+                                  type: array
+                                  items:
+                                    type: string
+                              required:
+                                - key
+                                - server
+                                - tool
+                                - access
+                                - approval
+                                - maxCallsPerRun
+                                - classification
+                                - profile
+                                - steps
+                              additionalProperties: false
+                          changed:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                from:
+                                  type: object
+                                  properties:
+                                    key:
+                                      type: string
+                                    server:
+                                      type: string
+                                    tool:
+                                      type: string
+                                    access:
+                                      type: string
+                                      enum:
+                                        - read
+                                        - write
+                                        - unclassified
+                                    approval:
+                                      type: string
+                                      enum:
+                                        - none
+                                        - required
+                                    maxCallsPerRun:
+                                      anyOf:
+                                        - type: integer
+                                          minimum: -9007199254740991
+                                          maximum: 9007199254740991
+                                        - type: "null"
+                                    classification:
+                                      type:
+                                        - string
+                                        - "null"
+                                    profile:
+                                      description: "`server:profile` when the grant came from a profile"
+                                      type:
+                                        - string
+                                        - "null"
+                                    steps:
+                                      type: array
+                                      items:
+                                        type: string
+                                  required:
+                                    - key
+                                    - server
+                                    - tool
+                                    - access
+                                    - approval
+                                    - maxCallsPerRun
+                                    - classification
+                                    - profile
+                                    - steps
+                                  additionalProperties: false
+                                to:
+                                  type: object
+                                  properties:
+                                    key:
+                                      type: string
+                                    server:
+                                      type: string
+                                    tool:
+                                      type: string
+                                    access:
+                                      type: string
+                                      enum:
+                                        - read
+                                        - write
+                                        - unclassified
+                                    approval:
+                                      type: string
+                                      enum:
+                                        - none
+                                        - required
+                                    maxCallsPerRun:
+                                      anyOf:
+                                        - type: integer
+                                          minimum: -9007199254740991
+                                          maximum: 9007199254740991
+                                        - type: "null"
+                                    classification:
+                                      type:
+                                        - string
+                                        - "null"
+                                    profile:
+                                      description: "`server:profile` when the grant came from a profile"
+                                      type:
+                                        - string
+                                        - "null"
+                                    steps:
+                                      type: array
+                                      items:
+                                        type: string
+                                  required:
+                                    - key
+                                    - server
+                                    - tool
+                                    - access
+                                    - approval
+                                    - maxCallsPerRun
+                                    - classification
+                                    - profile
+                                    - steps
+                                  additionalProperties: false
+                              required:
+                                - from
+                                - to
+                              additionalProperties: false
+                        required:
+                          - added
+                          - removed
+                          - changed
+                        additionalProperties: false
+                      egress:
+                        type: object
+                        properties:
+                          added:
+                            type: array
+                            items:
+                              type: string
+                          removed:
+                            type: array
+                            items:
+                              type: string
+                        required:
+                          - added
+                          - removed
+                        additionalProperties: false
+                      secretReferences:
+                        type: object
+                        properties:
+                          added:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                scope:
+                                  type: string
+                                  description: scoped references arrive with the secret store (ADR 0017 S4)
+                                  enum:
+                                    - legacy
+                                ownerNode:
+                                  type: "null"
+                                env:
+                                  type:
+                                    - string
+                                    - "null"
+                                steps:
+                                  type: array
+                                  items:
+                                    type: string
+                              required:
+                                - name
+                                - scope
+                                - ownerNode
+                                - env
+                                - steps
+                              additionalProperties: false
+                          removed:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                scope:
+                                  type: string
+                                  description: scoped references arrive with the secret store (ADR 0017 S4)
+                                  enum:
+                                    - legacy
+                                ownerNode:
+                                  type: "null"
+                                env:
+                                  type:
+                                    - string
+                                    - "null"
+                                steps:
+                                  type: array
+                                  items:
+                                    type: string
+                              required:
+                                - name
+                                - scope
+                                - ownerNode
+                                - env
+                                - steps
+                              additionalProperties: false
+                        required:
+                          - added
+                          - removed
+                        additionalProperties: false
+                      scalars:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            field:
+                              type: string
+                            from:
+                              type:
+                                - string
+                                - number
+                                - "null"
+                            to:
+                              type:
+                                - string
+                                - number
+                                - "null"
+                          required:
+                            - field
+                            - from
+                            - to
+                          additionalProperties: false
+                    required:
+                      - tools
+                      - egress
+                      - secretReferences
+                      - scalars
+                    additionalProperties: false
+                  rules:
+                    type: object
+                    properties:
+                      available:
+                        type: boolean
+                        enum:
+                          - false
+                      requirements:
+                        type: array
+                        items:
+                          not: {}
+                    required:
+                      - available
+                      - requirements
+                    additionalProperties: false
+                    description: agent rules arrive with ADR 0017 S8; until then nothing is listed
+                required:
+                  - reviewId
+                  - revision
+                  - base
+                  - headSource
+                  - facts
+                  - changes
+                  - rules
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/me/reviews:
+    get:
+      summary: "Your review inbox: open reviews you could decide now"
+      tags:
+        - lifecycle
+      description: Open reviews of the acting tenant, newest first, for agents you can read and where the approval rules (A1 to A7) would let you decide. Reviews you are not eligible for are not listed. Looks at the newest 100 open reviews of the tenant.
+      parameters:
+        - schema:
+            default: 20
+            type: integer
+            minimum: 1
+            maximum: 50
+          in: query
+          name: limit
+          required: false
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        reviewId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        agentId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        agentName:
+                          type: string
+                        state:
+                          type: string
+                        openedBy:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        openedAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        revisionSeq:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                        requiredApprovals:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                        countedApprovals:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                        yourDecision:
+                          anyOf:
+                            - type: string
+                              enum:
+                                - approve
+                                - request_changes
+                                - reject
+                            - type: "null"
+                      required:
+                        - reviewId
+                        - agentId
+                        - agentName
+                        - state
+                        - openedBy
+                        - openedAt
+                        - revisionSeq
+                        - requiredApprovals
+                        - countedApprovals
+                        - yourDecision
+                      additionalProperties: false
+                required:
+                  - items
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/event-sources:
     get:
       summary: List event sources
