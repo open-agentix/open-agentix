@@ -8449,6 +8449,49 @@ paths:
                       - secretReferences
                       - scalars
                     additionalProperties: false
+                  policy:
+                    type: object
+                    properties:
+                      requireApprovalForPublish:
+                        type: string
+                        enum:
+                          - off
+                          - production-only
+                          - on
+                      minApprovals:
+                        type: integer
+                        minimum: 1
+                        maximum: 5
+                      allowedApproverRoles:
+                        type: array
+                        items:
+                          type: string
+                          enum:
+                            - admin
+                            - agent-maintainer
+                            - agent-developer
+                            - operator
+                      approverScope:
+                        type: string
+                        enum:
+                          - tenant
+                          - team
+                          - other-team
+                      approvalExpiryHours:
+                        type: integer
+                        minimum: 1
+                        maximum: 720
+                      allowTokenApprovals:
+                        type: boolean
+                    required:
+                      - requireApprovalForPublish
+                      - minApprovals
+                      - allowedApproverRoles
+                      - approverScope
+                      - approvalExpiryHours
+                      - allowTokenApprovals
+                    additionalProperties: false
+                    description: the part of the effective lifecycle policy that decides who may approve
                   rules:
                     type: object
                     properties:
@@ -8472,6 +8515,7 @@ paths:
                   - headSource
                   - facts
                   - changes
+                  - policy
                   - rules
                 additionalProperties: false
         "401":

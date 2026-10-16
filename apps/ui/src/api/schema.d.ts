@@ -4876,6 +4876,17 @@ export interface paths {
                                     to: string | number | null;
                                 }[];
                             };
+                            /** @description the part of the effective lifecycle policy that decides who may approve */
+                            policy: {
+                                /** @enum {string} */
+                                requireApprovalForPublish: "off" | "production-only" | "on";
+                                minApprovals: number;
+                                allowedApproverRoles: ("admin" | "agent-maintainer" | "agent-developer" | "operator")[];
+                                /** @enum {string} */
+                                approverScope: "tenant" | "team" | "other-team";
+                                approvalExpiryHours: number;
+                                allowTokenApprovals: boolean;
+                            };
                             /** @description agent rules arrive with ADR 0017 S8; until then nothing is listed */
                             rules: {
                                 /** @enum {boolean} */
