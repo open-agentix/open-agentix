@@ -403,6 +403,12 @@ describe('who may decide (rules A1 to A7, A10)', () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe('self_approval');
+    // The operator made the organisation administrator, so a review the operator contributed to that
+    // stays unfinished would stop that administrator from loosening the policy in later tests (#356).
+    await n.ctx.db
+      .update(agentReviews)
+      .set({ status: 'published', closedAt: new Date() })
+      .where(eq(agentReviews.id, review.id));
   });
 
   it('lets a platform administrator approve the work of somebody else, as a distinct person', async () => {

@@ -12,12 +12,13 @@ import {
   type LifecyclePolicyInput,
   type Principal,
 } from '@openagentix/core';
-import { and, count, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, or, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { agentReviews, agents, tenants } from '../db/schema.js';
+import { agentReviews, agentVersions, agents, tenants } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
 import { revisionById } from './agent-revisions.js';
+import { followGrantChain } from './approver-facts.js';
 import type { AuditService } from './audit.js';
 import { loadActor, permissionsAt } from './grant-authority.js';
 import { reviewContributors } from './review-contributors.js';
@@ -54,6 +55,9 @@ export const storedOf = (row: Pick<TenantRow, 'settings'>): LifecyclePolicyInput
   return parsed.ok ? parsed.value : {};
 };
 
+/** Paging of the loosening guard; exported so that a test can lower them. */
+export const LOOSENING_LIMITS = { pageSize: 200, max: 20_000 };
+
 export class LifecyclePolicyService {
   private readonly access: TenantAccess;
 
@@ -82,43 +86,85 @@ export class LifecyclePolicyService {
   }
 
   /**
-   * Refuses a change that makes the effective policy of `node` looser when the caller is a
-   * contributor of an open review in the subtree of `node` (S1 review finding 2): they would be
-   * relaxing the rules of their own review. A second administrator (who is not a contributor) makes
-   * the change instead. Open reviews are judged by the stricter of their own snapshot and the
-   * current policy as well, so this is the second line, not the only one.
+   * Refuses a change that makes the effective policy of `node` looser (or the tenant move that does
+   * so, see `tenant-moves.ts`) when the caller, or anybody the caller's authority comes from, is a
+   * contributor of an unfinished review in the subtree of `node` (S1 review finding 2, #356): they
+   * would be relaxing the rules of their own review. Another administrator, whose chain does not
+   * reach a contributor, makes the change instead.
+   *
+   * Rules, all fail closed:
+   * - "The caller" is the caller and the chain of the caller (`followGrantChain`: the account that
+   *   created the caller, the grantors of the caller's administrator bindings, stored chains
+   *   included). An account a contributor made must not loosen the policy for them. A chain that
+   *   cannot be followed counts as a contributor as soon as there is an unfinished review.
+   * - A review is unfinished while it is open, and also after it was withdrawn or rejected as long
+   *   as nothing was published for that agent since it was opened: withdrawing, loosening and
+   *   reopening the same change must not be a way around the rule. Publishing the change (by somebody
+   *   else, under the rules in force) or opening a review for a published state ends the hold.
+   * - Every unfinished review of the subtree is checked, page by page. More than
+   *   {@link LOOSENING_LIMITS.max} are refused as unverifiable instead of being ignored.
+   * - A review whose head revision cannot be read cannot be shown to be free of the caller.
    */
-  private async assertNoOwnOpenReview(
+  async assertNoOwnOpenReview(
     tx: Db,
     userId: string,
-    node: TenantRow,
+    node: Pick<TenantRow, 'rootId' | 'path'>,
     keys: readonly LifecycleKey[],
   ): Promise<void> {
-    const open = await tx
-      .select({ review: agentReviews, agent: agents })
-      .from(agentReviews)
-      .innerJoin(agents, eq(agents.id, agentReviews.agentId))
-      .innerJoin(tenants, eq(tenants.id, agentReviews.tenantId))
-      .where(
-        and(
-          eq(agentReviews.status, 'open'),
-          eq(tenants.rootId, node.rootId),
-          sql`starts_with(${tenants.path}, ${node.path})`,
-        ),
-      )
-      .limit(1000);
-    for (const { review, agent } of open) {
-      const head = agent.draftRevisionId
-        ? await revisionById(tx, agent.draftRevisionId)
-        : undefined;
-      // A review whose head cannot be read cannot be shown to be free of the caller: fail closed.
-      const contributors = head ? (await reviewContributors(tx, agent, review, head)).set : null;
-      if (contributors === null || contributors.has(userId))
-        throw new HttpError(
-          403,
-          'policy_loosening_by_contributor',
-          `you contributed to an open review in this subtree; another administrator has to loosen ${keys.join(', ')}`,
+    const refuse = (why: string) =>
+      new HttpError(
+        403,
+        'policy_loosening_by_contributor',
+        `${why}; another administrator has to loosen ${keys.join(', ')}`,
+      );
+    const chain = await followGrantChain(tx, [{ userId, unknown: false }], this.ctx.now());
+    const mine = new Set([userId, ...chain.users]);
+    const unfinished = or(
+      eq(agentReviews.status, 'open'),
+      and(
+        inArray(agentReviews.status, ['withdrawn', 'rejected']),
+        sql`not exists (select 1 from ${agentVersions} v where v.agent_id = ${agentReviews.agentId} and v.published_at >= ${agentReviews.openedAt})`,
+      ),
+    );
+    let after: string | undefined;
+    let checked = 0;
+    for (;;) {
+      const page = await tx
+        .select({ review: agentReviews, agent: agents })
+        .from(agentReviews)
+        .innerJoin(agents, eq(agents.id, agentReviews.agentId))
+        .innerJoin(tenants, eq(tenants.id, agentReviews.tenantId))
+        .where(
+          and(
+            unfinished,
+            eq(tenants.rootId, node.rootId),
+            sql`starts_with(${tenants.path}, ${node.path})`,
+            after ? gt(agentReviews.id, after) : undefined,
+          ),
+        )
+        .orderBy(asc(agentReviews.id))
+        .limit(LOOSENING_LIMITS.pageSize);
+      if (page.length === 0) return;
+      if (chain.unknown)
+        throw refuse(
+          'an unfinished review exists in this subtree and your authority cannot be traced',
         );
+      for (const { review, agent } of page) {
+        if (++checked > LOOSENING_LIMITS.max)
+          throw refuse(
+            `more than ${LOOSENING_LIMITS.max} unfinished reviews in this subtree, they cannot all be checked`,
+          );
+        const head = agent.draftRevisionId
+          ? await revisionById(tx, agent.draftRevisionId)
+          : undefined;
+        const contributors = head ? (await reviewContributors(tx, agent, review, head)).set : null;
+        if (contributors === null || [...contributors].some((c) => mine.has(c)))
+          throw refuse(
+            'you, or somebody your authority comes from, contributed to an unfinished review in this subtree',
+          );
+      }
+      if (page.length < LOOSENING_LIMITS.pageSize) return;
+      after = page[page.length - 1]!.review.id;
     }
   }
 
