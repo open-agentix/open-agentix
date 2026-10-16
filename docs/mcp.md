@@ -585,7 +585,7 @@ database connection. Three bounds keep that from starving the rest of the API:
   counts as `busy` in the metric and is not tried again for one second for that connection. A token that
   has not expired is used meanwhile; an expired one fails that request and the next one renews.
 - **Lock wait.** Every transaction that takes the credential lock (renewal, disconnect, URL or client
-  change) sets `lock_timeout` to 15 s and answers `503 mcp_credential_busy` beyond it, instead of holding a
+  change) sets `lock_timeout` to 10 s and answers `503 mcp_credential_busy` beyond it, instead of holding a
   connection for as long as a stalled server takes.
 - **Compare-and-swap.** The new tokens are written only over the row the renewal read (`updated_at`). A
   write that loses (a status write or a re-authorization got in) is retried once, which re-reads the row

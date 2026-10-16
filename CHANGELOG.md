@@ -496,7 +496,7 @@ All notable changes to this project are documented here. The format follows
   `mcp_auth_refresh_failed` (the stored token keeps being used while it lasts), is not recorded as a
   failure and is not tried again for a second, so stalled authorization servers cannot drain the pool;
   new metric outcome `busy`. Waits for the credential lock (renewal, disconnect, configuration change)
-  end after 15 s with `503 mcp_credential_busy`. The signing algorithms the server published are kept next
+  end after 10 s with `503 mcp_credential_busy`. The signing algorithms the server published are kept next
   to the one-hour verification of the pinned endpoints, so an RSA key keeps signing `PS256` for a
   PS256-only server instead of `RS256` (permanent `invalid_client`). A failed renewal is recorded only
   over the row it saw: it no longer marks tokens written by a parallel authorization. A renewal whose
