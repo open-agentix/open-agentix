@@ -1000,7 +1000,7 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": "false"
+          "default": false
         }
       },
       "indexes": {
@@ -4860,7 +4860,7 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": "false"
+          "default": false
         }
       },
       "indexes": {
@@ -5178,7 +5178,7 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": "false"
+          "default": false
         }
       },
       "indexes": {
