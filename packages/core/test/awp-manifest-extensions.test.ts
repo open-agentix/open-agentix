@@ -3,7 +3,6 @@ import {
   OAX_CRITICAL_EXTENSIONS,
   knownExtensionNames,
   validateManifestSource,
-  type JsonObject,
   type ManifestFinding,
 } from '../src/index.js';
 import { AWP_SCHEMA } from '../src/awp/generated/awp-schema.js';

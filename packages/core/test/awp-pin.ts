@@ -29,6 +29,9 @@ const semantic = (await import(
   /* @vite-ignore */ pathToFileURL(`${VENDOR}conformance/semantic.mjs`).href
 )) as Semantic;
 
+/** Semantic rules of the vendored reference implementation (the oracle of the differential tests). */
+export const referenceSemanticCheck = semantic.semanticCheck;
+
 /** Digest computed by the vendored reference implementation (spec 9.1). */
 export const referenceDigest = (manifest: unknown): string => semantic.manifestDigest(manifest);
 
