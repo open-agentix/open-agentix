@@ -23,6 +23,31 @@ describe('run tokens', () => {
       exp: 1060,
     });
   });
+  it('rejects every non-canonical encoding of a valid signature', () => {
+    const t = issueRunToken(SECRET, { runId: 'r1', workerId: 'w1', ttlSeconds: 60 }, 0);
+    const [p, payload, sig = ''] = t.split('.');
+    // A 32-byte signature is 43 base64url characters; the last one carries 2 unused low bits.
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const last = alphabet.indexOf(sig.slice(-1));
+    const variants = [0, 1, 2, 3]
+      .map((low) => sig.slice(0, -1) + alphabet[(last & ~3) | low])
+      .filter((v) => v !== sig);
+    expect(variants).toHaveLength(3);
+    for (const v of variants) {
+      // Node decodes the variant to the same bytes: only the strict check can refuse it.
+      expect(Buffer.from(v, 'base64url').equals(Buffer.from(sig, 'base64url'))).toBe(true);
+      expect(code(() => verifyRunToken(SECRET, `${p}.${payload}.${v}`, 0))).toBe(
+        'run_token_invalid',
+      );
+    }
+    expect(code(() => verifyRunToken(SECRET, `${p}.${payload}.${sig}=`, 0))).toBe(
+      'run_token_invalid',
+    );
+    expect(code(() => verifyRunToken(SECRET, `${p}.${payload}.${sig}\n`, 0))).toBe(
+      'run_token_invalid',
+    );
+    expect(code(() => verifyRunToken(SECRET, t, 0))).toBe('ok');
+  });
   it('rejects tampering, wrong secrets, expiry and garbage', () => {
     const t = issueRunToken(SECRET, { runId: 'r1', workerId: 'w1', ttlSeconds: 60 }, 0);
     const [p, payload, sig] = t.split('.');

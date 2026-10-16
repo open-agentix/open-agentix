@@ -569,6 +569,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Run tokens: non-canonical signature encodings are rejected (#339)**: `verifyRunToken` decoded the
+  signature with Node's lenient base64url decoder, which ignores the unused trailing bits and stray
+  characters, so several distinct strings were accepted for one valid signature (token malleability,
+  not a forgery). The signature must now be the canonical encoding. The flaky tampered-signature case
+  in the relay test came from exactly this and now flips a bit of the decoded bytes.
+- **MCP OAuth renewals, follow-ups of #322 (#337)**: the per-tenant renewal bound is keyed by the root
+  organisation, so sub-tenants of one organisation share it; a denial is audited only when the failure
+  was stored (a lost compare-and-swap or a failed write audits nothing); a permanent `invalid_client`
+  that follows a request made with the cached discovery forgets the cache and renews once with a
+  fresh discovery before the connection needs authorization.
 - **MCP OAuth renewals are bounded and no longer lock out or mislabel connections (#313, #319)**: a
   renewal holds a database connection across the call to the authorization server, so renewals now run
   under a process-wide bound (`OAX_MCP_OAUTH_RENEWALS`, default 4) and a per-tenant bound

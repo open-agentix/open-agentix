@@ -477,7 +477,14 @@ describe('refusals look alike', () => {
     const other = await b.newRun();
     const otherSession = await b.session(other);
     same(await b.relay(runId, 'oaxrt.forged.token', 'jira', msg), 'forged');
-    same(await b.relay(runId, s.token.slice(0, -2) + 'xx', 'jira', msg), 'tampered signature');
+    // flip a bit in the decoded signature bytes (a character swap could hit unused base64url bits)
+    const [pre, pay, sg = ''] = s.token.split('.');
+    const sigBytes = Buffer.from(sg, 'base64url');
+    sigBytes[0] = (sigBytes[0] ?? 0) ^ 0x01;
+    same(
+      await b.relay(runId, `${pre}.${pay}.${sigBytes.toString('base64url')}`, 'jira', msg),
+      'tampered signature',
+    );
     // another run's token against this run's id
     same(await b.relay(runId, otherSession.token, 'jira', msg), 'foreign run');
     // an expired token of a live session
