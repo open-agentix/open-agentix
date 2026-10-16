@@ -113,6 +113,7 @@ beforeAll(async () => {
   await mkUser('fresh', ['agent-maintainer']);
   await mkUser('edit1', ['agent-maintainer']);
   await mkUser('edit2', ['agent-maintainer']);
+  await mkUser('para', ['agent-maintainer']);
 }, 120_000);
 afterAll(async () => {
   await n?.close();
@@ -938,7 +939,11 @@ describe('bounds on what a review costs to read', () => {
       deletedAt: new Date(),
     }));
     await n.ctx.db.insert(agentReviewComments).values(tombstones);
-    expect((await startThread(tok['rev2']!, review.id, { body: 'fits' })).statusCode).toBe(201);
+    const fits = await startThread(tok['rev2']!, review.id, { body: 'fits' });
+    expect(fits.statusCode).toBe(201);
+    // and it is in the list, not pushed out by the tombstones
+    const listed = j(await req(tok['rev2']!, 'GET', base(review.id))).items as Json[];
+    expect(listed.some((x) => x.id === fits.json().id && x.comments[0].body === 'fits')).toBe(true);
     // 250 live comments by one author use that author's share
     await n.ctx.db.insert(agentReviewComments).values(
       Array.from({ length: 249 }, () => ({
@@ -960,4 +965,21 @@ describe('bounds on what a review costs to read', () => {
       201,
     );
   }, 60_000);
+
+  it('keeps parallel comments of one user on different reviews within the limit', async () => {
+    const reviews = await Promise.all(Array.from({ length: 10 }, () => reviewed()));
+    const cfg = n.ctx.config.rateLimit;
+    const before = cfg.commentMax;
+    cfg.commentMax = 2;
+    try {
+      const results = await Promise.all(
+        reviews.map(({ review }) => startThread(tok['para']!, review.id, { body: 'parallel' })),
+      );
+      const ok = results.filter((r) => r.statusCode === 201).length;
+      expect(ok).toBeLessThanOrEqual(2);
+      expect(results.filter((r) => r.statusCode === 429).length).toBe(10 - ok);
+    } finally {
+      cfg.commentMax = before;
+    }
+  });
 });
