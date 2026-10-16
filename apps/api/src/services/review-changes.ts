@@ -13,7 +13,7 @@ import { eq } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import { agentVersions } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
-import { reviewHead, type AgentReviewsService } from './agent-reviews.js';
+import { reviewHead, reviewPolicy, type AgentReviewsService } from './agent-reviews.js';
 import type { AgentsService } from './agents.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
 
@@ -70,7 +70,8 @@ export class ReviewChangesService {
     const catalog = await this.reviews.catalogOf(agent);
     const headFacts = summariseDefinition(expandProfiles(declared, catalog).definition, declared);
     const baseFacts = base ? baseFactsOf(base.source, base.definition) : null;
-    const policy = await this.policy.effectiveForTenant(agent.tenantId);
+    // the policy this review is judged by: the stricter of its snapshot and the current one
+    const policy = reviewPolicy(review, await this.policy.effectiveForTenant(agent.tenantId));
     return {
       reviewId: review.id,
       revision: { id: head.id, seq: head.seq, digest: head.digest },

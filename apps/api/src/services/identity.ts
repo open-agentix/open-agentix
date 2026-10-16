@@ -452,7 +452,7 @@ export class IdentityService {
       const kept = new Map(
         (
           await tx.select().from(agentRoleBindings).where(eq(agentRoleBindings.agentId, agentId))
-        ).map((r) => [`${r.userId}|${r.role}`, r.grantedBy] as const),
+        ).map((r) => [`${r.userId}|${r.role}`, r] as const),
       );
       await tx.delete(agentRoleBindings).where(eq(agentRoleBindings.agentId, agentId));
       if (members.length)
@@ -464,8 +464,10 @@ export class IdentityService {
               userId: m.userId,
               role: m.role,
               grantedBy: kept.has(`${m.userId}|${m.role}`)
-                ? kept.get(`${m.userId}|${m.role}`)!
+                ? kept.get(`${m.userId}|${m.role}`)!.grantedBy
                 : grantorOf(actor.userId),
+              // a membership that stays keeps an unknown grantor unknown; a new one is known
+              grantorUnknown: kept.get(`${m.userId}|${m.role}`)?.grantorUnknown ?? false,
             })),
           )
           .onConflictDoNothing();
@@ -1070,6 +1072,8 @@ export class IdentityService {
         source: 'local',
         globalRoles: input.globalRoles,
         tenantId: actor.tenantId,
+        // rule A4 of ADR 0017: an account a contributor made counts as contributor-made
+        createdBy: grantorOf(actor.userId),
       });
       await mirrorGlobalRoles(
         tx as unknown as Db,
@@ -1335,7 +1339,7 @@ export class IdentityService {
       );
       const kept = new Map(
         (await tx.select().from(teamMembers).where(eq(teamMembers.teamId, teamId))).map(
-          (r) => [`${r.userId}|${r.role}`, r.grantedBy] as const,
+          (r) => [`${r.userId}|${r.role}`, r] as const,
         ),
       );
       await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
@@ -1348,8 +1352,10 @@ export class IdentityService {
               userId: m.userId,
               role: m.role,
               grantedBy: kept.has(`${m.userId}|${m.role}`)
-                ? kept.get(`${m.userId}|${m.role}`)!
+                ? kept.get(`${m.userId}|${m.role}`)!.grantedBy
                 : grantorOf(actor.userId),
+              // a membership that stays keeps an unknown grantor unknown; a new one is known
+              grantorUnknown: kept.get(`${m.userId}|${m.role}`)?.grantorUnknown ?? false,
             })),
           )
           .onConflictDoNothing();

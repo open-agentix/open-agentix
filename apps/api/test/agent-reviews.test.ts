@@ -75,6 +75,9 @@ const decide = (by: string, review: Json, decision: string, extra: Json = {}) =>
   req(by, 'POST', `/v1/reviews/${review.id}/decisions`, {
     decision,
     expectedDigest: review.revision.digest,
+    expectedExpansionDigest: review.digests.expansionDigest,
+    expectedResolutionDigest: review.digests.resolutionDigest,
+    expectedPolicyDigest: review.digests.policyDigest,
     ...extra,
   });
 const auditActions = async (target: string, action?: string) =>
@@ -390,7 +393,13 @@ describe('who may decide (rules A1 to A7, A10)', () => {
       method: 'POST',
       url: `/v1/reviews/${review.id}/decisions`,
       headers: { 'x-oax-tenant': 'org-a' },
-      payload: { decision: 'approve', expectedDigest: review.revision.digest },
+      payload: {
+        decision: 'approve',
+        expectedDigest: review.revision.digest,
+        expectedExpansionDigest: review.digests.expansionDigest,
+        expectedResolutionDigest: review.digests.resolutionDigest,
+        expectedPolicyDigest: review.digests.policyDigest,
+      },
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe('self_approval');
@@ -403,7 +412,13 @@ describe('who may decide (rules A1 to A7, A10)', () => {
       method: 'POST',
       url: `/v1/reviews/${review.id}/decisions`,
       headers: { 'x-oax-tenant': 'org-a' },
-      payload: { decision: 'approve', expectedDigest: review.revision.digest },
+      payload: {
+        decision: 'approve',
+        expectedDigest: review.revision.digest,
+        expectedExpansionDigest: review.digests.expansionDigest,
+        expectedResolutionDigest: review.digests.resolutionDigest,
+        expectedPolicyDigest: review.digests.policyDigest,
+      },
     });
     expect(res.statusCode, res.body).toBe(201);
     expect(j(res).decision.bindingRefs[0]).toMatchObject({ source: 'platform', grantedBy: null });
@@ -422,12 +437,19 @@ describe('who may decide (rules A1 to A7, A10)', () => {
     const refused = await decide(reviewer.secret, review, 'approve');
     expect(refused.statusCode).toBe(403);
     expect(refused.json().error).toBe('token_approval_disabled');
+    // loosening the policy does not relax a review that is already open (finding 2 of #343) ...
     await setPolicy({ allowTokenApprovals: true });
     try {
-      const ok = await decide(reviewer.secret, review, 'approve');
+      expect((await decide(reviewer.secret, review, 'approve')).json().error).toBe(
+        'token_approval_disabled',
+      );
+      // ... a review opened afterwards is judged by the new policy
+      const b = await newAgent(tok['author']!);
+      const fresh = j(await open(tok['author']!, b.id));
+      const ok = await decide(reviewer.secret, fresh, 'approve');
       expect(ok.statusCode, ok.body).toBe(201);
       expect(j(ok).decision.reviewerAuth).toBe(`token:${reviewer.id}`);
-      const mine = await decide(authorTok.secret, review, 'approve');
+      const mine = await decide(authorTok.secret, fresh, 'approve');
       expect(mine.statusCode).toBe(403);
       expect(mine.json().error).toBe('self_approval');
     } finally {
@@ -461,9 +483,14 @@ describe('who may decide (rules A1 to A7, A10)', () => {
     }
     await setPolicy({ allowedApproverRoles: ['admin', 'agent-maintainer', 'agent-developer'] });
     try {
-      const ok = await decide(tok['dev']!, review, 'approve');
+      // the review that is already open keeps the roles of its snapshot ...
+      expect((await decide(tok['dev']!, review, 'approve')).json().error).toBe('not_eligible');
+      // ... one opened afterwards uses the widened list
+      const b = await newAgent(tok['author']!);
+      const fresh = j(await open(tok['author']!, b.id));
+      const ok = await decide(tok['dev']!, fresh, 'approve');
       expect(ok.statusCode, ok.body).toBe(201);
-      expect((await decide(tok['oper']!, review, 'approve')).json().error).toBe('not_eligible');
+      expect((await decide(tok['oper']!, fresh, 'approve')).json().error).toBe('not_eligible');
     } finally {
       await setPolicy({ allowedApproverRoles: null });
     }
@@ -476,6 +503,9 @@ describe('who may decide (rules A1 to A7, A10)', () => {
     const unknown = await req(adminB, 'POST', `/v1/reviews/${randomUUID()}/decisions`, {
       decision: 'approve',
       expectedDigest: review.revision.digest,
+      expectedExpansionDigest: review.digests.expansionDigest,
+      expectedResolutionDigest: review.digests.resolutionDigest,
+      expectedPolicyDigest: review.digests.policyDigest,
     });
     expect(foreign.statusCode).toBe(404);
     expect(foreign.json()).toEqual(unknown.json());
@@ -551,8 +581,8 @@ describe('who may decide (rules A1 to A7, A10)', () => {
         (await req(adminA, 'PUT', `/v1/teams/${teamSec}/members`, { members })).statusCode,
       ).toBe(204);
       const a = await newAgent(tok['author']!);
-      const review = j(await open(tok['author']!, a.id));
       await setPolicy({ approverScope: 'other-team' });
+      const review = j(await open(tok['author']!, a.id));
       try {
         expect((await decide(tok['inteam']!, review, 'approve')).json().error).toBe(
           'approver_scope',
@@ -562,8 +592,8 @@ describe('who may decide (rules A1 to A7, A10)', () => {
         await setPolicy({ approverScope: null });
       }
       const b = await newAgent(tok['author']!);
-      const r2 = j(await open(tok['author']!, b.id));
       await setPolicy({ approverScope: 'team' });
+      const r2 = j(await open(tok['author']!, b.id));
       try {
         expect((await decide(tok['rev2']!, r2, 'approve')).json().error).toBe('approver_scope');
         expect((await decide(tok['inteam']!, r2, 'approve')).statusCode).toBe(201);
@@ -648,6 +678,9 @@ describe('digests, stale views and revisions saved during a review', () => {
     const old = await req(tok['rev2']!, 'POST', `/v1/reviews/${review.id}/decisions`, {
       decision: 'approve',
       expectedDigest: review.revision.digest,
+      expectedExpansionDigest: review.digests.expansionDigest,
+      expectedResolutionDigest: review.digests.resolutionDigest,
+      expectedPolicyDigest: review.digests.policyDigest,
     });
     expect(old.statusCode).toBe(409);
     const fresh = await decide(tok['rev2']!, after, 'approve');
@@ -926,8 +959,8 @@ describe('withdrawing', () => {
 
   it('lets two reviewers decide at the same time without losing either', async () => {
     const a = await newAgent(tok['author']!);
-    const review = j(await open(tok['author']!, a.id));
     await setPolicy({ minApprovals: 2 });
+    const review = j(await open(tok['author']!, a.id));
     try {
       const [x, y] = await Promise.all([
         decide(tok['rev1']!, review, 'approve'),

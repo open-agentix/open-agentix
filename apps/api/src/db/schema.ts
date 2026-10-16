@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   bigint,
   bigserial,
   boolean,
@@ -146,6 +147,13 @@ export const users = pgTable('users', {
   tenantId: tenant(),
   /** Platform operators may manage tenants and switch the tenant they act in. */
   platformAdmin: boolean('platform_admin').notNull().default(false),
+  /**
+   * Who created the account (a local account made through the user API). Rule A4 of ADR 0017 treats
+   * an account created by a contributor of a review as contributor-made. `null` = nobody did (the
+   * bootstrap, an identity provider, the demo seed) or not recorded (accounts from before
+   * migration 0036 that the audit chain could not attribute).
+   */
+  createdBy: uuid('created_by').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
   createdAt: created(),
   lastLoginAt: ts('last_login_at'),
 });
@@ -184,6 +192,13 @@ export const tenantRoleBindings = pgTable(
      */
     expiryWarnedAt: ts('expiry_warned_at'),
     grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
+    /**
+     * `true` = the grantor is **unknown**, as opposed to `granted_by is null` with this flag false =
+     * nobody granted it (identity provider, bootstrap). Set for rows from before the grantor was
+     * recorded that the audit chain could not attribute, for mirror rows the reconcile or the
+     * home-move trigger re-created, and when the grantor's account was deleted (migration 0036).
+     */
+    grantorUnknown: boolean('grantor_unknown').notNull().default(false),
     /**
      * `mirror` = a row that mirrors `users.global_roles` (home node, legacy roles; owned by the
      * mirror, the reconcile and the home-move trigger), `grant` = created through the role-binding
@@ -307,6 +322,8 @@ export const teamMembers = pgTable(
      * identity provider and the bootstrap.
      */
     grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
+    /** The grantor is unknown (see `tenant_role_bindings.grantor_unknown`). */
+    grantorUnknown: boolean('grantor_unknown').notNull().default(false),
   },
   (t) => [
     primaryKey({ columns: [t.teamId, t.userId, t.role] }),
@@ -1126,6 +1143,8 @@ export const agentRoleBindings = pgTable(
     role: text('role').notNull(),
     /** Who added the binding (rule A4 of ADR 0017); `null` = not recorded. */
     grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
+    /** The grantor is unknown (see `tenant_role_bindings.grantor_unknown`). */
+    grantorUnknown: boolean('grantor_unknown').notNull().default(false),
   },
   (t) => [
     primaryKey({ columns: [t.userId, t.agentId, t.role] }),

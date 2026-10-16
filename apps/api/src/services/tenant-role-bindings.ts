@@ -632,7 +632,10 @@ export class TenantRoleBindingsService {
             inherit: next.inherit,
             expiresAt: next.expiresAt,
             ...(widened
-              ? { grantedBy: sql<string | null>`(select id from users where id = ${actor.userId})` }
+              ? {
+                  grantedBy: sql<string | null>`(select id from users where id = ${actor.userId})`,
+                  grantorUnknown: false,
+                }
               : {}),
             ...(expiryChanged
               ? {
@@ -835,6 +838,7 @@ export class TenantRoleBindingsService {
         .set({
           inherit: true,
           grantedBy: sql<string | null>`(select id from users where id = ${p.userId})`,
+          grantorUnknown: false,
         })
         .where(
           inArray(

@@ -112,6 +112,13 @@ export const EnvSchema = z.object({
    * as the installation has more than one tenant (multi-tenant) and `off` for a single tenant.
    */
   OAX_LIFECYCLE_REQUIRE_APPROVAL: z.enum(['auto', 'off', 'production-only', 'on']).default('auto'),
+  /**
+   * What rule A4 does with a binding whose grantor is unknown (rows from before the grantor was
+   * recorded that the audit chain could not attribute, mirror rows the reconcile re-created) or
+   * whose grant chain is longer than can be followed: `refuse` (default, fail closed) or `allow`
+   * (accept the risk until the bindings have been granted again by an administrator).
+   */
+  OAX_LIFECYCLE_UNKNOWN_GRANTOR: z.enum(['refuse', 'allow']).default('refuse'),
   OAX_LIFECYCLE_MIN_APPROVALS: z.coerce.number().int().min(1).max(5).default(1),
   OAX_LIFECYCLE_ALLOWED_APPROVER_ROLES: z
     .string()
@@ -413,6 +420,7 @@ export interface Config {
     allowedApproverRoles: ApproverRole[];
     approvalExpiryHours: number;
     allowTokenApprovals: boolean;
+    unknownGrantor: 'refuse' | 'allow';
   };
   auth: {
     bootstrapAdmin: { email: string; password: string } | null;
@@ -721,6 +729,7 @@ function buildConfig(
       allowedApproverRoles: [...new Set(e.OAX_LIFECYCLE_ALLOWED_APPROVER_ROLES)],
       approvalExpiryHours: e.OAX_LIFECYCLE_APPROVAL_EXPIRY_HOURS,
       allowTokenApprovals: e.OAX_LIFECYCLE_ALLOW_TOKEN_APPROVALS,
+      unknownGrantor: e.OAX_LIFECYCLE_UNKNOWN_GRANTOR,
     },
     auth: {
       bootstrapAdmin:

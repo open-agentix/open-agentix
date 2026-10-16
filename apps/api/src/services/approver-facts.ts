@@ -1,4 +1,6 @@
 import {
+  ROLE_PERMISSIONS,
+  ROLES,
   appliedAt,
   hasPermissionIn,
   isRole,
@@ -7,11 +9,12 @@ import {
   type ApproverAuth,
   type ApproverBinding,
   type ApproverFacts,
+  type GrantChain,
   type Permission,
   type Principal,
   type RoleBinding,
 } from '@openagentix/core';
-import { and, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import type { agents } from '../db/schema.js';
 import {
@@ -48,6 +51,77 @@ export interface ApproverQuery {
   scopes?: readonly Permission[] | undefined;
 }
 
+/** How many hops of the grant chain are followed before the rest counts as unknown. */
+export const MAX_GRANT_CHAIN_DEPTH = 6;
+
+/** Roles whose holders may grant roles to others (`users:write`, the authority of ADR 0014 section 7). */
+const GRANTING_ROLES = ROLES.filter((r) => ROLE_PERMISSIONS[r].includes('users:write'));
+
+interface ChainSeed {
+  userId: string | null;
+  unknown: boolean;
+}
+
+/**
+ * Follows a grant transitively (rule A4, finding 1 of the S1 review). Starting from the seeds (the
+ * grantor of a binding, or the creator of an account) it collects every user the grant depends on:
+ * the grantor, the account that created the grantor, and whoever granted the grantor the roles that
+ * allow granting (`users:write`), and so on. A contributor anywhere in that chain makes the grant
+ * contributor-made: a contributor must not be able to launder an approver through a second account.
+ * A link without a known grantor, or a chain longer than `maxDepth`, is reported as `unknown`.
+ */
+export async function followGrantChain(
+  db: Db,
+  seeds: readonly ChainSeed[],
+  now: Date,
+  maxDepth = MAX_GRANT_CHAIN_DEPTH,
+): Promise<GrantChain> {
+  const seen = new Set<string>();
+  let unknown = false;
+  let frontier: string[] = [];
+  const add = (id: string | null) => {
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      frontier.push(id);
+    }
+  };
+  for (const s of seeds) {
+    if (s.unknown) unknown = true;
+    add(s.userId);
+  }
+  for (let hop = 1; frontier.length > 0; hop++) {
+    if (hop > maxDepth) {
+      unknown = true;
+      break;
+    }
+    const level = frontier;
+    frontier = [];
+    const accounts = await db
+      .select({ createdBy: users.createdBy })
+      .from(users)
+      .where(inArray(users.id, level));
+    for (const a of accounts) add(a.createdBy);
+    const grants = await db
+      .select({
+        grantedBy: tenantRoleBindings.grantedBy,
+        grantorUnknown: tenantRoleBindings.grantorUnknown,
+      })
+      .from(tenantRoleBindings)
+      .where(
+        and(
+          inArray(tenantRoleBindings.userId, level),
+          inArray(tenantRoleBindings.role, GRANTING_ROLES),
+          or(isNull(tenantRoleBindings.expiresAt), gt(tenantRoleBindings.expiresAt, now)),
+        ),
+      );
+    for (const g of grants) {
+      if (g.grantorUnknown) unknown = true;
+      add(g.grantedBy);
+    }
+  }
+  return { users: [...seen].sort(), unknown };
+}
+
 const has = (bindings: readonly AppliedBinding[], permission: Permission, ref: object) =>
   hasPermissionIn(pseudoPrincipal(bindings), permission, ref);
 
@@ -72,10 +146,16 @@ export async function loadApproverFacts(db: Db, q: ApproverQuery): Promise<Appro
     canRead: false,
     bindings: [],
     inAgentTeam: false,
+    creatorChain: { users: [], unknown: false },
   };
   const [user] = await db.select().from(users).where(eq(users.id, q.userId));
   if (!user || user.disabled) return empty;
-  const base: ApproverFacts = { ...empty, identitySource: user.source };
+  const creatorChain = await followGrantChain(
+    db,
+    [{ userId: user.createdBy, unknown: false }],
+    q.now,
+  );
+  const base: ApproverFacts = { ...empty, identitySource: user.source, creatorChain };
   const [node] = await db.select().from(tenants).where(eq(tenants.id, q.agent.tenantId));
   if (!node) return base;
   const loaded = await loadRawGrants(db, {
@@ -118,10 +198,12 @@ export async function loadApproverFacts(db: Db, q: ApproverQuery): Promise<Appro
         role: b.role,
         source: 'platform',
         grantedBy: null,
+        grantorUnknown: false,
+        chain: { users: [], unknown: false },
       });
     } else if (b.source === 'team' && b.teamId) {
       const rows = await db
-        .select({ grantedBy: teamMembers.grantedBy })
+        .select({ grantedBy: teamMembers.grantedBy, unknown: teamMembers.grantorUnknown })
         .from(teamMembers)
         .innerJoin(teams, eq(teams.id, teamMembers.teamId))
         .where(
@@ -138,10 +220,15 @@ export async function loadApproverFacts(db: Db, q: ApproverQuery): Promise<Appro
           role: b.role,
           source: 'team',
           grantedBy: r.grantedBy,
+          grantorUnknown: r.unknown,
+          chain: await followGrantChain(db, [{ userId: r.grantedBy, unknown: r.unknown }], now),
         });
     } else if (b.source === 'agent' && b.agentId) {
       const rows = await db
-        .select({ grantedBy: agentRoleBindings.grantedBy })
+        .select({
+          grantedBy: agentRoleBindings.grantedBy,
+          unknown: agentRoleBindings.grantorUnknown,
+        })
         .from(agentRoleBindings)
         .where(
           and(
@@ -156,6 +243,8 @@ export async function loadApproverFacts(db: Db, q: ApproverQuery): Promise<Appro
           role: b.role,
           source: 'agent',
           grantedBy: r.grantedBy,
+          grantorUnknown: r.unknown,
+          chain: await followGrantChain(db, [{ userId: r.grantedBy, unknown: r.unknown }], now),
         });
     } else {
       // A node binding: direct, inherited, or (use-case binding that reaches an attached node)
@@ -180,6 +269,12 @@ export async function loadApproverFacts(db: Db, q: ApproverQuery): Promise<Appro
           source:
             r.source === 'grant' ? 'grant' : r.source === 'directory' ? 'directory' : 'mirror',
           grantedBy: r.grantedBy,
+          grantorUnknown: r.grantorUnknown,
+          chain: await followGrantChain(
+            db,
+            [{ userId: r.grantedBy, unknown: r.grantorUnknown }],
+            now,
+          ),
         });
     }
   }

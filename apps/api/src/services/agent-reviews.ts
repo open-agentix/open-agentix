@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import {
   checkApprover,
-  collectContributors,
   declaredSecretReferences,
   expandProfiles,
   isProductionUseCase,
   lifecyclePolicyDigest,
   loadAgentDefinition,
+  policyFromSnapshot,
   requiredApprovals,
   reviewState,
   secretResolutionDigest,
+  stricterPolicy,
   stripInvisible,
   summariseDecisions,
   REFUSAL_STATUS,
@@ -23,7 +24,7 @@ import {
   type RefusalCode,
   type ReviewState,
 } from '@openagentix/core';
-import { and, asc, desc, eq, gt, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, lte, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import {
@@ -31,7 +32,6 @@ import {
   agentReviewDecisions,
   agentReviews,
   agentVersions,
-  auditLog,
   tenants,
 } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
@@ -47,7 +47,9 @@ import { loadApproverFacts } from './approver-facts.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
+import { isTenantAdminAt, loadActor } from './grant-authority.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
+import { reviewContributors } from './review-contributors.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 
 /**
@@ -160,9 +162,6 @@ export interface ShadowReport {
   reasons: { code: string; message: string }[];
 }
 
-const uuidOr = (v: string): string | null =>
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) ? v : null;
-
 const authString = (a: ApproverAuth): string =>
   a.kind === 'session' ? 'session' : `token:${a.tokenId}`;
 const parseAuth = (s: string): ApproverAuth =>
@@ -171,6 +170,22 @@ const parseAuth = (s: string): ApproverAuth =>
 function pgCode(e: unknown): string | undefined {
   const err = e as { code?: string; cause?: { code?: string } };
   return err.cause?.code ?? err.code;
+}
+
+/**
+ * The policy an open review is judged by: the **stricter** of the policy it was opened under (its
+ * snapshot) and the policy now. Loosening the policy (or switching approval off) therefore never
+ * relaxes a review that is already open, and tightening it applies at once (S1 review finding 2). A
+ * closed review is read against the current policy, as before. A snapshot that cannot be read leaves
+ * the current policy, which is the policy of a review opened a moment ago.
+ */
+export function reviewPolicy(
+  review: Pick<ReviewRow, 'status' | 'policySnapshot'>,
+  current: LifecyclePolicy,
+): LifecyclePolicy {
+  if (review.status !== 'open') return current;
+  const snapshot = policyFromSnapshot(review.policySnapshot);
+  return snapshot ? stricterPolicy(snapshot, current) : current;
 }
 
 interface Evaluation {
@@ -320,66 +335,13 @@ export class AgentReviewsService {
 
   // ------------------------------------------------------------------ contributors
 
-  async contributorsOf(
+  contributorsOf(
     db: Db,
     agent: AgentRow,
     review: Pick<ReviewRow, 'openedBy' | 'baseVersionId'>,
     head: RevisionRow,
-  ): Promise<{ set: Set<string>; unknownAuthor: boolean; base: VersionRow | null }> {
-    let base: VersionRow | null = null;
-    if (review.baseVersionId) {
-      const [v] = await db
-        .select()
-        .from(agentVersions)
-        .where(eq(agentVersions.id, review.baseVersionId));
-      base = v ?? null;
-    }
-    const baseRev = base?.revisionId ? await revisionById(db, base.revisionId) : undefined;
-    const window = await db
-      .select({
-        authorId: agentDraftRevisions.authorId,
-        authorKind: agentDraftRevisions.authorKind,
-      })
-      .from(agentDraftRevisions)
-      .where(
-        and(
-          eq(agentDraftRevisions.agentId, agent.id),
-          lte(agentDraftRevisions.seq, head.seq),
-          baseRev
-            ? gt(agentDraftRevisions.seq, baseRev.seq)
-            : base
-              ? gt(agentDraftRevisions.createdAt, base.publishedAt)
-              : undefined,
-        ),
-      );
-    const revisionAuthors = window.map((w) => ({
-      authorId: w.authorId,
-      authorKind: w.authorKind as 'user' | 'repo' | 'system',
-    }));
-    const unknownAuthor = revisionAuthors.some((r) => r.authorKind !== 'user' || !r.authorId);
-    let fallback: string[] = [];
-    if (unknownAuthor) {
-      // Best effort (ADR 0017 section 4.1): everybody the audit chain shows editing this draft since
-      // the base version counts, as does the creator of the agent.
-      const rows = await db
-        .select({ actor: auditLog.actor })
-        .from(auditLog)
-        .where(
-          and(
-            eq(auditLog.target, agent.id),
-            inArray(auditLog.action, ['agent.created', 'agent.draft.updated']),
-            base ? gt(auditLog.ts, base.publishedAt) : undefined,
-          ),
-        );
-      fallback = [...new Set(rows.map((r) => uuidOr(r.actor)).filter((x): x is string => !!x))];
-    }
-    const set = collectContributors({
-      revisionAuthors,
-      opener: review.openedBy,
-      unknownAuthorFallback: fallback,
-      agentCreator: agent.createdBy,
-    });
-    return { set, unknownAuthor, base };
+  ) {
+    return reviewContributors(db, agent, review, head);
   }
 
   // ------------------------------------------------------------------ evaluation
@@ -389,9 +351,10 @@ export class AgentReviewsService {
     db: Db,
     agent: AgentRow,
     review: ReviewRow,
-    policy: LifecyclePolicy,
+    currentPolicy: LifecyclePolicy,
     cached?: { head: RevisionRow; binding: Binding; useCase: string | null },
   ): Promise<Evaluation> {
+    const policy = reviewPolicy(review, currentPolicy);
     const head = cached?.head ?? (await reviewHead(db, agent, review));
     const computed = cached ?? {
       head,
@@ -449,11 +412,13 @@ export class AgentReviewsService {
             auth: parseAuth(d.reviewerAuth),
             now,
           });
-          const verdict = checkApprover(f, {
-            contributors,
-            policy,
-            view: { expected: head.digest, current: head.digest },
-          });
+          const verdict = checkApprover(
+            f,
+            this.approvalContext(contributors, policy, {
+              expected: head.digest,
+              current: head.digest,
+            }),
+          );
           if (!verdict.ok) reasons.push(verdict.code);
           else ok = true;
         }
@@ -547,6 +512,20 @@ export class AgentReviewsService {
     };
   }
 
+  /** The context of `checkApprover`: contributors, the policy of the review and the installation switch. */
+  private approvalContext(
+    contributors: ReadonlySet<string>,
+    policy: LifecyclePolicy,
+    view: { expected: string; current: string },
+  ) {
+    return {
+      contributors,
+      policy,
+      view,
+      unknownGrantor: this.ctx.config.lifecycle.unknownGrantor,
+    };
+  }
+
   private principalAuth(p: Principal): ApproverAuth {
     return p.kind === 'token'
       ? { kind: 'token', tokenId: p.tokenId ?? 'unknown' }
@@ -562,11 +541,10 @@ export class AgentReviewsService {
     digest: string,
   ) {
     const facts = await this.factsOf(db, p, agent);
-    return checkApprover(facts, {
-      contributors: ev.contributors,
-      policy: ev.policy,
-      view: { expected: digest, current: digest },
-    });
+    return checkApprover(
+      facts,
+      this.approvalContext(ev.contributors, ev.policy, { expected: digest, current: digest }),
+    );
   }
 
   private factsOf(db: Db, p: Principal, agent: AgentRow): Promise<ApproverFacts> {
@@ -724,7 +702,8 @@ export class AgentReviewsService {
           },
           tx,
         );
-        return { agent, review: review! };
+        // `ensureHead` may have appended a revision: the view reads the head from this row
+        return { agent: { ...agent, draftRevisionId: head.id }, review: review! };
       });
     } catch (e) {
       // The partial unique index is the backstop of the lock: one open review per agent.
@@ -777,18 +756,47 @@ export class AgentReviewsService {
       if (!review || review.tenantId !== p.tenantId) throw notFound('review');
       if (review.status !== 'open')
         throw new HttpError(409, 'review_closed', `the review is ${review.status}`);
-      const policy = await this.policy.effectiveFor(node, tx);
+      // The stricter of the policy the review was opened under and the policy now (finding 2).
+      const policy = reviewPolicy(review, await this.policy.effectiveFor(node, tx));
       const head = await ensureHead(tx, agent, (r) => this.auditRevision(tx, agent, r, true));
       const { set: contributors } = await this.contributorsOf(tx, agent, review, head);
       const facts = await this.factsOf(tx, p, agent);
-      const verdict = checkApprover(facts, {
-        contributors,
-        policy,
-        view: { expected: input.expectedDigest, current: head.digest },
-      });
+      const verdict = checkApprover(
+        facts,
+        this.approvalContext(contributors, policy, {
+          expected: input.expectedDigest,
+          current: head.digest,
+        }),
+      );
       if (!verdict.ok)
         return { kind: 'refused', code: verdict.code, message: verdict.message, agent };
-      const { binding } = this.bindingOf(agent, head.source, head.digest, policy, catalog);
+      const { binding, useCase } = this.bindingOf(agent, head.source, head.digest, policy, catalog);
+      // An approval binds to the expansion, the secret resolution and the policy the reviewer saw
+      // (A10): a client that leaves them out would bind it to something it never looked at. They are
+      // required for every approval, and for any decision while approval is required (finding 3).
+      const required = this.approvalRequired(
+        policy,
+        review.baseVersionId ? agent.useCase : null,
+        useCase,
+      );
+      if (input.decision === 'approve' || required) {
+        const missing = (
+          [
+            ['expectedExpansionDigest', input.expectedExpansionDigest],
+            ['expectedResolutionDigest', input.expectedResolutionDigest],
+            ['expectedPolicyDigest', input.expectedPolicyDigest],
+          ] as const
+        )
+          .filter(([, v]) => v === undefined)
+          .map(([k]) => k);
+        if (missing.length > 0)
+          throw new HttpError(
+            400,
+            'validation_failed',
+            `${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} required: a decision binds to the digests you looked at`,
+            missing.map((path) => ({ path, message: 'required' })),
+          );
+      }
       const stale = (
         [
           ['expectedExpansionDigest', input.expectedExpansionDigest, binding.expansionDigest],
@@ -923,15 +931,10 @@ export class AgentReviewsService {
   // ------------------------------------------------------------------ withdraw
 
   async withdraw(p: Principal, reviewId: string): Promise<ReviewView> {
-    const { review: found, agent: foundAgent } = await this.loadReview(p, reviewId);
+    const { agent: foundAgent } = await this.loadReview(p, reviewId);
     await this.agents.assertAccess(p, foundAgent, 'agents:write').catch((e: unknown) => {
       throw e instanceof HttpError && e.statusCode === 404 ? notFound('review') : e;
     });
-    const isAdmin = p.bindings.some(
-      (b) => b.role === 'admin' && b.teamId === null && !b.agentId && !b.useCase,
-    );
-    if (found.openedBy !== p.userId && !isAdmin)
-      throw forbidden('only the person who opened the review or an administrator can withdraw it');
     const agent = await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
       const node = await this.nodeOf(tx, foundAgent.tenantId);
@@ -943,6 +946,16 @@ export class AgentReviewsService {
         .where(eq(agentReviews.id, reviewId))
         .for('update');
       if (!review || review.tenantId !== p.tenantId) throw notFound('review');
+      // Whether the caller administers the agent's node is read from the database here, not from the
+      // cached principal (a revoked or narrowed binding must not still withdraw) and for the node
+      // of the agent, not any node (S1 review finding 8).
+      if (
+        review.openedBy !== p.userId &&
+        !isTenantAdminAt(await loadActor(tx, p), node, this.ctx.now())
+      )
+        throw forbidden(
+          'only the person who opened the review or an administrator can withdraw it',
+        );
       if (review.status !== 'open')
         throw new HttpError(409, 'review_closed', `the review is ${review.status}`);
       await tx
@@ -972,9 +985,15 @@ export class AgentReviewsService {
    */
   async shadowPublish(agent: AgentRow, source: string): Promise<ShadowReport> {
     const db = this.ctx.db;
-    const policy = await this.policy.effectiveForTenant(agent.tenantId, db);
+    const current = await this.policy.effectiveForTenant(agent.tenantId, db);
     const def = loadAgentDefinition(source);
     const baseUseCase = agent.latestVersionId ? agent.useCase : null;
+    const [review] = await db
+      .select()
+      .from(agentReviews)
+      .where(and(eq(agentReviews.agentId, agent.id), eq(agentReviews.status, 'open')));
+    // An open review keeps the stricter of its own policy and the current one (finding 2).
+    const policy = review ? reviewPolicy(review, current) : current;
     const required = this.approvalRequired(policy, baseUseCase, def.labels.useCase || null);
     const base: ShadowReport = {
       enforced: false,
@@ -985,17 +1004,13 @@ export class AgentReviewsService {
       reasons: [],
     };
     if (!required) return base;
-    const [review] = await db
-      .select()
-      .from(agentReviews)
-      .where(and(eq(agentReviews.agentId, agent.id), eq(agentReviews.status, 'open')));
     if (!review)
       return {
         ...base,
         wouldRefuse: true,
         reasons: [{ code: 'no_review', message: 'approval is required and no review is open' }],
       };
-    const ev = await this.evaluate(db, agent, review, policy);
+    const ev = await this.evaluate(db, agent, review, current);
     const reasons: { code: string; message: string }[] = [];
     if (ev.head.digest !== loadAgentDefinition(source).digest)
       reasons.push({ code: 'draft_changed', message: 'the draft is not the reviewed revision' });

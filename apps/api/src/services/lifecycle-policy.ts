@@ -12,13 +12,15 @@ import {
   type LifecyclePolicyInput,
   type Principal,
 } from '@openagentix/core';
-import { count, eq, inArray } from 'drizzle-orm';
+import { and, count, eq, inArray, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { tenants } from '../db/schema.js';
+import { agentReviews, agents, tenants } from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
+import { revisionById } from './agent-revisions.js';
 import type { AuditService } from './audit.js';
 import { loadActor, permissionsAt } from './grant-authority.js';
+import { reviewContributors } from './review-contributors.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 import { TenantAccess } from './tenant-access.js';
 
@@ -77,6 +79,47 @@ export class LifecyclePolicyService {
       approvalExpiryHours: c.approvalExpiryHours,
       allowTokenApprovals: c.allowTokenApprovals,
     });
+  }
+
+  /**
+   * Refuses a change that makes the effective policy of `node` looser when the caller is a
+   * contributor of an open review in the subtree of `node` (S1 review finding 2): they would be
+   * relaxing the rules of their own review. A second administrator (who is not a contributor) makes
+   * the change instead. Open reviews are judged by the stricter of their own snapshot and the
+   * current policy as well, so this is the second line, not the only one.
+   */
+  private async assertNoOwnOpenReview(
+    tx: Db,
+    userId: string,
+    node: TenantRow,
+    keys: readonly LifecycleKey[],
+  ): Promise<void> {
+    const open = await tx
+      .select({ review: agentReviews, agent: agents })
+      .from(agentReviews)
+      .innerJoin(agents, eq(agents.id, agentReviews.agentId))
+      .innerJoin(tenants, eq(tenants.id, agentReviews.tenantId))
+      .where(
+        and(
+          eq(agentReviews.status, 'open'),
+          eq(tenants.rootId, node.rootId),
+          sql`starts_with(${tenants.path}, ${node.path})`,
+        ),
+      )
+      .limit(1000);
+    for (const { review, agent } of open) {
+      const head = agent.draftRevisionId
+        ? await revisionById(tx, agent.draftRevisionId)
+        : undefined;
+      // A review whose head cannot be read cannot be shown to be free of the caller: fail closed.
+      const contributors = head ? (await reviewContributors(tx, agent, review, head)).set : null;
+      if (contributors === null || contributors.has(userId))
+        throw new HttpError(
+          403,
+          'policy_loosening_by_contributor',
+          `you contributed to an open review in this subtree; another administrator has to loosen ${keys.join(', ')}`,
+        );
+    }
   }
 
   /** The stored values of the chain of a node, root first. */
@@ -184,6 +227,13 @@ export class LifecyclePolicyService {
             widening.map((k) => ({ path: k, message: 'looser than the parent' })),
           );
       }
+      // Loosening the policy of a subtree where the caller contributed to an open review would let
+      // the author relax the rules of their own review: another administrator has to do it.
+      const loosened = wideningKeys(
+        resolveLifecyclePolicy(defaults, chain),
+        resolveLifecyclePolicy(defaults, [...chain.slice(0, -1), next]),
+      );
+      if (loosened.length > 0) await this.assertNoOwnOpenReview(tx, p.userId, fresh, loosened);
       const fields = (Object.keys(patch) as LifecycleKey[]).filter(
         (k) => JSON.stringify(before[k] ?? null) !== JSON.stringify(next[k] ?? null),
       );
@@ -200,6 +250,7 @@ export class LifecyclePolicyService {
             target: node.id,
             payload: {
               fields,
+              ...(loosened.length > 0 ? { loosened } : {}),
               from: Object.fromEntries(fields.map((k) => [k, before[k] ?? null])),
               to: Object.fromEntries(fields.map((k) => [k, next[k] ?? null])),
             },

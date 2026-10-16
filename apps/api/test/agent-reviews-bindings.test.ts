@@ -43,7 +43,13 @@ const decide = (who: string, review: Json, decision = 'approve', acting?: string
     who,
     'POST',
     `/v1/reviews/${review.id}/decisions`,
-    { decision, expectedDigest: review.revision.digest },
+    {
+      decision,
+      expectedDigest: review.revision.digest,
+      expectedExpansionDigest: review.digests.expansionDigest,
+      expectedResolutionDigest: review.digests.resolutionDigest,
+      expectedPolicyDigest: review.digests.policyDigest,
+    },
     acting,
   );
 
@@ -183,7 +189,13 @@ describe('approvals on the resolver read path', () => {
       method: 'POST',
       url: `/v1/reviews/${review.id}/decisions`,
       headers: { 'x-oax-tenant': w.id['unit-2']! },
-      payload: { decision: 'approve', expectedDigest: review.revision.digest },
+      payload: {
+        decision: 'approve',
+        expectedDigest: review.revision.digest,
+        expectedExpansionDigest: review.digests.expansionDigest,
+        expectedResolutionDigest: review.digests.resolutionDigest,
+        expectedPolicyDigest: review.digests.policyDigest,
+      },
     });
     expect(res.statusCode, res.body).toBe(201);
     expect(j(res).decision.bindingRefs[0]).toMatchObject({ source: 'platform', grantedBy: null });
