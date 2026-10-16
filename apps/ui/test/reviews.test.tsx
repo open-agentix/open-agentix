@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { configure, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { LifecycleBadge } from '../src/features/reviews/LifecycleBadge';
 import { lifecycleStatus } from '../src/features/reviews/lifecycleStatus';
 import { ineligibility } from '../src/features/reviews/decisionReasons';
@@ -14,6 +14,13 @@ import { server } from './server';
 import { asViewer, expectNoA11yViolations, heading, renderApp } from './utils';
 
 const path = `/agents/${f.ids.agent}?tab=review`;
+
+// The Review tab is a lazy chunk: load it before the first test and give async queries room, so a
+// busy machine (coverage, several workers) does not turn the first render into a timeout.
+configure({ asyncUtilTimeout: 5000 });
+beforeAll(async () => {
+  await import('../src/features/reviews/ReviewTab');
+});
 const json = (body: unknown, status = 200) => HttpResponse.json(body as never, { status });
 
 /** An open review with its changes, threads and people on the server side of the test. */
