@@ -22,6 +22,8 @@ export const GRANTING_ROLES = ROLES.filter((r) => ROLE_PERMISSIONS[r].includes('
 /** A chain longer than this is stored as unknown rather than growing without bound. */
 export const MAX_STORED_CHAIN = 200;
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface GrantRow {
   grantedBy: string | null;
   grantorUnknown: boolean;
@@ -74,7 +76,8 @@ export async function chainForGrant(
   grantorId: string | null | undefined,
   now: Date,
 ): Promise<string[] | null | undefined> {
-  if (!grantorId) return undefined;
+  // a system actor (the demo seed, a script) is not an account: the column is a uuid
+  if (!grantorId || !UUID.test(grantorId)) return undefined;
   const [g] = await tx
     .select({
       id: users.id,

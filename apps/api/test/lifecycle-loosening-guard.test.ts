@@ -225,6 +225,21 @@ describe('the creator chain of the caller', () => {
   });
 });
 
+describe('a review that cannot be examined', () => {
+  it('counts as a contributor when its head revision cannot be read', async () => {
+    await settleAll();
+    expect((await strict()).statusCode).toBe(200);
+    const agent = await newAgent(tok['author']!);
+    await openReview(tok['author']!, agent);
+    // the draft pointer is lost: nothing shows who touched this review
+    await n.ctx.db.update(agents).set({ draftRevisionId: null }).where(eq(agents.id, agent));
+    expectRefused(await setPolicy(LOOSEN));
+    await settleAll();
+    expect((await setPolicy(LOOSEN)).statusCode).toBe(200);
+    expect((await strict()).statusCode).toBe(200);
+  });
+});
+
 /** Review rows for `count` agents in the organisation, written directly; `openedBy` per agent. */
 async function seedReviews(
   count: number,

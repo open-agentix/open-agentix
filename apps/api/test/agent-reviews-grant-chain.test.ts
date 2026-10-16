@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { teamMembers, teams, tenantRoleBindings, users } from '../src/db/schema.js';
+import {
+  agentRoleBindings,
+  teamMembers,
+  teams,
+  tenantRoleBindings,
+  users,
+} from '../src/db/schema.js';
 import {
   chainForGrant,
   creatorChainOf,
@@ -256,6 +262,17 @@ describe('finding 1: the stored chain survives the removal of a link', () => {
     const [kept] = await n.ctx.db.select().from(teamMembers).where(eq(teamMembers.teamId, team));
     expect(kept!.grantChain).toEqual(row!.grantChain);
     await n.ctx.db.delete(teams).where(eq(teams.id, team));
+    // the same for the members of an agent
+    const agentId = (await newAgent(tok['author']!)).id;
+    const members = [{ userId: uid['tm'], role: 'agent-maintainer' }];
+    const putAgent = await req(tok['c']!, 'PUT', `/v1/agents/${agentId}/members`, { members });
+    expect(putAgent.statusCode, putAgent.body).toBe(204);
+    const [bound] = await n.ctx.db
+      .select()
+      .from(agentRoleBindings)
+      .where(eq(agentRoleBindings.agentId, agentId));
+    expect(bound!.grantChain).toEqual(expect.arrayContaining([uid['c']]));
+    expect(bound!.grantedBy).toBe(uid['c']);
   });
 });
 
@@ -346,6 +363,7 @@ describe('finding 2: accounts that lose created_by', () => {
   it('chainForGrant returns undefined for a non-account, a sorted chain for an account and null for an unknown link', async () => {
     expect(await chainForGrant(n.ctx.db, randomUUID(), new Date())).toBeUndefined();
     expect(await chainForGrant(n.ctx.db, null, new Date())).toBeUndefined();
+    expect(await chainForGrant(n.ctx.db, 'demo-seed', new Date())).toBeUndefined();
     const chain = await chainForGrant(n.ctx.db, uid['c']!, new Date());
     expect(chain).toEqual(expect.arrayContaining([uid['c']!]));
     expect([...chain!].sort()).toEqual(chain);
