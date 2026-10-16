@@ -102,8 +102,8 @@ importers:
         specifier: 0.4.0
         version: 0.4.0
       ldapts:
-        specifier: 8.2.0
-        version: 8.2.0
+        specifier: 9.2.0
+        version: 9.2.0
       lru-cache:
         specifier: 11.5.3
         version: 11.5.3
@@ -2522,9 +2522,9 @@ packages:
   keyv@5.6.0:
     resolution: {integrity: sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw==}
 
-  ldapts@8.2.0:
-    resolution: {integrity: sha512-XfKocadpoHc1kNgtbTBBhD+pSh1U9KVTzxcKwDS4ulFFyC7rJkLC3TwIfbQ4rt3my9KHz8qsw9qFXVjcPOGebw==}
-    engines: {node: '>=20'}
+  ldapts@9.2.0:
+    resolution: {integrity: sha512-5mDg3OT5fDP9DUXga9dCLW8cMW24OTOKT4pv/Qj+f2zCV3qxb+gkZLCzMAqzVTOANoycidKkYpPvkclUQU2aXw==}
+    engines: {node: '>=22'}
 
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
@@ -5588,7 +5588,7 @@ snapshots:
     dependencies:
       '@keyv/serialize': 1.1.1
 
-  ldapts@8.2.0:
+  ldapts@9.2.0:
     dependencies:
       strict-event-emitter-types: 2.0.0
 
