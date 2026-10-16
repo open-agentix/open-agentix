@@ -137,8 +137,12 @@ describe.each(sqlTargets)('migration 0036 on existing data (%s)', (_kind, enable
       members: [{ userId: attributed, role: 'agent-maintainer' }],
     });
     epochBefore = await epochs();
-    epochBefore = await epochs();
-    await c.migrate(MIGRATIONS_FOLDER);
+    // Only up to 0036: the later migration 0037 (stored grant chain) has its own test.
+    j.entries = (
+      JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta/_journal.json'), 'utf8')) as typeof j
+    ).entries.filter((e) => e.tag <= TAG);
+    writeFileSync(journalPath, JSON.stringify(j));
+    await c.migrate(dir);
   }, 120_000);
   afterAll(async () => {
     await c.close();

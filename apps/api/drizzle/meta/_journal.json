@@ -218,6 +218,13 @@
       "when": 1792700000005,
       "tag": "0036_grantor_unknown",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792700000006,
+      "tag": "0037_stored_grant_chain",
+      "breakpoints": true
     }
   ]
 }

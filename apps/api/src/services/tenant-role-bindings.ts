@@ -33,6 +33,7 @@ import {
   type Actor,
   type UseCaseGrantAuthority,
 } from './grant-authority.js';
+import { chainForGrant, widenedChain } from './grant-chain.js';
 import { PENTEST_WARNING_MS, type PentestService } from './pentest.js';
 import { TenantAccess } from './tenant-access.js';
 import { TenantTree } from './tenant-tree.js';
@@ -492,6 +493,8 @@ export class TenantRoleBindingsService {
               ? this.ctx.now()
               : null,
           grantedBy: actor.userId,
+          // every link the grant depends on, stored now (ADR 0017 rule A4, #356)
+          grantChain: (await chainForGrant(tx, actor.userId, this.ctx.now())) ?? null,
           source: 'grant',
         });
         await this.audit.append(
@@ -644,7 +647,15 @@ export class TenantRoleBindingsService {
             role: next.role,
             inherit: next.inherit,
             expiresAt: next.expiresAt,
-            ...(widened ? { grantedBy: widenedGrantor(actor.userId) } : {}),
+            ...(widened
+              ? {
+                  grantedBy: widenedGrantor(actor.userId),
+                  grantChain: widenedChain(
+                    row,
+                    await chainForGrant(tx, actor.userId, this.ctx.now()),
+                  ),
+                }
+              : {}),
             ...(expiryChanged
               ? {
                   expiryWarnedAt:
@@ -840,19 +851,17 @@ export class TenantRoleBindingsService {
         items: items.slice(0, LIST_ITEM_CAP),
       };
       if (input.dryRun || targets.length === 0) return result;
-      await tx
-        .update(tenantRoleBindings)
-        // Wider reach is a new grant by the operator (ADR 0017 rule A4).
-        .set({
-          inherit: true,
-          grantedBy: widenedGrantor(p.userId),
-        })
-        .where(
-          inArray(
-            tenantRoleBindings.id,
-            targets.map((t) => t.b.id),
-          ),
-        );
+      const operatorChain = await chainForGrant(tx, p.userId, this.ctx.now());
+      for (const t of targets)
+        await tx
+          .update(tenantRoleBindings)
+          // Wider reach is a new grant by the operator (ADR 0017 rule A4): the operator joins the chain.
+          .set({
+            inherit: true,
+            grantedBy: widenedGrantor(p.userId),
+            grantChain: widenedChain(t.b, operatorChain),
+          })
+          .where(eq(tenantRoleBindings.id, t.b.id));
       for (const t of targets)
         await this.audit.append(
           {
