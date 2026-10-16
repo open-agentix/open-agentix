@@ -218,6 +218,8 @@ export async function loadRawGrants(
         from ${tenantRoleRestrictions}
         join ${tenants} rn on rn.id = ${tenantRoleRestrictions.tenantId}
         where rn.root_id = t.root_id
+          -- platform operators are never narrowed (ADR 0014 section 5)
+          and not ${user.platformAdmin}
           -- only restrictions of roles the user holds can matter
           and ${tenantRoleRestrictions.role} in (
             select ${tenantRoleBindings.role} from ${tenantRoleBindings}

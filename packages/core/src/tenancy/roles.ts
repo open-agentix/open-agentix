@@ -157,6 +157,31 @@ export interface AppliedBinding extends EffectiveBinding {
   restrictedBy: readonly RestrictedPermission[];
 }
 
+type RestrictionIndex = Map<Role, Map<string, Permission[]>>;
+const indexCache = new WeakMap<readonly RoleRestriction[], RestrictionIndex>();
+
+/**
+ * Restrictions by role and node, built once per list (the list object is the cache key, so every
+ * resolution against the same grants shares it). `undefined` for no restrictions.
+ */
+function restrictionIndex(
+  list: readonly RoleRestriction[] | undefined,
+): RestrictionIndex | undefined {
+  if (!list || list.length === 0) return undefined;
+  let index = indexCache.get(list);
+  if (index) return index;
+  index = new Map();
+  for (const r of list) {
+    let byNode = index.get(r.role);
+    if (!byNode) index.set(r.role, (byNode = new Map()));
+    const perms = byNode.get(r.tenantId);
+    if (perms) perms.push(r.permission);
+    else byNode.set(r.tenantId, [r.permission]);
+  }
+  indexCache.set(list, index);
+  return index;
+}
+
 /** The ids of a node's chain, root first, or `undefined` when the placement is not coherent. */
 function chainOf(node: RoleNode): string[] | undefined {
   if (!isValidPath(node.path)) return undefined;
@@ -216,7 +241,12 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
   const position = new Map(chain.map((id, i) => [id, i] as const));
   // Platform admins returned above, so nothing here can narrow them. `admin` is never narrowed
   // below, whatever the restriction list says (the database refuses such rows, too).
-  const restrictions = [...(raw.restrictions ?? []), ...(opts.restrictions ?? [])];
+  // Platform operators are never narrowed (ADR 0014 section 5), also when they act with the roles
+  // of their home node (`implicitPlatformAdmin: false`): their own restrictions are not consulted.
+  const indexes = [
+    raw.platformAdmin ? undefined : restrictionIndex(raw.restrictions),
+    restrictionIndex(opts.restrictions),
+  ].filter((x): x is RestrictionIndex => x !== undefined);
 
   /**
    * Permissions of `role` for a binding anchored at chain position `at`, after restrictions, and
@@ -233,12 +263,20 @@ export function appliedAt(raw: RawGrants, node: RoleNode, opts: ResolveOptions):
     // `admin` can never be restricted (a node must not be able to lock out its administrators).
     if (role === 'admin') return { permissions: [...base], restrictedBy: [] };
     const removed = new Map<Permission, number>();
-    for (const r of restrictions) {
-      const i = position.get(r.tenantId);
-      if (r.role !== role || i === undefined || i > at) continue;
-      if (!base.includes(r.permission)) continue;
-      const prev = removed.get(r.permission);
-      if (prev === undefined || i > prev) removed.set(r.permission, i);
+    // Walk only the chain positions 0..at (the binding's node and its ancestors) and look each up in
+    // the index: the cost does not depend on how many restrictions the organisation holds.
+    for (const index of indexes) {
+      const byNode = index.get(role);
+      if (!byNode) continue;
+      for (let i = 0; i <= at; i++) {
+        const perms = byNode.get(chain[i]!);
+        if (!perms) continue;
+        for (const p of perms) {
+          if (!base.includes(p)) continue;
+          const prev = removed.get(p);
+          if (prev === undefined || i > prev) removed.set(p, i);
+        }
+      }
     }
     return {
       permissions: base.filter((p) => !removed.has(p)),
