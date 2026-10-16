@@ -223,12 +223,12 @@ describe('finding 1: the grant chain of rule A4', () => {
     const full = await followGrantChain(n.ctx.db, [{ userId: d!.id, unknown: false }], new Date());
     expect(full.users).toEqual(expect.arrayContaining([d!.id, uid['admin2']!]));
     expect(full.unknown).toBe(false);
-    // one hop is not enough to reach the end of the chain: the rest counts as unknown
+    // a walk that may not leave the grantor cannot reach the end of the chain: the rest counts as unknown
     const short = await followGrantChain(
       n.ctx.db,
       [{ userId: d!.id, unknown: false }],
       new Date(),
-      1,
+      0,
     );
     expect(short.unknown).toBe(true);
     expect(
