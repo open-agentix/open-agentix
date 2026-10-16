@@ -14,6 +14,7 @@ import {
   smallint,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
@@ -1232,6 +1233,8 @@ export const agentReviews = pgTable(
       .where(sql`${t.status} = 'open'`),
     index('agent_reviews_agent_idx').on(t.agentId, t.openedAt.desc()),
     index('agent_reviews_tenant_status_idx').on(t.tenantId, t.status),
+    // Target of the composite foreign key of the review threads (review, agent and tenant agree).
+    unique('agent_reviews_id_agent_tenant_uq').on(t.id, t.agentId, t.tenantId),
     check(
       'agent_reviews_status_check',
       sql`${t.status} in ('open','withdrawn','rejected','published')`,
@@ -1305,9 +1308,7 @@ export const agentReviewThreads = pgTable(
   'agent_review_threads',
   {
     id: uuid('id').primaryKey(),
-    reviewId: uuid('review_id')
-      .notNull()
-      .references(() => agentReviews.id),
+    reviewId: uuid('review_id').notNull(),
     agentId: uuid('agent_id')
       .notNull()
       .references(() => agents.id),
@@ -1325,6 +1326,14 @@ export const agentReviewThreads = pgTable(
     createdAt: ts('created_at').notNull().defaultNow(),
   },
   (t) => [
+    // The thread agrees with its review on agent and tenant.
+    foreignKey({
+      columns: [t.reviewId, t.agentId, t.tenantId],
+      foreignColumns: [agentReviews.id, agentReviews.agentId, agentReviews.tenantId],
+      name: 'agent_review_threads_review_fk',
+    }),
+    // Target of the composite foreign key of the comments.
+    unique('agent_review_threads_id_review_tenant_uq').on(t.id, t.reviewId, t.tenantId),
     index('agent_review_threads_review_idx').on(t.reviewId, t.createdAt),
     check('agent_review_threads_kind_check', sql`${t.anchorKind} in ('review','line')`),
     check(
@@ -1348,15 +1357,9 @@ export const agentReviewComments = pgTable(
   'agent_review_comments',
   {
     id: uuid('id').primaryKey(),
-    threadId: uuid('thread_id')
-      .notNull()
-      .references(() => agentReviewThreads.id),
-    reviewId: uuid('review_id')
-      .notNull()
-      .references(() => agentReviews.id),
-    tenantId: uuid('tenant_id')
-      .notNull()
-      .references(() => tenants.id),
+    threadId: uuid('thread_id').notNull(),
+    reviewId: uuid('review_id').notNull(),
+    tenantId: uuid('tenant_id').notNull(),
     authorId: uuid('author_id').notNull(),
     body: text('body').notNull(),
     createdAt: ts('created_at').notNull().defaultNow(),
@@ -1364,6 +1367,18 @@ export const agentReviewComments = pgTable(
     deletedAt: ts('deleted_at'),
   },
   (t) => [
+    // A comment agrees with its thread on review and tenant.
+    foreignKey({
+      columns: [t.threadId, t.reviewId, t.tenantId],
+      foreignColumns: [
+        agentReviewThreads.id,
+        agentReviewThreads.reviewId,
+        agentReviewThreads.tenantId,
+      ],
+      name: 'agent_review_comments_thread_fk',
+    }),
+    // Backs the per-review reads and budget (every comment of a review).
+    index('agent_review_comments_review_idx').on(t.reviewId, t.createdAt),
     index('agent_review_comments_thread_idx').on(t.threadId, t.createdAt),
     // Backs the per-author rate limit of comment creation (counts rows, tombstones included).
     index('agent_review_comments_author_idx').on(t.authorId, t.createdAt),

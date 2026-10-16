@@ -49,6 +49,10 @@ describe.each(sqlTargets)('migration 0033 on existing data (%s)', (_kind, enable
   const user = randomUUID();
   const revision = randomUUID();
   const review = randomUUID();
+  const agent2 = randomUUID();
+  const revision2 = randomUUID();
+  const review2 = randomUUID();
+  const other = randomUUID();
 
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'oax-mig-'));
@@ -72,6 +76,24 @@ describe.each(sqlTargets)('migration 0033 on existing data (%s)', (_kind, enable
       `insert into agent_reviews (id, agent_id, tenant_id, opened_by, opened_revision_id, policy_snapshot, policy_digest, required_approvals)
        values ($1, $2, $3, $4, $5, '{}'::jsonb, $6, 1)`,
       [review, agent, root, user, revision, HEX('b')],
+    );
+    await c.query(
+      `insert into agents (id, tenant_id, name, draft_source) values ($1, $2, 'a2', 'x')`,
+      [agent2, root],
+    );
+    await c.query(
+      `insert into tenants (id, slug, name, root_id, path, depth) values ($1, 'other', 'other', $1, $2, 0)`,
+      [other, `/${other}/`],
+    );
+    await c.query(
+      `insert into agent_draft_revisions (id, agent_id, tenant_id, seq, digest, source, author_id, author_kind)
+       values ($1, $2, $3, 1, $4, 'src', $5, 'user')`,
+      [revision2, agent2, root, HEX('a'), user],
+    );
+    await c.query(
+      `insert into agent_reviews (id, agent_id, tenant_id, opened_by, opened_revision_id, policy_snapshot, policy_digest, required_approvals)
+       values ($1, $2, $3, $4, $5, '{}'::jsonb, $6, 1)`,
+      [review2, agent2, root, user, revision2, HEX('b')],
     );
     await c.migrate(MIGRATIONS_FOLDER);
   }, 120_000);
@@ -114,7 +136,9 @@ describe.each(sqlTargets)('migration 0033 on existing data (%s)', (_kind, enable
     );
 
   it('keeps the earlier rows and stores a review thread and a line thread', async () => {
-    expect((await c.query(`select id from agent_reviews`)).rows).toEqual([{ id: review }]);
+    expect((await c.query(`select id from agent_reviews where id = $1`, [review])).rows).toEqual([
+      { id: review },
+    ]);
     await thread(randomUUID(), 'review');
     await thread(randomUUID(), 'line', {
       revisionId: revision,
@@ -179,6 +203,40 @@ describe.each(sqlTargets)('migration 0033 on existing data (%s)', (_kind, enable
     );
   });
 
+  it('ties a thread to the agent and tenant of its review, and a comment to the review and tenant of its thread', async () => {
+    const t = randomUUID();
+    await thread(t, 'review');
+    const bad = (sql: string, params: unknown[]) => failure(c.query(sql, params));
+    const insertThread = `insert into agent_review_threads (id, review_id, agent_id, tenant_id, created_by, anchor_kind) values ($1, $2, $3, $4, $5, 'review')`;
+    expect(await bad(insertThread, [randomUUID(), review, agent2, root, user])).toMatch(
+      /agent_review_threads_review_fk/,
+    );
+    expect(await bad(insertThread, [randomUUID(), review, agent, other, user])).toMatch(
+      /agent_review_threads_review_fk|foreign key/,
+    );
+    const insertComment = `insert into agent_review_comments (id, thread_id, review_id, tenant_id, author_id, body) values ($1, $2, $3, $4, $5, 'x')`;
+    expect(await bad(insertComment, [randomUUID(), t, review2, root, user])).toMatch(
+      /agent_review_comments_thread_fk/,
+    );
+    expect(await bad(insertComment, [randomUUID(), t, review, other, user])).toMatch(
+      /agent_review_comments_thread_fk/,
+    );
+  });
+
+  it('never deletes or truncates threads and comments, and indexes the comments of a review', async () => {
+    const t = randomUUID();
+    await thread(t, 'review');
+    await comment(randomUUID(), t, 'kept');
+    expect(await failure(c.query(`delete from agent_review_comments`))).toMatch(/append-only/);
+    expect(await failure(c.query(`delete from agent_review_threads`))).toMatch(/append-only/);
+    expect(await failure(c.query(`truncate agent_review_comments`))).toMatch(/append-only/);
+    expect(await failure(c.query(`truncate agent_review_threads cascade`))).toMatch(/append-only/);
+    const idx = await c.query<{ indexname: string }>(
+      `select indexname from pg_indexes where tablename = 'agent_review_comments'`,
+    );
+    expect(idx.rows.map((r) => r.indexname)).toContain('agent_review_comments_review_idx');
+  });
+
   it('is reverted by the down script, leaving the reviews alone', async () => {
     await c.script(DOWN);
     const tables = (
@@ -187,6 +245,8 @@ describe.each(sqlTargets)('migration 0033 on existing data (%s)', (_kind, enable
       )
     ).rows.map((r) => r.table_name);
     expect(tables.sort()).toEqual(['agent_review_decisions', 'agent_reviews']);
-    expect((await c.query(`select id from agent_reviews`)).rows).toEqual([{ id: review }]);
+    expect((await c.query(`select id from agent_reviews where id = $1`, [review])).rows).toEqual([
+      { id: review },
+    ]);
   });
 });
