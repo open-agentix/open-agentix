@@ -4,6 +4,8 @@ import type { RevisionRow } from '../../services/agent-revisions.js';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import {
+  ClearHoldBody,
+  ClearHoldResultSchema,
   DecisionBody,
   DecisionResultSchema,
   LifecyclePatchBody,
@@ -191,6 +193,32 @@ export function registerReviewRoutes(app: ZApp, { services }: Deps): void {
       },
     },
     async (req) => reviewDto(await agentReviews.withdraw(principalOf(req), req.params.id)),
+  );
+
+  app.post(
+    '/v1/reviews/:id/clear-hold',
+    {
+      config: { access: 'agents:write' },
+      schema: {
+        tags,
+        summary: 'Release a withdrawn or rejected review from the policy-loosening hold',
+        description:
+          "A withdrawn or rejected review keeps blocking `policy_loosening_by_contributor` for its contributors (and the accounts whose authority comes from them) until an administrator releases it here. Needs an administrator of the agent's tenant who is not a contributor of the review and whose own authority does not come from one (`403 hold_clear_by_contributor`); `409 not_held` for an open or published review or one already released. Audited as `agent.review.hold_cleared`. An agent with 25 unreleased withdrawn or rejected reviews cannot open another (`429 review_hold_limit`).",
+        security: sec,
+        params: IdParams,
+        body: ClearHoldBody,
+        response: {
+          200: ClearHoldResultSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
+      },
+    },
+    async (req) => {
+      const r = await agentReviews.clearHold(principalOf(req), req.params.id, req.body.reason);
+      return { ...r, clearedAt: iso(r.clearedAt) };
+    },
   );
 
   app.get(

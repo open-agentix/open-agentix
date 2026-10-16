@@ -162,6 +162,8 @@ const DENIED = [
   // ADR 0017 S1: deciding a review needs `agents:approve`, which no use-case binding carries (a
   // maintainer bound to a use case only loses it, fail closed: #336 item 7); the policy is node-wide
   'POST /v1/reviews/:id/decisions',
+  // releasing a loosening hold (#356) is reserved for tenant administrators
+  'POST /v1/reviews/:id/clear-hold',
   'GET /v1/tenants/:id/settings/agent-lifecycle',
   'PATCH /v1/tenants/:id/settings/agent-lifecycle',
   // ADR 0017 S2: comment threads need `agents:review`, which no use-case binding carries either, and
