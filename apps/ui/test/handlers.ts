@@ -172,6 +172,7 @@ export const handlers = [
     const { source } = (await request.json()) as { source: string };
     const valid = !source.includes('INVALID');
     return json<ResponseOf<'/v1/agents/validate', 'post'>>({
+      format: 'agents-md',
       valid,
       errors: valid ? [] : [{ path: '/agents/0/model', message: 'Required' }],
       warnings: source.includes('WARN') ? [{ path: '/budget', message: 'no budget' }] : [],
@@ -179,6 +180,7 @@ export const handlers = [
       version: /version: ([\d.]+)/.exec(source)?.[1] ?? null,
       digest: 'sha256:abc',
       definition: valid ? { name: 'ticket-updater' } : null,
+      manifest: null,
     });
   }),
   http.post(api('/v1/agents'), async ({ request }) => {

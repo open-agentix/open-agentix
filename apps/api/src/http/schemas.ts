@@ -80,15 +80,30 @@ export const SubtreePageQuery = SubtreeQuery.extend({
     .describe('with scope=subtree: `nextCursor` of the previous page'),
 });
 
-export const IssueSchema = z.object({ path: z.string(), message: z.string() });
+export const IssueSchema = z.object({
+  path: z.string().describe('dotted path (agents.md) or JSON Pointer (AWP manifest)'),
+  message: z.string(),
+  code: z
+    .string()
+    .optional()
+    .describe('stable machine code; the AWP diagnostic code for a manifest'),
+});
 export const ValidationResultSchema = z.object({
+  format: z.enum(['agents-md', 'awp']).describe('how the source was read'),
   valid: z.boolean(),
   errors: z.array(IssueSchema),
   warnings: z.array(IssueSchema),
   name: z.string().nullable(),
   version: z.string().nullable(),
-  digest: z.string().nullable(),
+  digest: z
+    .string()
+    .nullable()
+    .describe('agents.md: SHA-256 of the source; AWP: sha256:<hex> of the manifest (spec 9.1)'),
   definition: z.record(z.string(), z.unknown()).nullable().describe('parsed definition when valid'),
+  manifest: z
+    .record(z.string(), z.unknown())
+    .nullable()
+    .describe('effective AWP manifest when the source is a valid AWP manifest, otherwise null'),
 });
 
 export const AgentSchema = z.object({

@@ -20,6 +20,7 @@ export * from './awp/generated/awp-types.js';
 export * from './awp/manifest-types.js';
 export { validateManifestSource, validateManifestValue } from './awp/manifest-validate.js';
 export { isAwpApiVersion } from './awp/manifest-parse.js';
+export { manifestIssues } from './awp/manifest-issues.js';
 export {
   CRITICAL_EXTENSIONS as OAX_CRITICAL_EXTENSIONS,
   knownExtensionNames,

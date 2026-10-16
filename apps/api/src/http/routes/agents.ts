@@ -120,22 +120,29 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       config: { access: 'agents:read' },
       schema: {
         tags,
-        summary: 'Validate an agents.md source without storing it',
+        summary: 'Validate an agents.md source or an AWP manifest without storing it',
+        description:
+          'Accepts an agents.md file (apiVersion openagentix.io/v1alpha1) or an AWP manifest (apiVersion ' +
+          'awp.agenticworkflowprotocol.org/v1alpha1) as agents.md front matter or as plain JSON/YAML. ' +
+          'AWP is a draft; this is validation against the pinned schema, not a conformance claim. ' +
+          'For an AWP manifest the issues carry the AWP diagnostic code and a JSON Pointer path.',
         security: sec,
         body: AgentSourceBody,
         response: { 200: ValidationResultSchema },
       },
     },
     async (req) => {
-      const r = await agents.validateFor(principalOf(req), req.body.source);
+      const r = await agents.validateSource(principalOf(req), req.body.source);
       return {
+        format: r.format,
         valid: r.valid,
         errors: r.errors,
         warnings: r.warnings,
-        name: r.definition?.name ?? null,
-        version: r.definition?.version ?? null,
-        digest: r.definition?.digest ?? null,
+        name: r.name,
+        version: r.version,
+        digest: r.digest,
         definition: (r.definition as unknown as Record<string, unknown> | null) ?? null,
+        manifest: r.manifest,
       };
     },
   );
