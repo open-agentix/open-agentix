@@ -101,8 +101,13 @@ Least-privilege roles: [`deploy/sql/roles.sql`](../deploy/sql/roles.sql).
 | `OAX_LDAP_ROLE_MAPPING` | `{}` | JSON: group DN -> `role` / `role@team-slug`. |
 | `OAX_LDAP_TLS_REJECT_UNAUTHORIZED` | `true` | Verify the LDAP server certificate. |
 
-Roles: `admin`, `agent-engineer`, `integrator`, `operator`, `auditor`, `viewer`
-(permissions: `GET /v1/settings` or `packages/core/src/rbac.ts`).
+Roles: `admin`, `agent-developer`, `agent-maintainer`, `integrator`, `operator`, `auditor`, `viewer`
+(permissions: `GET /v1/settings` or `packages/core/src/rbac.ts`; the role table is in
+[tenancy.md](tenancy.md#fixed-roles-and-the-agent-roles-adr-0017-slice-s10)). Both mappings accept
+`agent-developer` and `agent-maintainer`, also as `role@team-slug`. **`agent-engineer` was renamed to
+`agent-maintainer` without an alias**: a mapping that still names `agent-engineer` is refused at start
+with an error that names `agent-maintainer`, so update `OAX_OIDC_ROLE_MAPPING` and
+`OAX_LDAP_ROLE_MAPPING` before upgrading.
 
 ## Audit
 

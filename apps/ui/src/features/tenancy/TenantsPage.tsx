@@ -37,10 +37,11 @@ import { defaultExpanded, matches, visibleRows, type TreeRow } from './treeRows'
 const route = getRouteApi('/_app/tenants');
 const SEARCH_DEBOUNCE_MS = 250;
 
-/** API role names (`admin`, `agent-engineer`, ...) to the role labels of the console. */
+/** API role names (`admin`, `agent-maintainer`, ...) to the role labels of the console. */
 const ROLE_KEYS: Record<string, TKey> = {
   admin: 'tenancy.roles.tenantAdmin',
-  'agent-engineer': 'tenancy.roles.agentEngineer',
+  'agent-developer': 'tenancy.roles.agentDeveloper',
+  'agent-maintainer': 'tenancy.roles.agentMaintainer',
   integrator: 'tenancy.roles.integrator',
   operator: 'tenancy.roles.operator',
   auditor: 'tenancy.roles.auditor',

@@ -84,7 +84,7 @@ describe('wizard generator', () => {
       advertisedTools({ ...f.connections[0]!, config: { allowedTools: [{ name: 'a' }, 3] } }),
     ).toEqual(['a']);
     expect(advertisedTools(undefined)).toEqual([]);
-    expect(publisherRoles()).toEqual(['admin', 'agent-engineer']);
+    expect(publisherRoles()).toEqual(['admin', 'agent-maintainer']);
   });
 });
 
@@ -128,7 +128,7 @@ describe('wizard page', () => {
     expect(screen.getByRole('button', { name: 'Create draft for review' })).toBeDisabled();
     await user.type(screen.getByLabelText(/name of the workflow/i), 'Ticket triage');
     await user.selectOptions(screen.getByLabelText('Owner team'), 'team-security');
-    expect(screen.getByText(/roles: admin, agent-engineer/)).toBeInTheDocument();
+    expect(screen.getByText(/roles: admin, agent-maintainer/)).toBeInTheDocument();
     expect(screen.getByText(/wait for a human at run time/)).toBeInTheDocument();
     await user.click(screen.getByText('Show generated agents.md'));
     expect(await screen.findByText('Valid', {}, { timeout: 3000 })).toBeInTheDocument();

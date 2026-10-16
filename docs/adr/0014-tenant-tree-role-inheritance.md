@@ -1,5 +1,7 @@
 # ADR 0014: Role inheritance over the tenant tree
 
+> Note (ADR 0017 S10): the role `agent-engineer` named below was renamed to `agent-maintainer` without an alias; `agent-developer` was added. Read `agent-engineer` as `agent-maintainer` in this document.
+
 - Status: Proposed. Slices S1, S1b, S2, S3, S4, S5 and S6 are implemented (see "Implementation status" below); S7 to S10 are open.
 - Date: 2026-10-10
 - Plan items: W13-6 (roles and visibility), with the parts of W13-2 that roles need (the pure
