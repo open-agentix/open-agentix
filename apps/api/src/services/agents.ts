@@ -123,7 +123,12 @@ export class AgentsService {
     principal: Principal,
     agent: AgentRow,
     permission:
-      'agents:read' | 'agents:write' | 'agents:publish' | 'agents:approve' | 'runs:execute',
+      | 'agents:read'
+      | 'agents:write'
+      | 'agents:publish'
+      | 'agents:review'
+      | 'agents:approve'
+      | 'runs:execute',
   ): Promise<void> {
     // Tenant boundary first: another tenant's agent does not exist for this principal. An agent
     // carries a use case, so a use-case binding of that use case (or a parent use case) counts too.

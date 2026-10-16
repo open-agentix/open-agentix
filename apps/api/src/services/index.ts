@@ -2,6 +2,9 @@ import type { AppContext } from '../context.js';
 import { createMcpOauth, type McpOauthStores, type TrustedRole } from '../mcp-oauth/index.js';
 import { AgentCheckService } from './agent-check.js';
 import { AgentReviewsService } from './agent-reviews.js';
+import { ReviewChangesService } from './review-changes.js';
+import { ReviewInboxService } from './review-inbox.js';
+import { ReviewThreadsService } from './review-threads.js';
 import { AgentSummaryService } from './agent-summaries.js';
 import { AgentsService } from './agents.js';
 import { AuditService } from './audit.js';
@@ -38,6 +41,9 @@ export interface Services {
   lifecyclePolicy: LifecyclePolicyService;
   /** Draft revisions, reviews and approval records (ADR 0017 S1). */
   agentReviews: AgentReviewsService;
+  reviewThreads: ReviewThreadsService;
+  reviewChanges: ReviewChangesService;
+  reviewInbox: ReviewInboxService;
   agentSummaries: AgentSummaryService;
   catalog: CatalogService;
   runs: RunsService;
@@ -76,6 +82,9 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const lifecyclePolicy = new LifecyclePolicyService(ctx, audit);
   const agentReviews = new AgentReviewsService(ctx, audit, agents, lifecyclePolicy, catalog);
   agents.shadowPublish = (agent, source) => agentReviews.shadowPublish(agent, source);
+  const reviewThreads = new ReviewThreadsService(ctx, audit, agents, agentReviews);
+  const reviewChanges = new ReviewChangesService(ctx, agents, agentReviews);
+  const reviewInbox = new ReviewInboxService(ctx, agentReviews, lifecyclePolicy);
   const agentSummaries = new AgentSummaryService(ctx);
   const budgets = new BudgetsService(ctx, audit, agents);
   const runs = new RunsService(ctx, audit, agents, budgets);
@@ -136,6 +145,9 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     agents,
     lifecyclePolicy,
     agentReviews,
+    reviewThreads,
+    reviewChanges,
+    reviewInbox,
     agentSummaries,
     catalog,
     runs,
