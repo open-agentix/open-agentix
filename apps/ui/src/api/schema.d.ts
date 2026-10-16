@@ -3534,6 +3534,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/reviews/{id}/clear-hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release a withdrawn or rejected review from the policy-loosening hold
+         * @description A withdrawn or rejected review keeps blocking `policy_loosening_by_contributor` for its contributors (and the accounts whose authority comes from them) until an administrator releases it here. Needs an administrator of the agent's tenant who is not a contributor of the review and whose own authority does not come from one (`403 hold_clear_by_contributor`); `409 not_held` for an open or published review or one already released. Audited as `agent.review.hold_cleared`. An agent with 25 unreleased withdrawn or rejected reviews cannot open another (`429 review_hold_limit`).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description why the hold is released (kept in the hold record) */
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            reviewId: string;
+                            /** Format: uuid */
+                            clearedBy: string;
+                            clearedAt: string;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tenants/{id}/settings/agent-lifecycle": {
         parameters: {
             query?: never;

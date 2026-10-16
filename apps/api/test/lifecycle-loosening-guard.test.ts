@@ -3,9 +3,10 @@ import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   agentDraftRevisions,
+  agentReviewHoldClears,
   agentReviews,
-  agentVersions,
   agents,
+  auditLog,
   tenants,
   users,
 } from '../src/db/schema.js';
@@ -86,7 +87,7 @@ const expectRefused = (res: { statusCode: number; body: string; json: () => unkn
 };
 /**
  * Ends every hold of the organisation so that the next test starts clean: open reviews are
- * published, and a version is published for every agent whose review was withdrawn or rejected.
+ * published, and withdrawn or rejected ones are released the way an administrator would.
  */
 async function settleAll() {
   await n.ctx.db
@@ -94,18 +95,14 @@ async function settleAll() {
     .set({ status: 'published', closedAt: new Date() })
     .where(eq(agentReviews.status, 'open'));
   const closed = await n.ctx.db
-    .select({ agentId: agentReviews.agentId })
+    .select({ id: agentReviews.id })
     .from(agentReviews)
     .where(inArray(agentReviews.status, ['withdrawn', 'rejected']));
-  for (const agentId of new Set(closed.map((c) => c.agentId)))
-    await n.ctx.db.insert(agentVersions).values({
-      id: randomUUID(),
-      agentId,
-      version: `settled-${randomUUID()}`,
-      digest: 'b'.repeat(64),
-      source: 'x',
-      definition: {},
-    });
+  for (const c of closed)
+    await n.ctx.db
+      .insert(agentReviewHoldClears)
+      .values({ reviewId: c.id, clearedBy: randomUUID(), reason: 'test cleanup' })
+      .onConflictDoNothing();
 }
 
 beforeAll(async () => {
@@ -128,9 +125,13 @@ beforeAll(async () => {
   expect(r.statusCode, r.body).toBe(201);
   orgA = j(r).id;
   adminA = await n.login('admin@loose.example.org', PW);
+  uid['adminA'] = (
+    await n.ctx.db.select().from(users).where(eq(users.email, 'admin@loose.example.org'))
+  )[0]!.id;
   await mkUser('author', ['agent-maintainer']);
   await mkUser('rev', ['agent-maintainer']);
   await mkUser('c', ['admin']); // contributor with administrator rights
+  await mkUser('d', ['admin'], tok['c']!); // made by C
 }, 120_000);
 afterAll(async () => {
   await n?.close();
@@ -152,9 +153,37 @@ describe('withdraw, loosen, reopen', () => {
     expect((await setPolicy({ minApprovals: 3 }, tok['c']!)).statusCode).toBe(200);
     expect((await setPolicy(LOOSEN)).statusCode).toBe(200);
     expect((await strict()).statusCode).toBe(200);
-    // publishing the change ends the hold: nothing is under review any more
+    // publishing does not end the hold: it needs no approval while approval is not enforced
     const pub = await req(tok['c']!, 'POST', `/v1/agents/${agent}/publish`);
     expect(pub.statusCode, pub.body).toBe(201);
+    expectRefused(await setPolicy(LOOSEN, tok['c']!));
+    // the contributor cannot release it, nor can an account whose authority comes from one
+    const own = await req(tok['c']!, 'POST', `/v1/reviews/${review.id}/clear-hold`, {
+      reason: 'x',
+    });
+    expect(own.statusCode, own.body).toBe(403);
+    expect(j(own).error).toBe('hold_clear_by_contributor');
+    const viaD = await req(tok['d']!, 'POST', `/v1/reviews/${review.id}/clear-hold`, {
+      reason: 'x',
+    });
+    expect(viaD.statusCode, viaD.body).toBe(403);
+    // an administrator outside the contributors releases it, audited, once
+    const notAdmin = await req(tok['rev']!, 'POST', `/v1/reviews/${review.id}/clear-hold`, {
+      reason: 'x',
+    });
+    expect(notAdmin.statusCode, notAdmin.body).toBe(403);
+    const clear = await req(adminA, 'POST', `/v1/reviews/${review.id}/clear-hold`, {
+      reason: 'abandoned',
+    });
+    expect(clear.statusCode, clear.body).toBe(200);
+    expect(j(clear).clearedBy).toBe(uid['adminA']);
+    const entries = await n.ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'agent.review.hold_cleared'));
+    expect(entries.some((e) => e.actor === uid['adminA'])).toBe(true);
+    const again = await req(adminA, 'POST', `/v1/reviews/${review.id}/clear-hold`, { reason: 'x' });
+    expect(again.statusCode).toBe(409);
     expect((await setPolicy(LOOSEN, tok['c']!)).statusCode).toBe(200);
     expect((await strict()).statusCode).toBe(200);
     await settleAll();
@@ -184,7 +213,6 @@ describe('the creator chain of the caller', () => {
     await settleAll();
     expect((await strict()).statusCode).toBe(200);
     // C makes an administrator D, D makes administrator E; neither touched a draft
-    await mkUser('d', ['admin'], tok['c']!);
     await mkUser('e', ['admin'], tok['d']!);
     const agent = await newAgent(tok['c']!);
     await openReview(tok['c']!, agent);
@@ -393,5 +421,92 @@ describe('a tenant move that widens the policy', () => {
     });
     expect(back.statusCode, back.body).toBe(200);
     expect(j(back).policiesWidened).toEqual([]);
+  });
+});
+
+describe('cost and abuse of the guard', () => {
+  it('examines an agent once however many reviews it collected, and limits the pile of unreleased ones', async () => {
+    await settleAll();
+    expect((await strict()).statusCode).toBe(200);
+    const agent = await newAgent(tok['author']!);
+    // open and withdraw until the limit: the 26th review is refused
+    for (let i = 0; i < 25; i++) {
+      const review = await openReview(tok['author']!, agent);
+      const w = await req(tok['author']!, 'POST', `/v1/reviews/${review.id}/withdraw`);
+      expect(w.statusCode, w.body).toBe(200);
+    }
+    const blocked = await req(tok['author']!, 'POST', `/v1/agents/${agent}/reviews`);
+    expect(blocked.statusCode, blocked.body).toBe(429);
+    expect(j(blocked).error).toBe('review_hold_limit');
+    // 25 reviews of one agent count as one agent: a cap of one agent does not trip, 0 would
+    const saved = { ...LOOSENING_LIMITS };
+    try {
+      LOOSENING_LIMITS.max = 1;
+      expect((await setPolicy(LOOSEN)).statusCode).toBe(200);
+      expect((await strict()).statusCode).toBe(200);
+      // an administrator releases the abandoned reviews, after which the author can open again
+      const rows = await n.ctx.db
+        .select({ id: agentReviews.id })
+        .from(agentReviews)
+        .where(eq(agentReviews.agentId, agent));
+      for (const r of rows.slice(0, 2)) {
+        const clear = await req(adminA, 'POST', `/v1/reviews/${r.id}/clear-hold`, { reason: 'x' });
+        expect(clear.statusCode, clear.body).toBe(200);
+      }
+      expect((await req(tok['author']!, 'POST', `/v1/agents/${agent}/reviews`)).statusCode).toBe(
+        201,
+      );
+    } finally {
+      Object.assign(LOOSENING_LIMITS, saved);
+    }
+    await settleAll();
+  }, 120_000);
+
+  it('repeats the full check under the lock when the fingerprint of the pre-check is stale', async () => {
+    await settleAll();
+    const svc = n.services.lifecyclePolicy;
+    const node = (await n.ctx.db.select().from(tenants).where(eq(tenants.id, orgA)))[0]!;
+    const known = await svc.checkLoosening(n.ctx.db, uid['c']!, node, ['minApprovals']);
+    // the same state: the answer stands
+    await svc.assertNoOwnOpenReview(n.ctx.db, uid['c']!, node, ['minApprovals'], known);
+    // C opens a review after the pre-check
+    await openReview(tok['c']!, await newAgent(tok['c']!));
+    await expect(
+      svc.assertNoOwnOpenReview(n.ctx.db, uid['c']!, node, ['minApprovals'], known),
+    ).rejects.toMatchObject({ code: 'policy_loosening_by_contributor' });
+    await settleAll();
+  });
+
+  it('honours OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow for a caller whose chain is unknown, but not a known contributor', async () => {
+    await settleAll();
+    expect((await strict()).statusCode).toBe(200);
+    await openReview(tok['c']!, await newAgent(tok['c']!));
+    await n.ctx.db.update(users).set({ creatorUnknown: true }).where(eq(users.id, uid['g']!));
+    expectRefused(await setPolicy(LOOSEN, tok['g']!));
+    const lifecycle = n.ctx.config.lifecycle;
+    lifecycle.unknownGrantor = 'allow';
+    try {
+      expect((await setPolicy(LOOSEN, tok['g']!)).statusCode).toBe(200);
+      expect((await strict()).statusCode).toBe(200);
+      expectRefused(await setPolicy(LOOSEN, tok['c']!)); // a known contributor stays refused
+    } finally {
+      lifecycle.unknownGrantor = 'refuse';
+    }
+    await settleAll();
+  });
+
+  it('keeps the opener of a later review when the earliest unfinished review of the agent is examined', async () => {
+    await settleAll();
+    expect((await strict()).statusCode).toBe(200);
+    const agent = await newAgent(tok['author']!);
+    const first = await openReview(tok['author']!, agent);
+    expect((await req(tok['author']!, 'POST', `/v1/reviews/${first.id}/withdraw`)).statusCode).toBe(
+      200,
+    );
+    // the first review stays held; C only opens the second one (no revision of C): C is a contributor
+    // as its opener, which the per-agent examination of the earliest review must not lose
+    await openReview(tok['c']!, agent);
+    expectRefused(await setPolicy(LOOSEN, tok['c']!));
+    await settleAll();
   });
 });

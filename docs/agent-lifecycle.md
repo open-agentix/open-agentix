@@ -269,13 +269,28 @@ of that node; another administrator makes it. The rules, all fail closed (#356):
   contributor made, or whose administrator role a contributor granted, cannot loosen the policy for
   them. A chain that cannot be followed counts as a contributor as soon as a review is unfinished.
 - **Withdrawing does not release.** A review is unfinished while it is open, and after it was
-  withdrawn or rejected as long as no version was published for that agent since it was opened.
-  Withdraw, loosen, reopen is therefore refused; publishing the change (by somebody else, under the
-  rules in force) or an administrator who is not a contributor ends the hold.
+  withdrawn or rejected until an administrator **outside the contributors and their chains** releases
+  it with `POST /v1/reviews/{id}/clear-hold` (a reason is required; audited as
+  `agent.review.hold_cleared`; `403 hold_clear_by_contributor`, `409 not_held`). Withdraw, loosen,
+  reopen is therefore refused. **Publishing a version does not end the hold**: while approval is not
+  enforced (before S3) anyone with `agents:publish` can publish without approval, so a publish proves
+  nothing. When S3 enforces approval and closes the review on publish, a review that is `published`
+  is finished by itself. An agent with 25 withdrawn or rejected reviews nobody released cannot open
+  another (`429 review_hold_limit`), so open, withdraw, repeat cannot pile up holds without bound.
 - **A tenant move that widens the policy is a loosening.** Moving a node out from under the ancestors
   that set a policy (`policiesWidened`) runs the same check on the moved subtree, also as a dry run.
-- **Every unfinished review is checked**, page by page; more than 20 000 are refused as unverifiable
-  instead of being ignored. A review whose head revision cannot be read is treated as a contributor.
+- **Every agent with an unfinished review is checked**, once per agent (the earliest unfinished
+  review has the widest window of revision authors; the openers of the others are added), page by
+  page; more than 20 000 such agents are refused as unverifiable instead of being ignored. A review
+  whose head revision cannot be read is treated as a contributor. The expensive check runs
+  **before** the tenant and binding locks are taken; under the lock only a fingerprint (the caller's
+  chain and the unfinished reviews with each agent's head revision) is compared, and the full check
+  is repeated under the lock only when it changed. A tenant move runs the full check under its lock.
+- **Who can loosen.** The bootstrap administrator, platform operators and administrators whose chain
+  is known and reaches no contributor of an unfinished review in the subtree. Accounts with an
+  unknown creator or grantor cannot while a review is unfinished, unless the installation sets
+  `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow` (the guard honours it for an unknown chain; known
+  contributors stay refused).
 
 (Notifying
 the administrators of a node about loosening changes follows with the notification slice S13; the
@@ -386,8 +401,24 @@ sources.
   made (not the bootstrap administrator) and role or membership rows that the audit chain cannot
   prove are unknown creators or grantors: they cannot make an approver while
   `OAX_LIFECYCLE_UNKNOWN_GRANTOR=refuse` (the default), and they cannot loosen the lifecycle policy of a
-  subtree that has an unfinished review. Remove and add the binding again (records the chain), or set
-  `allow` during the transition.
+  subtree that has an unfinished review. Repair a binding: an administrator whose own chain is known
+  (the bootstrap administrator, a platform operator, a clean administrator) removes and adds it again
+  (an unknown administrator re-granting spreads the unknown mark: the chain of the new row includes
+  theirs). Repair an account with `creator_unknown`: recreate it, or, when the operator knows who made
+  it, set `created_by` and `grant_chain` by SQL (`update users set creator_unknown = false, created_by =
+  '<id>', grant_chain = array['<id>']::uuid[] where id = '<account>'`). Or set `allow` during the
+  transition. The migration walks the chain of every existing row (six hops; a link that is unknown or
+  a longer chain leaves the row unknown); it builds a temporary index on `audit_log` (a SHARE lock:
+  audit appends wait) and needs roughly 3 seconds per million audit entries plus a pass over the
+  binding tables, measured on a small test VM; plan a short maintenance window on large audit chains.
+- **S3 requires `OAX_ROLE_BINDINGS_READ=bindings`.** `assertNodeAuthority` returns before it takes the
+  binding lock on the legacy read path, so the stored chain is only race-free (and the loosening
+  guard only sees the whole tree) with the resolver path. Do not enable approval enforcement on
+  `legacy`.
+- **Operator trust.** Changes to `OAX_LIFECYCLE_*` (including `UNKNOWN_GRANTOR=allow` and
+  `REQUIRE_APPROVAL`) are made by whoever runs the installation, and `REQUIRE_APPROVAL=auto` turns approval
+  off again when only one tenant is left (`installationDefaults`). These are operator-trust items: the
+  rules above protect against contributors, not against the operator.
 - **Still open from the S1 review (#343):** the platform-operator binding across organisations carries
   no grantor (7), information exposure of `grantedBy` and token ids to readers of the agent (9), database
   hardening such as truncate triggers and missing foreign keys (10), the start-up backfill running

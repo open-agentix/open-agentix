@@ -238,6 +238,10 @@ describe.each(sqlTargets)('migration 0034 on existing data (%s)', (_kind, enable
   });
 
   it('is reverted by the down script, leaving the reviews alone', async () => {
+    // 0037 (hold releases) refers to the reviews and goes first
+    await c.script(
+      readFileSync(join(MIGRATIONS_FOLDER, 'down/0037_stored_grant_chain.down.sql'), 'utf8'),
+    );
     await c.script(DOWN);
     const tables = (
       await c.query<{ table_name: string }>(

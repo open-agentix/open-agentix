@@ -51,10 +51,14 @@ All notable changes to this project are documented here. The format follows
   that lost its creator (deleted before a chain was stored) or that nobody is shown to have made is an
   unknown creator, not a clean one. (3) `policy_loosening_by_contributor` can no longer be bypassed:
   the caller's own chain counts (an account a contributor made, or whose administrator role a
-  contributor granted), a review that was withdrawn or rejected keeps the hold until a version is
-  published for the agent, a tenant move that widens the policy runs the same check (dry run too), all
-  unfinished reviews are checked page by page, and more than 20 000 are refused instead of ignored.
-  (4) Migration `0037` re-checks what `0036` attributed with a stricter rule (the audit chain must show
+  contributor granted), a review that was withdrawn or rejected keeps the hold until an administrator
+  outside the contributors releases it (`POST /v1/reviews/{id}/clear-hold`; publishing does not end it), a tenant move that widens the policy runs the same check (dry run too), all
+  unfinished reviews are checked once per agent and page by page before the locks are taken (a fingerprint
+  is compared under the lock), more than 20 000 agents are refused instead of ignored, and an agent
+  with 25 unreleased withdrawn or rejected reviews cannot open another (`429 review_hold_limit`).
+  The guard honours `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow`.
+  (4) Migration `0037` backfills the transitive chain of every existing row and re-checks what `0036`
+  attributed with a stricter rule (rows it cannot prove keep `granted_by` and get the unknown mark) (the audit chain must show
   the role or membership absent before; entries without `globalRoles`, `system` and non-account actors
   do not count) and turns the rest into unknown; identity-provider rows an administrator listed before
   are no longer "nobody", and an identity-provider login keeps the grantor of a team membership that
