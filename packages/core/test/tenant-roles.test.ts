@@ -1258,3 +1258,30 @@ describe('role restrictions carried in the raw grants (ADR 0014 section 5, slice
     });
   });
 });
+
+describe('role restrictions cost (slice S9)', () => {
+  it('resolving every node of a large organisation with many restrictions stays within a time budget', () => {
+    const r = rng(42);
+    const nodes = forest(r, 1, 1000);
+    const home = nodes[0]!;
+    const restrictions: RoleRestriction[] = [];
+    // every non-admin role, every permission it holds, on every node: the worst case an org can hold
+    for (const n of nodes)
+      for (const role of ROLES)
+        if (role !== 'admin')
+          for (const p of ROLE_PERMISSIONS[role])
+            restrictions.push({ tenantId: n.id, role, permission: p });
+    const nodeBindings = Array.from({ length: 200 }, (_, i) =>
+      grant(nodes[i % nodes.length]!.id, ROLES[1 + (i % (ROLES.length - 1))]!, {
+        inherit: i % 2 === 0,
+      }),
+    );
+    const raw = rawOf(home, { nodeBindings, restrictions });
+    const start = performance.now();
+    const visible = visibleNodeIds(raw, nodes, { now: NOW });
+    const ms = performance.now() - start;
+    expect(visible).toBeDefined();
+    // the unindexed version took seconds for this input; the index keeps it well below a second
+    expect(ms).toBeLessThan(750);
+  });
+});

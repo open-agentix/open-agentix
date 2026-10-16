@@ -213,6 +213,34 @@ describe('approvals on the resolver read path', () => {
     ).toBe(200);
   });
 
+  it('honours a role restriction: a reviewer whose agents:approve was restricted is not eligible (ADR 0014 S9)', async () => {
+    await w.mkUser('maint-r', 'org-a');
+    await w.bind('maint-r', 'org-a', 'agent-maintainer', { inherit: true });
+    await w.relogin('maint-r');
+    // the review of a-u1 opened in the first test is still open
+    const open409 = j(await open('admin-u1', 'a-u1'));
+    const review = j(await w.req('admin-u1', 'GET', `/v1/reviews/${open409.details.reviewId}`));
+    expect(review.revision.digest).toBeTruthy();
+    const base = `/v1/tenants/${w.id['org-a']}/role-restrictions`;
+    const restrict = await w.req('root-admin', 'PUT', base, {
+      role: 'agent-maintainer',
+      permissions: ['agents:approve'],
+    });
+    expect(restrict.statusCode, restrict.body).toBe(200);
+    try {
+      const refused = await decide('maint-r', review, 'approve', 'unit-1');
+      expect(refused.statusCode, refused.body).toBe(403);
+      // the route already needs agents:approve, which the restriction removed; either way refused
+      expect(['forbidden', 'not_eligible']).toContain(j(refused).error);
+    } finally {
+      expect(
+        (await w.req('root-admin', 'DELETE', `${base}?role=agent-maintainer`)).statusCode,
+      ).toBe(204);
+    }
+    // without the restriction the same reviewer decides
+    expect((await decide('maint-r', review, 'approve', 'unit-1')).statusCode).toBe(201);
+  });
+
   it('is invisible to another organisation, even to its administrator', async () => {
     const some = secureReview;
     for (const [method, url] of [

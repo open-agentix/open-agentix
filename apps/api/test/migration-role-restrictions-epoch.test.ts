@@ -30,7 +30,7 @@ describe('migration 0033 files', () => {
     expect(new Set(tags).size).toBe(tags.length);
     const read = (n: string) =>
       JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, `meta/${n}_snapshot.json`), 'utf8'));
-    expect(read('0033').prevId).toBe(read('0031').id);
+    expect(read('0033').prevId).toBe(read('0032').id);
     expect(existsSync(join(MIGRATIONS_FOLDER, `down/${TAG}.down.sql`))).toBe(true);
   });
 });

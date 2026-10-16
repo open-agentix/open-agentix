@@ -4,8 +4,10 @@ import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   DEFAULT_TENANT_ID,
+  agentRoleBindings,
   agentVersions,
   agents,
+  teamMembers,
   auditLog,
   tenantRoleBindings,
   tenantRoleRestrictions,
@@ -138,6 +140,7 @@ describe.each(sqlTargets)('role restrictions (%s)', (_kind, enabled, open) => {
       OAX_DATABASE_URL: target.url,
       OAX_ROLE_BINDINGS_READ: 'bindings',
       OAX_RATE_LIMIT_LOGIN_MAX: '100000',
+      OAX_RATE_LIMIT_RESTRICTION_MAX: '100000',
       OAX_BINDING_REAPER_INTERVAL_SECONDS: '0',
     });
     id.default = DEFAULT_TENANT_ID;
@@ -171,6 +174,36 @@ describe.each(sqlTargets)('role restrictions (%s)', (_kind, enabled, open) => {
     await bind('auditor', 'org-a', 'auditor', true);
     await mkUser('admin-b', 'org-b');
     await bind('admin-b', 'org-b', 'admin', true);
+    await mkUser('team-op', 'org-a');
+    await mkUser('agent-op', 'org-a');
+    const team = await n.req({
+      method: 'POST',
+      url: '/v1/teams',
+      payload: { slug: 'blue', name: 'blue' },
+      headers: { 'x-oax-tenant': id['div-1']! },
+      token: tok['root-admin']!,
+    });
+    expect(team.statusCode, team.body).toBe(201);
+    await n.ctx.db
+      .insert(teamMembers)
+      .values({ teamId: team.json().id, userId: uid['team-op']!, role: 'operator' });
+    id.agent = randomUUID();
+    await n.ctx.db.insert(agents).values({
+      id: id.agent,
+      tenantId: id['div-1']!,
+      name: 'bound-agent',
+      teamId: null,
+      draftSource: '# agent',
+    });
+    await n.ctx.db
+      .insert(agentRoleBindings)
+      .values({ agentId: id.agent, userId: uid['agent-op']!, role: 'operator' });
+    await mkUser('platform-op', 'org-a', ['operator']);
+    await n.ctx.db
+      .update(usersTable)
+      .set({ platformAdmin: true })
+      .where(eq(usersTable.id, uid['platform-op']!));
+    tok['platform-op'] = await n.login('platform-op@example.org', PW);
     await mkUser('platform', 'org-a');
     await n.ctx.db
       .update(usersTable)
@@ -341,6 +374,52 @@ describe.each(sqlTargets)('role restrictions (%s)', (_kind, enabled, open) => {
     });
   });
 
+  describe('team and agent bindings (node-local) are narrowed by the restrictions of their node chain', () => {
+    for (const who of ['team-op', 'agent-op']) {
+      it(`${who}: a restriction at the organisation removes the permission at the division`, async () => {
+        await clear();
+        const has = async () =>
+          (await access(who, 'div-1')).permissions.map((p) => p.permission).includes('runs:cancel');
+        expect(await has()).toBe(true);
+        expect(
+          (await put('root-admin', 'org-a', { role: 'operator', permissions: ['runs:cancel'] }))
+            .statusCode,
+        ).toBe(200);
+        expect(await has()).toBe(false);
+        const acc = await access(who, 'div-1');
+        expect(acc.denied).toEqual([
+          expect.objectContaining({ permission: 'runs:cancel', reason: 'role_restricted' }),
+        ]);
+        // a restriction at the division itself narrows it too, a sibling's does not
+        await clear();
+        await put('root-admin', 'div-2', { role: 'operator', permissions: ['runs:cancel'] });
+        expect(await has()).toBe(true);
+        await put('root-admin', 'div-1', { role: 'operator', permissions: ['runs:cancel'] });
+        expect(await has()).toBe(false);
+        await clear();
+      });
+    }
+  });
+
+  describe('platform operators are never narrowed', () => {
+    it('an operator with a home operator binding keeps it after a restriction at the home organisation', async () => {
+      await clear();
+      expect(await cancel('platform-op')).toBe(404); // allowed
+      await put('root-admin', 'org-a', { role: 'operator', permissions: ['runs:cancel'] });
+      expect(await cancel('platform-op')).toBe(404); // still allowed
+      // an ordinary operator of the same shape is narrowed
+      expect(await cancel('op-root', 'org-a')).toBe(403);
+      // and the access view of the operator is the same resolver
+      const view = await n.req({
+        method: 'GET',
+        url: `/v1/tenants/${id['org-a']}/access?userId=${uid['platform-op']}`,
+        token: tok['root-admin']!,
+      });
+      expect(view.json().denied).toEqual([]);
+      await clear();
+    });
+  });
+
   describe('who may write', () => {
     it('inheriting tenant admins of the node or an ancestor, and platform operators', async () => {
       await clear();
@@ -502,6 +581,73 @@ describe.each(sqlTargets)('role restrictions (%s)', (_kind, enabled, open) => {
       } finally {
         cfg.maxRoleRestrictionsPerNode = was;
         await clear();
+      }
+    });
+  });
+
+  describe('limits and the unenforced guard', () => {
+    it('caps the restrictions per organisation', async () => {
+      await clear();
+      const cfg = n.ctx.config.tenancy as { maxRoleRestrictionsPerOrg: number };
+      const was = cfg.maxRoleRestrictionsPerOrg;
+      cfg.maxRoleRestrictionsPerOrg = 3;
+      try {
+        expect(
+          (
+            await put('root-admin', 'org-a', {
+              role: 'operator',
+              permissions: ['runs:cancel', 'runs:approve'],
+            })
+          ).statusCode,
+        ).toBe(200);
+        expect(
+          (await put('root-admin', 'div-1', { role: 'operator', permissions: ['runs:cancel'] }))
+            .statusCode,
+        ).toBe(200);
+        const over = await put('root-admin', 'div-2', {
+          role: 'operator',
+          permissions: ['runs:cancel'],
+        });
+        expect(over.statusCode).toBe(422);
+        expect(over.json().error).toBe('restriction_limit_exceeded');
+        // another organisation is counted separately
+        expect(
+          (await put('admin-b', 'org-b', { role: 'operator', permissions: ['runs:cancel'] }))
+            .statusCode,
+        ).toBe(200);
+      } finally {
+        cfg.maxRoleRestrictionsPerOrg = was;
+        await clear();
+      }
+    });
+
+    it('fails readiness while stored restrictions are not enforced, unless accepted', async () => {
+      await clear();
+      await put('root-admin', 'org-a', { role: 'operator', permissions: ['runs:cancel'] });
+      const ready = () => n.req({ method: 'GET', url: '/readyz', token: null });
+      expect((await ready()).statusCode).toBe(200); // enforced: bindings
+      const auth = n.ctx.config.auth as unknown as {
+        roleBindingsRead: Mode;
+        allowUnenforcedRestrictions: boolean;
+      };
+      setMode('legacy');
+      try {
+        const r = await ready();
+        expect(r.statusCode).toBe(503);
+        expect(r.json().checks).toMatchObject({ restrictions: false });
+        expect(await n.services.roleRestrictions.countUnenforced()).toBe(1);
+        auth.allowUnenforcedRestrictions = true;
+        expect((await ready()).statusCode).toBe(200);
+      } finally {
+        auth.allowUnenforcedRestrictions = false;
+        setMode('bindings');
+        await clear();
+      }
+      setMode('legacy');
+      try {
+        expect((await ready()).statusCode).toBe(200); // nothing stored, nothing to enforce
+      } finally {
+        setMode('bindings');
       }
     });
   });
