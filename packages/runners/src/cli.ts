@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+  AWP_LIMITS,
   PolicyBundleSchema,
   PriceTableSchema,
   manifestIssues,
@@ -22,6 +23,8 @@ export interface CliIo {
   out: (line: string) => void;
   err: (line: string) => void;
   readFile: (path: string) => Promise<string>;
+  /** Size in bytes, to refuse an oversized AWP manifest before reading it (optional). */
+  fileSize?: (path: string) => Promise<number>;
   env: NodeJS.ProcessEnv;
 }
 
@@ -106,12 +109,25 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
   try {
     if (cmd === 'validate') {
       if (!file) throw new Error('missing <agents.md>');
+      // Only *.awp.yaml, *.awp.yml and *.awp.json are AWP documents; an .md file is read as AWP when
+      // its front matter says apiVersion: awp.…; any other file keeps the legacy agents.md message.
+      const isAwpFile = /\.awp\.(?:ya?ml|json)$/i.test(file);
+      if (isAwpFile && io.fileSize) {
+        const size = await io.fileSize(file);
+        if (size > AWP_LIMITS.maxSourceBytes) {
+          io.err(
+            `error   limit.size -: the file is larger than ${AWP_LIMITS.maxSourceBytes} bytes`,
+          );
+          io.out('invalid');
+          return 1;
+        }
+      }
       const text = await io.readFile(file);
-      // *.awp.yaml, *.awp.json and plain .yaml/.yml/.json files are AWP manifests; any other file
-      // is an agents.md whose front matter is read as AWP only when its apiVersion says so.
-      const awp = validateManifestSource(text, {
-        layout: /\.(?:ya?ml|json)$/i.test(file) ? 'document' : 'auto',
-      });
+      const awp = isAwpFile
+        ? validateManifestSource(text, { layout: 'document' })
+        : /\.md$/i.test(file)
+          ? validateManifestSource(text, { layout: 'auto' })
+          : null;
       if (awp) {
         const { errors, warnings } = manifestIssues(awp);
         for (const e of errors) io.err(`error   ${e.code} ${e.path || '-'}: ${e.message}`);
@@ -219,6 +235,7 @@ if (isMain()) {
     out: (l) => process.stdout.write(`${l}\n`),
     err: (l) => process.stderr.write(`${l}\n`),
     readFile: (p) => readFile(p, 'utf8'),
+    fileSize: async (p) => (await stat(p)).size,
     env: process.env,
   }).then((code) => {
     process.exitCode = code;

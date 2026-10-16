@@ -132,4 +132,28 @@ describe('oax validate with AWP manifests', () => {
     expect(a.err.join('\n')).toContain('error   schema.additionalProperties /metadata/extra');
     expect(a.out).toEqual(['invalid']);
   });
+
+  it('reads only *.awp.yaml and *.awp.json as AWP documents; other yaml and json keep the legacy message', async () => {
+    const text = await readFile(`${root}examples/awp/log-reader.awp.json`, 'utf8');
+    const a = io();
+    a.cli.readFile = async () => text;
+    expect(await runCli(['validate', 'manifest.json'], a.cli)).toBe(1);
+    expect(a.err.join('\n')).toContain('missing front matter');
+    const b = io();
+    b.cli.readFile = async () => text;
+    expect(await runCli(['validate', 'manifest.awp.json'], b.cli)).toBe(0);
+  });
+
+  it('checks the size of an AWP file before reading it', async () => {
+    const a = io();
+    let read = false;
+    a.cli.fileSize = async () => 10_000_000;
+    a.cli.readFile = async () => {
+      read = true;
+      return '{}';
+    };
+    expect(await runCli(['validate', 'huge.awp.json'], a.cli)).toBe(1);
+    expect(read).toBe(false);
+    expect(a.err.join('\n')).toContain('limit.size');
+  });
 });
