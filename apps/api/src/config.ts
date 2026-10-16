@@ -90,6 +90,7 @@ export const EnvSchema = z.object({
     ),
   /** Role bindings one user may hold (ADR 0014 3.1); more is `422 binding_limit_exceeded`. */
   OAX_MAX_BINDINGS_PER_USER: z.coerce.number().int().min(1).max(10_000).default(200),
+  OAX_MAX_ROLE_RESTRICTIONS_PER_NODE: z.coerce.number().int().min(1).max(1000).default(100),
   /**
    * Longest validity of a `pentest` binding in days (ADR 0014 section 7, rule 7). A grant needs an
    * `expiresAt` at most this far ahead; a longer period means a new grant.
@@ -365,6 +366,8 @@ export interface Config {
     maxDepth: number;
     maxNodesPerRoot: number;
     maxBindingsPerUser: number;
+    /** Role restrictions (role, permission pairs) one node may carry (ADR 0014 section 5, S9). */
+    maxRoleRestrictionsPerNode: number;
     pentestMaxDays: number;
     bindingReaperIntervalSeconds: number;
     reservedSlugs: string[];
@@ -661,6 +664,7 @@ function buildConfig(
       maxNodesPerRoot: e.OAX_TENANT_MAX_NODES_PER_ROOT,
       reservedSlugs: e.OAX_TENANT_RESERVED_SLUGS,
       maxBindingsPerUser: e.OAX_MAX_BINDINGS_PER_USER,
+      maxRoleRestrictionsPerNode: e.OAX_MAX_ROLE_RESTRICTIONS_PER_NODE,
       pentestMaxDays: e.OAX_PENTEST_MAX_DAYS,
       bindingReaperIntervalSeconds: e.OAX_BINDING_REAPER_INTERVAL_SECONDS,
     },

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import type { TenantRow } from '../../services/tenants.js';
-import { roleBindingDto, tenantDto } from '../dto.js';
+import { roleBindingDto, roleRestrictionDto, tenantDto } from '../dto.js';
 import { isUseCaseOnly } from '../use-case-policy.js';
 import {
   EnableInheritanceBody,
@@ -15,6 +15,10 @@ import {
   RoleBindingParams,
   RoleBindingPatchBody,
   RoleBindingSchema,
+  RoleRestrictionDeleteQuery,
+  RoleRestrictionListSchema,
+  RoleRestrictionPutBody,
+  RoleRestrictionSchema,
   TenantCreateBody,
   TenantPatchBody,
   TenantSchema,
@@ -29,7 +33,7 @@ const sec = [{ bearer: [] }];
 const tags = ['tenants'];
 
 export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
-  const { tenants, roleBindings } = services;
+  const { tenants, roleBindings, roleRestrictions } = services;
   /**
    * The node limits (budget, secret references) stay hidden from a caller whose bindings are all
    * limited to use cases, like the node limit of `/v1/budgets` (ADR 0014 S8).
@@ -352,6 +356,95 @@ export function registerTenantRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req, reply) => {
       await roleBindings.remove(principalOf(req), req.params.id, req.params.bindingId);
+      return reply.status(204).send(null);
+    },
+  );
+
+  app.get(
+    '/v1/tenants/:id/role-restrictions',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['role-restrictions'],
+        summary: 'List the role restrictions set on a tenant',
+        description:
+          'Needs `users:read` on the tenant (directly or through an inheriting binding above it). ' +
+          'Lists the restrictions set on this tenant only, grouped by role; restrictions set on ' +
+          'ancestors show up as `denied` (reason `role_restricted`, with the restricting tenant) in ' +
+          '`GET /v1/me/access` and `GET /v1/tenants/{id}/access`. A tenant the caller cannot see is ' +
+          '404. `enforced` is false while `OAX_ROLE_BINDINGS_READ=legacy`.',
+        security: sec,
+        params: IdParams,
+        response: { 200: RoleRestrictionListSchema, 403: ErrorSchema, 404: ErrorSchema },
+      },
+    },
+    async (req) => {
+      const r = await roleRestrictions.list(principalOf(req), req.params.id);
+      return { items: r.items.map(roleRestrictionDto), enforced: r.enforced };
+    },
+  );
+
+  app.put(
+    '/v1/tenants/:id/role-restrictions',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['role-restrictions'],
+        summary: 'Remove permissions from a role for the bindings at a tenant and below',
+        description:
+          'Sets the complete list of permissions removed from `role` for bindings **bound on this ' +
+          'tenant or below** (ADR 0014 section 5); idempotent, an empty list removes them. A ' +
+          'binding granted on an ancestor of this tenant is never narrowed by it, a restriction ' +
+          'never adds a permission, never applies to platform operators and never to `admin` (422 ' +
+          '`restriction_on_admin`). Needs an inheriting `admin` binding on this tenant or an ' +
+          'ancestor, or platform operator access (403 `inheritance_required` for an administrator ' +
+          'whose binding does not inherit; never a use-case administrator). At most ' +
+          '`OAX_MAX_ROLE_RESTRICTIONS_PER_NODE` entries per tenant (422 `restriction_limit_exceeded`). ' +
+          'Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 `role_restrictions_require_bindings_read`). ' +
+          'Audited as `tenant.role_restricted` and `tenant.role_restriction_removed` in the ' +
+          'partition of the tenant; takes effect on the next request of every user of the ' +
+          'organisation (authz epoch).',
+        security: sec,
+        params: IdParams,
+        body: RoleRestrictionPutBody,
+        response: {
+          200: RoleRestrictionSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+          422: ErrorSchema,
+        },
+      },
+    },
+    async (req) =>
+      roleRestrictionDto(await roleRestrictions.set(principalOf(req), req.params.id, req.body)),
+  );
+
+  app.delete(
+    '/v1/tenants/:id/role-restrictions',
+    {
+      config: { access: 'authenticated' },
+      schema: {
+        tags: ['role-restrictions'],
+        summary: 'Lift the restrictions of a role on a tenant',
+        description:
+          'Removes every restriction of `role` set on this tenant, or only `permission`. ' +
+          'Idempotent (204 also when there was nothing to remove). Same authority and read-path ' +
+          'rules as `PUT`. Audited as `tenant.role_restriction_removed`.',
+        security: sec,
+        params: IdParams,
+        querystring: RoleRestrictionDeleteQuery,
+        response: {
+          204: z.null(),
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+          422: ErrorSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      await roleRestrictions.remove(principalOf(req), req.params.id, req.query);
       return reply.status(204).send(null);
     },
   );
