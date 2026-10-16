@@ -1,0 +1,66 @@
+# Conformance case 3.3-profile-audit-field
+# Spec section 3.3: spec.audit belongs to the audit profile.
+# Expected: invalid (profile.unsupported at /spec/audit)
+# Profiles supported by the validator for this case: core, mcp
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Workflow
+metadata:
+  name: conformance-base
+  version: 1.0.0
+  owner:
+    team: conformance-team
+  classification: internal
+  risk:
+    level: low
+spec:
+  inputs:
+    - name: repo
+      type: string
+      required: true
+  budget:
+    maxCostUsd: 1
+    maxSteps: 10
+    maxDuration: 10m
+    resources:
+      maxRetries: 2
+      maxConcurrency: 1
+  secrets:
+    - name: TOOLS_TOKEN
+      source: secret-manager
+      scope:
+        - tools
+  mcpServers:
+    - name: tools
+      transport: streamable-http
+      url: https://mcp.example.com/tools
+      auth:
+        secretRef: TOOLS_TOKEN
+  actionGroups:
+    tools.read:
+      - tools.read_file
+  agents:
+    - id: worker
+      model:
+        provider: ollama
+        name: qwen3
+      tools:
+        - type: mcp
+          server: tools
+  workflow:
+    - id: analyze
+      agent: worker
+      task: Analyze ${{ inputs.repo }}.
+      outputs:
+        - name: report
+    - id: apply
+      agent: worker
+      task: Apply ${{ steps.analyze.outputs.report }}.
+      dependsOn:
+        - analyze
+  permissions:
+    default: deny
+    tools:
+      tools.read:
+        allow: true
+  audit:
+    enabled: true

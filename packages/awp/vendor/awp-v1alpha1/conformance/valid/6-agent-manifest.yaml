@@ -1,0 +1,35 @@
+# Conformance case 6-agent-manifest
+# Spec section 6: A complete Agent manifest.
+# Expected: valid
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Agent
+metadata:
+  name: conformance-agent
+  version: 1.0.0
+  owner: conformance-team
+  classification: internal
+spec:
+  model:
+    provider: ollama
+    name: qwen3
+  instructions: Extract fields.
+  permissions:
+    default: deny
+  mcpServers:
+    - name: docs
+      transport: stdio
+      image: registry.example.com/mcp/docs@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  tools:
+    - type: mcp
+      server: docs
+      tools:
+        - read
+    - type: builtin
+      name: shell
+  budget:
+    maxSteps: 5
+  secrets:
+    - name: DOCS_KEY
+      source: vault
+      scope:
+        - docs

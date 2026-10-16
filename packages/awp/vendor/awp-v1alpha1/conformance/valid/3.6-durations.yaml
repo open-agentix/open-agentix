@@ -1,0 +1,65 @@
+# Conformance case 3.6-durations
+# Spec section 3.6: Durations use units ms, s, m, h, d, w, y and may be combined.
+# Expected: valid
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Workflow
+metadata:
+  name: conformance-base
+  version: 1.0.0
+  owner:
+    team: conformance-team
+  classification: internal
+  risk:
+    level: low
+spec:
+  inputs:
+    - name: repo
+      type: string
+      required: true
+  budget:
+    maxCostUsd: 1
+    maxSteps: 10
+    maxDuration: 1h30m
+    resources:
+      maxRetries: 3
+      maxConcurrency: 1
+  secrets:
+    - name: TOOLS_TOKEN
+      source: secret-manager
+      scope:
+        - tools
+  mcpServers:
+    - name: tools
+      transport: streamable-http
+      url: https://mcp.example.com/tools
+      auth:
+        secretRef: TOOLS_TOKEN
+  actionGroups:
+    tools.read:
+      - tools.read_file
+  agents:
+    - id: worker
+      model:
+        provider: ollama
+        name: qwen3
+      tools:
+        - type: mcp
+          server: tools
+  workflow:
+    - id: analyze
+      agent: worker
+      task: Analyze ${{ inputs.repo }}.
+      outputs:
+        - name: report
+      timeout: 24h
+    - id: apply
+      agent: worker
+      task: Apply ${{ steps.analyze.outputs.report }}.
+      dependsOn:
+        - analyze
+      timeout: 7y
+  permissions:
+    default: deny
+    tools:
+      tools.read:
+        allow: true

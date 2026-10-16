@@ -1,0 +1,20 @@
+# Conformance case 8.3-in-not-a-list
+# Spec section 8.3: in and notIn take lists.
+# Expected: invalid (schema.oneOf at /spec/rules/0/when/destination.region)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec:
+  rules:
+    - id: deploy-needs-approval
+      when:
+        destination.region:
+          in: EU
+      effect: requireApproval
+      approval:
+        approvers:
+          - role: release-manager

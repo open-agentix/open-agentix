@@ -22,6 +22,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Vendored AWP schema and conformance suite with an offline pin check (#254)**: `packages/awp/vendor/awp-v1alpha1/`
+  holds a byte-identical copy of the AWP draft (`v1alpha1`) JSON Schema and conformance suite at a pinned
+  upstream commit, with `PROVENANCE.json` (source URL, commit SHA, retrieval date, licence and SHA-256 per file).
+  `scripts/awp/verify-pin.mjs` fails on a changed, missing, extra or mis-hashed file without any network access
+  and runs in CI (job `awp-pin`); `scripts/awp/vendor-awp.mjs` replaces the copy from a local checkout. The copy
+  is excluded from prettier, eslint and publishing. openagentix is **not** conformant to AWP: the wording is
+  "built to the AWP schema, conformance in progress (alpha)" ([docs/awp.md](docs/awp.md)).
+
 - **Move a tenant and its subtree inside an organisation (ADR 0014 S10, #195, with W13-11)**:
   `POST /v1/tenants/{id}/move { parentId, dryRun }`. Needs an inheriting `admin` (no use case) that
   covers the tenant, its old parent and the new parent, or a platform operator, so the mover gains no

@@ -1,0 +1,20 @@
+# Conformance case 8.3-invalid-classification-value
+# Spec section 8.3: Classification values in conditions are data classes.
+# Expected: invalid (schema.oneOf at /spec/rules/0/when/data.classification)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec:
+  rules:
+    - id: deploy-needs-approval
+      when:
+        data.classification:
+          gte: topsecret
+      effect: requireApproval
+      approval:
+        approvers:
+          - role: release-manager

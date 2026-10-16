@@ -1,0 +1,20 @@
+# Conformance case 3.3-profile-policy-kind
+# Spec section 3.3: Policy manifests belong to the governance profile.
+# Expected: invalid (profile.unsupported at /kind)
+# Profiles supported by the validator for this case: core
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec:
+  rules:
+    - id: deploy-needs-approval
+      when:
+        action: production.deploy
+      effect: requireApproval
+      approval:
+        approvers:
+          - role: release-manager

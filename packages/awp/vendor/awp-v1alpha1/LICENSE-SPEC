@@ -1,0 +1,51 @@
+Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+Copyright The AWP Authors
+
+The text of the Agentic Workflow Protocol (AWP) specification, its concept and
+governance documentation and the website prose in this repository are licensed
+under the Creative Commons Attribution 4.0 International License (CC BY 4.0).
+
+This covers in particular:
+
+  - everything under spec/
+  - everything under docs/
+  - Markdown and other prose files that describe the specification
+
+Code, JSON Schemas, conformance tests, tooling and the source code of the
+website are licensed under the Apache License, Version 2.0 (see LICENSE).
+Example manifests (YAML/JSON) embedded in the specification text are
+additionally made available under the Apache License, Version 2.0, so that
+they can be copied into software without attribution concerns.
+
+You are free to:
+
+  Share - copy and redistribute the material in any medium or format for any
+          purpose, even commercially.
+  Adapt - remix, transform, and build upon the material for any purpose,
+          even commercially.
+
+Under the following terms:
+
+  Attribution - You must give appropriate credit, provide a link to the
+                license, and indicate if changes were made. You may do so in
+                any reasonable manner, but not in any way that suggests the
+                licensor endorses you or your use.
+
+  No additional restrictions - You may not apply legal terms or technological
+                measures that legally restrict others from doing anything the
+                license permits.
+
+Suggested attribution:
+
+  "Agentic Workflow Protocol (AWP) Specification" by The AWP Authors,
+  https://agenticworkflowprotocol.org, licensed under CC BY 4.0.
+
+This file is a notice, not the full legal text. The full legal code of the
+license is available at:
+
+  https://creativecommons.org/licenses/by/4.0/legalcode
+
+Human-readable summary:
+
+  https://creativecommons.org/licenses/by/4.0/

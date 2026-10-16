@@ -1,0 +1,18 @@
+# Conformance case 6-agent-kind-with-workflow-spec
+# Spec section 6: agents/workflow belong to kind Workflow only.
+# Expected: invalid (schema.additionalProperties at /spec/agents)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Agent
+metadata:
+  name: conformance-agent
+  version: 1.0.0
+  owner: conformance-team
+  classification: internal
+spec:
+  model:
+    provider: ollama
+    name: qwen3
+  instructions: Extract fields.
+  permissions:
+    default: deny
+  agents: []

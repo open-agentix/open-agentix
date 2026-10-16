@@ -1,0 +1,1531 @@
+{
+  "$comment": "Machine-readable index of the AWP v1alpha1 conformance suite. Each invalid case violates exactly one rule; `code` and `path` identify the expected diagnostic (see schema/README.md).",
+  "suite": "awp-conformance",
+  "version": "0.1.0",
+  "awp": "v1alpha1",
+  "defaults": {
+    "profiles": [
+      "core",
+      "governance",
+      "audit",
+      "security",
+      "mcp",
+      "a2a"
+    ],
+    "verifyDigest": false
+  },
+  "nonManifestExamples": [
+    "audit-events.yaml",
+    "conformance-statement.yaml",
+    "execution-record.yaml"
+  ],
+  "tests": [
+    {
+      "id": "10.2-invalid-integrity-mode",
+      "file": "invalid/10.2-invalid-integrity-mode.yaml",
+      "section": "10.2",
+      "rule": "audit.integrity.mode is none, hash-chain or signed.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/audit/integrity/mode"
+    },
+    {
+      "id": "10.2-invalid-payload",
+      "file": "invalid/10.2-invalid-payload.yaml",
+      "section": "10.2",
+      "rule": "audit.payload is metadata or full.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/audit/payload"
+    },
+    {
+      "id": "10.2-invalid-retention",
+      "file": "invalid/10.2-invalid-retention.yaml",
+      "section": "10.2",
+      "rule": "retention.duration is a duration.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/audit/retention/duration"
+    },
+    {
+      "id": "3.1-custom-tag",
+      "file": "invalid/3.1-custom-tag.yaml",
+      "section": "3.1",
+      "rule": "YAML features without a JSON equivalent (custom tags) MUST be rejected.",
+      "expect": "invalid",
+      "code": "yaml.custom-tag",
+      "path": ""
+    },
+    {
+      "id": "3.1-non-string-key",
+      "file": "invalid/3.1-non-string-key.yaml",
+      "section": "3.1",
+      "rule": "YAML mapping keys MUST be strings.",
+      "expect": "invalid",
+      "code": "yaml.non-string-key",
+      "path": ""
+    },
+    {
+      "id": "3.1-syntax-error",
+      "file": "invalid/3.1-syntax-error.yaml",
+      "section": "3.1",
+      "rule": "A document that is not well-formed YAML is rejected.",
+      "expect": "invalid",
+      "code": "yaml.parse-error",
+      "path": ""
+    },
+    {
+      "id": "3.2-missing-api-version",
+      "file": "invalid/3.2-missing-api-version.yaml",
+      "section": "3.2",
+      "rule": "apiVersion is REQUIRED.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": ""
+    },
+    {
+      "id": "3.2-missing-metadata",
+      "file": "invalid/3.2-missing-metadata.yaml",
+      "section": "3.2",
+      "rule": "metadata is REQUIRED.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": ""
+    },
+    {
+      "id": "3.2-missing-spec",
+      "file": "invalid/3.2-missing-spec.yaml",
+      "section": "3.2",
+      "rule": "spec is REQUIRED.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": ""
+    },
+    {
+      "id": "3.2-unsupported-api-version",
+      "file": "invalid/3.2-unsupported-api-version.yaml",
+      "section": "3.2",
+      "rule": "apiVersion MUST be awp.agenticworkflowprotocol.org/v1alpha1.",
+      "expect": "invalid",
+      "code": "schema.const",
+      "path": "/apiVersion"
+    },
+    {
+      "id": "3.2-unsupported-kind",
+      "file": "invalid/3.2-unsupported-kind.yaml",
+      "section": "3.2",
+      "rule": "kind MUST be Workflow, Agent or Policy.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/kind"
+    },
+    {
+      "id": "3.3-profile-a2a-agent",
+      "file": "invalid/3.3-profile-a2a-agent.yaml",
+      "section": "3.3",
+      "rule": "Agents with protocol a2a belong to the a2a profile.",
+      "expect": "invalid",
+      "code": "profile.unsupported",
+      "path": "/spec/agents/1",
+      "profiles": [
+        "core",
+        "mcp"
+      ]
+    },
+    {
+      "id": "3.3-profile-approval-step",
+      "file": "invalid/3.3-profile-approval-step.yaml",
+      "section": "3.3",
+      "rule": "Steps with type approval belong to the governance profile.",
+      "expect": "invalid",
+      "code": "profile.unsupported",
+      "path": "/spec/workflow/2",
+      "profiles": [
+        "core",
+        "mcp"
+      ]
+    },
+    {
+      "id": "3.3-profile-audit-field",
+      "file": "invalid/3.3-profile-audit-field.yaml",
+      "section": "3.3",
+      "rule": "spec.audit belongs to the audit profile.",
+      "expect": "invalid",
+      "code": "profile.unsupported",
+      "path": "/spec/audit",
+      "profiles": [
+        "core",
+        "mcp"
+      ]
+    },
+    {
+      "id": "3.3-profile-governance-field",
+      "file": "invalid/3.3-profile-governance-field.yaml",
+      "section": "3.3",
+      "rule": "A field of a profile the implementation does not support MUST be rejected naming field and profile (spec.approval, governance).",
+      "expect": "invalid",
+      "code": "profile.unsupported",
+      "path": "/spec/approval",
+      "profiles": [
+        "core",
+        "mcp"
+      ]
+    },
+    {
+      "id": "3.3-profile-high-risk",
+      "file": "invalid/3.3-profile-high-risk.yaml",
+      "section": "3.3",
+      "rule": "metadata.risk.level high or critical belongs to the governance profile.",
+      "expect": "invalid",
+      "code": "profile.unsupported",
+      "path": "/metadata/risk/level",
+      "profiles": [
+        "core",
+        "mcp"
+      ]
+    },
+    {
+      "id": "3.3-profile-mcp-field",
+      "file": "invalid/3.3-profile-mcp-field.yaml",
+      "section": "3.3",
+      "rule": "spec.mcpServers belongs to the mcp profile.",
+      "expect": "invalid",
+      "code": "profile.unsupported",
+      "path": "/spec/mcpServers",
+      "profiles": [
+        "core"
+      ]
+    },
+    {
+      "id": "3.3-profile-policy-kind",
+      "file": "invalid/3.3-profile-policy-kind.yaml",
+      "section": "3.3",
+      "rule": "Policy manifests belong to the governance profile.",
+      "expect": "invalid",
+      "code": "profile.unsupported",
+      "path": "/kind",
+      "profiles": [
+        "core"
+      ]
+    },
+    {
+      "id": "3.3-profile-security-field",
+      "file": "invalid/3.3-profile-security-field.yaml",
+      "section": "3.3",
+      "rule": "metadata.signature belongs to the security profile.",
+      "expect": "invalid",
+      "code": "profile.unsupported",
+      "path": "/metadata/signature",
+      "profiles": [
+        "core",
+        "mcp"
+      ]
+    },
+    {
+      "id": "3.3-unknown-field-near-extension",
+      "file": "invalid/3.3-unknown-field-near-extension.yaml",
+      "section": "3.3",
+      "rule": "Only the prefix x- marks an extension; x_foo and X-foo are unknown fields.",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/X-foo"
+    },
+    {
+      "id": "3.3-unknown-metadata-field",
+      "file": "invalid/3.3-unknown-metadata-field.yaml",
+      "section": "3.3",
+      "rule": "Unknown fields MUST be rejected (metadata).",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/metadata/team"
+    },
+    {
+      "id": "3.3-unknown-step-field",
+      "file": "invalid/3.3-unknown-step-field.yaml",
+      "section": "3.3",
+      "rule": "Unknown fields MUST be rejected (nested in a list entry).",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/workflow/0/parallel"
+    },
+    {
+      "id": "3.3-unknown-top-level-field",
+      "file": "invalid/3.3-unknown-top-level-field.yaml",
+      "section": "3.3",
+      "rule": "Unknown fields MUST be rejected (top level).",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/status"
+    },
+    {
+      "id": "3.4-duplicate-agent-id",
+      "file": "invalid/3.4-duplicate-agent-id.yaml",
+      "section": "3.4",
+      "rule": "Identifiers MUST be unique within their list (agents).",
+      "expect": "invalid",
+      "code": "id.duplicate",
+      "path": "/spec/agents/1/id"
+    },
+    {
+      "id": "3.4-duplicate-rule-id",
+      "file": "invalid/3.4-duplicate-rule-id.yaml",
+      "section": "3.4",
+      "rule": "Identifiers MUST be unique within their list (rules).",
+      "expect": "invalid",
+      "code": "id.duplicate",
+      "path": "/spec/rules/1/id"
+    },
+    {
+      "id": "3.4-invalid-metadata-name",
+      "file": "invalid/3.4-invalid-metadata-name.yaml",
+      "section": "3.4",
+      "rule": "metadata.name MUST match ^[a-zA-Z][a-zA-Z0-9_-]{0,62}$.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/metadata/name"
+    },
+    {
+      "id": "3.4-uppercase-agent-id",
+      "file": "invalid/3.4-uppercase-agent-id.yaml",
+      "section": "3.4",
+      "rule": "Identifiers MUST match ^[a-z][a-z0-9-]{0,62}$.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/agents/0/id"
+    },
+    {
+      "id": "3.5-version-leading-zero",
+      "file": "invalid/3.5-version-leading-zero.yaml",
+      "section": "3.5",
+      "rule": "SemVer forbids leading zeros in numeric identifiers.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/metadata/version"
+    },
+    {
+      "id": "3.5-version-not-semver",
+      "file": "invalid/3.5-version-not-semver.yaml",
+      "section": "3.5",
+      "rule": "metadata.version MUST be a SemVer 2.0.0 string.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/metadata/version"
+    },
+    {
+      "id": "3.6-duration-unknown-unit",
+      "file": "invalid/3.6-duration-unknown-unit.yaml",
+      "section": "3.6",
+      "rule": "Durations use the units ms, s, m, h, d, w, y.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/workflow/0/timeout"
+    },
+    {
+      "id": "3.6-duration-zero",
+      "file": "invalid/3.6-duration-zero.yaml",
+      "section": "3.6",
+      "rule": "A duration MUST be greater than zero.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/budget/maxDuration"
+    },
+    {
+      "id": "3.7-date-not-calendar-valid",
+      "file": "invalid/3.7-date-not-calendar-valid.yaml",
+      "section": "3.7",
+      "rule": "Dates are RFC 3339 full-date values; 2027-02-30 does not exist.",
+      "expect": "invalid",
+      "code": "date.invalid",
+      "path": "/spec/agents/0/model/approval/expires"
+    },
+    {
+      "id": "3.7-date-wrong-format",
+      "file": "invalid/3.7-date-wrong-format.yaml",
+      "section": "3.7",
+      "rule": "Dates are RFC 3339 full-date values.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/agents/0/model/approval/expires"
+    },
+    {
+      "id": "3.8-digest-uppercase-hex",
+      "file": "invalid/3.8-digest-uppercase-hex.yaml",
+      "section": "3.8",
+      "rule": "Digest hex is lowercase.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/metadata/integrity/digest"
+    },
+    {
+      "id": "3.8-digest-wrong-length",
+      "file": "invalid/3.8-digest-wrong-length.yaml",
+      "section": "3.8",
+      "rule": "A sha256 digest has 64 lowercase hex characters.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/metadata/integrity/digest"
+    },
+    {
+      "id": "3.9-expression-function",
+      "file": "invalid/3.9-expression-function.yaml",
+      "section": "3.9",
+      "rule": "No functions in expressions.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/workflow/0/task"
+    },
+    {
+      "id": "3.9-expression-in-env-key-ref-bad",
+      "file": "invalid/3.9-expression-in-env-key-ref-bad.yaml",
+      "section": "3.9",
+      "rule": "env values are expression-enabled; other syntax is rejected.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/workflow/2/env/A"
+    },
+    {
+      "id": "3.9-expression-operator",
+      "file": "invalid/3.9-expression-operator.yaml",
+      "section": "3.9",
+      "rule": "No operators in expressions.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/workflow/0/task"
+    },
+    {
+      "id": "3.9-expression-unknown-root",
+      "file": "invalid/3.9-expression-unknown-root.yaml",
+      "section": "3.9",
+      "rule": "References are inputs, steps.<id>.outputs and execution only.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/workflow/0/task"
+    },
+    {
+      "id": "3.9-expression-unterminated",
+      "file": "invalid/3.9-expression-unterminated.yaml",
+      "section": "3.9",
+      "rule": "An expression must be closed.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/workflow/0/task"
+    },
+    {
+      "id": "3.9-step-reference-in-permissions",
+      "file": "invalid/3.9-step-reference-in-permissions.yaml",
+      "section": "3.9",
+      "rule": "Step references are only valid inside a step.",
+      "expect": "invalid",
+      "code": "expr.step-reference-outside-step",
+      "path": "/spec/permissions/tools/tools.read/resources/0"
+    },
+    {
+      "id": "3.9-step-reference-unknown-step",
+      "file": "invalid/3.9-step-reference-unknown-step.yaml",
+      "section": "3.9",
+      "rule": "A reference to a non-existent step is rejected.",
+      "expect": "invalid",
+      "code": "expr.unknown-step",
+      "path": "/spec/workflow/1/task"
+    },
+    {
+      "id": "3.9-step-reference-without-dependency",
+      "file": "invalid/3.9-step-reference-without-dependency.yaml",
+      "section": "3.9",
+      "rule": "steps.<id> MUST only be used in a step that depends on <id>.",
+      "expect": "invalid",
+      "code": "expr.not-a-dependency",
+      "path": "/spec/workflow/1/task"
+    },
+    {
+      "id": "4-invalid-label-key",
+      "file": "invalid/4-invalid-label-key.yaml",
+      "section": "4",
+      "rule": "Label keys MUST match ^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$.",
+      "expect": "invalid",
+      "code": "schema.propertyNames",
+      "path": "/metadata/labels/-bad"
+    },
+    {
+      "id": "4-invalid-risk-level",
+      "file": "invalid/4-invalid-risk-level.yaml",
+      "section": "4",
+      "rule": "risk.level is one of low, medium, high, critical.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/metadata/risk/level"
+    },
+    {
+      "id": "4-label-value-not-string",
+      "file": "invalid/4-label-value-not-string.yaml",
+      "section": "4",
+      "rule": "Labels are a map of strings.",
+      "expect": "invalid",
+      "code": "schema.type",
+      "path": "/metadata/labels/tier"
+    },
+    {
+      "id": "4-missing-owner",
+      "file": "invalid/4-missing-owner.yaml",
+      "section": "4",
+      "rule": "metadata.owner is REQUIRED.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/metadata"
+    },
+    {
+      "id": "4-missing-version",
+      "file": "invalid/4-missing-version.yaml",
+      "section": "4",
+      "rule": "metadata.version is REQUIRED.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/metadata"
+    },
+    {
+      "id": "4-owner-without-team",
+      "file": "invalid/4-owner-without-team.yaml",
+      "section": "4",
+      "rule": "owner as an object REQUIRES team.",
+      "expect": "invalid",
+      "code": "schema.oneOf",
+      "path": "/metadata/owner"
+    },
+    {
+      "id": "5.2-cron-not-five-fields",
+      "file": "invalid/5.2-cron-not-five-fields.yaml",
+      "section": "5.2",
+      "rule": "cron is a 5-field cron expression.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/triggers/0/cron"
+    },
+    {
+      "id": "5.2-event-without-event-type",
+      "file": "invalid/5.2-event-without-event-type.yaml",
+      "section": "5.2",
+      "rule": "event triggers REQUIRE source and eventType.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/triggers/0"
+    },
+    {
+      "id": "5.2-schedule-without-cron",
+      "file": "invalid/5.2-schedule-without-cron.yaml",
+      "section": "5.2",
+      "rule": "schedule triggers REQUIRE cron.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/triggers/0"
+    },
+    {
+      "id": "5.2-unknown-trigger-type",
+      "file": "invalid/5.2-unknown-trigger-type.yaml",
+      "section": "5.2",
+      "rule": "type is manual, schedule or event.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/triggers/0/type"
+    },
+    {
+      "id": "5.3-default-wrong-type",
+      "file": "invalid/5.3-default-wrong-type.yaml",
+      "section": "5.3",
+      "rule": "default MUST match type.",
+      "expect": "invalid",
+      "code": "schema.type",
+      "path": "/spec/inputs/0/default"
+    },
+    {
+      "id": "5.3-invalid-pattern",
+      "file": "invalid/5.3-invalid-pattern.yaml",
+      "section": "5.3",
+      "rule": "pattern is an ECMA-262 regular expression.",
+      "expect": "invalid",
+      "code": "input.pattern-invalid",
+      "path": "/spec/inputs/0/pattern"
+    },
+    {
+      "id": "5.3-required-input-with-default",
+      "file": "invalid/5.3-required-input-with-default.yaml",
+      "section": "5.3",
+      "rule": "default MUST NOT be set when required is true.",
+      "expect": "invalid",
+      "code": "schema.not",
+      "path": "/spec/inputs/0"
+    },
+    {
+      "id": "5.3-unknown-input-type",
+      "file": "invalid/5.3-unknown-input-type.yaml",
+      "section": "5.3",
+      "rule": "type is string, integer, number, boolean, object, array or artifact.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/inputs/0/type"
+    },
+    {
+      "id": "5.4.1-inline-agent-without-model",
+      "file": "invalid/5.4.1-inline-agent-without-model.yaml",
+      "section": "5.4.1",
+      "rule": "An inline agent REQUIRES model.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/agents/0"
+    },
+    {
+      "id": "5.4.1-instructions-and-prompt-ref",
+      "file": "invalid/5.4.1-instructions-and-prompt-ref.yaml",
+      "section": "5.4.1",
+      "rule": "promptRef MUST NOT be combined with instructions.",
+      "expect": "invalid",
+      "code": "schema.not",
+      "path": "/spec/agents/0"
+    },
+    {
+      "id": "5.4.2-reference-version-range",
+      "file": "invalid/5.4.2-reference-version-range.yaml",
+      "section": "5.4.2",
+      "rule": "ref.version is an exact SemVer version, no ranges.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/agents/1/ref/version"
+    },
+    {
+      "id": "5.4.2-reference-with-instructions",
+      "file": "invalid/5.4.2-reference-with-instructions.yaml",
+      "section": "5.4.2",
+      "rule": "An agent reference MUST NOT contain instructions.",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/agents/1/instructions"
+    },
+    {
+      "id": "5.4.2-reference-with-model",
+      "file": "invalid/5.4.2-reference-with-model.yaml",
+      "section": "5.4.2",
+      "rule": "An agent reference MUST NOT contain model.",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/agents/1/model"
+    },
+    {
+      "id": "5.4.2-reference-without-version",
+      "file": "invalid/5.4.2-reference-without-version.yaml",
+      "section": "5.4.2",
+      "rule": "ref REQUIRES name and version.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/agents/1/ref"
+    },
+    {
+      "id": "5.4.3-invalid-model-approval-status",
+      "file": "invalid/5.4.3-invalid-model-approval-status.yaml",
+      "section": "5.4.3",
+      "rule": "model.approval.status is approved, pending, rejected or revoked.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/agents/0/model/approval/status"
+    },
+    {
+      "id": "5.4.3-model-without-name",
+      "file": "invalid/5.4.3-model-without-name.yaml",
+      "section": "5.4.3",
+      "rule": "model REQUIRES provider and name.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/agents/0/model"
+    },
+    {
+      "id": "5.4.4-remote-agent-http-endpoint",
+      "file": "invalid/5.4.4-remote-agent-http-endpoint.yaml",
+      "section": "5.4.4",
+      "rule": "A remote agent endpoint is an HTTPS URL.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/agents/1/endpoint"
+    },
+    {
+      "id": "5.4.4-remote-agent-with-model",
+      "file": "invalid/5.4.4-remote-agent-with-model.yaml",
+      "section": "5.4.4",
+      "rule": "A remote agent MUST NOT contain model.",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/agents/1/model"
+    },
+    {
+      "id": "5.4.4-remote-agent-without-endpoint",
+      "file": "invalid/5.4.4-remote-agent-without-endpoint.yaml",
+      "section": "5.4.4",
+      "rule": "A remote agent REQUIRES endpoint.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/agents/1"
+    },
+    {
+      "id": "5.4.4-remote-agent-wrong-protocol",
+      "file": "invalid/5.4.4-remote-agent-wrong-protocol.yaml",
+      "section": "5.4.4",
+      "rule": "protocol MUST be a2a.",
+      "expect": "invalid",
+      "code": "schema.const",
+      "path": "/spec/agents/1/protocol"
+    },
+    {
+      "id": "5.5.1-duplicate-server-name",
+      "file": "invalid/5.5.1-duplicate-server-name.yaml",
+      "section": "5.5.1",
+      "rule": "MCP server names are referenced by tool sources and must be unique.",
+      "expect": "invalid",
+      "code": "name.duplicate",
+      "path": "/spec/mcpServers/1/name"
+    },
+    {
+      "id": "5.5.1-mcp-url-not-https",
+      "file": "invalid/5.5.1-mcp-url-not-https.yaml",
+      "section": "5.5.1",
+      "rule": "The url of an MCP server MUST use https.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/mcpServers/0/url"
+    },
+    {
+      "id": "5.5.1-streamable-http-without-url",
+      "file": "invalid/5.5.1-streamable-http-without-url.yaml",
+      "section": "5.5.1",
+      "rule": "url is REQUIRED for streamable-http.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/mcpServers/0"
+    },
+    {
+      "id": "5.5.1-unknown-transport",
+      "file": "invalid/5.5.1-unknown-transport.yaml",
+      "section": "5.5.1",
+      "rule": "transport is stdio or streamable-http.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/mcpServers/0/transport"
+    },
+    {
+      "id": "5.5.2-builtin-tool-source-without-name",
+      "file": "invalid/5.5.2-builtin-tool-source-without-name.yaml",
+      "section": "5.5.2",
+      "rule": "A builtin tool source REQUIRES name.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/agents/0/tools/0"
+    },
+    {
+      "id": "5.5.2-mcp-tool-source-without-server",
+      "file": "invalid/5.5.2-mcp-tool-source-without-server.yaml",
+      "section": "5.5.2",
+      "rule": "An mcp tool source REQUIRES server.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/agents/0/tools/0"
+    },
+    {
+      "id": "5.5.3-invalid-action-identifier-in-permissions",
+      "file": "invalid/5.5.3-invalid-action-identifier-in-permissions.yaml",
+      "section": "5.5.3",
+      "rule": "Permission keys are action identifiers with at least two segments.",
+      "expect": "invalid",
+      "code": "schema.propertyNames",
+      "path": "/spec/permissions/tools/shell"
+    },
+    {
+      "id": "5.5.3-wildcard-not-final-segment",
+      "file": "invalid/5.5.3-wildcard-not-final-segment.yaml",
+      "section": "5.5.3",
+      "rule": "Only a final segment may be the wildcard *.",
+      "expect": "invalid",
+      "code": "schema.propertyNames",
+      "path": "/spec/permissions/tools/*.read"
+    },
+    {
+      "id": "5.5.4-group-contains-group",
+      "file": "invalid/5.5.4-group-contains-group.yaml",
+      "section": "5.5.4",
+      "rule": "Groups MUST NOT contain other groups.",
+      "expect": "invalid",
+      "code": "actionGroup.nested",
+      "path": "/spec/actionGroups/tools.all/0"
+    },
+    {
+      "id": "5.5.4-invalid-group-identifier",
+      "file": "invalid/5.5.4-invalid-group-identifier.yaml",
+      "section": "5.5.4",
+      "rule": "A group identifier MUST be a valid action identifier.",
+      "expect": "invalid",
+      "code": "schema.propertyNames",
+      "path": "/spec/actionGroups/readers"
+    },
+    {
+      "id": "5.6.1-agent-step-with-command",
+      "file": "invalid/5.6.1-agent-step-with-command.yaml",
+      "section": "5.6.1",
+      "rule": "Fields of command steps are not allowed in agent steps.",
+      "expect": "invalid",
+      "code": "schema.not",
+      "path": "/spec/workflow/0"
+    },
+    {
+      "id": "5.6.1-agent-step-without-agent",
+      "file": "invalid/5.6.1-agent-step-without-agent.yaml",
+      "section": "5.6.1",
+      "rule": "An agent step REQUIRES agent.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/workflow/0"
+    },
+    {
+      "id": "5.6.1-approval-step-without-approval",
+      "file": "invalid/5.6.1-approval-step-without-approval.yaml",
+      "section": "5.6.1",
+      "rule": "An approval step REQUIRES approval.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/workflow/2"
+    },
+    {
+      "id": "5.6.1-command-step-with-agent",
+      "file": "invalid/5.6.1-command-step-with-agent.yaml",
+      "section": "5.6.1",
+      "rule": "A command step has no agent.",
+      "expect": "invalid",
+      "code": "schema.not",
+      "path": "/spec/workflow/2"
+    },
+    {
+      "id": "5.6.1-command-step-without-command",
+      "file": "invalid/5.6.1-command-step-without-command.yaml",
+      "section": "5.6.1",
+      "rule": "A command step REQUIRES command.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/workflow/2"
+    },
+    {
+      "id": "5.6.1-negative-retries",
+      "file": "invalid/5.6.1-negative-retries.yaml",
+      "section": "5.6.1",
+      "rule": "retries is a non-negative integer.",
+      "expect": "invalid",
+      "code": "schema.minimum",
+      "path": "/spec/workflow/0/retries"
+    },
+    {
+      "id": "5.6.1-retries-exceed-max-retries",
+      "file": "invalid/5.6.1-retries-exceed-max-retries.yaml",
+      "section": "5.6.1",
+      "rule": "retries MUST NOT exceed budget.resources.maxRetries if set.",
+      "expect": "invalid",
+      "code": "retries.exceeds-budget",
+      "path": "/spec/workflow/0/retries"
+    },
+    {
+      "id": "5.6.1-unknown-step-type",
+      "file": "invalid/5.6.1-unknown-step-type.yaml",
+      "section": "5.6.1",
+      "rule": "type is agent, command or approval.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/workflow/0/type"
+    },
+    {
+      "id": "5.6.2-env-key-invalid",
+      "file": "invalid/5.6.2-env-key-invalid.yaml",
+      "section": "5.6.2",
+      "rule": "env keys are environment variable names.",
+      "expect": "invalid",
+      "code": "schema.propertyNames",
+      "path": "/spec/workflow/2/env/BAD-KEY"
+    },
+    {
+      "id": "5.6.3-dependency-cycle",
+      "file": "invalid/5.6.3-dependency-cycle.yaml",
+      "section": "5.6.3",
+      "rule": "The runtime MUST reject a workflow whose steps contain a cycle.",
+      "expect": "invalid",
+      "code": "dependsOn.cycle",
+      "path": "/spec/workflow"
+    },
+    {
+      "id": "5.6.3-depends-on-unknown-step",
+      "file": "invalid/5.6.3-depends-on-unknown-step.yaml",
+      "section": "5.6.3",
+      "rule": "A dependsOn entry that names a non-existent step is rejected.",
+      "expect": "invalid",
+      "code": "dependsOn.unknown-step",
+      "path": "/spec/workflow/1/dependsOn/1"
+    },
+    {
+      "id": "5.6.3-duplicate-step-id",
+      "file": "invalid/5.6.3-duplicate-step-id.yaml",
+      "section": "5.6.3",
+      "rule": "The runtime MUST reject a duplicate step id.",
+      "expect": "invalid",
+      "code": "id.duplicate",
+      "path": "/spec/workflow/1/id"
+    },
+    {
+      "id": "5.6.3-self-dependency",
+      "file": "invalid/5.6.3-self-dependency.yaml",
+      "section": "5.6.3",
+      "rule": "A step that depends on itself is a cycle.",
+      "expect": "invalid",
+      "code": "dependsOn.cycle",
+      "path": "/spec/workflow/0/dependsOn"
+    },
+    {
+      "id": "5.6.3-undeclared-step-output",
+      "file": "invalid/5.6.3-undeclared-step-output.yaml",
+      "section": "5.6.3",
+      "rule": "Outputs not declared in outputs MUST NOT be referenced.",
+      "expect": "invalid",
+      "code": "expr.undeclared-output",
+      "path": "/spec/workflow/1/task"
+    },
+    {
+      "id": "5.6.3-unknown-agent",
+      "file": "invalid/5.6.3-unknown-agent.yaml",
+      "section": "5.6.3",
+      "rule": "An agent that names a non-existent agent is rejected.",
+      "expect": "invalid",
+      "code": "step.unknown-agent",
+      "path": "/spec/workflow/0/agent"
+    },
+    {
+      "id": "5.7-negative-cost",
+      "file": "invalid/5.7-negative-cost.yaml",
+      "section": "5.7",
+      "rule": "All limits MUST be positive.",
+      "expect": "invalid",
+      "code": "schema.exclusiveMinimum",
+      "path": "/spec/budget/maxCostUsd"
+    },
+    {
+      "id": "5.7-unknown-budget-field",
+      "file": "invalid/5.7-unknown-budget-field.yaml",
+      "section": "5.7",
+      "rule": "Unknown budget fields are rejected.",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/budget/maxMoney"
+    },
+    {
+      "id": "5.7-zero-concurrency",
+      "file": "invalid/5.7-zero-concurrency.yaml",
+      "section": "5.7",
+      "rule": "All limits MUST be positive.",
+      "expect": "invalid",
+      "code": "schema.minimum",
+      "path": "/spec/budget/resources/maxConcurrency"
+    },
+    {
+      "id": "5.7-zero-max-steps",
+      "file": "invalid/5.7-zero-max-steps.yaml",
+      "section": "5.7",
+      "rule": "All limits MUST be positive.",
+      "expect": "invalid",
+      "code": "schema.minimum",
+      "path": "/spec/budget/maxSteps"
+    },
+    {
+      "id": "6-agent-instructions-and-prompt-ref",
+      "file": "invalid/6-agent-instructions-and-prompt-ref.yaml",
+      "section": "6",
+      "rule": "promptRef MUST NOT be combined with instructions.",
+      "expect": "invalid",
+      "code": "schema.not",
+      "path": "/spec"
+    },
+    {
+      "id": "6-agent-kind-with-workflow-spec",
+      "file": "invalid/6-agent-kind-with-workflow-spec.yaml",
+      "section": "6",
+      "rule": "agents/workflow belong to kind Workflow only.",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/agents"
+    },
+    {
+      "id": "6-agent-with-workflow-field",
+      "file": "invalid/6-agent-with-workflow-field.yaml",
+      "section": "6",
+      "rule": "An Agent manifest has no spec.workflow (unknown field).",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/workflow"
+    },
+    {
+      "id": "6-agent-without-model",
+      "file": "invalid/6-agent-without-model.yaml",
+      "section": "6",
+      "rule": "An Agent manifest REQUIRES spec.model.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec"
+    },
+    {
+      "id": "7.1-governance-requires-classification",
+      "file": "invalid/7.1-governance-requires-classification.yaml",
+      "section": "7.1",
+      "rule": "Under the governance profile Workflow and Agent REQUIRE metadata.classification.",
+      "expect": "invalid",
+      "code": "governance.classification-required",
+      "path": "/metadata"
+    },
+    {
+      "id": "7.10-environment-without-autonomy",
+      "file": "invalid/7.10-environment-without-autonomy.yaml",
+      "section": "7.10",
+      "rule": "Each environment REQUIRES autonomy.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/environments/production"
+    },
+    {
+      "id": "7.10-invalid-autonomy",
+      "file": "invalid/7.10-invalid-autonomy.yaml",
+      "section": "7.10",
+      "rule": "autonomy is unrestricted, controlled, approval-required or prohibited.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/environments/production/autonomy"
+    },
+    {
+      "id": "7.2-invalid-classification",
+      "file": "invalid/7.2-invalid-classification.yaml",
+      "section": "7.2",
+      "rule": "Data classes are public, internal, confidential, personal, restricted, sensitive, secret.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/metadata/classification"
+    },
+    {
+      "id": "7.2-invalid-external-transfer",
+      "file": "invalid/7.2-invalid-external-transfer.yaml",
+      "section": "7.2",
+      "rule": "externalTransfer is allow or deny.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/dataPolicy/restrictions/externalTransfer"
+    },
+    {
+      "id": "7.4-invalid-model-policy-status",
+      "file": "invalid/7.4-invalid-model-policy-status.yaml",
+      "section": "7.4",
+      "rule": "requirements.approvalStatus uses the model approval statuses.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/modelPolicy/requirements/approvalStatus"
+    },
+    {
+      "id": "7.5-allow-not-boolean",
+      "file": "invalid/7.5-allow-not-boolean.yaml",
+      "section": "7.5.1",
+      "rule": "allow is a boolean.",
+      "expect": "invalid",
+      "code": "schema.type",
+      "path": "/spec/permissions/tools/tools.read/allow"
+    },
+    {
+      "id": "7.5-invalid-default",
+      "file": "invalid/7.5-invalid-default.yaml",
+      "section": "7.5.1",
+      "rule": "permissions.default is allow or deny.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/permissions/default"
+    },
+    {
+      "id": "7.5-invalid-egress",
+      "file": "invalid/7.5-invalid-egress.yaml",
+      "section": "7.5.1",
+      "rule": "network.egress is allow or deny.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/permissions/network/egress"
+    },
+    {
+      "id": "7.5-tool-without-allow",
+      "file": "invalid/7.5-tool-without-allow.yaml",
+      "section": "7.5.1",
+      "rule": "permissions.tools entries REQUIRE allow.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/permissions/tools/tools.read"
+    },
+    {
+      "id": "7.6-approver-empty",
+      "file": "invalid/7.6-approver-empty.yaml",
+      "section": "7.6",
+      "rule": "An approver has exactly one of role or user.",
+      "expect": "invalid",
+      "code": "schema.oneOf",
+      "path": "/spec/approval/approvers/0"
+    },
+    {
+      "id": "7.6-approver-role-and-user",
+      "file": "invalid/7.6-approver-role-and-user.yaml",
+      "section": "7.6",
+      "rule": "An approver has exactly one of role or user.",
+      "expect": "invalid",
+      "code": "schema.oneOf",
+      "path": "/spec/approval/approvers/0"
+    },
+    {
+      "id": "7.6-invalid-on-timeout",
+      "file": "invalid/7.6-invalid-on-timeout.yaml",
+      "section": "7.6",
+      "rule": "onTimeout is reject or fail.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/approval/onTimeout"
+    },
+    {
+      "id": "7.6-min-approvals-zero",
+      "file": "invalid/7.6-min-approvals-zero.yaml",
+      "section": "7.6",
+      "rule": "minApprovals is a positive integer.",
+      "expect": "invalid",
+      "code": "schema.minimum",
+      "path": "/spec/approval/minApprovals"
+    },
+    {
+      "id": "7.6-required-for-invalid-key",
+      "file": "invalid/7.6-required-for-invalid-key.yaml",
+      "section": "7.6",
+      "rule": "requiredFor lists action keys.",
+      "expect": "invalid",
+      "code": "schema.pattern",
+      "path": "/spec/approval/requiredFor/0"
+    },
+    {
+      "id": "7.8-unknown-separation-rule",
+      "file": "invalid/7.8-unknown-separation-rule.yaml",
+      "section": "7.8",
+      "rule": "Separation-of-duties rules are the defined rules only.",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/approval/separationOfDuties/rules/0/everyoneCanApprove"
+    },
+    {
+      "id": "7.9-literal-password-in-free-form-value",
+      "file": "invalid/7.9-literal-password-in-free-form-value.yaml",
+      "section": "7.9",
+      "rule": "Credential-named fields are rejected anywhere outside x- extensions, also inside free-form values.",
+      "expect": "invalid",
+      "code": "secret.literal-field",
+      "path": "/spec/inputs/0/default/password"
+    },
+    {
+      "id": "7.9-literal-token-field",
+      "file": "invalid/7.9-literal-token-field.yaml",
+      "section": "7.9",
+      "rule": "Fields named token, password, apiKey, secret or privateKey with a literal value are rejected (here: unknown field in auth).",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/mcpServers/0/auth/token"
+    },
+    {
+      "id": "7.9-remote-agent-secret-ref-out-of-scope",
+      "file": "invalid/7.9-remote-agent-secret-ref-out-of-scope.yaml",
+      "section": "7.9",
+      "rule": "A remote agent credential is scoped to the agent id.",
+      "expect": "invalid",
+      "code": "secretRef.scope",
+      "path": "/spec/agents/1/auth/secretRef"
+    },
+    {
+      "id": "7.9-secret-ref-empty-scope",
+      "file": "invalid/7.9-secret-ref-empty-scope.yaml",
+      "section": "7.9",
+      "rule": "The default scope is none.",
+      "expect": "invalid",
+      "code": "secretRef.scope",
+      "path": "/spec/mcpServers/0/auth/secretRef"
+    },
+    {
+      "id": "7.9-secret-ref-out-of-scope",
+      "file": "invalid/7.9-secret-ref-out-of-scope.yaml",
+      "section": "7.9",
+      "rule": "The scope of the secret MUST include the consumer.",
+      "expect": "invalid",
+      "code": "secretRef.scope",
+      "path": "/spec/mcpServers/0/auth/secretRef"
+    },
+    {
+      "id": "7.9-secret-ref-undeclared",
+      "file": "invalid/7.9-secret-ref-undeclared.yaml",
+      "section": "7.9",
+      "rule": "A secretRef MUST name a secret declared in spec.secrets.",
+      "expect": "invalid",
+      "code": "secretRef.undeclared",
+      "path": "/spec/mcpServers/0/auth/secretRef"
+    },
+    {
+      "id": "7.9-secret-without-source",
+      "file": "invalid/7.9-secret-without-source.yaml",
+      "section": "7.9",
+      "rule": "A secret declaration REQUIRES name and source.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/secrets/0"
+    },
+    {
+      "id": "8.1-include-without-version",
+      "file": "invalid/8.1-include-without-version.yaml",
+      "section": "8.1",
+      "rule": "include entries name a Policy by name and exact version.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/policies/include/0"
+    },
+    {
+      "id": "8.1-shorthand-not-boolean",
+      "file": "invalid/8.1-shorthand-not-boolean.yaml",
+      "section": "8.1",
+      "rule": "Policy shorthands are booleans.",
+      "expect": "invalid",
+      "code": "schema.type",
+      "path": "/spec/policies/git/allowPush"
+    },
+    {
+      "id": "8.1-unknown-shorthand",
+      "file": "invalid/8.1-unknown-shorthand.yaml",
+      "section": "8.1",
+      "rule": "Unknown shorthands are rejected.",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/policies/network"
+    },
+    {
+      "id": "8.2-no-allow-effect",
+      "file": "invalid/8.2-no-allow-effect.yaml",
+      "section": "8.2",
+      "rule": "Policy rules can only restrict: effect is deny or requireApproval.",
+      "expect": "invalid",
+      "code": "schema.enum",
+      "path": "/spec/rules/0/effect"
+    },
+    {
+      "id": "8.2-policy-without-rules",
+      "file": "invalid/8.2-policy-without-rules.yaml",
+      "section": "8.2",
+      "rule": "A Policy REQUIRES rules.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec"
+    },
+    {
+      "id": "8.2-require-approval-without-approval",
+      "file": "invalid/8.2-require-approval-without-approval.yaml",
+      "section": "8.2",
+      "rule": "approval is REQUIRED for requireApproval.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/rules/0"
+    },
+    {
+      "id": "8.2-rule-without-when",
+      "file": "invalid/8.2-rule-without-when.yaml",
+      "section": "8.2",
+      "rule": "A rule REQUIRES when.",
+      "expect": "invalid",
+      "code": "schema.required",
+      "path": "/spec/rules/0"
+    },
+    {
+      "id": "8.3-empty-when",
+      "file": "invalid/8.3-empty-when.yaml",
+      "section": "8.3",
+      "rule": "A condition has at least one attribute.",
+      "expect": "invalid",
+      "code": "schema.minProperties",
+      "path": "/spec/rules/0/when"
+    },
+    {
+      "id": "8.3-in-not-a-list",
+      "file": "invalid/8.3-in-not-a-list.yaml",
+      "section": "8.3",
+      "rule": "in and notIn take lists.",
+      "expect": "invalid",
+      "code": "schema.oneOf",
+      "path": "/spec/rules/0/when/destination.region"
+    },
+    {
+      "id": "8.3-invalid-actor-type",
+      "file": "invalid/8.3-invalid-actor-type.yaml",
+      "section": "8.3",
+      "rule": "actor.type is agent, human, runtime or system.",
+      "expect": "invalid",
+      "code": "schema.oneOf",
+      "path": "/spec/rules/0/when/actor.type"
+    },
+    {
+      "id": "8.3-invalid-classification-value",
+      "file": "invalid/8.3-invalid-classification-value.yaml",
+      "section": "8.3",
+      "rule": "Classification values in conditions are data classes.",
+      "expect": "invalid",
+      "code": "schema.oneOf",
+      "path": "/spec/rules/0/when/data.classification"
+    },
+    {
+      "id": "8.3-ordering-operator-on-unordered-attribute",
+      "file": "invalid/8.3-ordering-operator-on-unordered-attribute.yaml",
+      "section": "8.3",
+      "rule": "gt, gte, lt, lte are for data.classification and risk.level only.",
+      "expect": "invalid",
+      "code": "schema.oneOf",
+      "path": "/spec/rules/0/when/action"
+    },
+    {
+      "id": "8.3-unknown-attribute",
+      "file": "invalid/8.3-unknown-attribute.yaml",
+      "section": "8.3",
+      "rule": "Only the defined attributes may be used in conditions.",
+      "expect": "invalid",
+      "code": "schema.additionalProperties",
+      "path": "/spec/rules/0/when/user.name"
+    },
+    {
+      "id": "9.1-digest-mismatch",
+      "file": "invalid/9.1-digest-mismatch.yaml",
+      "section": "9.1",
+      "rule": "If metadata.integrity.digest is present, runtimes verify it and reject on mismatch.",
+      "expect": "invalid",
+      "code": "digest.mismatch",
+      "path": "/metadata/integrity/digest",
+      "verifyDigest": true
+    },
+    {
+      "id": "9.4-unpinned-command-image-security-profile",
+      "file": "invalid/9.4-unpinned-command-image-security-profile.yaml",
+      "section": "9.4",
+      "rule": "Under the security profile command step images MUST be pinned by digest.",
+      "expect": "invalid",
+      "code": "security.image-not-pinned",
+      "path": "/spec/workflow/2/image"
+    },
+    {
+      "id": "9.4-unpinned-mcp-image-security-profile",
+      "file": "invalid/9.4-unpinned-mcp-image-security-profile.yaml",
+      "section": "9.4",
+      "rule": "Under the security profile container images MUST be pinned by digest.",
+      "expect": "invalid",
+      "code": "security.image-not-pinned",
+      "path": "/spec/mcpServers/1/image"
+    },
+    {
+      "id": "10.2-audit-configuration",
+      "file": "valid/10.2-audit-configuration.yaml",
+      "section": "10.2",
+      "rule": "Audit configuration.",
+      "expect": "valid"
+    },
+    {
+      "id": "3.1-json-serialization",
+      "file": "valid/3.1-json-serialization.json",
+      "section": "3.1",
+      "rule": "Manifests are representable as JSON and implementations accept JSON.",
+      "expect": "valid"
+    },
+    {
+      "id": "3.1-multi-document",
+      "file": "valid/3.1-multi-document.yaml",
+      "section": "3.1",
+      "rule": "A file may contain several YAML documents; each is an independent manifest.",
+      "expect": "valid"
+    },
+    {
+      "id": "3.2-minimal-workflow",
+      "file": "valid/3.2-minimal-workflow.yaml",
+      "section": "3.2",
+      "rule": "Minimal Workflow of the specification (hello); metadata.classification is only REQUIRED under the governance profile.",
+      "expect": "valid",
+      "profiles": [
+        "core"
+      ]
+    },
+    {
+      "id": "3.3-core-profile-only",
+      "file": "valid/3.3-core-profile-only.yaml",
+      "section": "3.3",
+      "rule": "A manifest using only core fields is valid for a validator that supports only the core profile.",
+      "expect": "valid",
+      "profiles": [
+        "core"
+      ]
+    },
+    {
+      "id": "3.3-extension-fields",
+      "file": "valid/3.3-extension-fields.yaml",
+      "section": "3.3",
+      "rule": "Fields starting with x- may appear in any object and are ignored.",
+      "expect": "valid"
+    },
+    {
+      "id": "3.6-durations",
+      "file": "valid/3.6-durations.yaml",
+      "section": "3.6",
+      "rule": "Durations use units ms, s, m, h, d, w, y and may be combined.",
+      "expect": "valid"
+    },
+    {
+      "id": "3.9-expression-references",
+      "file": "valid/3.9-expression-references.yaml",
+      "section": "3.9",
+      "rule": "The allowed references are inputs.<name>, steps.<id>.outputs.<name>, execution.id, execution.environment.",
+      "expect": "valid"
+    },
+    {
+      "id": "4-owner-string-shorthand",
+      "file": "valid/4-owner-string-shorthand.yaml",
+      "section": "4",
+      "rule": "owner may be a string (shorthand for owner.team); labels and annotations are string maps.",
+      "expect": "valid",
+      "profiles": [
+        "core",
+        "mcp"
+      ]
+    },
+    {
+      "id": "5.2-triggers",
+      "file": "valid/5.2-triggers.yaml",
+      "section": "5.2",
+      "rule": "manual, schedule and event triggers.",
+      "expect": "valid"
+    },
+    {
+      "id": "5.3-inputs",
+      "file": "valid/5.3-inputs.yaml",
+      "section": "5.3",
+      "rule": "Input declarations with all types; default matches type.",
+      "expect": "valid"
+    },
+    {
+      "id": "5.4.2-agent-reference",
+      "file": "valid/5.4.2-agent-reference.yaml",
+      "section": "5.4.2",
+      "rule": "Agent reference with exact version and digest.",
+      "expect": "valid"
+    },
+    {
+      "id": "5.4.4-remote-agent",
+      "file": "valid/5.4.4-remote-agent.yaml",
+      "section": "5.4.4",
+      "rule": "Remote A2A agent with HTTPS endpoint and a scoped secretRef.",
+      "expect": "valid"
+    },
+    {
+      "id": "5.5.4-action-groups",
+      "file": "valid/5.5.4-action-groups.yaml",
+      "section": "5.5.4",
+      "rule": "Groups map concrete actions to well-known actions; groups hold only concrete actions.",
+      "expect": "valid"
+    },
+    {
+      "id": "5.6.2-command-step-env",
+      "file": "valid/5.6.2-command-step-env.yaml",
+      "section": "5.6.2",
+      "rule": "Command steps receive values through env; the command text has no expressions.",
+      "expect": "valid"
+    },
+    {
+      "id": "5.6.3-transitive-step-reference",
+      "file": "valid/5.6.3-transitive-step-reference.yaml",
+      "section": "5.6.3",
+      "rule": "A step may reference outputs of steps it depends on transitively.",
+      "expect": "valid"
+    },
+    {
+      "id": "5.7-nested-budgets",
+      "file": "valid/5.7-nested-budgets.yaml",
+      "section": "5.7",
+      "rule": "Budgets on workflow, agent and step; retries do not exceed maxRetries.",
+      "expect": "valid"
+    },
+    {
+      "id": "6-agent-manifest",
+      "file": "valid/6-agent-manifest.yaml",
+      "section": "6",
+      "rule": "A complete Agent manifest.",
+      "expect": "valid"
+    },
+    {
+      "id": "6-agent-prompt-ref",
+      "file": "valid/6-agent-prompt-ref.yaml",
+      "section": "6",
+      "rule": "An Agent may use promptRef instead of instructions.",
+      "expect": "valid"
+    },
+    {
+      "id": "7.10-environments",
+      "file": "valid/7.10-environments.yaml",
+      "section": "7.10",
+      "rule": "Environments with autonomy levels.",
+      "expect": "valid"
+    },
+    {
+      "id": "7.2-data-and-model-policy",
+      "file": "valid/7.2-data-and-model-policy.yaml",
+      "section": "7.2",
+      "rule": "Data policy, residency, processing and model policy.",
+      "expect": "valid"
+    },
+    {
+      "id": "7.5-permissions",
+      "file": "valid/7.5-permissions.yaml",
+      "section": "7.5",
+      "rule": "All permission fields, wildcard keys and resource scopes.",
+      "expect": "valid"
+    },
+    {
+      "id": "7.6-approval-and-separation-of-duties",
+      "file": "valid/7.6-approval-and-separation-of-duties.yaml",
+      "section": "7.6",
+      "rule": "Workflow approval, approval step and separation of duties.",
+      "expect": "valid"
+    },
+    {
+      "id": "8.1-policy-shorthands",
+      "file": "valid/8.1-policy-shorthands.yaml",
+      "section": "8.1",
+      "rule": "Policy shorthands and policy includes.",
+      "expect": "valid"
+    },
+    {
+      "id": "8.2-policy-manifest",
+      "file": "valid/8.2-policy-manifest.yaml",
+      "section": "8.2",
+      "rule": "Policy manifest with requireApproval and deny rules.",
+      "expect": "valid"
+    },
+    {
+      "id": "8.3-conditions",
+      "file": "valid/8.3-conditions.yaml",
+      "section": "8.3",
+      "rule": "All condition attributes and operators; ordering operators on ordered attributes.",
+      "expect": "valid"
+    },
+    {
+      "id": "9.1-digest-verified",
+      "file": "valid/9.1-digest-verified.yaml",
+      "section": "9.1",
+      "rule": "metadata.integrity.digest matches the JCS digest of the manifest without integrity, signature and provenance.",
+      "expect": "valid",
+      "verifyDigest": true
+    },
+    {
+      "id": "9.4-pinned-images-security-profile",
+      "file": "valid/9.4-pinned-images-security-profile.yaml",
+      "section": "9.4",
+      "rule": "Under the security profile images are pinned by digest.",
+      "expect": "valid"
+    }
+  ]
+}

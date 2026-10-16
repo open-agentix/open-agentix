@@ -1,0 +1,89 @@
+# Conformance case 7.6-approval-and-separation-of-duties
+# Spec section 7.6: Workflow approval, approval step and separation of duties.
+# Expected: valid
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Workflow
+metadata:
+  name: conformance-base
+  version: 1.0.0
+  owner:
+    team: conformance-team
+  classification: internal
+  risk:
+    level: high
+    category:
+      - financial
+spec:
+  inputs:
+    - name: repo
+      type: string
+      required: true
+  budget:
+    maxCostUsd: 1
+    maxSteps: 10
+    maxDuration: 10m
+    resources:
+      maxRetries: 2
+      maxConcurrency: 1
+  secrets:
+    - name: TOOLS_TOKEN
+      source: secret-manager
+      scope:
+        - tools
+  mcpServers:
+    - name: tools
+      transport: streamable-http
+      url: https://mcp.example.com/tools
+      auth:
+        secretRef: TOOLS_TOKEN
+  actionGroups:
+    tools.read:
+      - tools.read_file
+  agents:
+    - id: worker
+      model:
+        provider: ollama
+        name: qwen3
+      tools:
+        - type: mcp
+          server: tools
+  workflow:
+    - id: analyze
+      agent: worker
+      task: Analyze ${{ inputs.repo }}.
+      outputs:
+        - name: report
+    - id: apply
+      agent: worker
+      task: Apply ${{ steps.analyze.outputs.report }}.
+      dependsOn:
+        - analyze
+    - id: release
+      type: approval
+      dependsOn:
+        - apply
+      approval:
+        approvers:
+          - role: release-manager
+        message: Release ${{ steps.analyze.outputs.report }}?
+  permissions:
+    default: deny
+    tools:
+      tools.read:
+        allow: true
+  approval:
+    requiredFor:
+      - production.deploy
+    approvers:
+      - role: security-reviewer
+      - user: user:alice
+    minApprovals: 2
+    timeout: 24h
+    onTimeout: reject
+    message: Deploy ${{ execution.id }}?
+    separationOfDuties:
+      enabled: true
+      rules:
+        - actorCannotApproveOwnAction: true
+        - initiatorCannotApprove: true
+        - distinctApprovers: true

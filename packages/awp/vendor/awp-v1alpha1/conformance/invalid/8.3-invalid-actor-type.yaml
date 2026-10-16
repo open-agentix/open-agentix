@@ -1,0 +1,19 @@
+# Conformance case 8.3-invalid-actor-type
+# Spec section 8.3: actor.type is agent, human, runtime or system.
+# Expected: invalid (schema.oneOf at /spec/rules/0/when/actor.type)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec:
+  rules:
+    - id: deploy-needs-approval
+      when:
+        actor.type: robot
+      effect: requireApproval
+      approval:
+        approvers:
+          - role: release-manager

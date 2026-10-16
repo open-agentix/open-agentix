@@ -1,0 +1,17 @@
+# Conformance case 8.2-rule-without-when
+# Spec section 8.2: A rule REQUIRES when.
+# Expected: invalid (schema.required at /spec/rules/0)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec:
+  rules:
+    - id: deploy-needs-approval
+      effect: requireApproval
+      approval:
+        approvers:
+          - role: release-manager

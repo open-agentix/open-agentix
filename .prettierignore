@@ -7,3 +7,4 @@ apps/api/drizzle
 *.md
 apps/ui/src/api/schema.d.ts
 packages/providers/catalog
+packages/awp/vendor

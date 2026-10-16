@@ -1,0 +1,11 @@
+# Conformance case 8.2-policy-without-rules
+# Spec section 8.2: A Policy REQUIRES rules.
+# Expected: invalid (schema.required at /spec)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Policy
+metadata:
+  name: conformance-policy
+  version: 1.0.0
+  owner:
+    team: governance-team
+spec: {}

@@ -1,0 +1,13 @@
+# Conformance case 3.2-missing-spec
+# Spec section 3.2: spec is REQUIRED.
+# Expected: invalid (schema.required at /)
+apiVersion: awp.agenticworkflowprotocol.org/v1alpha1
+kind: Workflow
+metadata:
+  name: conformance-base
+  version: 1.0.0
+  owner:
+    team: conformance-team
+  classification: internal
+  risk:
+    level: low
