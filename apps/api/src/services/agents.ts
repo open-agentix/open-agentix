@@ -12,7 +12,9 @@ import {
   validateAgentSource,
   visibleAgents,
   visibleTeams,
+  summariseDecisions,
   type AgentDefinition,
+  type DecisionFact,
   type Principal,
   type ValidationResult,
 } from '@openagentix/core';
@@ -20,10 +22,19 @@ import { and, desc, eq, inArray, isNotNull, isNull, lt, or, type SQL } from 'dri
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { agentVersions, agents, teams } from '../db/schema.js';
+import { agentReviewDecisions, agentReviews, agentVersions, agents, teams } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import { decodeTimeCursor, encodeTimeCursor, page } from '../pagination.js';
 import { statusFilter, textFilter, useCaseFilter, type AgentStatus } from './agent-filters.js';
+import {
+  appendRevision,
+  authorOf,
+  ensureHead,
+  firstRevision,
+  lockAgent,
+  type RevisionRow,
+} from './agent-revisions.js';
+import type { ShadowReport } from './agent-reviews.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import type { ResolvedScope } from './subtree-scope.js';
@@ -66,6 +77,9 @@ const summary = (v: AgentVersionRow): VersionSummary => ({
 
 const IMMUTABLE_TTL = 3_600_000;
 
+/** Reports what publish would have been refused for (ADR 0017 S1, set once the services exist). */
+export type ShadowPublish = (agent: AgentRow, source: string) => Promise<ShadowReport>;
+
 /** Filters of {@link AgentsService.list}; all of them narrow the principal's visible agents. */
 export interface AgentListQuery {
   limit: number;
@@ -90,6 +104,9 @@ export class AgentsService {
     private readonly catalog: CatalogService,
   ) {}
 
+  /** Wired by `createServices`: the shadow-mode check of publish (ADR 0017 S1). */
+  shadowPublish: ShadowPublish | undefined;
+
   async teamIdForOwner(tenantId: string, owner: string): Promise<string | null> {
     const [t] = await this.ctx.db
       .select({ id: teams.id })
@@ -105,7 +122,8 @@ export class AgentsService {
   async assertAccess(
     principal: Principal,
     agent: AgentRow,
-    permission: 'agents:read' | 'agents:write' | 'agents:publish' | 'runs:execute',
+    permission:
+      'agents:read' | 'agents:write' | 'agents:publish' | 'agents:approve' | 'runs:execute',
   ): Promise<void> {
     // Tenant boundary first: another tenant's agent does not exist for this principal. An agent
     // carries a use case, so a use-case binding of that use case (or a parent use case) counts too.
@@ -238,27 +256,55 @@ export class AgentsService {
       .from(agents)
       .where(and(eq(agents.name, def.name), eq(agents.tenantId, principal.tenantId)));
     if (exists) throw conflict(`agent "${def.name}" already exists`);
-    const [row] = await this.ctx.db
-      .insert(agents)
-      .values({
-        id: opts.id ?? randomUUID(),
-        tenantId: principal.tenantId,
-        name: def.name,
-        teamId,
-        description: def.description ?? null,
-        useCase: useCaseOf(def),
-        draftSource: source,
-        createdBy: principal.userId,
-      })
-      .returning();
-    await this.audit.append({
-      actor: principal.userId,
-      tenantId: principal.tenantId,
-      action: 'agent.created',
-      target: row!.id,
-      payload: { name: def.name, version: def.version, digest: def.digest },
+    const row = await this.ctx.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      const [created] = await tx
+        .insert(agents)
+        .values({
+          id: opts.id ?? randomUUID(),
+          tenantId: principal.tenantId,
+          name: def.name,
+          teamId,
+          description: def.description ?? null,
+          useCase: useCaseOf(def),
+          draftSource: source,
+          createdBy: principal.userId,
+        })
+        .returning();
+      // The first revision of the draft, with its author (ADR 0017 section 4.1).
+      const revision = await firstRevision(tx, created!, source, authorOf(principal.userId));
+      await this.audit.append(
+        {
+          actor: principal.userId,
+          tenantId: principal.tenantId,
+          action: 'agent.created',
+          target: created!.id,
+          payload: { name: def.name, version: def.version, digest: def.digest },
+        },
+        tx,
+      );
+      await this.auditRevision(tx, created!, revision, principal.userId);
+      return { ...created!, draftRevisionId: revision.id };
     });
-    return row!;
+    return row;
+  }
+
+  private auditRevision(tx: Db, agent: AgentRow, revision: RevisionRow, actor: string) {
+    return this.audit.append(
+      {
+        actor,
+        tenantId: agent.tenantId,
+        action: 'agent.revision.created',
+        target: agent.id,
+        payload: {
+          revision: revision.id,
+          seq: revision.seq,
+          digest: revision.digest,
+          author: revision.authorId,
+        },
+      },
+      tx,
+    );
   }
 
   /**
@@ -367,25 +413,90 @@ export class AgentsService {
     if (def.name !== agent.name)
       throw new HttpError(400, 'validation_failed', `name must stay "${agent.name}"`);
     this.assertLabelInScope(principal, 'agents:write', agent, useCaseOf(def));
-    const [row] = await this.ctx.db
-      .update(agents)
-      .set({
-        draftSource: source,
-        draftUpdatedAt: this.ctx.now(),
-        description: def.description ?? null,
-        // The published version keeps defining the use case until a newer one is published.
-        ...(agent.latestVersionId ? {} : { useCase: useCaseOf(def) }),
-      })
-      .where(eq(agents.id, id))
-      .returning();
-    await this.audit.append({
-      actor: principal.userId,
-      tenantId: principal.tenantId,
-      action: 'agent.draft.updated',
-      target: id,
-      payload: { version: def.version, digest: def.digest },
+    return this.ctx.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      // Serialised with reviews, decisions and other saves of this agent (ADR 0017 section 4.3).
+      const locked = await lockAgent(tx, id);
+      const { revision, previous, created } = await appendRevision(
+        tx,
+        locked,
+        source,
+        authorOf(principal.userId),
+        (r) => this.auditRevision(tx, locked, r, 'system').then(() => undefined),
+      );
+      // Identical content (same normalised digest) creates no revision and changes nothing: the
+      // draft stays byte for byte the source of its newest revision.
+      const [row] = created
+        ? await tx
+            .update(agents)
+            .set({
+              draftSource: source,
+              draftUpdatedAt: this.ctx.now(),
+              description: def.description ?? null,
+              // The published version keeps defining the use case until a newer one is published.
+              ...(agent.latestVersionId ? {} : { useCase: useCaseOf(def) }),
+            })
+            .where(eq(agents.id, id))
+            .returning()
+        : [{ ...locked, draftRevisionId: revision.id }];
+      await this.audit.append(
+        {
+          actor: principal.userId,
+          tenantId: principal.tenantId,
+          action: 'agent.draft.updated',
+          target: id,
+          payload: { version: def.version, digest: def.digest },
+        },
+        tx,
+      );
+      if (created) {
+        await this.auditRevision(tx, locked, revision, principal.userId);
+        await this.staleOpenReview(tx, locked, previous);
+      }
+      return row!;
     });
-    return row!;
+  }
+
+  /**
+   * A new revision makes every approval of an open review on the previous one stale (ADR 0017
+   * section 3): they are listed, not counted. This only records it in the audit trail.
+   */
+  private async staleOpenReview(tx: Db, agent: AgentRow, previous: RevisionRow): Promise<void> {
+    const [review] = await tx
+      .select({ id: agentReviews.id })
+      .from(agentReviews)
+      .where(and(eq(agentReviews.agentId, agent.id), eq(agentReviews.status, 'open')));
+    if (!review) return;
+    const rows = await tx
+      .select()
+      .from(agentReviewDecisions)
+      .where(eq(agentReviewDecisions.reviewId, review.id));
+    const facts: DecisionFact[] = rows.map((d) => ({
+      id: d.id,
+      reviewerId: d.reviewerId,
+      decision: d.decision as DecisionFact['decision'],
+      revisionId: d.revisionId,
+      decidedAt: d.decidedAt,
+      expiresAt: d.expiresAt,
+    }));
+    const stale = summariseDecisions(facts, previous.id, this.ctx.now());
+    const approvals = stale.approvers.length;
+    if (approvals + stale.changesRequested.length === 0) return;
+    await this.audit.append(
+      {
+        actor: 'system',
+        tenantId: agent.tenantId,
+        action: 'agent.review.stale',
+        target: agent.id,
+        payload: {
+          review: review.id,
+          approvals,
+          changesRequested: stale.changesRequested.length,
+          reason: 'revision_changed',
+        },
+      },
+      tx,
+    );
   }
 
   /** Platform constraints on `runtime`: enabled runners and the toolbox allowlist. */
@@ -590,7 +701,7 @@ export class AgentsService {
   async publish(
     principal: Principal,
     id: string,
-  ): Promise<{ version: VersionSummary; created: boolean }> {
+  ): Promise<{ version: VersionSummary; created: boolean; shadow?: ShadowReport }> {
     const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:publish');
     const def = loadAgentDefinition(agent.draftSource);
@@ -601,10 +712,14 @@ export class AgentsService {
       .from(agentVersions)
       .where(eq(agentVersions.agentId, id));
     const outcome = checkPublish(published, def);
+    // ADR 0017 S1, shadow mode: report what publish would be refused for once approvals are
+    // enforced. It never refuses anything and must never break a publish.
+    const shadow = await this.shadow(agent);
     if (outcome === 'unchanged') {
       return {
         version: summary(published.find((p) => p.version === def.version)!),
         created: false,
+        ...(shadow ? { shadow } : {}),
       };
     }
     // Profile grants become concrete grants now and are stored with the version: a later change
@@ -666,7 +781,16 @@ export class AgentsService {
         errors,
       );
     }
-    const row = await this.ctx.db.transaction(async (tx) => {
+    const row = await this.ctx.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      // The draft is read again under the agent lock: a save that slipped in since the checks above
+      // would otherwise publish content that was never validated (ADR 0017 section 4.3).
+      const locked = await lockAgent(tx, id);
+      if (locked.draftSource !== agent.draftSource)
+        throw new HttpError(409, 'draft_changed', 'the draft changed while publishing; try again');
+      const head = await ensureHead(tx, locked, (r) =>
+        this.auditRevision(tx, locked, r, 'system').then(() => undefined),
+      );
       const [v] = await tx
         .insert(agentVersions)
         .values({
@@ -677,6 +801,7 @@ export class AgentsService {
           source: agent.draftSource,
           definition: definition as unknown as object,
           publishedBy: principal.userId,
+          revisionId: head.id,
         })
         .returning();
       await tx
@@ -691,7 +816,12 @@ export class AgentsService {
       tenantId: principal.tenantId,
       action: 'agent.published',
       target: id,
-      payload: { version: row.version, digest: row.digest },
+      payload: {
+        version: row.version,
+        digest: row.digest,
+        revision: row.revisionId,
+        ...(shadow ? { shadow } : {}),
+      },
     });
     if (definition.expansion?.length) {
       await this.audit.append({
@@ -706,7 +836,18 @@ export class AgentsService {
         },
       });
     }
-    return { version: summary(row), created: true };
+    return { version: summary(row), created: true, ...(shadow ? { shadow } : {}) };
+  }
+
+  /** The shadow report of a publish, or `undefined` when it cannot be computed (never an error). */
+  private async shadow(agent: AgentRow): Promise<ShadowReport | undefined> {
+    if (!this.shadowPublish) return undefined;
+    try {
+      return await this.shadowPublish(agent, agent.draftSource);
+    } catch (e) {
+      this.ctx.logger.warn({ err: e, agent: agent.id }, 'publish shadow check failed');
+      return undefined;
+    }
   }
 
   async versions(id: string): Promise<VersionSummary[]> {

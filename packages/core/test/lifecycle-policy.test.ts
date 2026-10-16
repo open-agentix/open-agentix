@@ -8,6 +8,7 @@ import {
   resolveLifecyclePolicy,
   wideningKeys,
   changedKeys,
+  isProductionUseCase,
   type LifecyclePolicy,
   type LifecyclePolicyInput,
 } from '../src/index.js';
@@ -310,5 +311,23 @@ describe('policy digest', () => {
       proposeLifecyclePolicy(DEFAULTS, { productionUseCases: ['a', 'b'] }),
     );
     expect(a).not.toBe(b);
+  });
+});
+
+describe('isProductionUseCase', () => {
+  it('matches globs per segment and across segments', () => {
+    expect(isProductionUseCase('prod/support', ['prod/**'])).toBe(true);
+    expect(isProductionUseCase('prod', ['prod/**'])).toBe(true);
+    expect(isProductionUseCase('prod/a/b', ['prod/*'])).toBe(false);
+    expect(isProductionUseCase('prod/a', ['prod/*'])).toBe(true);
+    expect(isProductionUseCase('support-x', ['support-*'])).toBe(true);
+    expect(isProductionUseCase('prodx', ['prod/**'])).toBe(false);
+    expect(isProductionUseCase('a.b', ['a.b'])).toBe(true);
+    expect(isProductionUseCase('axb', ['a.b'])).toBe(false);
+    expect(isProductionUseCase('ab', ['a?'])).toBe(true);
+  });
+  it('never covers a missing use case or an empty list', () => {
+    expect(isProductionUseCase(null, ['**'])).toBe(false);
+    expect(isProductionUseCase('x', [])).toBe(false);
   });
 });

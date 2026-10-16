@@ -214,7 +214,25 @@ export const VersionDetailSchema = VersionSchema.extend({
       'pinned tool definitions per MCP connection (ADR 0016 section 5); absent for versions published before pinning',
     ),
 });
-export const PublishResultSchema = z.object({ version: VersionSchema, created: z.boolean() });
+export const PublishResultSchema = z.object({
+  version: VersionSchema,
+  created: z.boolean(),
+  shadow: z
+    .object({
+      enforced: z.literal(false).describe('this version only reports; publish is not refused'),
+      approvalRequired: z.boolean(),
+      wouldRefuse: z
+        .boolean()
+        .describe('publish would have been refused if approvals were enforced (ADR 0017 S1)'),
+      reviewId: Id.nullable(),
+      state: z.string().nullable(),
+      reasons: z.array(z.object({ code: z.string(), message: z.string() })),
+    })
+    .optional()
+    .describe(
+      'shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed',
+    ),
+});
 
 export const RunStatusSchema = z.enum(RUN_STATUSES);
 export const RunSchema = z.object({

@@ -8,6 +8,8 @@ import {
   isGrantableRole,
   type PriceEntry,
   type RoleBinding,
+  APPROVER_ROLES,
+  type ApproverRole,
 } from '@openagentix/core';
 import { parseStdioAllowlist } from '@openagentix/mcp';
 import { parseProviderConfigs, type ProviderConfig } from '@openagentix/providers';
@@ -100,6 +102,26 @@ export const EnvSchema = z.object({
    * notices). `0` switches the timer off (expiry itself is always evaluated per request).
    */
   OAX_BINDING_REAPER_INTERVAL_SECONDS: z.coerce.number().int().min(0).max(86_400).default(60),
+  /**
+   * Installation defaults of the agent lifecycle policy (ADR 0017 section 6). A tenant's own
+   * `settings.agentLifecycle` replaces them for the tenant and its subtree (a root may choose
+   * freely, every node below only narrows). `auto` for the approval requirement means `on` as soon
+   * as the installation has more than one tenant (multi-tenant) and `off` for a single tenant.
+   */
+  OAX_LIFECYCLE_REQUIRE_APPROVAL: z.enum(['auto', 'off', 'production-only', 'on']).default('auto'),
+  OAX_LIFECYCLE_MIN_APPROVALS: z.coerce.number().int().min(1).max(5).default(1),
+  OAX_LIFECYCLE_ALLOWED_APPROVER_ROLES: z
+    .string()
+    .default('admin,agent-maintainer')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((x) => x.trim())
+        .filter((x) => x.length > 0),
+    )
+    .pipe(z.array(z.enum(APPROVER_ROLES)).min(1)),
+  OAX_LIFECYCLE_APPROVAL_EXPIRY_HOURS: z.coerce.number().int().min(1).max(720).default(168),
+  OAX_LIFECYCLE_ALLOW_TOKEN_APPROVALS: bool.default(false),
   OAX_AUTH_CACHE_TTL_SECONDS: int(30),
   /**
    * Which source authorises (ADR 0014 S2): `legacy` = users.global_roles, team memberships and
@@ -368,6 +390,14 @@ export interface Config {
     pentestMaxDays: number;
     bindingReaperIntervalSeconds: number;
     reservedSlugs: string[];
+  };
+  /** Installation defaults of the agent lifecycle policy (`OAX_LIFECYCLE_*`, ADR 0017 section 6). */
+  lifecycle: {
+    requireApproval: 'auto' | 'off' | 'production-only' | 'on';
+    minApprovals: number;
+    allowedApproverRoles: ApproverRole[];
+    approvalExpiryHours: number;
+    allowTokenApprovals: boolean;
   };
   auth: {
     bootstrapAdmin: { email: string; password: string } | null;
@@ -663,6 +693,13 @@ function buildConfig(
       maxBindingsPerUser: e.OAX_MAX_BINDINGS_PER_USER,
       pentestMaxDays: e.OAX_PENTEST_MAX_DAYS,
       bindingReaperIntervalSeconds: e.OAX_BINDING_REAPER_INTERVAL_SECONDS,
+    },
+    lifecycle: {
+      requireApproval: e.OAX_LIFECYCLE_REQUIRE_APPROVAL,
+      minApprovals: e.OAX_LIFECYCLE_MIN_APPROVALS,
+      allowedApproverRoles: [...new Set(e.OAX_LIFECYCLE_ALLOWED_APPROVER_ROLES)],
+      approvalExpiryHours: e.OAX_LIFECYCLE_APPROVAL_EXPIRY_HOURS,
+      allowTokenApprovals: e.OAX_LIFECYCLE_ALLOW_TOKEN_APPROVALS,
     },
     auth: {
       bootstrapAdmin:

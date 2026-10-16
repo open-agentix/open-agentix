@@ -272,9 +272,7 @@ export function resolveLifecyclePolicy(
  * `parent`'s effective policy. Empty = the write is narrowing.
  */
 export function wideningKeys(parent: LifecyclePolicy, proposed: LifecyclePolicy): LifecycleKey[] {
-  return LIFECYCLE_KEYS.filter((k) =>
-    SPECS[k].widens(parent[k] as never, proposed[k] as never),
-  );
+  return LIFECYCLE_KEYS.filter((k) => SPECS[k].widens(parent[k] as never, proposed[k] as never));
 }
 
 /**
@@ -313,4 +311,36 @@ export function lifecyclePolicyDigest(
       rules: sortedRules,
     }),
   );
+}
+
+/** Compiles a use-case glob: `*` is any run inside one segment, `**` any run across segments, `?` one character. */
+function useCaseGlobRegex(glob: string): RegExp {
+  let out = '';
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i]!;
+    if (ch === '*') {
+      if (glob[i + 1] === '*') {
+        i++;
+        out += '.*';
+      } else out += '[^/]*';
+    } else if (ch === '?') out += '[^/]';
+    else out += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/**
+ * Whether a use case is covered by one of the `productionUseCases` globs. A glob ending in `/**`
+ * also covers the use case it names itself (`prod/**` covers `prod`). `null` (no use case) is never
+ * covered.
+ */
+export function isProductionUseCase(
+  useCase: string | null | undefined,
+  globs: readonly string[],
+): boolean {
+  if (!useCase) return false;
+  return globs.some((g) => {
+    if (useCaseGlobRegex(g).test(useCase)) return true;
+    return g.endsWith('/**') && useCase === g.slice(0, -3);
+  });
 }

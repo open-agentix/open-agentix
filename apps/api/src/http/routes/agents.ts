@@ -186,6 +186,8 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
       schema: {
         tags,
         summary: 'Publish the draft as an immutable version',
+        description:
+          'Needs `agents:publish`. Not yet refused without an approval: `shadow` reports whether publish would have been refused (ADR 0017 S1 shadow mode); the same report is in the audit entry `agent.published`.',
         security: sec,
         params: IdParams,
         response: { 200: PublishResultSchema, 201: PublishResultSchema, 409: ErrorSchema },
@@ -193,9 +195,11 @@ export function registerAgentRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req, reply) => {
       const r = await agents.publish(principalOf(req), req.params.id);
-      return reply
-        .status(r.created ? 201 : 200)
-        .send({ version: versionDto(r.version), created: r.created });
+      return reply.status(r.created ? 201 : 200).send({
+        version: versionDto(r.version),
+        created: r.created,
+        ...(r.shadow ? { shadow: r.shadow } : {}),
+      });
     },
   );
 

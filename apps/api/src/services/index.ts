@@ -1,6 +1,7 @@
 import type { AppContext } from '../context.js';
 import { createMcpOauth, type McpOauthStores, type TrustedRole } from '../mcp-oauth/index.js';
 import { AgentCheckService } from './agent-check.js';
+import { AgentReviewsService } from './agent-reviews.js';
 import { AgentSummaryService } from './agent-summaries.js';
 import { AgentsService } from './agents.js';
 import { AuditService } from './audit.js';
@@ -11,6 +12,7 @@ import { CostsService } from './costs.js';
 import { GuidelinesService } from './guidelines.js';
 import { IdentityService } from './identity.js';
 import { IngestService } from './ingest.js';
+import { LifecyclePolicyService } from './lifecycle-policy.js';
 import { LocateService } from './locate.js';
 import { ModelAccountingService } from './model-accounting.js';
 import { ModelProxyService } from './model-proxy.js';
@@ -32,6 +34,10 @@ export interface Services {
   budgets: BudgetsService;
   identity: IdentityService;
   agents: AgentsService;
+  /** The agent lifecycle policy of a tenant node (ADR 0017 S1). */
+  lifecyclePolicy: LifecyclePolicyService;
+  /** Draft revisions, reviews and approval records (ADR 0017 S1). */
+  agentReviews: AgentReviewsService;
   agentSummaries: AgentSummaryService;
   catalog: CatalogService;
   runs: RunsService;
@@ -67,6 +73,9 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const identity = new IdentityService(ctx, audit);
   const catalog = new CatalogService(ctx, audit);
   const agents = new AgentsService(ctx, audit, catalog);
+  const lifecyclePolicy = new LifecyclePolicyService(ctx, audit);
+  const agentReviews = new AgentReviewsService(ctx, audit, agents, lifecyclePolicy, catalog);
+  agents.shadowPublish = (agent, source) => agentReviews.shadowPublish(agent, source);
   const agentSummaries = new AgentSummaryService(ctx);
   const budgets = new BudgetsService(ctx, audit, agents);
   const runs = new RunsService(ctx, audit, agents, budgets);
@@ -125,6 +134,8 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     budgets,
     identity,
     agents,
+    lifecyclePolicy,
+    agentReviews,
     agentSummaries,
     catalog,
     runs,
@@ -152,6 +163,8 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
 }
 
 export {
+  AgentReviewsService,
+  LifecyclePolicyService,
   AgentCheckService,
   GuidelinesService,
   AgentsService,
