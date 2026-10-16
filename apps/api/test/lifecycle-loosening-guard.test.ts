@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   agentDraftRevisions,
@@ -139,7 +139,7 @@ afterAll(async () => {
 });
 
 describe('withdraw, loosen, reopen', () => {
-  it('keeps the hold after the contributor withdrew their review, until the change is published', async () => {
+  it('keeps the hold after the contributor withdrew their review, publishing does not end it, an outside administrator releases it', async () => {
     expect((await strict()).statusCode).toBe(200);
     const agent = await newAgent(tok['c']!);
     const review = await openReview(tok['c']!, agent);
@@ -507,6 +507,110 @@ describe('cost and abuse of the guard', () => {
     // as its opener, which the per-agent examination of the earliest review must not lose
     await openReview(tok['c']!, agent);
     expectRefused(await setPolicy(LOOSEN, tok['c']!));
+    await settleAll();
+  });
+});
+
+describe('clear-hold and the window of a closed review', () => {
+  const clear = (by: string, id: string) =>
+    req(by, 'POST', `/v1/reviews/${id}/clear-hold`, { reason: 'abandoned' });
+  const draftEdit = (by: string, agentId: string, name: string) =>
+    req(by, 'PUT', `/v1/agents/${agentId}/draft`, {
+      source: agentSource(name, 'nobody', '1.0.1'),
+    });
+
+  it('freezes the contributors of a closed review at its closing revision: later editors can loosen and clear', async () => {
+    await settleAll();
+    expect((await strict()).statusCode).toBe(200);
+    await mkUser('late', ['admin']);
+    const agent = await newAgent(tok['author']!);
+    const review = await openReview(tok['author']!, agent);
+    expect(
+      (await req(tok['author']!, 'POST', `/v1/reviews/${review.id}/withdraw`)).statusCode,
+    ).toBe(200);
+    const [row] = await n.ctx.db.select().from(agentReviews).where(eq(agentReviews.id, review.id));
+    expect(row!.closedRevisionId).toBe(review.revision.id);
+    // a different administrator edits the agent afterwards ...
+    const name = (await n.ctx.db.select().from(agents).where(eq(agents.id, agent)))[0]!.name;
+    const edit = await draftEdit(tok['late']!, agent, name);
+    expect(edit.statusCode, edit.body).toBe(200);
+    // ... and is not a contributor of the old, held review
+    expect((await setPolicy(LOOSEN, tok['late']!)).statusCode).toBe(200);
+    expect((await strict()).statusCode).toBe(200);
+    const ok = await clear(tok['late']!, review.id);
+    expect(ok.statusCode, ok.body).toBe(200);
+    await settleAll();
+  });
+
+  it('refuses a head that cannot be read, and a platform operator releases such a hold', async () => {
+    await settleAll();
+    const agent = await newAgent(tok['author']!);
+    const review = await openReview(tok['author']!, agent);
+    await req(tok['author']!, 'POST', `/v1/reviews/${review.id}/withdraw`);
+    await n.ctx.db.execute(
+      sql`alter table agent_reviews disable trigger agent_reviews_consistency`,
+    );
+    await n.ctx.db
+      .update(agentReviews)
+      .set({ closedRevisionId: null })
+      .where(eq(agentReviews.id, review.id));
+    await n.ctx.db.execute(sql`alter table agent_reviews enable trigger agent_reviews_consistency`);
+    await n.ctx.db.update(agents).set({ draftRevisionId: null }).where(eq(agents.id, agent));
+    const refused = await clear(adminA, review.id);
+    expect(refused.statusCode, refused.body).toBe(403);
+    expect(j(refused).error).toBe('hold_clear_by_contributor');
+    const operator = await n.req({
+      method: 'POST',
+      url: `/v1/reviews/${review.id}/clear-hold`,
+      payload: { reason: 'head lost' },
+      headers: { 'x-oax-tenant': 'org-loose' },
+    });
+    expect(operator.statusCode, operator.body).toBe(200);
+    await settleAll();
+  });
+
+  it('answers 404 for a review of another organisation and 409 for an open one', async () => {
+    await settleAll();
+    const agent = await newAgent(tok['author']!);
+    const review = await openReview(tok['author']!, agent);
+    const open = await clear(adminA, review.id);
+    expect(open.statusCode, open.body).toBe(409);
+    expect(j(open).error).toBe('not_held');
+    const other = await n.req({
+      method: 'POST',
+      url: '/v1/tenants',
+      payload: {
+        slug: 'other-company',
+        name: 'other-company',
+        admin: { email: 'admin@loose2.example.org', displayName: 'A2', password: PW },
+      },
+    });
+    expect(other.statusCode, other.body).toBe(201);
+    const otherAdmin = await n.login('admin@loose2.example.org', PW);
+    const foreign = await clear(otherAdmin, review.id);
+    expect(foreign.statusCode, foreign.body).toBe(404);
+    await settleAll();
+  });
+
+  it('lets the administrator who created a contributor release the hold (by design), also after a reject', async () => {
+    await settleAll();
+    // adminA made C; C's review is rejected by a reviewer; adminA is not a contributor and releases it
+    const agent = await newAgent(tok['c']!);
+    const review = await openReview(tok['c']!, agent);
+    const reject = await req(tok['rev']!, 'POST', `/v1/reviews/${review.id}/decisions`, {
+      decision: 'reject',
+      comment: 'no',
+      expectedDigest: review.revision.digest,
+      expectedExpansionDigest: review.digests.expansionDigest,
+      expectedResolutionDigest: review.digests.resolutionDigest,
+      expectedPolicyDigest: review.digests.policyDigest,
+    });
+    expect(reject.statusCode, reject.body).toBe(201);
+    const [row] = await n.ctx.db.select().from(agentReviews).where(eq(agentReviews.id, review.id));
+    expect(row!.status).toBe('rejected');
+    expect(row!.closedRevisionId).toBe(review.revision.id);
+    const ok = await clear(adminA, review.id);
+    expect(ok.statusCode, ok.body).toBe(200);
     await settleAll();
   });
 });

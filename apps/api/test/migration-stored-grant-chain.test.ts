@@ -72,6 +72,11 @@ describe.each(sqlTargets)('migration 0037 on existing data (%s)', (_kind, enable
   const cyc1 = id(); // two accounts that created each other
   const cyc2 = id();
   const viaLonely = id();
+  const dense = Array.from({ length: 30 }, () => id()); // 30 administrators, each granted by 5 others
+  const rev1 = id(); // revision before the review closed
+  const rev2 = id(); // revision after
+  const closedReview = id();
+  let migrateMs = 0;
   const team1 = id(); // team.created, then members.set
   const team2 = id(); // members.set is the first entry of the team
   const agent = id();
@@ -153,6 +158,11 @@ describe.each(sqlTargets)('migration 0037 on existing data (%s)', (_kind, enable
       `insert into tenant_role_bindings (id, user_id, tenant_id, role, inherit, source, granted_by) values ($1, $2, $3, 'viewer', false, 'grant', $4)`,
       [id(), admin, root, ring[7]],
     );
+    // the boundary: from ring[5] the bootstrap administrator is 6 hops away, from ring[6] it is 7
+    await c.query(
+      `insert into tenant_role_bindings (id, user_id, tenant_id, role, inherit, source, granted_by) values ($1, $2, $3, 'operator', false, 'grant', $4), ($5, $2, $3, 'integrator', false, 'grant', $6)`,
+      [id(), admin, root, ring[5], id(), ring[6]],
+    );
     await c.query(
       `insert into users (id, email, display_name, source, tenant_id) values ($1, 'cyc1@example.org', 'c', 'local', $3), ($2, 'cyc2@example.org', 'c', 'local', $3)`,
       [cyc1, cyc2, root],
@@ -160,6 +170,28 @@ describe.each(sqlTargets)('migration 0037 on existing data (%s)', (_kind, enable
     await c.query(`update users set created_by = $2 where id = $1`, [cyc1, cyc2]);
     await c.query(`update users set created_by = $2 where id = $1`, [cyc2, cyc1]);
     await user(viaLonely, 'vl@example.org', 'local', [], lonely);
+    // a dense graph: 5 tenants, every account an administrator in each, granted by 5 different others
+    const tenantsOf = [root];
+    for (let t = 0; t < 4; t++) {
+      const tid = id();
+      tenantsOf.push(tid);
+      await c.query(
+        `insert into tenants (id, slug, name, parent_id, root_id, path, depth) values ($1, $2, $2, $3, $3, $4, 1)`,
+        [tid, `dense-${t}`, root, `/${root}/${tid}/`],
+      );
+    }
+    for (let i = 0; i < dense.length; i++)
+      await user(dense[i]!, `dense${i}@example.org`, 'local', [], boot);
+    for (let i = 0; i < dense.length; i++)
+      for (let k = 0; k < 5; k++)
+        await c.query(
+          `insert into tenant_role_bindings (id, user_id, tenant_id, role, inherit, source, granted_by) values ($1, $2, $3, 'admin', false, 'grant', $4)`,
+          [id(), dense[i], tenantsOf[k], dense[(i + k + 1) % dense.length]],
+        );
+    await c.query(
+      `insert into tenant_role_bindings (id, user_id, tenant_id, role, inherit, source, granted_by) values ($1, $2, $3, 'auditor', false, 'grant', $4)`,
+      [id(), created, root, dense[0]],
+    );
     // mirror rows as 0036 attributed them
     await mirror(boot, 'admin', null);
     await mirror(admin, 'admin', boot);
@@ -213,12 +245,23 @@ describe.each(sqlTargets)('migration 0037 on existing data (%s)', (_kind, enable
     );
     await audit(boot, 'agent.created', agent, {});
     await audit(boot, 'agent.members.set', agent, { members: [{ userId: created, role: MAINT }] });
+    // a review that closed between two revisions of its agent
+    await c.query(
+      `insert into agent_draft_revisions (id, agent_id, tenant_id, seq, digest, source, author_id, author_kind, created_at) values ($1, $3, $4, 1, $5, 'x', $6, 'user', now() - interval '2 hours'), ($2, $3, $4, 2, $5, 'x', $6, 'user', now())`,
+      [rev1, rev2, agent, root, 'a'.repeat(64), boot],
+    );
+    await c.query(
+      `insert into agent_reviews (id, agent_id, tenant_id, opened_by, opened_revision_id, status, policy_snapshot, policy_digest, required_approvals, closed_at) values ($1, $2, $3, $4, $5, 'withdrawn', '{}'::jsonb, 'd', 1, now() - interval '1 hour')`,
+      [closedReview, agent, root, boot, rev1],
+    );
     epochBefore = await epochs();
     j.entries = JSON.parse(
       readFileSync(join(MIGRATIONS_FOLDER, 'meta/_journal.json'), 'utf8'),
     ).entries;
     writeFileSync(journalPath, JSON.stringify(j));
+    const started = Date.now();
     await c.migrate(dir);
+    migrateMs = Date.now() - started;
   }, 120_000);
   afterAll(async () => {
     await c.close();
@@ -317,6 +360,31 @@ describe.each(sqlTargets)('migration 0037 on existing data (%s)', (_kind, enable
     expect((await u(scripted)).creator_unknown).toBe(true);
     expect((await u(boot)).creator_unknown).toBe(false); // the bootstrap administrator
     expect((await u(idp)).creator_unknown).toBe(false); // identity-provider accounts have no local creator
+  });
+
+  it('draws the depth line at six hops, the same as the live walk', async () => {
+    const at = (role: string) =>
+      row('tenant_role_bindings', `user_id = $1 and role = '${role}' and source = 'grant'`, [
+        admin,
+      ]);
+    // ring[5]: ring[5] .. ring[0] and the bootstrap administrator are six hops: known
+    const six = await at('operator');
+    expect(six.grant_chain).toEqual(chain(...ring.slice(0, 6), boot));
+    // ring[6]: the bootstrap administrator would be the seventh hop: unknown
+    expect((await at('integrator')).grant_chain).toBeNull();
+  });
+
+  it('walks a dense graph in seconds and reaches everybody in it', async () => {
+    expect(migrateMs).toBeLessThan(30_000);
+    const r = await row('tenant_role_bindings', `user_id = $1 and role = 'auditor'`, [created]);
+    expect(r.grant_chain).toEqual(chain(...dense, boot));
+  });
+
+  it('ends the contributor window of a closed review at the revision that was the head then', async () => {
+    const [closed] = (
+      await c.query(`select closed_revision_id from agent_reviews where id = $1`, [closedReview])
+    ).rows as { closed_revision_id: string | null }[];
+    expect(closed!.closed_revision_id).toBe(rev1);
   });
 
   it('does not bump the authz epoch of any organisation', async () => {

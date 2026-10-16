@@ -277,6 +277,15 @@ of that node; another administrator makes it. The rules, all fail closed (#356):
   nothing. When S3 enforces approval and closes the review on publish, a review that is `published`
   is finished by itself. An agent with 25 withdrawn or rejected reviews nobody released cannot open
   another (`429 review_hold_limit`), so open, withdraw, repeat cannot pile up holds without bound.
+  Note that anyone with `agents:write` on an agent can fill that cap for that agent (an insider can
+  block new reviews of an agent they can already write to until an administrator releases the holds);
+  bulk release and a per-opener cap are follow-ups.
+- **The contributor window of a closed review is frozen.** A withdrawn or rejected review records the
+  head revision it closed at (`agent_reviews.closed_revision_id`; the audit fallback for unknown authors
+  ends at `closed_at` too), so people who edit the agent later are not contributors of the old, held
+  review and can loosen the policy or release the hold. A review whose head cannot be read at all (no
+  recorded closing revision and no draft revision) refuses every administrator; a **platform operator**
+  can release such a hold with `clear-hold` (the way out), and an open one is withdrawn first.
 - **A tenant move that widens the policy is a loosening.** Moving a node out from under the ancestors
   that set a policy (`policiesWidened`) runs the same check on the moved subtree, also as a dry run.
 - **Every agent with an unfinished review is checked**, once per agent (the earliest unfinished
@@ -407,8 +416,10 @@ sources.
   theirs). Repair an account with `creator_unknown`: recreate it, or, when the operator knows who made
   it, set `created_by` and `grant_chain` by SQL (`update users set creator_unknown = false, created_by =
   '<id>', grant_chain = array['<id>']::uuid[] where id = '<account>'`). Or set `allow` during the
-  transition. The migration walks the chain of every existing row (six hops; a link that is unknown or
-  a longer chain leaves the row unknown); it builds a temporary index on `audit_log` (a SHARE lock:
+  transition. The migration walks the chain of every existing row breadth first (six hops, the same line
+  as the live walk: a seventh hop, or a link that is unknown, leaves the row unknown). **Links that were
+  revoked, expired or deleted before the upgrade are not recoverable** by the backfill: it can only
+  follow what exists then, so rows laundered before the upgrade stay clean; it builds a temporary index on `audit_log` (a SHARE lock:
   audit appends wait) and needs roughly 3 seconds per million audit entries plus a pass over the
   binding tables, measured on a small test VM; plan a short maintenance window on large audit chains.
 - **S3 requires `OAX_ROLE_BINDINGS_READ=bindings`.** `assertNodeAuthority` returns before it takes the

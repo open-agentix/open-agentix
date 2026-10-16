@@ -8,6 +8,7 @@ import {
   tenantRoleBindings,
   users,
 } from '../src/db/schema.js';
+import { followGrantChain } from '../src/services/approver-facts.js';
 import {
   chainForGrant,
   creatorChainOf,
@@ -370,6 +371,28 @@ describe('finding 2: accounts that lose created_by', () => {
     await n.ctx.db.update(users).set({ creatorUnknown: true }).where(eq(users.id, uid['c']!));
     expect(await chainForGrant(n.ctx.db, uid['c']!, new Date())).toBeNull();
     await n.ctx.db.update(users).set({ creatorUnknown: false }).where(eq(users.id, uid['c']!));
+  });
+
+  it('follows a chain of six hops and calls a seventh unknown, the line migration 0037 draws too', async () => {
+    const ids = Array.from({ length: 9 }, () => randomUUID());
+    for (const [i, id] of ids.entries())
+      await n.ctx.db.insert(users).values({
+        id,
+        email: `depth${i}@chain.example.org`,
+        displayName: `depth${i}`,
+        source: 'local',
+        tenantId: orgA,
+        createdBy: i === 0 ? null : ids[i - 1]!,
+        grantChain: i === 0 ? null : [],
+      });
+    const walk = (k: number) =>
+      followGrantChain(n.ctx.db, [{ userId: ids[k]!, unknown: false }], new Date());
+    const six = await walk(6); // ids[6] .. ids[0]: the last one is the sixth hop
+    expect(six.unknown).toBe(false);
+    expect(six.users).toEqual([...ids.slice(0, 7)].sort());
+    expect((await walk(7)).unknown).toBe(true);
+    await n.ctx.db.delete(users).where(eq(users.createdBy, ids[0]!)); // clean up the chain
+    for (const id of [...ids].reverse()) await n.ctx.db.delete(users).where(eq(users.id, id));
   });
 
   it('storedChainOf reads the encoding: nobody, known, unknown', () => {
