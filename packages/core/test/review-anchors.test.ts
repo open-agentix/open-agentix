@@ -45,10 +45,12 @@ describe('review anchors', () => {
     expect(lineHash(`x${blanks}`)).toBe(lineHash('x'));
   });
 
-  it('tells long lines apart by their length and their start', () => {
+  it('hashes the whole line: a long line differs from another in its tail', () => {
     const a = 'a'.repeat(5000);
     expect(lineHash(a)).not.toBe(lineHash(`${a}a`));
-    expect(lineHash(a)).not.toBe(lineHash(`b${a.slice(1)}`));
+    expect(lineHash(a)).not.toBe(lineHash(`${a.slice(0, 4999)}b`));
     expect(lineHash(`${a}   `)).toBe(lineHash(a));
+    // lines up to 4,096 characters hash as they always did
+    expect(lineHash('x: 1')).toBe(lineHash('x: 1  '));
   });
 });

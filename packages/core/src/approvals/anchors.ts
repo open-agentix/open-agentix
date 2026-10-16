@@ -22,9 +22,6 @@ export function sourceLines(source: string): string[] {
   return source.split('\n');
 }
 
-/** Longest line text that is hashed; a longer line is hashed by its first part and its length. */
-export const MAX_HASHED_LINE_CHARS = 4096;
-
 /** Index after the last character that is not a blank, tab or carriage return (linear). */
 function trimmedEnd(line: string): number {
   let end = line.length;
@@ -38,17 +35,11 @@ function trimmedEnd(line: string): number {
 
 /**
  * SHA-256 of a line without trailing blanks, so reformatting the end of a line keeps the anchor.
- * Linear in the hashed part: a source line may be hundreds of thousands of characters long (a
- * regular expression such as `/[ \t\r]+$/` is quadratic on a long run of blanks), so the trim is a
- * loop and only the first {@link MAX_HASHED_LINE_CHARS} characters and the length are hashed.
+ * Linear: a source line may be hundreds of thousands of characters long, and a regular expression
+ * such as `/[ \t\r]+$/` is quadratic on a long run of blanks, so the trim is a loop.
  */
 export function lineHash(line: string): string {
-  const end = trimmedEnd(line);
-  const text =
-    end > MAX_HASHED_LINE_CHARS
-      ? `${line.slice(0, MAX_HASHED_LINE_CHARS)}\n${end}`
-      : line.slice(0, end);
-  return sha256Hex(text);
+  return sha256Hex(line.slice(0, trimmedEnd(line)));
 }
 
 /** The hash of line `line` (1-based) of `lines`, or `null` when the source has no such line. */
