@@ -94,6 +94,8 @@ const DENIED = [
   'GET /v1/tenants/:id/role-restrictions',
   'PUT /v1/tenants/:id/role-restrictions',
   'DELETE /v1/tenants/:id/role-restrictions',
+  // a move changes who inherits what in the whole subtree: tenant administrators only
+  'POST /v1/tenants/:id/move',
   // node-wide configuration and credentials
   'GET /v1/connections',
   'POST /v1/connections',
