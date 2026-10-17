@@ -153,6 +153,7 @@ with an error that names `agent-maintainer`, so update `OAX_OIDC_ROLE_MAPPING` a
 | `OAX_CONTROL_MAX_TOOL_CALLS_PER_MINUTE` | `30` | worker | Rate guardrail of the control agent (pause above). |
 | `OAX_DEFAULT_MAX_STEPS` | `50` | worker | Reserved: platform default when an agent sets no step budget. |
 | `OAX_DEFAULT_TIMEOUT_SECONDS` | `1800` | worker | Reserved: platform default timeout. |
+| `OAX_DEV_BUDGET_DEFAULT_USD` | `10` | api, worker | Monthly development budget (USD) of a node that has neither a monthly cap nor an explicit development budget. A node with a cap gets 10 % of it by default; an explicit budget is never above the cap. See [budgets](budgets.md#development-budget). |
 | `OAX_DEMO_MCP` | `false` | worker | Registers the built-in demo MCP servers (`cve-db`, `tickets`) for `in-memory` connections. Demo only. |
 | `OAX_WORKER_HTTP_PORT` | `9090` | worker | Port of the worker's probe/metrics server. |
 | `OAX_WORKER_HTTP_HOST` | `0.0.0.0` | worker | Listen address of that server. |

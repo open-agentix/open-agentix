@@ -193,6 +193,7 @@ export const MODEL_ERRORS = {
   control_budget_tenant: { status: 403, anthropicType: 'permission_error' },
   control_budget_use_case: { status: 403, anthropicType: 'permission_error' },
   control_budget_team: { status: 403, anthropicType: 'permission_error' },
+  control_budget_development: { status: 403, anthropicType: 'permission_error' },
   model_token_already_issued: { status: 409, anthropicType: null },
   model_request_too_large: { status: 413, anthropicType: 'request_too_large' },
   model_unpriced: { status: 422, anthropicType: 'invalid_request_error' },

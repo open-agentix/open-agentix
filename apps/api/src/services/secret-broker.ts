@@ -1,6 +1,8 @@
 import {
   OaxError,
   destinationsAllowed,
+  devRunSecretVerdict,
+  productionRunSecretVerdict,
   nameBlocked,
   parseSecretRef,
   canonicalSecretRef,
@@ -9,13 +11,15 @@ import {
   type AgentSpec,
   type SecretPin,
   type SecretResolutionCode,
+  type SecretUsage,
 } from '@openagentix/core';
 import type { McpServerConfig } from '@openagentix/mcp';
 import { eq } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
-import { agentVersions, secrets, tenants, type runs } from '../db/schema.js';
+import { agentDraftRevisions, agentVersions, secrets, tenants, type runs } from '../db/schema.js';
 import { platformSecretRefs } from './platform-secrets.js';
-import { stateOf, type SecretResolution } from './secret-resolution.js';
+import type { LifecyclePolicyService } from './lifecycle-policy.js';
+import { stateOf, type Resolved, type SecretResolution } from './secret-resolution.js';
 import type { SecretRow, SecretStore } from './secret-store.js';
 
 type RunRow = typeof runs.$inferSelect;
@@ -78,7 +82,9 @@ export function stepDestinations(
 
 /**
  * Issues scoped secrets to the steps of a run (ADR 0017 section 13.8), the run-time half of the
- * credential broker. A production run uses exactly the secret its version **pinned** at publish
+ * credential broker. A development run (a draft revision, ADR 0017 section 8) resolves its references
+ * live, for the user who started it, under the rules of `devRunSecretVerdict`. A production run uses
+ * exactly the secret its version **pinned** at publish
  * (owning node and secret id): there is no lookup by name here, so a secret created later at a nearer
  * node cannot take over, and a pinned secret that is revoked, expired, deleted, blocked or no longer
  * on the chain fails closed with a code (`secret_unavailable`, `secret_out_of_chain`, ...) and never
@@ -89,25 +95,119 @@ export class ScopedSecretBroker {
     private readonly ctx: AppContext,
     private readonly store: SecretStore,
     private readonly resolution: SecretResolution,
+    private readonly policy: Pick<LifecyclePolicyService, 'effectiveForTenant'>,
+    /**
+     * Whether the user who started a development run may still use their personal secrets: the
+     * account is active and still holds `agents:write` on the agent. Fail closed (`false`) on any error.
+     */
+    private readonly starterEntitled: (run: RunRow) => Promise<boolean>,
   ) {}
 
-  /** Checks every scoped reference of a step; throws {@link SecretDenied} at the first failure. */
+  /**
+   * Checks every scoped reference of a step; throws {@link SecretDenied} at the first failure. A run
+   * of a published version uses the secrets its version pinned; a development run (a draft revision)
+   * resolves live, for the user who started it.
+   */
   async prepare(
     run: RunRow,
     refs: readonly string[],
     step: { destinations: readonly string[] },
   ): Promise<PreparedSecret[]> {
     if (refs.length === 0) return [];
+    return run.stage === 'development'
+      ? this.prepareDevelopment(run, refs, step)
+      : this.prepareProduction(run, refs, step);
+  }
+
+  private async prepareProduction(
+    run: RunRow,
+    refs: readonly string[],
+    step: { destinations: readonly string[] },
+  ): Promise<PreparedSecret[]> {
     const pins = await this.pinsOf(run.agentVersionId);
     const chain = await this.resolution.chainOf(this.ctx.db, run.tenantId);
     const out: PreparedSecret[] = [];
     for (const ref of refs) {
       const secret = await this.pinned(pins.get(ref), ref);
+      const verdict = productionRunSecretVerdict({
+        scope: secret.scope as 'personal' | 'team' | 'tenant',
+        usage: secret.usage as SecretUsage,
+      });
+      if (verdict) throw new SecretDenied(verdict, ref);
       this.assertScope(run, chain, secret, ref);
       await this.assertUsable(run, secret, ref, step.destinations);
       out.push({ ref, secret });
     }
     return out;
+  }
+
+  /**
+   * A development run resolves its references now (nearest owner along the chain, personal ones against
+   * the user who started the run) and applies the development rules of `devRunSecretVerdict`. The
+   * policy is read at issuance, so tightening it takes effect for runs already going.
+   */
+  private async prepareDevelopment(
+    run: RunRow,
+    refs: readonly string[],
+    step: { destinations: readonly string[] },
+  ): Promise<PreparedSecret[]> {
+    // A development run acts as its starter: once they are disabled or lost `agents:write`, no secret
+    // of any scope is issued to it any more.
+    if (!(await this.starterEntitled(run)))
+      throw new SecretDenied('secret_owner_unavailable', refs[0]!);
+    const policy = await this.policy.effectiveForTenant(run.tenantId);
+    const resolved = await this.resolution.resolve(
+      this.ctx.db,
+      { tenantId: run.tenantId, teamId: run.teamId, starterUserId: run.startedBy },
+      refs,
+    );
+    const byRef = new Map(resolved.map((r) => [r.pin.ref, r]));
+    const chain = await this.resolution.chainOf(this.ctx.db, run.tenantId);
+    const out: PreparedSecret[] = [];
+    for (const ref of refs) {
+      const secret = this.resolvedSecret(byRef.get(ref), ref);
+      // Confused deputy: a draft is code its author wrote. Somebody who runs another person's revision
+      // does not hand it their personal credentials (they edit the draft first, which makes them its author).
+      if (secret.scope === 'personal' && !(await this.startedByAuthor(run)))
+        throw new SecretDenied('secret_scope_not_usable', ref);
+      const verdict = devRunSecretVerdict(
+        {
+          scope: secret.scope as 'personal' | 'team' | 'tenant',
+          scopeId: secret.scopeId,
+          tenantId: secret.tenantId,
+          usage: secret.usage as SecretUsage,
+        },
+        { agentNodeId: run.tenantId, starterUserId: run.startedBy, policy },
+      );
+      if (verdict) throw new SecretDenied(verdict, ref);
+      this.assertScope(run, chain, secret, ref);
+      await this.assertUsable(run, secret, ref, step.destinations);
+      out.push({ ref, secret });
+    }
+    return out;
+  }
+
+  /** Whether the user who started a development run wrote the revision it executes. */
+  private async startedByAuthor(run: RunRow): Promise<boolean> {
+    if (!run.agentRevisionId || !run.startedBy) return false;
+    const [rev] = await this.ctx.db
+      .select({ authorId: agentDraftRevisions.authorId, kind: agentDraftRevisions.authorKind })
+      .from(agentDraftRevisions)
+      .where(eq(agentDraftRevisions.id, run.agentRevisionId));
+    return rev?.kind === 'user' && rev.authorId === run.startedBy;
+  }
+
+  private resolvedSecret(r: Resolved | undefined, ref: string): SecretRow {
+    if (!r || r.pin.state !== 'resolved' || !r.secret) {
+      const code = r?.pin.state === 'unresolved' ? r.pin.code : 'secret_unavailable';
+      throw new SecretDenied(
+        code === 'secret_not_found' ? 'secret_not_found' : 'secret_unavailable',
+        ref,
+      );
+    }
+    if (stateOf(r.secret, this.ctx.now()) !== 'active')
+      throw new SecretDenied('secret_unavailable', ref);
+    return r.secret;
   }
 
   /** The plaintext of a prepared secret, for one issuance. */
@@ -138,7 +238,8 @@ export class ScopedSecretBroker {
     return this.store.issuedValues(runId);
   }
 
-  private async pinsOf(versionId: string): Promise<Map<string, SecretPin>> {
+  private async pinsOf(versionId: string | null): Promise<Map<string, SecretPin>> {
+    if (!versionId) return new Map();
     const [v] = await this.ctx.db
       .select({ pins: agentVersions.secretResolution })
       .from(agentVersions)
@@ -172,7 +273,9 @@ export class ScopedSecretBroker {
     secret: SecretRow,
     ref: string,
   ): void {
-    if (secret.scope === 'personal') throw new SecretDenied('secret_scope_not_usable', ref);
+    // A personal secret is decided by the stage verdicts before this point (production: never;
+    // development: only the starter's own); it is attached to no chain.
+    if (secret.scope === 'personal') return;
     if (secret.scope === 'team') {
       if (secret.tenantId !== run.tenantId || secret.scopeId !== run.teamId)
         throw new SecretDenied('secret_out_of_chain', ref);
@@ -193,8 +296,6 @@ export class ScopedSecretBroker {
     ref: string,
     destinations: readonly string[],
   ): Promise<void> {
-    // Every run of a published version is a production run (development runs do not exist yet).
-    if (secret.usage === 'development') throw new SecretDenied('secret_not_usable', ref);
     if (
       secret.allowedDestinations.length > 0 &&
       !destinationsAllowed(secret.allowedDestinations, destinations)

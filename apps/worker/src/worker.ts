@@ -282,6 +282,7 @@ export class Worker {
               runners: this.opts.isolation?.runners ?? {},
               workerId: this.id,
               ...(this.delivery ? { delivery: this.delivery } : {}),
+              stage: run.stage === 'development' ? 'development' : 'production',
               controlUrl: this.opts.isolation?.controlUrl ?? '',
               ...(this.opts.isolation?.controlUrls
                 ? { controlUrls: this.opts.isolation.controlUrls }

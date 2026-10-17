@@ -54,6 +54,7 @@ const SCOPED = [
   'GET /v1/agents/:id/members',
   'POST /v1/agents/:id/dry-run',
   'POST /v1/agents/:id/runs',
+  'POST /v1/agents/:id/dev-runs',
   // runs and approvals (through the agent of the run)
   'GET /v1/runs',
   'GET /v1/runs/:id',
@@ -163,6 +164,8 @@ const DENIED = [
   'POST /v1/audit/checkpoints',
   'PUT /v1/budgets/use-cases/:useCase',
   'DELETE /v1/budgets/use-cases/:useCase',
+  'PUT /v1/budgets/development',
+  'DELETE /v1/budgets/development',
   'POST /v1/plans/check',
   'POST /v1/plans/generate',
   'GET /v1/demo/scenarios',

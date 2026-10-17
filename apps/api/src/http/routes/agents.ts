@@ -29,6 +29,7 @@ import {
   Id,
   IdParams,
   LegacyReportSchema,
+  DevRunBody,
   ManualRunBody,
   MembersBody,
   PageQuery,
@@ -565,6 +566,27 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
         triggeredBy: `manual:${p.userId}`,
         ...(versionId ? { versionId } : {}),
       });
+      return reply.status(202).send(runDto(run));
+    },
+  );
+
+  app.post(
+    '/v1/agents/:id/dev-runs',
+    {
+      config: { access: 'agents:write' },
+      schema: {
+        tags: ['runs'],
+        summary: 'Start a development run of a draft revision',
+        description:
+          'Runs a draft revision (the head revision by default) with real tools and models, as the caller: personal secrets resolve for the caller only, the spend counts against the development budget of the node, and the run is labelled stage=development everywhere. Manual only: no webhook, mail, Kafka or cron trigger can start one. Refused with draft_runs_disabled when the lifecycle policy switches draft runs off, and with dev_run_limit above three active development runs per person.',
+        security: sec,
+        params: IdParams,
+        body: DevRunBody,
+        response: { 202: RunSchema },
+      },
+    },
+    async (req, reply) => {
+      const run = await services.devRuns.start(principalOf(req), req.params.id, req.body);
       return reply.status(202).send(runDto(run));
     },
   );

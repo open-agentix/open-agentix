@@ -99,6 +99,39 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Development runs of draft revisions and personal secrets (ADR 0017 S5, #248)**. `POST
+  /v1/agents/{id}/dev-runs` runs a draft revision (the head revision, or an older one by id) with real tools
+  and models **as the caller**: `stage: development` on the run, `agentRevisionId` instead of
+  `agentVersionId` (now nullable), `startedBy`, a definition frozen at admission, manual only (no
+  webhook, mail, Kafka or cron trigger can start one), at most three active per person
+  (`dev_run_limit`), and no pull request delivery. Needs `agents:write`; the lifecycle keys
+  `allowDraftRuns` (`off`: `draft_runs_disabled`), `allowPersonalSecretsInDevRuns` and
+  `allowProductionSecretsInDraftRuns` are now enforced. Secrets of a development run resolve live:
+  `personal:` secrets only for the user who started the run and only in development runs (a reviewer's or
+  another user's run finds its own, never the author's; published versions, schedules and events never get
+  one; `secret_owner_unavailable` when the starter is disabled or lost `agents:write`), the usage matrix
+  (`production` secrets are refused to drafts unless `allowDraftRuns: on` with the production flag,
+  `development` secrets only go to development runs), and a tenant secret of a **higher node** only if its
+  owner marked it `usage: development` (the draft has no review). A disabled account loses its personal
+  secrets and its development runs stop; an owner without `agents:write` (but with `secrets:read`) can still delete their own personal secret. Development
+  spend has its own budget: explicit (`PUT/DELETE /v1/budgets/development`) or 10 % of the node's monthly
+  cap, hard stop (`development_budget_exceeded`, `control_budget_development`), alerts under the scope
+  `development`, never counted against the production budgets; cost lines, the costs export
+  (`stage` column), `groupBy=stage`, run records and audit entries carry the stage. Migration
+  `0041_dev_runs`; down path `apps/api/drizzle/down/0041_dev_runs.down.sql` (deletes development runs).
+  Hardening from the security review of the PR: operator secrets, credentialed MCP connections
+  and OAuth tokens count as production credentials for a draft (refused unless `allowDraftRuns: on` with
+  `allowProductionSecretsInDraftRuns`); the explicit development budget never exceeds the node cap and a
+  node without cap gets `OAX_DEV_BUDGET_DEFAULT_USD`; policy and starter are re-checked when a worker
+  claims the run and at every model reservation, session and relayed call; development runs use the
+  default approver roles and their starter cannot approve them; personal secrets only for the author of
+  the revision that runs; development runs and their pending approvals are visible to their starter and administrators (and approvers). The CSV
+  export gets `stage` as its last column.
+  Left out: the `with-approval` path for personal secrets in published versions. See
+  [docs/agent-lifecycle.md](docs/agent-lifecycle.md#development-runs),
+  [docs/secrets.md](docs/secrets.md#development-runs-and-personal-secrets) and
+  [docs/budgets.md](docs/budgets.md#development-budget).
+
 - **AWP step conditions: export mapping, validator rules and skip reason (AWP-6, #260)**: the `agents.md`
   `when` condition is translated into the grammar of AEP-0001 (draft, not accepted; the pinned
   `v1alpha1` schema has no step `when`) instead of being copied: `steps.<id>.output.<path>` becomes

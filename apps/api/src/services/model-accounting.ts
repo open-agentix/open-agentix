@@ -15,6 +15,7 @@ import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
+import type { DevRunGate } from './dev-run-gate.js';
 import { BUDGET_LIMITS, BUDGET_SCOPES, closed } from '../metric-labels.js';
 import { recordStepMetric, type ProviderLabelResolver } from './step-metrics.js';
 import { writeStepRows, type LedgerExtras, type StepMetric } from './step-writer.js';
@@ -243,7 +244,15 @@ type Code =
   | 'control_budget_steps'
   | 'control_budget_tenant'
   | 'control_budget_use_case'
-  | 'control_budget_team';
+  | 'control_budget_team'
+  | 'control_budget_development';
+
+const CODE_OF_SCOPE = {
+  tenant: 'control_budget_tenant',
+  use_case: 'control_budget_use_case',
+  team: 'control_budget_team',
+  development: 'control_budget_development',
+} as const satisfies Record<string, Code>;
 
 interface Limit {
   code: Code;
@@ -251,7 +260,7 @@ interface Limit {
   /** What the limit applies to, for the refusal message. */
   label: string;
   /** Closed label values of `oax_budget_exhausted_total` (ADR 0015 S5). */
-  scope: 'run' | 'step' | 'team' | 'use_case' | 'tenant';
+  scope: 'run' | 'step' | 'team' | 'use_case' | 'tenant' | 'development';
   metricLimit: 'tokens' | 'usd' | 'steps';
   /** Spent plus active reservations. */
   used: number;
@@ -293,7 +302,27 @@ export class ModelAccountingService {
    * One transaction under a per-tenant advisory lock: concurrent reservations of a tenant queue up
    * behind each other, so the sum of settled and reserved cost of any scope never exceeds its limit.
    */
+  /** The checks of a development run (policy, starter); set by `createServices`. */
+  devGate: DevRunGate | undefined;
+
+  /** A development run stops getting model calls once its policy or its starter changes. */
+  private async assertDevRunActive(scope: AccountingScope, runId: string): Promise<void> {
+    if (!this.devGate) return;
+    const [run] = await this.ctx.db
+      .select({
+        stage: runs.stage,
+        startedBy: runs.startedBy,
+        tenantId: runs.tenantId,
+        teamId: runs.teamId,
+        agentId: runs.agentId,
+      })
+      .from(runs)
+      .where(and(eq(runs.id, runId), eq(runs.tenantId, scope.tenantId)));
+    if (run) await this.devGate.assertActive(run);
+  }
+
   async reserve(scope: AccountingScope, req: ReserveRequest): Promise<Reservation> {
+    await this.assertDevRunActive(scope, req.runId);
     if (!isCount(req.inputTokens) || !isCount(req.maxOutputTokens) || req.maxOutputTokens < 1) {
       throw new HttpError(400, 'model_request_invalid', 'token bounds must be positive integers');
     }
@@ -329,14 +358,16 @@ export class ModelAccountingService {
     try {
       const [run] = await this.ctx.db
         .select({
+          id: runs.id,
+          stage: runs.stage,
           teamId: runs.teamId,
-          versionId: runs.agentVersionId,
+          agentVersionId: runs.agentVersionId,
           agentId: runs.agentId,
         })
         .from(runs)
         .where(and(eq(runs.id, runId), eq(runs.tenantId, scope.tenantId)));
       if (!run) return undefined;
-      const { definition } = await this.agents.definitionOf(run.versionId);
+      const { definition } = await this.agents.definitionOfRun(run);
       const agent = definition.agents.find((a) => a.id === agentId);
       if (!agent) return undefined;
       return await hook(
@@ -355,6 +386,17 @@ export class ModelAccountingService {
     }
   }
 
+  /** The runs among the reservations that are development runs (their spend has its own budget). */
+  private async developmentRunIds(tx: Db, rows: readonly ReservationRow[]): Promise<Set<string>> {
+    const ids = [...new Set(rows.map((r) => r.runId))];
+    if (ids.length === 0) return new Set();
+    const found = await tx
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(inArray(runs.id, ids), eq(runs.stage, 'development')));
+    return new Set(found.map((r) => r.id));
+  }
+
   private async reserveLocked(
     tx: Db,
     scope: AccountingScope,
@@ -363,9 +405,11 @@ export class ModelAccountingService {
   ): Promise<Reservation> {
     const [run] = await tx
       .select({
+        id: runs.id,
+        stage: runs.stage,
         tenantId: runs.tenantId,
         teamId: runs.teamId,
-        versionId: runs.agentVersionId,
+        agentVersionId: runs.agentVersionId,
         status: runs.status,
         costMicros: runs.costMicros,
         tokensIn: runs.tokensIn,
@@ -378,7 +422,8 @@ export class ModelAccountingService {
     if (!ACTIVE_RUN_STATUSES.includes(run.status)) {
       throw new HttpError(409, 'invalid_state', 'run is not active');
     }
-    const { definition } = await this.agents.definitionOf(run.versionId);
+    // Read on the transaction: a second connection would wait for it (PGlite has one).
+    const { definition } = await this.agents.definitionOfRun(run, tx);
     const agent = definition.agents.find((a) => a.id === req.agentId);
     if (!agent) {
       throw new HttpError(
@@ -476,25 +521,26 @@ export class ModelAccountingService {
         blockAtLimit: true,
       });
     }
+    const developmentRuns = await this.developmentRunIds(tx, active);
     const monthly = await this.budgets.scopeUsages(tx, {
       tenantId: scope.tenantId,
       teamId: run.teamId,
       useCase,
+      stage: run.stage === 'development' ? 'development' : 'production',
     });
     for (const u of monthly) {
+      // Reservations of development runs count against the development budget only.
+      const production = active.filter((r) => !developmentRuns.has(r.runId));
       const rows =
-        u.scope === 'tenant'
-          ? active
-          : u.scope === 'use_case'
-            ? active.filter((r) => r.useCase === u.scopeKey)
-            : active.filter((r) => r.teamId === u.scopeKey);
-      limits.push({
-        code:
-          u.scope === 'tenant'
-            ? 'control_budget_tenant'
+        u.scope === 'development'
+          ? active.filter((r) => developmentRuns.has(r.runId))
+          : u.scope === 'tenant'
+            ? production
             : u.scope === 'use_case'
-              ? 'control_budget_use_case'
-              : 'control_budget_team',
+              ? production.filter((r) => r.useCase === u.scopeKey)
+              : production.filter((r) => r.teamId === u.scopeKey);
+      limits.push({
+        code: CODE_OF_SCOPE[u.scope],
         kind: 'cost',
         label: `${u.scope.replace('_', ' ')} "${u.key}" monthly budget`,
         scope: u.scope,

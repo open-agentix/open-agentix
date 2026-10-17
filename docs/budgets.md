@@ -57,7 +57,8 @@ reservation with the measured cost. Limits checked, all under one per-tenant loc
 | Run `maxCostUsd`, `maxTokens` | run counters plus active reservations of the run | `control_budget_cost`, `control_budget_tokens` |
 | Step (`agents[].budget`, merged with the pipeline budget) cost, tokens | recorded steps of that agent plus its active reservations | `control_budget_cost`, `control_budget_tokens` |
 | Step model calls (`maxSteps`) | recorded model calls of that agent plus active reservations | `control_budget_steps` |
-| Monthly tenant, use case, team | cost ledger of the month plus active reservations of the scope | `control_budget_tenant`, `control_budget_use_case`, `control_budget_team` |
+| Monthly tenant, use case, team | cost ledger of the month plus active reservations of the scope (development runs excluded, see below) | `control_budget_tenant`, `control_budget_use_case`, `control_budget_team` |
+| Monthly development budget of the node (runs of draft revisions only) | development lines of the ledger plus active reservations of development runs | `control_budget_development` |
 
 A reservation that lands exactly on a limit is granted; one micro-USD more is refused. A model
 without a price is refused (`model_unpriced`) whenever any cost limit applies; give self-hosted
@@ -75,6 +76,30 @@ of the run's connections). The overshoot described above therefore no longer app
 case does not fit. The output bound of a reserved call is the step's `maxTokensPerCall`, else 4096
 tokens, shrunk to what the tightest budget can pay (down to 256). The local CLI has no ledger and
 keeps the after-the-fact checks.
+
+## Development budget
+
+Runs of draft revisions (development runs, [`agent-lifecycle.md`](agent-lifecycle.md)) have a budget of
+their own (ADR 0017 section 8 and decision 9). Their cost lines carry `stage: development`
+(`GET /v1/costs/export` has a `stage` column, `GET /v1/costs/summary?groupBy=stage` splits the spend),
+and they are counted against **the development budget of the node only**: never against the tenant, use
+case or team budgets, and production spend never uses it up.
+
+- **Limit.** An explicit one (`PUT /v1/budgets/development { "monthlyBudgetUsd": 5 }`, `DELETE` removes it;
+  `settings:write` on the node), else **10 % of the node's monthly cap** (`monthlyBudgetUsd` of the node),
+  else the platform default `OAX_DEV_BUDGET_DEFAULT_USD` (10). Development spend is outside the node's
+  cap, and the cap is the operator's, so an explicit budget is **never above the cap**: setting a higher one is
+  `422 dev_budget_above_cap`, and a cap lowered afterwards clamps it. Without a cap an administrator may
+  choose any explicit budget. A limit of `0` blocks development runs.
+- **Hard stop.** Like every budget: a new development run is `blocked_by_policy` with
+  `development_budget_exceeded` once the month's development spend reaches the limit, a running one is
+  stopped at its next check (`budget.blocked`), and a model call that does not fit is refused with
+  `control_budget_development`. Alerts at 50, 80 and 100 % are raised under the scope `development`.
+- **Overview.** `GET /v1/budgets` has `development` (`limitUsd`, `spentUsd`, `percentUsed`, `alerts` and
+  `source`: `explicit`, `default` or `platform`); a caller who reads costs through use cases only sees `null`.
+  The per-node overview of `scope=subtree` does not list development budgets yet.
+- Team and use case budgets do not apply to development runs, and a development budget is per node: the
+  descendants of a node have their own (default 10 % of their own cap).
 
 ## Alerts
 

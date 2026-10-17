@@ -39,6 +39,7 @@ import {
   agentVersionDeprecations,
   agentVersions,
   agents,
+  devRunDefinitions,
   teams,
 } from '../db/schema.js';
 import { demoId } from '../demo/ids.js';
@@ -1190,6 +1191,40 @@ export class AgentsService {
     );
     if (!v) throw notFound('agent version');
     return v;
+  }
+
+  /**
+   * The definition a run executes: the published version of a production run, or the definition
+   * frozen at admission for a development run (ADR 0017 section 8). Both are immutable, so both are
+   * cached. Every reader of a run's definition goes through here, so a development run can never be
+   * read as a version or the other way round.
+   */
+  async definitionOfRun(
+    run: {
+      id: string;
+      stage: string;
+      agentVersionId: string | null;
+    },
+    db: Db = this.ctx.db,
+  ): Promise<{ definition: AgentDefinition }> {
+    if (run.stage !== 'development') {
+      if (!run.agentVersionId) throw notFound('agent version');
+      return this.definitionOf(run.agentVersionId);
+    }
+    const frozen = await cached(
+      this.ctx.cache,
+      `dev-run-definition:${run.id}`,
+      IMMUTABLE_TTL,
+      async () => {
+        const [row] = await db
+          .select({ definition: devRunDefinitions.definition })
+          .from(devRunDefinitions)
+          .where(eq(devRunDefinitions.runId, run.id));
+        return row ? { definition: row.definition as AgentDefinition } : null;
+      },
+    );
+    if (!frozen) throw notFound('run definition');
+    return frozen;
   }
 
   async latestVersionId(

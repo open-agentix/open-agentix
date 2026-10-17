@@ -3,7 +3,9 @@ import {
   ControlAgent,
   DEFAULT_CONTROL_LIMITS,
   crossedThresholds,
+  DEFAULT_DEV_BUDGET_SHARE,
   describeBudget,
+  developmentBudget,
   evaluateBudgets,
   newRunMetrics,
   percentUsed,
@@ -64,5 +66,48 @@ describe('budgets', () => {
     expect(d.reasons[0]?.rule).toBe('budget_use_case');
     recordBudgetBreaches(m, []);
     expect(agent.evaluate(m, 1).action).toBe('continue');
+  });
+});
+
+describe('development budget (ADR 0017 decision 9)', () => {
+  const DEFAULT = 10_000_000;
+
+  it('is 10 % of the monthly cap of the node until an administrator sets one', () => {
+    expect(DEFAULT_DEV_BUDGET_SHARE).toBe(0.1);
+    expect(developmentBudget(null, 100_000_000, DEFAULT)).toEqual({
+      limitMicros: 10_000_000,
+      source: 'default',
+    });
+  });
+
+  it('prefers the explicit budget but never lets it exceed the cap', () => {
+    expect(developmentBudget(2_000_000, 100_000_000, DEFAULT)).toEqual({
+      limitMicros: 2_000_000,
+      source: 'explicit',
+    });
+    expect(developmentBudget(0, 100_000_000, DEFAULT).limitMicros).toBe(0);
+    expect(developmentBudget(500_000_000, 100_000_000, DEFAULT)).toEqual({
+      limitMicros: 100_000_000,
+      source: 'explicit',
+    });
+  });
+
+  it('uses the platform default for a node without a cap and without an explicit budget', () => {
+    expect(developmentBudget(null, null, DEFAULT)).toEqual({
+      limitMicros: DEFAULT,
+      source: 'platform',
+    });
+    expect(developmentBudget(7, null, DEFAULT)).toEqual({ limitMicros: 7, source: 'explicit' });
+  });
+
+  it('rounds the default down and stops at the limit like every other budget', () => {
+    expect(developmentBudget(null, 15, DEFAULT).limitMicros).toBe(1);
+    const v = evaluateBudgets([
+      { scope: 'development', key: 'acme', limitMicros: 1_000_000, spentMicros: 1_000_000 },
+    ]);
+    expect(v.blocked).toBe(true);
+    expect(v.breaches[0]?.message).toBe(
+      'development "acme" reached its monthly budget (1.00 of 1.00 USD)',
+    );
   });
 });

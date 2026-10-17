@@ -1,7 +1,7 @@
 # Agent lifecycle: revisions, reviews and approval records
 
 Design: [ADR 0017](adr/0017-agent-lifecycle-governance.md), slices S1 (#244) and S2 (#245).
-**Status: enforced (slices S1, S2 and S3).** Drafts get revisions, reviews can be opened and decided,
+**Status: enforced (slices S1, S2, S3 and S5).** Drafts get revisions, reviews can be opened and decided,
 approval records bind a decision to exact content, the tenant policy exists, the console has a Review
 tab, and **publishing is refused wherever the policy requires approval and the review is not approved
 by eligible, independent approvers** (S3, #246). Versions can be deprecated, and deprecating the latest
@@ -23,6 +23,7 @@ via Git are later slices.
 | Review tab, status badges, decision bar, inbox page | console: agent page, tab "Review"; `/reviews` |
 | Publish under approval (the gate) | `POST /v1/agents/{id}/publish` with `reviewId` and `expectedDigest` |
 | Version deprecation and rollback | `POST /v1/agents/{id}/versions/{version}/deprecate` |
+| Development run of a draft revision | `POST /v1/agents/{id}/dev-runs`, see "Development runs" |
 | Rule module (A1 to A8, A10) | `packages/core/src/approvals/rules.ts` |
 | Policy resolver | `packages/core/src/tenancy/lifecycle-policy.ts` |
 
@@ -368,8 +369,10 @@ are audited as `tenant.lifecycle_policy_changed` (changed keys with old and new 
 There is no `breakGlass`, no `breakGlassRatifyHours` and no `approverBindingMinAgeHours`: sending one
 is `400`. Of these keys, S1 consumes `requireApprovalForPublish`, `productionUseCases`, `minApprovals`,
 `allowedApproverRoles`, `approverScope`, `approvalExpiryHours`, `allowTokenApprovals` and
-`approverIdentitySources`; the others are stored, narrowed and digested now and used by the later
-slices. The installation defaults are the `OAX_LIFECYCLE_*` variables in
+`approverIdentitySources`; S5 consumes `allowDraftRuns`, `allowPersonalSecretsInDevRuns` and
+`allowProductionSecretsInDraftRuns` (see "Development runs"); the others are stored, narrowed and
+digested now and used by the later slices (`allowPersonalSecretsInPublishedAgents` only has the value
+`never` in effect, see [`secrets.md`](secrets.md)). The installation defaults are the `OAX_LIFECYCLE_*` variables in
 [configuration.md](configuration.md#agent-lifecycle-policy).
 
 ## Publish: the approval gate
@@ -474,11 +477,57 @@ be published again under its number (`409 version_deprecated`).
 `agent.publish.refused` (code, review; rate-limited), `agent.version.deprecated` (version, `rollbackTo`),
 `tenant.lifecycle_policy_changed`. Names, ids and digests only: never comment text, never sources.
 
+## Development runs
+
+A **development run** runs a draft *revision* (the head revision, or an older one by id) with real tools
+and models, as the person who starts it (ADR 0017 section 8, slice S5).
+
+```
+POST /v1/agents/{id}/dev-runs   { "revisionId": "<optional>", "data": { ... } }   ->  202 run
+```
+
+| Aspect | Development run | Run of a published version |
+| --- | --- | --- |
+| What runs | a revision; `agentRevisionId` on the run, `agentVersionId` is `null`, `stage: development` | a version, `stage: production` |
+| Who may start | `agents:write` on the agent (checked again at every secret issuance: a starter who is disabled or lost the role gets nothing more) | `runs:execute` |
+| Triggers | the endpoint above only, so **never** a webhook, mail, Kafka or cron trigger | all triggers |
+| Identity | `startedBy` is the caller; `triggeredBy` is `dev:<user id>`; personal secrets resolve for this user | none |
+| Definition | frozen at admission (`dev_run_definitions`): the profiles are expanded then, a later save or catalog change does not widen a run that is going | the version |
+| Secrets | resolved live, see [`secrets.md`](secrets.md) | pinned at publish |
+| Budget | the development budget of the node, [`budgets.md`](budgets.md) | the normal budgets |
+| Approvals | the approver roles are the default (`operator`, `admin`), not the draft's `approvals.approverRoles`; the person who started the run cannot approve its tool calls (`403 self_approval`) | as published |
+| Visible to | the starter and node administrators (`settings:write`) | everybody with `runs:read` |
+| Side effects | no pull request delivery (`pull_request_not_in_development`); tools are real and go through the policy and approval gates as usual | as published |
+| Records | `run.queued`, `credential.issued`, `secret.access_denied` and `run.completed` carry `stage: development`; the run, the cost lines and the export say `development` | `production` |
+
+Policy (`allowDraftRuns`, narrowed down the tree like every key): `off` refuses with `403
+draft_runs_disabled`; `development-credentials` (default) lets the run use secrets of usage `development`
+or `any` and the starter's personal secrets; `on` with `allowProductionSecretsInDraftRuns` also lets it
+use secrets of usage `production`. `allowPersonalSecretsInDevRuns: false` takes the personal secrets
+away. The policy is read at every issuance, so tightening it affects runs that already started.
+
+The policy is read when a worker claims the run, at every model reservation, node session, credential
+issuance and relayed MCP call, not only at admission. A run that uses operator secrets or credentialed MCP
+connections is refused (`400 production_credentials_in_draft`) unless the policy lets drafts use production
+credentials, see [`secrets.md`](secrets.md). Runs that execute in the worker process (not in a run node) are checked at claim and at every model
+reservation, so a tightened policy stops them at their next model call; a run node is also checked at
+every session, credential issuance and relayed call. Changing a person's global roles to ones without
+`agents:write` cancels their queued development runs and asks the running ones to stop.
+
+Limits: a person can have at most three development runs queued or running (`429 dev_run_limit`); a
+disabled agent refuses them (`409 agent_disabled`); the draft is validated, its runner checked and its
+profiles expanded exactly as at publish (`400` otherwise). A **reviewer** who wants to run somebody
+else's draft starts a run of their own: it runs the same revision with *their* credentials, never the
+author's. When an account is disabled, its personal secrets are deleted and its queued development runs
+are cancelled, running ones are asked to stop.
+
 ## Limits of this slice
 
 - Agent rules are S8; notifications are S13. Secret scopes, the encrypted store and the concrete secret
-  resolution are S4 ([`secrets.md`](secrets.md)); development runs and personal secrets in published agents
-  are not part of it.
+  resolution are S4 ([`secrets.md`](secrets.md)); development runs and personal secrets in development runs
+  are S5 (above). The `with-approval` path for personal secrets in published agents is not part of S5 (a
+  follow-up issue lists it).
+- Development runs are visible to their starter and node administrators only; pending approvals of a development run (they show the tool-call arguments) are listed only to its starter, to holders of `runs:approve` and to `settings:write` holders. Audit entries, approval counts and deep-link lookups are not filtered by that rule yet (#376). Losing `agents:write` through a team or agent binding (not the global roles) does not cancel queued runs; the claim gate refuses them when a worker picks them up.
 - The connection catalog behind the expansion digest is read just before the locks are taken (a
   connection change is not serialised with publish): a change after that read and before the commit is not
   seen by this publish. **That includes revocations and narrowings**: a connection or tool grant removed,

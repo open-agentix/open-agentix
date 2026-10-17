@@ -15,7 +15,7 @@ export const TOOL_RESULTS = set('ok', 'error', 'not_executed');
 export const APPROVAL_OUTCOMES = set('approved', 'rejected', 'timeout', 'cancelled');
 export const TOKEN_DIRECTIONS = set('input', 'output', 'cache_read', 'cache_write');
 export const TOKEN_VIA = set('in-process', 'proxy');
-export const BUDGET_SCOPES = set('run', 'step', 'team', 'use_case', 'tenant');
+export const BUDGET_SCOPES = set('run', 'step', 'team', 'use_case', 'tenant', 'development');
 export const BUDGET_LIMITS = set('tokens', 'usd', 'steps', 'tool_calls', 'timeout');
 export const GUARD_SOURCES = set('input', 'tool_result', 'tool_error');
 export const GUARD_CLASSES = set('secret', 'invisible');
@@ -85,7 +85,9 @@ export function closed(allowed: ReadonlySet<string>, value: unknown, fallback = 
  */
 export function triggerLabel(triggeredBy: string): string {
   const head = triggeredBy.split(':')[0] ?? '';
-  return closed(TRIGGER_KINDS, head === 'demo-scenario' ? 'demo' : head);
+  // A development run is started by hand: it is counted with the manual runs.
+  const family = head === 'demo-scenario' ? 'demo' : head === 'dev' ? 'manual' : head;
+  return closed(TRIGGER_KINDS, family);
 }
 
 /** Provider label for a cost or token line: the closed family set, never an instance name. */
@@ -115,4 +117,5 @@ export const BUDGET_RULES: Readonly<Record<string, readonly [string, string]>> =
   budget_tenant: ['tenant', 'usd'],
   budget_team: ['team', 'usd'],
   budget_use_case: ['use_case', 'usd'],
+  budget_development: ['development', 'usd'],
 };

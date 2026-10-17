@@ -277,6 +277,9 @@ export const run: Run = {
   agentId: ids.agent,
   agentName: 'ticket-updater',
   agentVersionId: ids.version,
+  agentRevisionId: null,
+  stage: 'production',
+  startedBy: null,
   teamId: ids.team,
   eventId: ids.event,
   status: 'awaiting_approval',
@@ -534,6 +537,7 @@ export const budgets: BudgetOverview = {
     { scope: 'use_case', key: 'ops', limitUsd: 5, spentUsd: 1, percentUsed: 20, alerts: [] },
   ],
   teams: [],
+  development: null,
 };
 
 // ---- tenant tree (GET /v1/tenants/tree) ------------------------------------------------------

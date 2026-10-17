@@ -506,7 +506,7 @@ describe('runs API', () => {
     expect(csv.headers['content-type']).toContain('text/csv');
     const [header, first] = csv.body.split('\r\n');
     expect(header).toBe(
-      'id,createdAt,month,tenantId,teamId,agentId,agentName,useCase,runId,stepSeq,provider,model,tokensIn,tokensOut,costMicros,costUsd',
+      'id,createdAt,month,tenantId,teamId,agentId,agentName,useCase,runId,stepSeq,provider,model,tokensIn,tokensOut,costMicros,costUsd,stage',
     );
     expect(first).toContain('cve-triage,vulnerability-management');
     const json = (await n.req({ method: 'GET', url: '/v1/costs/export?format=json' })).json();

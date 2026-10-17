@@ -384,7 +384,16 @@ export const RunSchema = z.object({
   id: Id,
   agentId: Id,
   agentName: z.string().nullable(),
-  agentVersionId: Id,
+  agentVersionId: Id.nullable().describe(
+    'the published version a production run executes; null for a development run',
+  ),
+  agentRevisionId: Id.nullable().describe(
+    'the draft revision a development run executes; null for a production run',
+  ),
+  stage: z
+    .enum(['production', 'development'])
+    .describe('development: a run of a draft revision, started by a person (ADR 0017 section 8)'),
+  startedBy: Id.nullable().describe('the user a development run acts as; null for production runs'),
   teamId: Id.nullable(),
   eventId: Id.nullable(),
   status: RunStatusSchema,
@@ -443,6 +452,13 @@ export const RunStatsSchema = z.object({
   costUsd: z.number(),
   avgDurationMs: z.number().nullable(),
 });
+export const DevRunBody = z.object({
+  revisionId: Id.optional().describe('the draft revision to run; the head revision when omitted'),
+  data: Json.optional().describe(
+    'Event payload (wrapped into a manual CloudEvent) or a full CloudEvent',
+  ),
+});
+
 export const ManualRunBody = z.object({
   data: Json.describe('Event payload (wrapped into a manual CloudEvent) or a full CloudEvent'),
   version: z.string().optional(),
@@ -919,7 +935,7 @@ export const MonthBound = z
 
 export const CostQuery = SubtreeQuery.extend({
   groupBy: z
-    .enum(['run', 'agent', 'team', 'tenant', 'use_case', 'month', 'provider', 'model'])
+    .enum(['run', 'agent', 'team', 'tenant', 'use_case', 'month', 'provider', 'model', 'stage'])
     .default('agent'),
   from: MonthBound.optional().describe(
     'start of the period, inclusive: YYYY-MM-DD or ISO 8601 timestamp, rounded down to the first day of its month (UTC)',
@@ -1679,11 +1695,22 @@ export const BudgetLineSchema = z.object({
   percentUsed: z.number().nullable(),
   alerts: z.array(z.number()).describe('alert thresholds (50, 80, 100) raised this month'),
 });
+export const DevelopmentBudgetSchema = BudgetLineSchema.extend({
+  scope: z.literal('development'),
+  source: z
+    .enum(['explicit', 'default', 'platform'])
+    .describe(
+      'explicit: set by an administrator; default: 10 % of the monthly cap of the node; platform: the node has neither a cap nor an explicit budget, so the platform default (OAX_DEV_BUDGET_DEFAULT_USD) applies',
+    ),
+});
 export const BudgetOverviewSchema = z.object({
   month: z.string().describe('first day of the current month'),
   tenant: BudgetLineSchema,
   useCases: z.array(BudgetLineSchema),
   teams: z.array(BudgetLineSchema),
+  development: DevelopmentBudgetSchema.nullable().describe(
+    'the development budget of the node (runs of draft revisions, ADR 0017 section 8); null for a caller who reads costs through use cases only',
+  ),
   nodes: z
     .array(
       z.object({
@@ -1706,11 +1733,12 @@ export const BudgetOverviewSchema = z.object({
 export const BudgetQuery = SubtreePageQuery;
 export const UseCaseParams = z.object({ useCase: z.string().min(1).max(200) });
 export const UseCaseBudgetBody = z.object({ monthlyBudgetUsd: z.number().min(0).max(1e9) });
+export const DevelopmentBudgetBody = UseCaseBudgetBody;
 export const BudgetVerdictSchema = z.object({
   blocked: z.boolean(),
   breaches: z.array(
     z.object({
-      scope: z.enum(['tenant', 'use_case', 'team']),
+      scope: z.enum(['tenant', 'use_case', 'team', 'development']),
       key: z.string(),
       limitMicros: z.number(),
       spentMicros: z.number(),

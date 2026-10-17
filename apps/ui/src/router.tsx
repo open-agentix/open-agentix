@@ -234,7 +234,15 @@ const auditRoute = createRoute({
   component: lazyRouteComponent(() => import('./features/audit/AuditPage'), 'AuditPage'),
 });
 
-const COST_GROUPS: readonly CostGroupBy[] = ['agent', 'team', 'month', 'run', 'provider', 'model'];
+const COST_GROUPS: readonly CostGroupBy[] = [
+  'agent',
+  'team',
+  'month',
+  'run',
+  'provider',
+  'model',
+  'stage',
+];
 
 const costsRoute = createRoute({
   ...child('/costs'),

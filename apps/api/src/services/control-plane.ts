@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { OaxError } from '@openagentix/core';
+import type { OaxError, Role } from '@openagentix/core';
 import {
   evaluateToolCall,
   issueRunToken,
@@ -31,6 +31,7 @@ import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
 import type { CatalogService } from './catalog.js';
+import type { DevRunGate } from './dev-run-gate.js';
 import type { GuidelinesService } from './guidelines.js';
 import type { ModelAccountingService } from './model-accounting.js';
 import type { RunNodesService } from './run-nodes.js';
@@ -41,6 +42,9 @@ import { matchGrant, spanIdentity, storedParent } from './node-telemetry.js';
 import { tracingEnabled, withSpan } from '../telemetry.js';
 
 const ACTIVE = ['running', 'awaiting_approval'];
+/** Who may approve a tool call of a development run, whatever the draft says (the schema default). */
+const DEV_RUN_APPROVER_ROLES: Role[] = ['operator', 'admin'];
+
 /** Largest input or output a run node may attach to one step record. */
 const NODE_STEP_MAX_BYTES = 64 * 1024;
 /** Step kinds a run node may report. */
@@ -302,10 +306,18 @@ export class ControlPlaneService {
     return true;
   }
 
+  /** The checks of a development run (policy, starter, credentials); set by `createServices`. */
+  devGate: DevRunGate | undefined;
+
   async prepare(runId: string): Promise<PreparedRun> {
     const [run] = await this.ctx.db.select().from(runs).where(eq(runs.id, runId));
     if (!run) throw notFound('run');
-    const { definition } = await this.agents.definitionOf(run.agentVersionId);
+    const { definition } = await this.agents.definitionOfRun(run);
+    if (run.stage === 'development' && this.devGate) {
+      // A worker claims the run: the policy, the starter and the credentials are checked again.
+      await this.devGate.assertActive(run);
+      await this.devGate.assertNoProductionCredentials(definition, run);
+    }
     const [ev] = run.eventId
       ? await this.ctx.db
           .select({ payload: events.payload })
@@ -327,18 +339,28 @@ export class ControlPlaneService {
     };
   }
 
-  private async definitionForRun(
-    runId: string,
-  ): Promise<{ definition: AgentDefinition; teamId: string | null; tenantId: string }> {
+  private async definitionForRun(runId: string): Promise<{
+    definition: AgentDefinition;
+    teamId: string | null;
+    tenantId: string;
+    stage: string;
+  }> {
     const [run] = await this.ctx.db
-      .select({ v: runs.agentVersionId, t: runs.teamId, tenantId: runs.tenantId })
+      .select({
+        id: runs.id,
+        stage: runs.stage,
+        v: runs.agentVersionId,
+        t: runs.teamId,
+        tenantId: runs.tenantId,
+      })
       .from(runs)
       .where(eq(runs.id, runId));
     if (!run) throw notFound('run');
     return {
-      definition: (await this.agents.definitionOf(run.v)).definition,
+      definition: (await this.agents.definitionOfRun({ ...run, agentVersionId: run.v })).definition,
       teamId: run.t,
       tenantId: run.tenantId,
+      stage: run.stage,
     };
   }
 
@@ -603,7 +625,7 @@ export class ControlPlaneService {
     call: ToolCallRequest,
     reasons: unknown,
   ): Promise<string> {
-    const { definition, teamId, tenantId } = await this.definitionForRun(runId);
+    const { definition, teamId, tenantId, stage } = await this.definitionForRun(runId);
     const id = randomUUID();
     const now = this.ctx.now();
     const scrubbed = await this.nodes.scrub(runId, call.args);
@@ -618,7 +640,9 @@ export class ControlPlaneService {
       args: scrubbed,
       argsRedacted,
       reasons: (reasons ?? []) as object,
-      approverRoles: definition.approvals.approverRoles,
+      // A draft does not choose who approves its own run: development runs use the default roles.
+      approverRoles:
+        stage === 'development' ? DEV_RUN_APPROVER_ROLES : definition.approvals.approverRoles,
       status: 'pending',
       requestedAt: now,
       expiresAt: new Date(now.getTime() + definition.approvals.timeoutSeconds * 1000),
@@ -732,6 +756,7 @@ export class ControlPlaneService {
         createdAt: runs.createdAt,
         startedAt: runs.startedAt,
         triggeredBy: runs.triggeredBy,
+        stage: runs.stage,
       });
     await this.ctx.db
       .update(approvals)
@@ -752,7 +777,12 @@ export class ControlPlaneService {
       action: 'run.completed',
       target: runId,
       runId,
-      payload: { status: result.status, usage: result.usage, error: result.error ?? null },
+      payload: {
+        status: result.status,
+        stage: done?.stage ?? 'production',
+        usage: result.usage,
+        error: result.error ?? null,
+      },
       // The attempt span `invoke_workflow` documents this entry (payload.otel, oax.audit.seq).
       linkSpan: true,
     });

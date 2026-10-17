@@ -43,6 +43,7 @@ import type { Db } from '../db/client.js';
 import type { AuditService } from './audit.js';
 import { BindingReconciler } from './binding-reconciler.js';
 import { chainForGrant } from './grant-chain.js';
+import { offboardPersonalCredentials, stopDevelopmentRuns } from './personal-offboarding.js';
 import {
   currentAuthzEpoch,
   loadAuthzEpoch,
@@ -1152,6 +1153,16 @@ export class IdentityService {
         .set(set)
         .where(and(eq(users.id, id), eq(users.tenantId, actor.tenantId)))
         .returning();
+      if (rows.length > 0 && patch.disabled === true)
+        await offboardPersonalCredentials(
+          tx as unknown as Db,
+          this.audit,
+          actor,
+          id,
+          this.ctx.now(),
+        );
+      if (rows.length > 0 && patch.globalRoles !== undefined && !mayWriteAgents(patch.globalRoles))
+        await stopDevelopmentRuns(tx as unknown as Db, id, this.ctx.now(), 'role_lost');
       if (rows.length > 0 && patch.globalRoles !== undefined)
         await mirrorGlobalRoles(
           tx as unknown as Db,
@@ -1457,3 +1468,7 @@ function toTokenInfo(r: typeof apiTokens.$inferSelect): TokenInfo {
     createdAt: r.createdAt,
   };
 }
+
+/** Whether the global roles of a user include `agents:write` (the right to run a draft). */
+const mayWriteAgents = (roles: readonly Role[]): boolean =>
+  roles.some((r) => ROLE_PERMISSIONS[r].includes('agents:write'));

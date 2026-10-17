@@ -176,6 +176,8 @@ export const EnvSchema = z.object({
   OAX_CONTROL_MAX_TOOL_CALLS_PER_MINUTE: int(30),
   OAX_DEFAULT_MAX_STEPS: int(50),
   OAX_DEFAULT_TIMEOUT_SECONDS: int(1800),
+  /** Monthly development budget (USD) of a node that has neither a cap nor an explicit budget. */
+  OAX_DEV_BUDGET_DEFAULT_USD: z.coerce.number().min(0).max(1_000_000).default(10),
 
   OAX_WEBHOOK_TOLERANCE_SECONDS: int(300),
   OAX_WEBHOOK_MAX_BYTES: int(1_048_576),
@@ -483,6 +485,8 @@ export interface Config {
     maxToolCallsPerMinute: number;
     defaultMaxSteps: number;
     defaultTimeoutSeconds: number;
+    /** Development budget of a node without cap and without explicit budget, in micro-USD. */
+    devBudgetDefaultMicros: number;
   };
   webhook: { toleranceSeconds: number; maxBytes: number };
   worker: {
@@ -806,6 +810,7 @@ function buildConfig(
       maxToolCallsPerMinute: e.OAX_CONTROL_MAX_TOOL_CALLS_PER_MINUTE,
       defaultMaxSteps: e.OAX_DEFAULT_MAX_STEPS,
       defaultTimeoutSeconds: e.OAX_DEFAULT_TIMEOUT_SECONDS,
+      devBudgetDefaultMicros: Math.round(e.OAX_DEV_BUDGET_DEFAULT_USD * 1_000_000),
     },
     webhook: {
       toleranceSeconds: e.OAX_WEBHOOK_TOLERANCE_SECONDS,

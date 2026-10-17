@@ -623,6 +623,7 @@
     "noSteps": "Noch keine Schritte – der Run wartet auf einen Worker.",
     "details": "Details",
     "version": "Version",
+    "developmentRevision": "Entwurfsrevision (Entwicklungslauf)",
     "event": "Ereignis",
     "started": "Gestartet",
     "finished": "Beendet",
@@ -963,7 +964,8 @@
       "provider": "Provider",
       "run": "Run",
       "tenant": "Tenant",
-      "use_case": "Use Case"
+      "use_case": "Use Case",
+      "stage": "Phase"
     },
     "tableCaption": "Kosten nach {group}",
     "tokensIn": "Input-Tokens",

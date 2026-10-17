@@ -620,6 +620,7 @@
     "noSteps": "No steps yet – the run is waiting for a worker.",
     "details": "Details",
     "version": "Version",
+    "developmentRevision": "Draft revision (development run)",
     "event": "Event",
     "started": "Started",
     "finished": "Finished",
@@ -952,7 +953,8 @@
       "provider": "Provider",
       "run": "Run",
       "tenant": "Tenant",
-      "use_case": "Use case"
+      "use_case": "Use case",
+      "stage": "Stage"
     },
     "tableCaption": "Costs by {group}",
     "tokensIn": "Input tokens",

@@ -51,6 +51,11 @@ export const tenants = pgTable(
     depth: smallint('depth').notNull().default(0),
     monthlyBudgetMicros: micros('monthly_budget_micros'),
     /**
+     * Monthly budget of the development runs of this node (ADR 0017 decision 9). `null` = none set:
+     * 10 % of `monthly_budget_micros` applies, and no development limit without a cap either.
+     */
+    devMonthlyBudgetMicros: micros('dev_monthly_budget_micros'),
+    /**
      * Secret reference globs the credential broker may hand out for this tenant's runs (ADR 0008).
      * Empty = no secret at all (fail closed); the default tenant is migrated to `["*"]`.
      */
@@ -594,9 +599,16 @@ export const runs = pgTable(
     agentId: uuid('agent_id')
       .notNull()
       .references(() => agents.id),
-    agentVersionId: uuid('agent_version_id')
-      .notNull()
-      .references(() => agentVersions.id),
+    /** The published version a production run executes; `null` for a development run. */
+    agentVersionId: uuid('agent_version_id').references(() => agentVersions.id),
+    /** The draft revision a development run executes (ADR 0017 section 8); `null` for a production run. */
+    agentRevisionId: uuid('agent_revision_id').references(
+      (): AnyPgColumn => agentDraftRevisions.id,
+    ),
+    /** `production` (a published version) or `development` (a draft revision); immutable. */
+    stage: text('stage').notNull().default('production'),
+    /** The user who started a development run; the identity its personal secrets resolve against. */
+    startedBy: uuid('started_by').references(() => users.id),
     teamId: uuid('team_id'),
     eventId: uuid('event_id').references(() => events.id),
     status: text('status').notNull(),
@@ -637,6 +649,14 @@ export const runs = pgTable(
     index('runs_lease_idx')
       .on(t.leaseUntil)
       .where(sql`status in ('running', 'awaiting_approval')`),
+    index('runs_dev_started_by_idx')
+      .on(t.startedBy, t.status)
+      .where(sql`stage = 'development'`),
+    // A production run executes a version, a development run a revision and has a starter.
+    check(
+      'runs_stage_shape',
+      sql`(${t.stage} = 'production' and ${t.agentVersionId} is not null and ${t.agentRevisionId} is null) or (${t.stage} = 'development' and ${t.agentRevisionId} is not null and ${t.agentVersionId} is null and ${t.startedBy} is not null)`,
+    ),
     // Both ids or neither, in W3C shape and not all zero (ADR 0015 section 2).
     check(
       'runs_trace_ids_shape',
@@ -644,6 +664,19 @@ export const runs = pgTable(
     ),
   ],
 );
+
+/**
+ * The definition a development run executes, frozen at admission (draft source of the revision with
+ * the profiles expanded, like `agent_versions.definition`), so that a catalog change cannot widen the
+ * grants of a run that is already going. Insert-only; production runs have no row.
+ */
+export const devRunDefinitions = pgTable('dev_run_definitions', {
+  runId: uuid('run_id')
+    .primaryKey()
+    .references(() => runs.id),
+  definition: jsonb('definition').notNull(),
+  createdAt: created(),
+});
 
 export const runSteps = pgTable(
   'run_steps',
@@ -1294,10 +1327,14 @@ export const costLedger = pgTable(
     reservationId: uuid('reservation_id'),
     /** `in-process`, `proxy` or `harness-report`. */
     via: text('via').notNull().default('in-process'),
+    /** `production` or `development` (the stage of the run); development spend has its own budget. */
+    stage: text('stage').notNull().default('production'),
     createdAt: created(),
   },
   (t) => [
     check('cost_ledger_cost_nonneg', sql`${t.costMicros} >= 0`),
+    check('cost_ledger_stage_check', sql`${t.stage} in ('production', 'development')`),
+    index('cost_tenant_stage_month_idx').on(t.tenantId, t.stage, t.month),
     index('cost_team_month_idx').on(t.teamId, t.month),
     index('cost_agent_month_idx').on(t.agentId, t.month),
     index('cost_month_idx').on(t.month),

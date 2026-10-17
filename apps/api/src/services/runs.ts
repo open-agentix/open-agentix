@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   bindingPermissions,
+  hasPermission,
   hasPermissionIn,
   isTerminal,
   LEGACY_REMOVED_CODE,
@@ -15,7 +16,7 @@ import {
   type Principal,
   type RunStatus,
 } from '@openagentix/core';
-import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import {
@@ -69,6 +70,28 @@ export const agentDisabled = () =>
 export type RunRow = typeof runs.$inferSelect;
 export type StepRow = typeof runSteps.$inferSelect;
 export type ApprovalRow = typeof approvals.$inferSelect;
+
+/**
+ * A development run is visible to the person who started it and to node administrators
+ * (`settings:write`): what a personal credential let the run read is output of the run, and the
+ * other readers of the team's runs are not who it was run for (ADR 0017 section 13.5).
+ */
+export function mayReadDevelopmentRun(
+  principal: Principal,
+  run: { stage: string; startedBy: string | null },
+): boolean {
+  return (
+    run.stage !== 'development' ||
+    run.startedBy === principal.userId ||
+    hasPermission(principal, 'settings:write')
+  );
+}
+
+/** The row filter of {@link mayReadDevelopmentRun}; `undefined` for an administrator. */
+function developmentRunFilter(principal: Principal): SQL | undefined {
+  if (hasPermission(principal, 'settings:write')) return undefined;
+  return or(ne(runs.stage, 'development'), eq(runs.startedBy, principal.userId));
+}
 
 export function monthOf(d: Date): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`;
@@ -356,7 +379,12 @@ export class RunsService {
         : null;
     if (
       run.tenantId !== principal.tenantId ||
-      !hasPermissionIn(principal, permission, { teamId: run.teamId, agentId: run.agentId, useCase })
+      !hasPermissionIn(principal, permission, {
+        teamId: run.teamId,
+        agentId: run.agentId,
+        useCase,
+      }) ||
+      !mayReadDevelopmentRun(principal, run)
     ) {
       await this.audit.append({
         actor: principal.userId,
@@ -406,6 +434,7 @@ export class RunsService {
       .where(
         and(
           visibility,
+          developmentRunFilter(principal),
           filter.agentId ? eq(runs.agentId, filter.agentId) : undefined,
           filter.status ? eq(runs.status, filter.status) : undefined,
           filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
@@ -489,6 +518,7 @@ export class RunsService {
       .where(
         and(
           eq(runs.tenantId, principal.tenantId),
+          developmentRunFilter(principal),
           filter.agentId ? eq(runs.agentId, filter.agentId) : undefined,
           filter.teamId ? eq(runs.teamId, filter.teamId) : undefined,
           filter.from ? gte(runs.createdAt, filter.from) : undefined,
@@ -612,6 +642,7 @@ export class RunsService {
       .where(
         and(
           visibility,
+          this.developmentApprovalFilter(principal),
           eq(approvals.status, status),
           runId ? eq(approvals.runId, runId) : undefined,
           c
@@ -628,6 +659,23 @@ export class RunsService {
   }
 
   /** Like {@link visibility} for approvals, whose agent scope goes through the run. */
+  /**
+   * Approvals of a development run show the arguments of a tool call that may hold what a personal
+   * credential let the run read: only the starter and people who may decide approvals
+   * (`runs:approve`) or administer the node (`settings:write`) see them.
+   */
+  private developmentApprovalFilter(principal: Principal): SQL | undefined {
+    if (hasPermission(principal, 'settings:write') || hasPermission(principal, 'runs:approve'))
+      return undefined;
+    return inArray(
+      approvals.runId,
+      this.ctx.db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(or(ne(runs.stage, 'development'), eq(runs.startedBy, principal.userId))),
+    );
+  }
+
   private approvalVisibility(
     principal: Principal,
     subtree: ResolvedScope | undefined,
@@ -716,6 +764,18 @@ export class RunsService {
     );
     if (!roleOk)
       throw forbidden(`approval requires one of the roles: ${a.approverRoles.join(', ')}`);
+    // Nobody approves a tool call of their own development run: the draft is theirs to write, the
+    // approval is the second pair of eyes.
+    const [stage] = await this.ctx.db
+      .select({ stage: runs.stage, startedBy: runs.startedBy })
+      .from(runs)
+      .where(eq(runs.id, a.runId));
+    if (stage?.stage === 'development' && stage.startedBy === principal.userId)
+      throw new HttpError(
+        403,
+        'self_approval',
+        'the person who started a development run cannot approve its tool calls',
+      );
     if (a.status !== 'pending')
       throw new HttpError(409, 'invalid_state', `approval is already ${a.status}`);
     if (a.expiresAt.getTime() <= this.ctx.now().getTime())

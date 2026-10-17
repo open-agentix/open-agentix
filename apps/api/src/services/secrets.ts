@@ -87,10 +87,18 @@ export class SecretsService {
   }
 
   /** The row if the caller may manage it (it is owned by the acting node), else `404`/`403`. */
-  private async managed(tx: Db, p: Principal, id: string): Promise<SecretRow> {
+  private async managed(
+    tx: Db,
+    p: Principal,
+    id: string,
+    op: 'rotate' | 'remove' = 'rotate',
+  ): Promise<SecretRow> {
     const [row] = await tx.select().from(secrets).where(eq(secrets.id, id)).for('update');
     if (!row || row.tenantId !== p.tenantId) throw notFound('secret');
     if (row.scope === 'personal' && row.scopeId !== p.userId) throw notFound('secret');
+    // A person can always delete their own personal secret, also after they lost
+    // `agents:write`: that role is needed to create and use one, never to get rid of one.
+    if (row.scope === 'personal' && op === 'remove') return row;
     assertSecrets(p, 'write', row.scope as SecretScope, row.scope === 'team' ? row.scopeId : null);
     return row;
   }
@@ -383,7 +391,7 @@ export class SecretsService {
   async remove(p: Principal, id: string): Promise<void> {
     await this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
-      const row = await this.managed(tx, p, id);
+      const row = await this.managed(tx, p, id, 'remove');
       await tx.delete(secrets).where(eq(secrets.id, row.id));
       await this.auditWrite(
         tx,

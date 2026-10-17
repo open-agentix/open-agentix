@@ -7,6 +7,8 @@
 
 export const BUDGET_SCOPES = ['tenant', 'use_case', 'team'] as const;
 export type BudgetScope = (typeof BUDGET_SCOPES)[number];
+/** The scope of a usage line: a budget scope, or the development budget of a node (ADR 0017 section 8). */
+export type UsageScope = BudgetScope | 'development';
 
 /** Alert thresholds in percent of the monthly limit. 100 means "limit reached, hard stop". */
 export const ALERT_THRESHOLDS = [50, 80, 100] as const;
@@ -14,7 +16,7 @@ export type AlertThreshold = (typeof ALERT_THRESHOLDS)[number];
 
 /** One budget with what has been spent against it in the current month. */
 export interface BudgetUsage {
-  scope: BudgetScope;
+  scope: UsageScope;
   /** Use case label, team slug or tenant slug (for messages and audit payloads). */
   key: string;
   limitMicros: number;
@@ -37,8 +39,33 @@ export function percentUsed(u: Pick<BudgetUsage, 'limitMicros' | 'spentMicros'>)
   return u.limitMicros > 0 ? (u.spentMicros / u.limitMicros) * 100 : 0;
 }
 
-export function describeBudget(scope: BudgetScope): string {
+export function describeBudget(scope: UsageScope): string {
   return scope === 'use_case' ? 'use case' : scope;
+}
+
+/** Share of a node's monthly cap that development runs may spend until an admin sets a budget (ADR 0017 decision 9). */
+export const DEFAULT_DEV_BUDGET_SHARE = 0.1;
+
+export type DevBudgetSource = 'explicit' | 'default' | 'platform';
+
+/**
+ * The monthly budget of the development runs of a node. With a monthly cap on the node the budget is
+ * the explicit one an administrator set, never above the cap (development spend is outside the cap, so
+ * the budget may not be a way around it), else 10 % of the cap. Without a cap it is the explicit one,
+ * else the platform default (`OAX_DEV_BUDGET_DEFAULT_USD`): there is always a limit.
+ */
+export function developmentBudget(
+  explicitMicros: number | null,
+  nodeCapMicros: number | null,
+  platformDefaultMicros: number,
+): { limitMicros: number; source: DevBudgetSource } {
+  if (nodeCapMicros !== null) {
+    if (explicitMicros !== null)
+      return { limitMicros: Math.min(explicitMicros, nodeCapMicros), source: 'explicit' };
+    return { limitMicros: Math.floor(nodeCapMicros * DEFAULT_DEV_BUDGET_SHARE), source: 'default' };
+  }
+  if (explicitMicros !== null) return { limitMicros: explicitMicros, source: 'explicit' };
+  return { limitMicros: platformDefaultMicros, source: 'platform' };
 }
 
 /**
@@ -77,7 +104,7 @@ export const BUDGET_ALERT_EVENT_TYPE = 'io.openagentix.budget.alert';
 
 export interface BudgetAlertData {
   tenantId: string;
-  scope: BudgetScope;
+  scope: UsageScope;
   /** Use case or team slug; null for the tenant budget. */
   key: string | null;
   month: string;
