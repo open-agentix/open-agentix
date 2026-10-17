@@ -225,6 +225,13 @@
       "when": 1792700000006,
       "tag": "0037_stored_grant_chain",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792700000007,
+      "tag": "0038_agent_publish_gate",
+      "breakpoints": true
     }
   ]
 }
