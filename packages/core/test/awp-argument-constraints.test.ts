@@ -3,6 +3,7 @@ import {
   REGEX_INPUT_LIMIT,
   REGEX_WORK_BUDGET,
   MAX_PATTERN_CHARS,
+  isCachedLinear,
   checkPatternList,
   compileLinear,
   resetLinearCache,
@@ -1250,6 +1251,38 @@ describe('compile cost is bounded by source size', () => {
     const [r2, ms2] = timed(() => validateAgentSource(over));
     expect(r2.errors.map((e) => e.message).join()).toMatch(/together.*8192/);
     expect(ms2).toBeLessThan(200);
+  });
+
+  it('does not fill the compile cache while validating', () => {
+    resetLinearCache();
+    const p = slow(999, 120);
+    expect(checkRegexSource(p)).toBeNull();
+    expect(isCachedLinear(p)).toBe(false);
+    expect(compileLinear(p)).not.toBeNull();
+    expect(isCachedLinear(p)).toBe(true);
+  });
+
+  it('limits the characters of patterns in one AWP manifest too, not only their count', () => {
+    const deny = Array.from({ length: 40 }, (_, i) => slow(i, 250)); // 40 x 231 > 8192, count is fine
+    const m = manifestOf(
+      exportOf(
+        probe((o) => {
+          o.agents[0]!.tools = [
+            {
+              server: 'srv',
+              tool: 'do_it',
+              allowAdditionalArgs: true,
+              args: { k: { type: 'string', maxLength: 9, deny } },
+            },
+          ];
+        }),
+        { requiredExtensionsSupported: true },
+      ),
+    );
+    delete (m.metadata as Obj).requiredExtensions;
+    delete (m.metadata as Obj).integrity;
+    const r = validateManifestSource(JSON.stringify(m), { layout: 'document' })!;
+    expect(r.findings.map((f) => `${f.code} ${f.path}`)).toContain('args.limit /spec');
   });
 
   it('decides with 32 cold slow-compiling deny patterns in under 1 s', () => {
