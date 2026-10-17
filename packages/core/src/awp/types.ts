@@ -38,6 +38,7 @@ export type ExportFindingCode =
   | 'secret_not_representable'
   | 'pipeline_not_representable'
   | 'unknown_field'
+  | 'grant_widened'
   | 'not_canonicalizable';
 
 export interface ExportFinding {

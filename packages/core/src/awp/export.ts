@@ -4,6 +4,7 @@ import { exportAgent, type AgentExport } from './export-agent.js';
 import { exportBudget } from './export-budget.js';
 import { ExportContext, rejectUnknownKeys } from './export-context.js';
 import { exportApproval, exportSecrets, exportSteps, exportTriggers } from './export-workflow.js';
+import { verifyNoWidening } from './legacy-widening.js';
 import { awpManifestDigest } from './manifest-digest.js';
 import {
   AWP_API_VERSION,
@@ -158,6 +159,9 @@ export function exportAwpManifest(def: PublishedDefinition, options: ExportOptio
   });
   if (findings.length > 0) return refused();
   const manifest: JsonObject = { apiVersion: AWP_API_VERSION, kind: 'Workflow', metadata, spec };
+  // Safety net, independent of the mapping above: a conversion never grants more than the source.
+  const widened = verifyNoWidening(def, manifest);
+  if (widened.length > 0) return refused(widened);
   try {
     const digest = awpManifestDigest(manifest);
     metadata.integrity = { digest };
