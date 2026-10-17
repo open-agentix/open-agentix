@@ -117,7 +117,7 @@ describe('disable and enable', () => {
     expect(Date.parse(res.json().disabledAt)).not.toBeNaN();
     // List and detail agree, the status filter finds it, the other filters do not.
     const listed = (await get(alice, '/v1/agents')).items.find((a: { id: string }) => a.id === id);
-    const { draftSource: _d, ...detail } = await get(alice, `/v1/agents/${id}`);
+    const { draftSource: _d, deprecations: _dep, ...detail } = await get(alice, `/v1/agents/${id}`);
     expect(detail).toEqual(listed);
     const names = async (q: string) =>
       (await get(alice, `/v1/agents?status=${q}`)).items.map((a: { name: string }) => a.name);

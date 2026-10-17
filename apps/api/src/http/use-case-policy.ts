@@ -31,6 +31,8 @@ const SCOPED = [
   'GET /v1/agents',
   'POST /v1/agents',
   'POST /v1/agents/validate',
+  // AWP-3b: the report is filtered by the same visibility as the agent list (use cases included)
+  'GET /v1/agents/legacy-report',
   'GET /v1/agents/:id',
   'PUT /v1/agents/:id/draft',
   'POST /v1/agents/:id/publish',
