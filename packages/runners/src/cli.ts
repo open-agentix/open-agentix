@@ -4,8 +4,13 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   AWP_LIMITS,
+  LEGACY_CONVERT_COMMAND,
+  LEGACY_FORMAT_REMOVED_IN,
+  LEGACY_REMOVED_CODE,
   PolicyBundleSchema,
   PriceTableSchema,
+  legacyFormatPhase,
+  legacyRemovedMessage,
   manifestIssues,
   validateAgentSource,
   validateManifestSource,
@@ -26,6 +31,8 @@ export interface CliIo {
   /** Size in bytes, to refuse an oversized AWP manifest before reading it (optional). */
   fileSize?: (path: string) => Promise<number>;
   env: NodeJS.ProcessEnv;
+  /** Version used to pick the phase of the legacy format (tests of release N+1); default: this build. */
+  version?: string;
 }
 
 const USAGE = `oax ${CLI_VERSION} - run openagentix agents locally
@@ -34,7 +41,7 @@ Usage:
   oax run <agents.md> --event <event.json> [options]
   oax validate <agents.md | manifest.awp.yaml | manifest.awp.json>
   oax plan check|generate <plan.yaml> (see "oax plan --help")
-  oax awp export <agents.md> (see "oax awp --help")
+  oax awp export|convert <agents.md>, oax awp legacy-report <agents.md>... (see "oax awp --help")
   oax --version
 
 Options for "run":
@@ -51,6 +58,13 @@ Options for "run":
                        provider: name), binary OAX_OPENCODE_BIN, pin OAX_OPENCODE_SHA256
   --json               print steps and the result as JSON lines
 `;
+
+/** Front matter of the legacy file format. */
+const LEGACY_FILE = /^apiVersion:\s*["']?openagentix\.io\/v1alpha1/m;
+
+/** The one deprecation warning of a legacy file (`legacy_format`). */
+const legacyWarning = (): string =>
+  `warning legacy_format -: the file format openagentix.io/v1alpha1 is deprecated and is rejected from release ${LEGACY_FORMAT_REMOVED_IN}; convert it with "${LEGACY_CONVERT_COMMAND}" (docs/agents-md.md)`;
 
 function parseArgs(argv: string[]): {
   positional: string[];
@@ -89,7 +103,7 @@ function formatStep(s: StepInput): string {
 
 export async function runCli(argv: string[], io: CliIo): Promise<number> {
   const { positional, flags } = parseArgs(argv);
-  const [cmd, file, file2] = positional;
+  const [cmd, file, file2, ...more] = positional;
   if (flags.version) {
     io.out(CLI_VERSION);
     return 0;
@@ -139,14 +153,21 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
         );
         return awp.valid ? 0 : 1;
       }
+      // AWP-3b: the legacy format is deprecated (release N) and rejected from release N+1.
+      if (LEGACY_FILE.test(text) && legacyFormatPhase(io.version ?? CLI_VERSION) === 'removed') {
+        io.err(`error   ${LEGACY_REMOVED_CODE} apiVersion: ${legacyRemovedMessage()}`);
+        io.out('invalid');
+        return 1;
+      }
       const r = validateAgentSource(text);
+      if (LEGACY_FILE.test(text)) io.err(legacyWarning());
       for (const e of r.errors) io.err(`error   ${e.path}: ${e.message}`);
       for (const w of r.warnings) io.err(`warning ${w.path}: ${w.message}`);
       io.out(r.valid ? `valid: ${r.definition?.name}@${r.definition?.version}` : 'invalid');
       return r.valid ? 0 : 1;
     }
     if (cmd === 'plan') return await runPlanCommand(file, file2, flags, io);
-    if (cmd === 'awp') return await runAwpCommand(file, file2, flags, io);
+    if (cmd === 'awp') return await runAwpCommand(file, file2, flags, io, more);
     if (cmd !== 'run') {
       io.err(`unknown command "${cmd}"`);
       io.out(USAGE);
