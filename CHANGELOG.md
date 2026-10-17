@@ -99,6 +99,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **AWP step conditions: export mapping, validator rules and skip reason (AWP-6, #260)**: the `agents.md`
+  `when` condition is translated into the grammar of AEP-0001 (draft, not accepted; the pinned
+  `v1alpha1` schema has no step `when`) instead of being copied: `steps.<id>.output.<path>` becomes
+  `steps.<id>.outputs.result.<path>` and `event.data.<path>` becomes `inputs.event.<path>`. It is written as
+  `x-openagentix-when` (still refused until the pin offers `requiredExtensions`) and as the core field
+  `when` once `PINNED_AWP_FEATURES.stepWhen` is set; a condition that cannot be mapped is refused with
+  `condition_not_representable`, and a conversion that lost a condition fails the widening check. The
+  validator checks both fields with `when.syntax`, `when.limits`, `when.unknown-step`,
+  `when.not-a-dependency`, `when.undeclared-output` and the warning `when.undeclared-input`. The audit
+  entry `step.skipped` now carries `reason: "condition"` (still no values). Runtime semantics are unchanged;
+  the differences to the AEP are listed in `docs/awp.md`. openagentix is not conformant to any AWP profile.
+
 - **Transition of the legacy `openagentix.io/v1alpha1` format to AWP manifests (AWP-3b, #257)**: release N
   of the transition. Legacy files are still accepted on validate, publish and import, and every read
   now reports the deprecation `legacy_format` (`deprecations` in the API, a warning from `oax validate`,
