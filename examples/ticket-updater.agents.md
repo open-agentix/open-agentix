@@ -27,13 +27,13 @@ agents:
       - server: tickets
         tool: get_ticket
         args:
-          key: { type: string, required: true, pattern: "^SEC-\\d+$" }
+          key: { type: string, required: true, pattern: "^SEC-\\d+$", maxLength: 32 }
       - server: tickets
         tool: update_ticket
         approval: required
         maxCallsPerRun: 1
         args:
-          key: { type: string, required: true, pattern: "^SEC-\\d+$" }
+          key: { type: string, required: true, pattern: "^SEC-\\d+$", maxLength: 32 }
           status: { type: string, enum: [triaged, in-progress, done] }
           labels: { type: array, maxItems: 5 }
     simulation:

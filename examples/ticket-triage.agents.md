@@ -62,6 +62,7 @@ agents:
             type: string
             required: true
             pattern: "^CVE-\\d{4}-\\d{4,}$"
+            maxLength: 32
     simulation:
       responses:
         - toolCalls:
@@ -101,6 +102,7 @@ agents:
             type: string
             required: true
             pattern: "^SEC-\\d+$"
+            maxLength: 32
           comment:
             type: string
             required: true

@@ -79,7 +79,9 @@ describe('the x-openagentix-* namespace', () => {
           'x-openagentix-access': 'read-only',
         });
         Object.assign(toolPerm(m), {
-          'x-openagentix-args': { key: { type: 'string', required: true, pattern: '^A-\\d+$' } },
+          'x-openagentix-args': {
+            key: { type: 'string', required: true, pattern: '^A-\\d+$', maxLength: 16 },
+          },
           'x-openagentix-allowAdditionalArgs': false,
           'x-openagentix-maxCallsPerRun': 2,
           'x-openagentix-classification': 'internal',

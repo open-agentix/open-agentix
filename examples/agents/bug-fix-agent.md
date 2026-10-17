@@ -35,9 +35,9 @@ agents:
       - { server: workspace, tool: list_files, maxCallsPerRun: 20, args: { path: { type: string, maxLength: 300, deny: ["\\.\\.", "^[/~]", "\\\\"] }, depth: { type: integer, minimum: 1, maximum: 3 } } }
       - { server: workspace, tool: read_file, maxCallsPerRun: 40, args: { path: { type: string, required: true, maxLength: 300, deny: ["\\.\\.", "^[/~]", "\\\\"] }, offset: { type: integer, minimum: 0, maximum: 1000000 }, limit: { type: integer, minimum: 1, maximum: 5000 } } }
       - { server: workspace, tool: search, maxCallsPerRun: 20, args: { pattern: { type: string, required: true, minLength: 1, maxLength: 200 }, path: { type: string, maxLength: 300, deny: ["\\.\\.", "^[/~]", "\\\\"] }, literal: { type: boolean }, ignoreCase: { type: boolean } } }
-      - { server: workspace, tool: edit_file, maxCallsPerRun: 20, args: { path: { type: string, required: true, pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$", deny: ["\\.\\.", "^\\."] }, old: { type: string, required: true, minLength: 1, maxLength: 65536 }, new: { type: string, required: true, maxLength: 65536 } } }
-      - { server: workspace, tool: write_file, maxCallsPerRun: 10, args: { path: { type: string, required: true, pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$", deny: ["\\.\\.", "^\\."] }, content: { type: string, required: true, maxLength: 65536 } } }
-      - { server: workspace, tool: run_tests, maxCallsPerRun: 8, args: { file: { type: string, pattern: "^test/[a-z0-9-]+\\.test\\.js$", deny: ["\\.\\.", "^[.-]"] } } }
+      - { server: workspace, tool: edit_file, maxCallsPerRun: 20, args: { path: { type: string, required: true, pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$", maxLength: 220, deny: ["\\.\\.", "^\\."] }, old: { type: string, required: true, minLength: 1, maxLength: 65536 }, new: { type: string, required: true, maxLength: 65536 } } }
+      - { server: workspace, tool: write_file, maxCallsPerRun: 10, args: { path: { type: string, required: true, pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$", maxLength: 220, deny: ["\\.\\.", "^\\."] }, content: { type: string, required: true, maxLength: 65536 } } }
+      - { server: workspace, tool: run_tests, maxCallsPerRun: 8, args: { file: { type: string, pattern: "^test/[a-z0-9-]+\\.test\\.js$", maxLength: 120, deny: ["\\.\\.", "^[.-]"] } } }
       - { server: workspace, tool: diff, maxCallsPerRun: 5 }
 pipeline: [fix]
 ---
