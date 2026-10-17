@@ -125,6 +125,25 @@ export const ReviewSchema = z.object({
     .boolean()
     .describe('a revision of the window has no known author; the audit chain stands in for it'),
   approvals: z.array(ApprovalSchema),
+  secrets: z
+    .array(
+      z.object({
+        ref: z.string(),
+        state: z.enum(['legacy', 'resolved', 'unresolved']),
+        scope: z.string().nullable(),
+        ownerNode: z.object({ id: Id, slugPath: z.string() }).nullable(),
+        foreign: z
+          .boolean()
+          .describe(
+            'the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says',
+          ),
+        code: z.string().nullable(),
+      }),
+    )
+    .optional()
+    .describe(
+      'the secret references of the head revision and what each resolves to now; never a value',
+    ),
   you: z.object({
     eligible: z.boolean(),
     code: z.string().nullable(),

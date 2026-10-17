@@ -127,9 +127,17 @@ describe.each(sqlTargets)('migration 0040 (%s)', (_kind, enabled, open) => {
     expect(
       await failure(c.query(`update secrets set id = $2 where id = $1`, [id, randomUUID()])),
     ).toMatch(/immutable|foreign key/);
-    await c.query(`update secrets set description = 'ok', usage = 'production' where id = $1`, [
-      id,
-    ]);
+    // the policy columns are immutable as well
+    for (const [col, val] of [
+      ['usage', 'production'],
+      ['inherit', 'true'],
+      ['allow_override', 'true'],
+      ['allowed_destinations', '["x.example.org"]'],
+    ] as const)
+      expect(
+        await failure(c.query(`update secrets set ${col} = $2 where id = $1`, [id, val])),
+      ).toMatch(/immutable|check/);
+    await c.query(`update secrets set description = 'ok', expires_at = now() where id = $1`, [id]);
   });
 
   it('deletes the sealed values with their secret', async () => {

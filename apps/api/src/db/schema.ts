@@ -1014,6 +1014,33 @@ export const secretVersions = pgTable(
 );
 
 /**
+ * The scoped secret values a run's nodes were given (ADR 0017 section 13.8), sealed under the data key
+ * of the secret's owning node, so that the redaction of a run still covers a value after its secret
+ * was rotated, revoked or deleted. AAD = owner | run | session | secret | version. Rows are only read by
+ * the redaction of that run and are purged one day after the session expired. Never selected by a route.
+ */
+export const runSecretIssuances = pgTable(
+  'run_secret_issuances',
+  {
+    id: uuid('id').primaryKey(),
+    runId: uuid('run_id').notNull(),
+    sessionId: uuid('session_id').notNull(),
+    tenantId: uuid('tenant_id').notNull(),
+    secretId: uuid('secret_id').notNull(),
+    version: integer('version').notNull(),
+    ciphertext: text('ciphertext').notNull(),
+    dekVersion: integer('dek_version').notNull(),
+    createdAt: created(),
+    expiresAt: ts('expires_at').notNull(),
+  },
+  (t) => [
+    index('run_secret_issuances_run_idx').on(t.runId),
+    index('run_secret_issuances_expiry_idx').on(t.expiresAt),
+    index('run_secret_issuances_dek_idx').on(t.tenantId, t.dekVersion),
+  ],
+);
+
+/**
  * OAuth tokens of MCP connections (ADR 0016 section 7.5). The only stored credential values of the
  * platform, and they are ciphertext: `access_token_enc` / `refresh_token_enc` are AES-256-GCM
  * envelopes under the tenant data key `key_version`, bound to (tenant, connection, issuer,

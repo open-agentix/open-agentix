@@ -1,5 +1,5 @@
 {
-  "id": "67531150-0e97-4eb8-81b1-c2f232f6e882",
+  "id": "8096e1c1-8b9d-419e-bece-0b39321b3d1a",
   "prevId": "13ee8233-ee2b-4155-9737-b14b2299f73c",
   "version": "7",
   "dialect": "postgresql",
@@ -4693,6 +4693,132 @@
           "value": "\"run_node_sessions\".\"otel_session\" is null or coalesce(jsonb_typeof(\"run_node_sessions\".\"otel_session\") = 'object' and jsonb_typeof(\"run_node_sessions\".\"otel_session\"->'events') = 'array' and jsonb_array_length(case when jsonb_typeof(\"run_node_sessions\".\"otel_session\"->'events') = 'array' then \"run_node_sessions\".\"otel_session\"->'events' else '[]'::jsonb end) <= 1000 and jsonb_typeof(\"run_node_sessions\".\"otel_session\"->'dropped') = 'number', false)"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.run_secret_issuances": {
+      "name": "run_secret_issuances",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "secret_id": {
+          "name": "secret_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dek_version": {
+          "name": "dek_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "run_secret_issuances_run_idx": {
+          "name": "run_secret_issuances_run_idx",
+          "columns": [
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "run_secret_issuances_expiry_idx": {
+          "name": "run_secret_issuances_expiry_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "run_secret_issuances_dek_idx": {
+          "name": "run_secret_issuances_dek_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "dek_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.run_steps": {

@@ -1,9 +1,9 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { OaxError } from '@openagentix/core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, lt } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { secretVersions, type secrets } from '../db/schema.js';
+import { runSecretIssuances, secretVersions, type secrets } from '../db/schema.js';
 import type { KeyService } from '../mcp-oauth/key-service.js';
 
 export type SecretRow = typeof secrets.$inferSelect;
@@ -29,6 +29,22 @@ export function secretAad(identity: SecretIdentity, version: number): Buffer {
       identity.id,
       String(version),
     ]),
+    'utf8',
+  );
+}
+
+/** One day after a session expired its issued values are no longer needed for redaction. */
+const ISSUED_RETENTION_MS = 24 * 3_600_000;
+
+function issuedAad(
+  owner: string,
+  runId: string,
+  sessionId: string,
+  secretId: string,
+  version: number,
+) {
+  return Buffer.from(
+    JSON.stringify(['issued', owner, runId, sessionId, secretId, String(version)]),
     'utf8',
   );
 }
@@ -145,6 +161,59 @@ export class SecretStore {
       )
       .returning({ v: secretVersions.version });
     return updated.length > 0;
+  }
+
+  /**
+   * Remembers a value that was issued to a run, sealed under the owner's data key, so that the run's
+   * redaction keeps covering it after a rotation, revocation or deletion of the secret. Expired rows
+   * (a day after the session) are purged here.
+   */
+  async recordIssued(
+    db: Db,
+    issued: { runId: string; sessionId: string; expiresAt: Date; secret: SecretRow },
+    value: string,
+  ): Promise<void> {
+    const { runId, sessionId, secret } = issued;
+    const aad = issuedAad(secret.tenantId, runId, sessionId, secret.id, secret.currentVersion);
+    const sealed = await this.keys.sealTo([value], { tenantId: secret.tenantId, aad }, db);
+    const now = this.ctx.now();
+    await db
+      .delete(runSecretIssuances)
+      .where(lt(runSecretIssuances.expiresAt, new Date(now.getTime() - ISSUED_RETENTION_MS)));
+    await db.insert(runSecretIssuances).values({
+      id: randomUUID(),
+      runId,
+      sessionId,
+      tenantId: secret.tenantId,
+      secretId: secret.id,
+      version: secret.currentVersion,
+      ciphertext: sealed.ciphertexts[0]!,
+      dekVersion: sealed.keyVersion,
+      createdAt: now,
+      expiresAt: issued.expiresAt,
+    });
+  }
+
+  /** Every value issued to a run (best effort: a row whose key is gone is skipped). */
+  async issuedValues(runId: string): Promise<string[]> {
+    const rows = await this.ctx.db
+      .select()
+      .from(runSecretIssuances)
+      .where(eq(runSecretIssuances.runId, runId));
+    const out: string[] = [];
+    for (const r of rows) {
+      try {
+        out.push(
+          await this.keys.openFrom(r.dekVersion, r.ciphertext, {
+            tenantId: r.tenantId,
+            aad: issuedAad(r.tenantId, r.runId, r.sessionId, r.secretId, r.version),
+          }),
+        );
+      } catch {
+        // the owner's key was destroyed: the value is gone for good
+      }
+    }
+    return out;
   }
 
   /** Removes the values of a secret (revocation); the metadata row stays. */

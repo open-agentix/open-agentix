@@ -923,7 +923,12 @@ siblings or other organisations (ADR 0014 "never up, never sideways").
 - **Moves** (ADR 0013 section 9): after a node move, inherited resolutions are recomputed;
   published versions whose pinned secret is no longer on the chain fail closed until a new revision
   is approved; moves into another organisation map references with `secretRefMap` as today.
-- **Consequence**: a secret on a root is usable by every agent of the organisation after review.
+- **Consequence**: a secret on a root is usable by every agent of the organisation. Slice S4 makes the
+  review mandatory for it: a version that pins a tenant secret of another node is published only under an
+  approved review, whatever the lifecycle policy says (`approval_required_for_foreign_secret`), and the
+  review shows the owning node. `inherit` stays `true` by default (as decided); the threat (an author can
+  make a step exfiltrate a higher node's credential through output, a prompt or an allowed channel) is
+  documented in `docs/secrets.md`.
   The documentation recommends `allowedDestinations`, `usage`, `inherit: false` for narrow
   credentials and rules that require an owning-node approver for agents that reference a root
   secret.
@@ -934,7 +939,8 @@ siblings or other organisations (ADR 0014 "never up, never sideways").
   `admin` and `integrator` on their scope; `agent-developer` and `agent-maintainer` get
   `secrets:read`; personal secrets are managed only by their owner. `auditor` and `pentest` see
   metadata.
-- **No API returns a value**, not even to the creator or a platform admin. Values are accepted
+- **No API returns a value**, not even to the creator or a platform admin. `auditor` and `pentest` hold
+  `secrets:read` (metadata only). Values are accepted
   only on create and rotate (request body, never in query strings or logs), are at least 8
   characters long (the redaction minimum) and at most 64 KiB.
 - Using a secret means: the broker issues it to a step of an agent that may use it (13.1, 13.3) in a

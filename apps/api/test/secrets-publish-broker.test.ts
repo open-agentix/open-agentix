@@ -1,15 +1,17 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { StepCredentials } from '@openagentix/core';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   agentVersions,
   auditLog,
   runNodeSessions,
+  runSecretIssuances,
   runs,
   secrets,
   tenants,
 } from '../src/db/schema.js';
+import { RunNodesService } from '../src/services/run-nodes.js';
 import { RUN_TOKEN_SECRET, testNode, type TestNode } from './helpers.js';
 
 /**
@@ -216,6 +218,16 @@ const auditOf = async (action: string, runId?: string) =>
   (await n.ctx.db.select().from(auditLog).where(eq(auditLog.action, action)).orderBy(auditLog.seq))
     .filter((e) => !runId || e.runId === runId)
     .map((e) => e.payload as Json);
+
+/** Changes a policy column behind the service's back: the trigger forbids it unless disabled. */
+async function policyUpdate(id: string, set: Partial<typeof secrets.$inferInsert>) {
+  await n.ctx.db.execute(sql`alter table secrets disable trigger secrets_identity_immutable`);
+  try {
+    await n.ctx.db.update(secrets).set(set).where(eq(secrets.id, id));
+  } finally {
+    await n.ctx.db.execute(sql`alter table secrets enable trigger secrets_identity_immutable`);
+  }
+}
 
 beforeAll(async () => {
   n = await testNode(ENV);
@@ -483,7 +495,7 @@ describe('run time', () => {
     [
       'made node-only',
       'secret_out_of_chain',
-      (sid: string) => n.ctx.db.update(secrets).set({ inherit: false }).where(eq(secrets.id, sid)),
+      (sid: string) => policyUpdate(sid, { inherit: false }),
     ],
   ])('fails closed when the pinned secret is %s', async (label, code, change) => {
     const sid = await secret('sp-root', `fc-${label.replace(' ', '-')}`, value(label));
@@ -595,7 +607,7 @@ describe('run time', () => {
   it('refuses usage:development secrets that were pinned before the usage changed', async () => {
     const sid = await secret('sp-root', 'turns-dev', value('td'));
     const { a } = await published(['tenant:turns-dev']);
-    await n.ctx.db.update(secrets).set({ usage: 'development' }).where(eq(secrets.id, sid));
+    await policyUpdate(sid, { usage: 'development' });
     const { res } = await issue(a);
     expect(res.statusCode).toBe(403);
     expect(res.body).toContain('secret_not_usable');
@@ -649,20 +661,68 @@ describe('run time', () => {
     expect(denied.res.body).toContain('secret_not_allowed');
   });
 
-  it('scrubs an issued scoped value from what a node reports', async () => {
-    const v = value('scrub');
-    await secret('sp-root', 'scrubbed', v);
-    const { a } = await published(['tenant:scrubbed']);
-    const { runId, res } = await issue(a);
-    expect(res.statusCode).toBe(200);
-    const cleaned = await n.services.runNodes.scrub(runId, { text: `the token is ${v} ok` });
-    expect(JSON.stringify(cleaned)).not.toContain(v);
-    // still scrubbed after the secret was rotated away from the issued value
-    const [row] = await n.ctx.db
-      .select()
-      .from(secrets)
-      .where(and(eq(secrets.name, 'scrubbed')));
-    await api(tok['sp-root']!, 'POST', `/v1/secrets/${row!.id}/rotate`, { value: value('scrub2') });
+  describe('redaction covers every value issued to the run', () => {
+    const report = (v: string) => ({ text: `the token is ${v} ok`, nested: { again: [v] } });
+    async function issued(name: string) {
+      const v = value(name);
+      const sid = await secret('sp-root', name, v);
+      const { a } = await published([`tenant:${name}`]);
+      const out = await issue(a);
+      expect(out.res.statusCode, out.res.body).toBe(200);
+      // sanity: before any change the value is scrubbed
+      expect(JSON.stringify(await n.services.runNodes.scrub(out.runId, report(v)))).not.toContain(
+        v,
+      );
+      return { v, sid, runId: out.runId };
+    }
+    const scrubbed = async (runId: string, v: string) =>
+      !JSON.stringify(await n.services.runNodes.scrub(runId, report(v))).includes(v);
+
+    it('after the secret was rotated', async () => {
+      const { v, sid, runId } = await issued('scrub-rotated');
+      const res = await api(tok['sp-root']!, 'POST', `/v1/secrets/${sid}/rotate`, {
+        value: value('rot2'),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(await scrubbed(runId, v)).toBe(true);
+    });
+
+    it('after the secret was revoked', async () => {
+      const { v, sid, runId } = await issued('scrub-revoked');
+      expect((await api(tok['sp-root']!, 'POST', `/v1/secrets/${sid}/revoke`)).statusCode).toBe(
+        200,
+      );
+      expect(await n.services.runNodes.scoped!.issuedValues(runId)).toContain(v);
+      expect(await scrubbed(runId, v)).toBe(true);
+    });
+
+    it('after the secret was deleted', async () => {
+      const { v, sid, runId } = await issued('scrub-deleted');
+      expect((await api(tok['sp-root']!, 'DELETE', `/v1/secrets/${sid}`)).statusCode).toBe(204);
+      expect(await scrubbed(runId, v)).toBe(true);
+    });
+
+    it('with a dynamic credential source too (the scoped branch is not behind the static guard)', async () => {
+      const { v, runId } = await issued('scrub-dynamic');
+      const dynamic = new RunNodesService(
+        n.ctx,
+        n.services.audit,
+        n.services.agents,
+        n.services.catalog,
+        { name: 'dynamic', issue: async () => ({ value: 'dynamic-value-1' }) },
+      );
+      dynamic.scoped = n.services.runNodes.scoped;
+      expect(await dynamic.knownSecrets(runId)).toContain(v);
+    });
+
+    it('keeps the issued value sealed, never in clear text, and only for that run', async () => {
+      const { v, runId } = await issued('scrub-sealed');
+      const rows = await n.ctx.db.select().from(runSecretIssuances);
+      expect(JSON.stringify(rows)).not.toContain(v);
+      expect(rows.length).toBeGreaterThan(0);
+      expect(await n.services.runNodes.scoped!.issuedValues(randomUUID())).toEqual([]);
+      expect(await n.services.runNodes.scoped!.issuedValues(runId)).toContain(v);
+    });
   });
 });
 
@@ -731,6 +791,23 @@ describe('pins that no publish can produce (defence in depth of the broker)', ()
     await expect(
       prepare(await fixture([pin], { teamId: id['sp-team']! }), ref),
     ).resolves.toHaveLength(1);
+  });
+
+  it('refuses a pin whose secret is not the one the reference names (scope and name)', async () => {
+    const sid = await secret('sp-root', 'real-name', value('rn'));
+    const other = await secret('sp-root', 'other-name', value('on'));
+    const run = await fixture([
+      resolved('tenant:real-name', 'tenant', id['sp-root']!, other),
+      resolved('team:real-name', 'tenant', id['sp-root']!, sid),
+    ]);
+    await expect(prepare(run, 'tenant:real-name')).rejects.toMatchObject({
+      code: 'secret_unavailable',
+    });
+    await expect(prepare(run, 'team:real-name')).rejects.toMatchObject({
+      code: 'secret_unavailable',
+    });
+    const ok = await fixture([resolved('tenant:real-name', 'tenant', id['sp-root']!, sid)]);
+    await expect(prepare(ok, 'tenant:real-name')).resolves.toHaveLength(1);
   });
 
   it('refuses an unresolved pin, a missing pin and a pin whose owner does not match', async () => {

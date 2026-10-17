@@ -3220,6 +3220,21 @@ export interface paths {
                                     /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
                                     reasons: string[];
                                 }[];
+                                /** @description the secret references of the head revision and what each resolves to now; never a value */
+                                secrets?: {
+                                    ref: string;
+                                    /** @enum {string} */
+                                    state: "legacy" | "resolved" | "unresolved";
+                                    scope: string | null;
+                                    ownerNode: {
+                                        /** Format: uuid */
+                                        id: string;
+                                        slugPath: string;
+                                    } | null;
+                                    /** @description the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says */
+                                    foreign: boolean;
+                                    code: string | null;
+                                }[];
                                 you: {
                                     eligible: boolean;
                                     code: string | null;
@@ -3375,6 +3390,21 @@ export interface paths {
                                 counted: boolean;
                                 /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
                                 reasons: string[];
+                            }[];
+                            /** @description the secret references of the head revision and what each resolves to now; never a value */
+                            secrets?: {
+                                ref: string;
+                                /** @enum {string} */
+                                state: "legacy" | "resolved" | "unresolved";
+                                scope: string | null;
+                                ownerNode: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slugPath: string;
+                                } | null;
+                                /** @description the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says */
+                                foreign: boolean;
+                                code: string | null;
                             }[];
                             you: {
                                 eligible: boolean;
@@ -3554,6 +3584,21 @@ export interface paths {
                                 counted: boolean;
                                 /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
                                 reasons: string[];
+                            }[];
+                            /** @description the secret references of the head revision and what each resolves to now; never a value */
+                            secrets?: {
+                                ref: string;
+                                /** @enum {string} */
+                                state: "legacy" | "resolved" | "unresolved";
+                                scope: string | null;
+                                ownerNode: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slugPath: string;
+                                } | null;
+                                /** @description the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says */
+                                foreign: boolean;
+                                code: string | null;
                             }[];
                             you: {
                                 eligible: boolean;
@@ -3742,6 +3787,21 @@ export interface paths {
                                     counted: boolean;
                                     /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
                                     reasons: string[];
+                                }[];
+                                /** @description the secret references of the head revision and what each resolves to now; never a value */
+                                secrets?: {
+                                    ref: string;
+                                    /** @enum {string} */
+                                    state: "legacy" | "resolved" | "unresolved";
+                                    scope: string | null;
+                                    ownerNode: {
+                                        /** Format: uuid */
+                                        id: string;
+                                        slugPath: string;
+                                    } | null;
+                                    /** @description the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says */
+                                    foreign: boolean;
+                                    code: string | null;
                                 }[];
                                 you: {
                                     eligible: boolean;
@@ -3980,6 +4040,21 @@ export interface paths {
                                 counted: boolean;
                                 /** @description why it does not count: `revision_changed`, `superseded`, `expired`, `expansion_changed`, `secret_resolution_changed`, or a refusal code of the rules (the reviewer is no longer eligible) */
                                 reasons: string[];
+                            }[];
+                            /** @description the secret references of the head revision and what each resolves to now; never a value */
+                            secrets?: {
+                                ref: string;
+                                /** @enum {string} */
+                                state: "legacy" | "resolved" | "unresolved";
+                                scope: string | null;
+                                ownerNode: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slugPath: string;
+                                } | null;
+                                /** @description the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says */
+                                foreign: boolean;
+                                code: string | null;
                             }[];
                             you: {
                                 eligible: boolean;

@@ -50,6 +50,7 @@ import { isTenantAdminAt, loadActor } from './grant-authority.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
 import type { SecretResolution } from './secret-resolution.js';
 import { reviewContributors, reviewHeadOf } from './review-contributors.js';
+import { TenantTree } from './tenant-tree.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 
 /**
@@ -153,7 +154,23 @@ export interface ReviewView {
   contributors: string[];
   unknownAuthor: boolean;
   approvals: ApprovalView[];
+  /**
+   * The secret references of the head revision with what each resolves to now: scope, owning node
+   * and whether the owner is another node than the agent's (`foreign`, which makes approval required
+   * at publish whatever the policy says). Never a value.
+   */
+  secrets: ReviewSecretView[];
   you: { eligible: boolean; code: RefusalCode | null; message: string | null };
+}
+
+export interface ReviewSecretView {
+  ref: string;
+  state: 'legacy' | 'resolved' | 'unresolved';
+  scope: string | null;
+  ownerNode: { id: string; slugPath: string } | null;
+  foreign: boolean;
+  /** Why an unresolved reference does not resolve. */
+  code: string | null;
 }
 
 const authString = (a: ApproverAuth): string =>
@@ -498,8 +515,34 @@ export class AgentReviewsService {
     };
   }
 
+  /** What each secret reference of a revision resolves to now, for the people who decide. */
+  private async secretViewsOf(agent: AgentRow, source: string): Promise<ReviewSecretView[]> {
+    const def = loadAgentDefinition(source);
+    const { resolved } = await this.secretResolution.pinsFor(
+      this.ctx.db,
+      { tenantId: agent.tenantId, teamId: agent.teamId },
+      def,
+    );
+    const owners = [...new Set(resolved.flatMap((r) => (r.secret ? [r.secret.tenantId] : [])))];
+    const nodes = owners.length
+      ? await this.ctx.db.select().from(tenants).where(inArray(tenants.id, owners))
+      : [];
+    const paths = await new TenantTree(this.ctx).slugPaths(nodes);
+    return resolved.map(({ pin, secret }) => ({
+      ref: pin.ref,
+      state: pin.state,
+      scope: pin.state === 'resolved' ? pin.scope : pin.state === 'legacy' ? 'legacy' : null,
+      ownerNode: secret
+        ? { id: secret.tenantId, slugPath: paths.get(secret.tenantId) ?? secret.tenantId }
+        : null,
+      foreign: !!secret && secret.scope === 'tenant' && secret.tenantId !== agent.tenantId,
+      code: pin.state === 'unresolved' ? pin.code : null,
+    }));
+  }
+
   private async viewOf(p: Principal, agent: AgentRow, ev: Evaluation): Promise<ReviewView> {
     const you = await this.verdictFor(this.ctx.db, p, agent, ev, ev.binding.digest);
+    const secrets = await this.secretViewsOf(agent, ev.head.source);
     return {
       id: ev.review.id,
       agentId: ev.review.agentId,
@@ -525,11 +568,12 @@ export class AgentReviewsService {
         createdAt: ev.head.createdAt,
       },
       requiredApprovals: ev.required,
-      approvalRequired: ev.approvalRequired,
+      approvalRequired: ev.approvalRequired || secrets.some((x) => x.foreign),
       digests: ev.binding,
       contributors: [...ev.contributors].sort(),
       unknownAuthor: ev.unknownAuthor,
       approvals: ev.approvals,
+      secrets,
       you: you.ok
         ? { eligible: true, code: null, message: null }
         : { eligible: false, code: you.code, message: you.message },

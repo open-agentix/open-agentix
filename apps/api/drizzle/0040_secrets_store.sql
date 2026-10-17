@@ -5,7 +5,11 @@
 --   (tenant_id, scope, scope_id, name).
 -- * secret_versions: the sealed values (oaxe1 envelope, AES-256-GCM, AAD = tenant | scope | scope_id |
 --   name | secret id | version), one row per version, deleted with the secret.
--- * A trigger keeps the identity columns of a secret (the AAD inputs) immutable.
+-- * run_secret_issuances: the scoped values issued to a run, sealed under the owner's data key, so that
+--   the redaction of the run still covers a value after its secret was rotated, revoked or deleted.
+-- * A trigger keeps the identity columns of a secret (the AAD inputs) and its policy columns (usage,
+--   allowed_destinations, inherit, allow_override, pointer) immutable: the API has no edit of them, so a
+--   changed value can only come from outside the service. A deliberate change disables the trigger.
 -- * agent_versions.secret_resolution (jsonb, since 0038) now holds pins ({ ref, state, ... }) next to
 --   the legacy names; no data change is needed (old rows keep their string entries).
 -- Down path: drizzle/down/0040_secrets_store.down.sql
@@ -58,12 +62,32 @@ CREATE INDEX "secret_versions_dek_idx" ON "secret_versions" USING btree ("tenant
 CREATE UNIQUE INDEX "secrets_identity_uq" ON "secrets" USING btree ("tenant_id","scope","scope_id","name");--> statement-breakpoint
 CREATE INDEX "secrets_scope_idx" ON "secrets" USING btree ("scope","scope_id");
 --> statement-breakpoint
+CREATE TABLE "run_secret_issuances" (
+	"id" uuid PRIMARY KEY NOT NULL,
+	"run_id" uuid NOT NULL,
+	"session_id" uuid NOT NULL,
+	"tenant_id" uuid NOT NULL,
+	"secret_id" uuid NOT NULL,
+	"version" integer NOT NULL,
+	"ciphertext" text NOT NULL,
+	"dek_version" integer NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX "run_secret_issuances_run_idx" ON "run_secret_issuances" USING btree ("run_id");--> statement-breakpoint
+CREATE INDEX "run_secret_issuances_expiry_idx" ON "run_secret_issuances" USING btree ("expires_at");--> statement-breakpoint
+CREATE INDEX "run_secret_issuances_dek_idx" ON "run_secret_issuances" USING btree ("tenant_id","dek_version");
+--> statement-breakpoint
 CREATE FUNCTION oax_secret_identity_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
      OR NEW.scope IS DISTINCT FROM OLD.scope OR NEW.scope_id IS DISTINCT FROM OLD.scope_id
-     OR NEW.name IS DISTINCT FROM OLD.name OR NEW.backend IS DISTINCT FROM OLD.backend THEN
-    RAISE EXCEPTION 'the identity of a secret is immutable' USING ERRCODE = 'integrity_constraint_violation';
+     OR NEW.name IS DISTINCT FROM OLD.name OR NEW.backend IS DISTINCT FROM OLD.backend
+     OR NEW.pointer IS DISTINCT FROM OLD.pointer OR NEW.usage IS DISTINCT FROM OLD.usage
+     OR NEW.allowed_destinations IS DISTINCT FROM OLD.allowed_destinations
+     OR NEW.inherit IS DISTINCT FROM OLD.inherit OR NEW.allow_override IS DISTINCT FROM OLD.allow_override THEN
+    RAISE EXCEPTION 'the identity and the policy of a secret are immutable' USING ERRCODE = 'integrity_constraint_violation';
   END IF;
   RETURN NEW;
 END $$;

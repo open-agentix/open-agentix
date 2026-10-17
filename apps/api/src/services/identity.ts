@@ -1342,11 +1342,35 @@ export class IdentityService {
       .select({ userId: teamMembers.userId })
       .from(teamMembers)
       .where(eq(teamMembers.teamId, teamId));
-    // The secrets of a team are deleted with it (their sealed values go with them, ADR 0017 13.6).
-    await this.ctx.db
-      .delete(secrets)
-      .where(and(eq(secrets.scope, 'team'), eq(secrets.scopeId, teamId)));
-    await this.ctx.db.delete(teams).where(eq(teams.id, teamId));
+    // The secrets of a team are deleted with it, in the same transaction and with one audit entry
+    // each (their sealed values go with them, ADR 0017 13.6).
+    await this.ctx.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      const gone = await tx
+        .delete(secrets)
+        .where(and(eq(secrets.scope, 'team'), eq(secrets.scopeId, teamId)))
+        .returning();
+      for (const row of gone)
+        await this.audit.append(
+          {
+            actor: actor.userId,
+            tenantId: actor.tenantId,
+            action: 'secret.deleted',
+            target: row.id,
+            payload: {
+              scope: row.scope,
+              scopeId: row.scopeId,
+              name: row.name,
+              version: row.currentVersion,
+              backend: row.backend,
+              inherit: row.inherit,
+              reason: 'team_deleted',
+            },
+          },
+          tx,
+        );
+      await tx.delete(teams).where(eq(teams.id, teamId));
+    });
     await Promise.all(members.map((m) => this.invalidateUserTokens(m.userId)));
     await this.ctx.cache.del(`teams:${actor.tenantId}`);
     await this.audit.append({

@@ -4971,6 +4971,54 @@ paths:
                         - counted
                         - reasons
                       additionalProperties: false
+                  secrets:
+                    description: the secret references of the head revision and what each resolves to now; never a value
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ref:
+                          type: string
+                        state:
+                          type: string
+                          enum:
+                            - legacy
+                            - resolved
+                            - unresolved
+                        scope:
+                          type:
+                            - string
+                            - "null"
+                        ownerNode:
+                          anyOf:
+                            - type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                slugPath:
+                                  type: string
+                              required:
+                                - id
+                                - slugPath
+                              additionalProperties: false
+                            - type: "null"
+                        foreign:
+                          type: boolean
+                          description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                        code:
+                          type:
+                            - string
+                            - "null"
+                      required:
+                        - ref
+                        - state
+                        - scope
+                        - ownerNode
+                        - foreign
+                        - code
+                      additionalProperties: false
                   you:
                     type: object
                     properties:
@@ -5352,6 +5400,54 @@ paths:
                               - counted
                               - reasons
                             additionalProperties: false
+                        secrets:
+                          description: the secret references of the head revision and what each resolves to now; never a value
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              ref:
+                                type: string
+                              state:
+                                type: string
+                                enum:
+                                  - legacy
+                                  - resolved
+                                  - unresolved
+                              scope:
+                                type:
+                                  - string
+                                  - "null"
+                              ownerNode:
+                                anyOf:
+                                  - type: object
+                                    properties:
+                                      id:
+                                        type: string
+                                        format: uuid
+                                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                      slugPath:
+                                        type: string
+                                    required:
+                                      - id
+                                      - slugPath
+                                    additionalProperties: false
+                                  - type: "null"
+                              foreign:
+                                type: boolean
+                                description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                              code:
+                                type:
+                                  - string
+                                  - "null"
+                            required:
+                              - ref
+                              - state
+                              - scope
+                              - ownerNode
+                              - foreign
+                              - code
+                            additionalProperties: false
                         you:
                           type: object
                           properties:
@@ -5707,6 +5803,54 @@ paths:
                         - current
                         - counted
                         - reasons
+                      additionalProperties: false
+                  secrets:
+                    description: the secret references of the head revision and what each resolves to now; never a value
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ref:
+                          type: string
+                        state:
+                          type: string
+                          enum:
+                            - legacy
+                            - resolved
+                            - unresolved
+                        scope:
+                          type:
+                            - string
+                            - "null"
+                        ownerNode:
+                          anyOf:
+                            - type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                slugPath:
+                                  type: string
+                              required:
+                                - id
+                                - slugPath
+                              additionalProperties: false
+                            - type: "null"
+                        foreign:
+                          type: boolean
+                          description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                        code:
+                          type:
+                            - string
+                            - "null"
+                      required:
+                        - ref
+                        - state
+                        - scope
+                        - ownerNode
+                        - foreign
+                        - code
                       additionalProperties: false
                   you:
                     type: object
@@ -6094,6 +6238,54 @@ paths:
                             - current
                             - counted
                             - reasons
+                          additionalProperties: false
+                      secrets:
+                        description: the secret references of the head revision and what each resolves to now; never a value
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            ref:
+                              type: string
+                            state:
+                              type: string
+                              enum:
+                                - legacy
+                                - resolved
+                                - unresolved
+                            scope:
+                              type:
+                                - string
+                                - "null"
+                            ownerNode:
+                              anyOf:
+                                - type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      format: uuid
+                                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                    slugPath:
+                                      type: string
+                                  required:
+                                    - id
+                                    - slugPath
+                                  additionalProperties: false
+                                - type: "null"
+                            foreign:
+                              type: boolean
+                              description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                            code:
+                              type:
+                                - string
+                                - "null"
+                          required:
+                            - ref
+                            - state
+                            - scope
+                            - ownerNode
+                            - foreign
+                            - code
                           additionalProperties: false
                       you:
                         type: object
@@ -6603,6 +6795,54 @@ paths:
                         - current
                         - counted
                         - reasons
+                      additionalProperties: false
+                  secrets:
+                    description: the secret references of the head revision and what each resolves to now; never a value
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ref:
+                          type: string
+                        state:
+                          type: string
+                          enum:
+                            - legacy
+                            - resolved
+                            - unresolved
+                        scope:
+                          type:
+                            - string
+                            - "null"
+                        ownerNode:
+                          anyOf:
+                            - type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                slugPath:
+                                  type: string
+                              required:
+                                - id
+                                - slugPath
+                              additionalProperties: false
+                            - type: "null"
+                        foreign:
+                          type: boolean
+                          description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                        code:
+                          type:
+                            - string
+                            - "null"
+                      required:
+                        - ref
+                        - state
+                        - scope
+                        - ownerNode
+                        - foreign
+                        - code
                       additionalProperties: false
                   you:
                     type: object

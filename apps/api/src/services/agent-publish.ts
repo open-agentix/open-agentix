@@ -20,6 +20,7 @@ import type { AuditService } from './audit.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
 import type {
   ApprovalRecord,
+  ForeignSecret,
   GateOutcome,
   GateRefusal,
   PublishApprovalInput,
@@ -122,7 +123,12 @@ export class AgentPublisher {
       );
       const unusable = this.secretRefusal(secrets.resolved);
       if (unusable && !p.seed) return { kind: 'refused', refusal: unusable };
-      const gated = await this.decide(tx, p, { agent, head, node });
+      const gated = await this.decide(tx, p, {
+        agent,
+        head,
+        node,
+        foreign: foreignOf(agent, secrets.resolved),
+      });
       if (gated.kind === 'refused') return { kind: 'refused', refusal: gated.refusal };
       const record = gated.kind === 'approved' ? gated.record : null;
       if (record && record.resolutionDigest !== secrets.digest)
@@ -166,7 +172,12 @@ export class AgentPublisher {
   private async decide(
     tx: Db,
     p: CommitParams,
-    at: { agent: AgentRow; head: RevisionRow; node: typeof tenants.$inferSelect },
+    at: {
+      agent: AgentRow;
+      head: RevisionRow;
+      node: typeof tenants.$inferSelect;
+      foreign: ForeignSecret[];
+    },
   ): Promise<GateOutcome> {
     if (p.seed) return { kind: 'not_required', advisoryReviewId: null };
     return this.gate.decide(tx, {
@@ -177,6 +188,7 @@ export class AgentPublisher {
       catalog: p.catalog,
       policy: await this.policy.effectiveFor(at.node, tx),
       input: p.input,
+      foreignSecrets: at.foreign,
     });
   }
 
@@ -364,4 +376,21 @@ export class AgentPublisher {
       payload: { code: refusal.code, review: refusal.reviewId },
     });
   }
+}
+
+/**
+ * The scoped secrets a version would pin that belong to ANOTHER node than the agent's own: inherited
+ * from an ancestor (ADR 0017 section 13.3). Using one always needs an approved review (see
+ * `PublishGate`), whatever the lifecycle policy says: the agent's author may not hand a credential
+ * of a higher node to a step on their own authority.
+ */
+export function foreignOf(
+  agent: Pick<AgentRow, 'tenantId'>,
+  resolved: readonly Resolved[],
+): ForeignSecret[] {
+  return resolved.flatMap((r) =>
+    r.secret && r.secret.scope === 'tenant' && r.secret.tenantId !== agent.tenantId
+      ? [{ ref: r.pin.ref, scope: r.secret.scope, ownerNode: r.secret.tenantId }]
+      : [],
+  );
 }

@@ -296,6 +296,12 @@ describe('teams', () => {
     expect(made.statusCode, made.body).toBe(201);
     const del = await api(tok['sec-root']!, 'DELETE', `/v1/teams/${teamId}`);
     expect(del.statusCode, del.body).toBe(204);
+    const entries = await n.ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.target, j(made).id));
+    expect(entries.map((e) => e.action)).toEqual(['secret.created', 'secret.deleted']);
+    expect(entries[1]!.payload).toMatchObject({ reason: 'team_deleted', name: 'doomed-key' });
     expect(
       await n.ctx.db
         .select()
@@ -533,6 +539,42 @@ describe('shadowing', () => {
           teamId: team,
           name: 'reserved',
           value: canary('tt'),
+        })
+      ).statusCode,
+    ).toBe(201);
+  });
+});
+
+describe('a reservation cannot be created over an existing name below', () => {
+  it('refuses a reserving secret while a node below already owns the name', async () => {
+    await create(tok['sec-grand']!, { scope: 'tenant', name: 'below-first', value: canary('bf') });
+    const res = await create(tok['sec-root']!, {
+      scope: 'tenant',
+      name: 'below-first',
+      value: canary('bf2'),
+    });
+    expect(res.statusCode, res.body).toBe(422);
+    expect(j(res).error).toBe('secret_name_conflict');
+    expect(res.body).not.toContain('sec-grand');
+    // allowed once the owner lets the name be shadowed, or keeps it node-only
+    expect(
+      (
+        await create(tok['sec-root']!, {
+          scope: 'tenant',
+          name: 'below-first',
+          value: canary('bf3'),
+          allowOverride: true,
+        })
+      ).statusCode,
+    ).toBe(201);
+    await create(tok['sec-grand']!, { scope: 'tenant', name: 'below-second', value: canary('bs') });
+    expect(
+      (
+        await create(tok['sec-root']!, {
+          scope: 'tenant',
+          name: 'below-second',
+          value: canary('bs2'),
+          inherit: false,
         })
       ).statusCode,
     ).toBe(201);

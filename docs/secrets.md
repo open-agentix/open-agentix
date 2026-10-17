@@ -69,6 +69,17 @@ The MCP connection schema (`envSecrets`, `headerSecrets`) does not accept them y
   secretId }` per reference; versions from before this slice hold plain names). The pins are computed once
   under the publish locks and equal what the approval bound to.
 
+## Secrets of a higher node need an approved review
+
+A version whose `credentials` pin a tenant secret owned by **another node** than the agent's (inherited
+from an ancestor) is published only under an approved review, even where `requireApprovalForPublish` is `off`
+or the review would be advisory. Without a review the publish is refused with
+`409 approval_required_for_foreign_secret` (`details.foreignSecrets[] { ref, scope, ownerNode }`); with
+one, the normal gate applies (approvals, bindings, `publishBy`). It needs the resolver read path
+(`OAX_ROLE_BINDINGS_READ=bindings`), like every enforced approval. The review (`GET /v1/reviews/{id}`)
+lists `secrets[] { ref, state, scope, ownerNode, foreign }` so the approvers see whose secret it is.
+Secrets of the agent's own node and own team do not trigger this.
+
 ## Run time
 
 The broker issues a scoped secret to a step only if the pinned secret passes every check, in this order:
@@ -82,8 +93,10 @@ session. **There is no fallback to another node or scope.** Codes: `secret_unava
 `secret_out_of_chain`, `secret_not_usable`, `secret_scope_not_usable`, `secret_destination_denied`.
 
 `credential.issued` gains `secrets: [{ ref, scope, ownerNode, secretId, secretVersion, backend }]`. Values
-are registered with the redaction of the run: the scrubber of node results and the pull request delivery
-check also use the values of scoped secrets (read from the pinned secret).
+are part of the redaction of the run: every scoped value that is issued is also stored **sealed** for that
+run (`run_secret_issuances`, under the owner's data key, kept until a day after the session expired), and the
+scrubber of node results and the pull request delivery check read it from there. So the redaction covers
+what was **issued**, also after the secret was rotated, revoked or deleted, and for every credential source.
 
 ## Encryption at rest
 
@@ -134,7 +147,7 @@ every step is idempotent, run it until `remaining` is `0`.
   chain (and needs a new approval). Secrets of the moved subtree stay with their nodes. Moving into another
   organisation therefore leaves every pinned reference to the old ancestors unusable until agents are
   re-reviewed; references are not rewritten (`secretRefMap` is not implemented in this slice).
-- Deleting a team deletes its secrets.
+- Deleting a team deletes its secrets, in the same transaction, with one `secret.deleted` audit entry each.
 
 ## Import helper
 
@@ -178,6 +191,12 @@ of the scope. A secret the caller may not see is a `404`, the same as a missing 
 - The globs of `blockInherited` and the destinations are validated narrowly (names with `*`; host names and
   `*.suffix`, no ports, no addresses). An egress entry that is an address never matches a destination.
 
+- The policy columns of a secret (`usage`, `allowed_destinations`, `inherit`, `allow_override`, `pointer`)
+  are immutable in the database, like the identity: the API has no edit of them, so a changed value can only
+  come from outside the service. The broker also checks that the pinned row is the secret the reference names.
+- A reserving secret (`allowOverride: false`, inheritable) cannot be created while a node below already owns
+  that name (`422 secret_name_conflict`), because that secret would keep winning for its subtree.
+
 ## Left out (follow-up issue)
 
 Secret backends other than `internal` and the `env` pointer (Vault, AWS Secrets Manager); development runs
@@ -192,10 +211,29 @@ node X instead of node Y" (the digests carry it, the API does not render it yet)
 
 - A value lives in the memory of the api or worker for one issuance and in the run node; a JavaScript string
   cannot be zeroed. A compromised node holds the values it was given and can encode them past the scrubbers.
-- A value that was issued and whose secret was deleted afterwards is no longer known to the scrubber of the
-  control node; the run node's own redaction still has it.
-- A secret on a root is usable by every agent of the organisation after review; use `allowedDestinations`,
-  `usage` and `inherit: false` for narrow credentials.
+- Crypto-shredding the owning node also destroys the sealed copies of issued values: after that, a
+  value issued earlier is no longer known to the control node's scrubber (the run node's redaction still has it).
+- **A credential of a higher node reaches every agent below it.** A tenant secret is inheritable by
+  default (`inherit: true`), and an author can make a step print it, put it in a prompt or send it through
+  a channel the control node allows; `allowedDestinations` limits egress only, and an empty list is
+  unrestricted. Mitigations built in: a version that pins a secret of another node always needs an
+  **approved review**, whatever the lifecycle policy says (`409 approval_required_for_foreign_secret`;
+  the review lists the owning node of each such secret), and the approval binds to that secret. Mitigations
+  you must choose: `inherit: false` for narrow credentials, `allowedDestinations`, `usage`, and agent rules
+  that name the owning-node approver. A secret of the own node or the own team is usable without review
+  where the policy asks for none.
+- Operations: do not run `db:keys -- retire` while writes to the node are in progress; `reencrypt` covers
+  `secret_versions` only, and a retired data key stays (`remaining > 0`) while MCP OAuth rows or issued values
+  of unexpired sessions still use it. Watch the audit actions `secret.created`, `secret.rotated`,
+  `secret.revoked` and `secret.deleted` (a rotation by an attacker with `secrets:write` is a credential
+  swap): alert on them in the audit export. `secret.rotated` carries the new version only, never a value.
+- Existence oracles: a caller with `secrets:write` learns whether a `pointer` target is configured
+  (`secret_not_found` vs `secret_pointer_not_allowed`) and a node that creates a name learns that an ancestor
+  reserves it (`secret_name_reserved`) or that a node below owns it (`secret_name_conflict`); neither reveals
+  a value or the node below. An author without `secrets:read` learns from `secret_not_usable` whether an
+  inheritable name exists above.
+- Rolling the application back to a version before slice S4 leaves object pins in
+  `agent_versions.secret_resolution` (that table is insert-only); older code does not read the column.
 - The first resolution of a name in a transaction is a read, not a lock: a secret created in the same
   instant as a publish can land just before or just after it; the pins and the digest are consistent with
   each other either way.

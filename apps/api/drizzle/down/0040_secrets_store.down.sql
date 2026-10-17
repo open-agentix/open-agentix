@@ -7,5 +7,6 @@
 -- data keys in tenant_data_keys stay. Run it before the down scripts of 0039, 0038, 0037, 0034 and 0032.
 DROP TRIGGER IF EXISTS secrets_identity_immutable ON secrets;
 DROP FUNCTION IF EXISTS oax_secret_identity_immutable();
+DROP TABLE IF EXISTS run_secret_issuances;
 DROP TABLE IF EXISTS secret_versions;
 DROP TABLE IF EXISTS secrets;

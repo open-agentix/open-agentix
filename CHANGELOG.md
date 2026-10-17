@@ -143,7 +143,10 @@ All notable changes to this project are documented here. The format follows
   (`secret_unavailable`, `secret_out_of_chain`, `secret_destination_denied`, ...) when it is revoked, expired,
   deleted, blocked or off the chain. A second KEK slot (`OAX_MCP_OAUTH_KEK_PREVIOUS*`) and the `db:keys` tool
   rotate KEKs and data keys; `POST /v1/secrets` with `pointer` imports a pointer to an operator environment
-  secret. Migration `0040_secrets_store` (down script included). See `docs/secrets.md`.
+  secret. A version that pins a secret of a higher node is published only under an approved review whatever
+  the policy says (`approval_required_for_foreign_secret`), and the values issued to a run are kept sealed so
+  that its redaction survives a rotation or revocation. Migration `0040_secrets_store` (down script
+  included). See `docs/secrets.md`.
 
 - **Approval is a gate at publish; version deprecation and rollback (ADR 0017 S3, #246)**. In one
   transaction under the tree, binding and agent locks, publish re-checks the draft digest, recomputes the

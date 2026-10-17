@@ -2,6 +2,7 @@ import {
   OaxError,
   destinationsAllowed,
   nameBlocked,
+  parseSecretRef,
   canonicalSecretRef,
   secretRefAllowed,
   type AgentDefinition,
@@ -115,19 +116,26 @@ export class ScopedSecretBroker {
     return this.store.open(p.secret);
   }
 
+  /** Remembers the value just issued to a session (sealed), for the redaction of the run. */
+  recordIssued(
+    run: RunRow,
+    session: { id: string; expiresAt: Date },
+    p: PreparedSecret,
+    value: string,
+  ): Promise<void> {
+    return this.store.recordIssued(
+      this.ctx.db,
+      { runId: run.id, sessionId: session.id, expiresAt: session.expiresAt, secret: p.secret },
+      value,
+    );
+  }
+
   /**
-   * The value of a pinned secret for redaction only (no policy checks: a value that was issued must
-   * be scrubbed even if the secret was revoked since). `null` when it cannot be read any more.
+   * Every scoped value issued to a run, for redaction. It covers what was ISSUED, so a rotation, a
+   * revocation or a deletion of the secret afterwards does not let the old value into a step record.
    */
-  async valueForRedaction(run: RunRow, ref: string): Promise<string | null> {
-    try {
-      const pin = (await this.pinsOf(run.agentVersionId)).get(ref);
-      if (pin?.state !== 'resolved') return null;
-      const [secret] = await this.ctx.db.select().from(secrets).where(eq(secrets.id, pin.secretId));
-      return secret && !secret.revokedAt ? await this.open({ ref, secret }) : null;
-    } catch {
-      return null;
-    }
+  issuedValues(runId: string): Promise<string[]> {
+    return this.store.issuedValues(runId);
   }
 
   private async pinsOf(versionId: string): Promise<Map<string, SecretPin>> {
@@ -142,7 +150,15 @@ export class ScopedSecretBroker {
   private async pinned(pin: SecretPin | undefined, ref: string): Promise<SecretRow> {
     if (pin?.state !== 'resolved') throw new SecretDenied('secret_unavailable', ref);
     const [secret] = await this.ctx.db.select().from(secrets).where(eq(secrets.id, pin.secretId));
-    if (!secret || secret.tenantId !== pin.ownerNode)
+    // The row must be the secret the REFERENCE names: scope and name are part of the reference.
+    const named = parseSecretRef(ref);
+    if (
+      !secret ||
+      secret.tenantId !== pin.ownerNode ||
+      named?.kind !== 'scoped' ||
+      named.scope !== secret.scope ||
+      named.name !== secret.name
+    )
       throw new SecretDenied('secret_unavailable', ref);
     if (stateOf(secret, this.ctx.now()) !== 'active')
       throw new SecretDenied('secret_unavailable', ref);

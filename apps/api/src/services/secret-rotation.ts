@@ -1,9 +1,10 @@
-import { and, count, eq, inArray, ne } from 'drizzle-orm';
+import { and, count, eq, gt, inArray, ne } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import {
   mcpOauthClients,
   mcpOauthPending,
   mcpOauthTokens,
+  runSecretIssuances,
   secretVersions,
   secrets,
 } from '../db/schema.js';
@@ -119,6 +120,17 @@ export class SecretKeyRotation {
   private async usesOf(tenantId: string, version: number): Promise<number> {
     const db = this.ctx.db;
     const counts = await Promise.all([
+      // values issued to runs that may still be running (their sessions have not expired)
+      db
+        .select({ n: count() })
+        .from(runSecretIssuances)
+        .where(
+          and(
+            eq(runSecretIssuances.tenantId, tenantId),
+            eq(runSecretIssuances.dekVersion, version),
+            gt(runSecretIssuances.expiresAt, this.ctx.now()),
+          ),
+        ),
       db
         .select({ n: count() })
         .from(secretVersions)

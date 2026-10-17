@@ -132,6 +132,13 @@ export class RunNodesService {
    * ACCIDENTAL leaks: a compromised node holds the plain values and can encode them.
    */
   async knownSecrets(runId: string): Promise<string[]> {
+    // Scoped values come from what was issued (sealed per run), whatever the credential source is,
+    // and survive a rotation or revocation of the secret.
+    const issued = (await this.scoped?.issuedValues(runId)) ?? [];
+    return [...new Set([...issued, ...(await this.legacyKnownSecrets(runId))])];
+  }
+
+  private async legacyKnownSecrets(runId: string): Promise<string[]> {
     if (this.source.name !== 'static') return [];
     const sessions = await this.ctx.db
       .select({ issued: runNodeSessions.credentialsIssued })
@@ -145,14 +152,9 @@ export class RunNodesService {
       const agent = definition.agents.find((a) => a.id === id);
       if (!agent) continue;
       const needs = this.needs(agent, await this.configsFor(run, agent));
-      for (const ref of needs.refs) {
+      for (const ref of needs.refs.filter((r) => !isScopedRef(r))) {
         try {
-          // A scoped value is read from its pinned secret (the one that was issued), the others from
-          // the operator's resolver.
-          const value = isScopedRef(ref)
-            ? await this.scoped?.valueForRedaction(run, ref)
-            : await this.ctx.secrets.resolve(ref);
-          if (value) out.add(value);
+          out.add(await this.ctx.secrets.resolve(ref));
         } catch {
           // not resolvable any more: nothing to scrub
         }
@@ -865,7 +867,10 @@ export class RunNodesService {
       for (const ref of needs.refs) {
         const scoped = prepared.get(ref);
         if (scoped) {
-          values.set(ref, await this.scoped!.open(scoped));
+          const value = await this.scoped!.open(scoped);
+          // Recorded before the value leaves: a value that cannot be remembered is not issued.
+          await this.scoped!.recordIssued(run, s, scoped, value);
+          values.set(ref, value);
           continue;
         }
         const issued = await this.source.issue(ref, {

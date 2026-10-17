@@ -6,10 +6,11 @@ import {
   canonicalSecretRef,
   parseDestinations,
   secretRefAllowed,
+  subtreePrefix,
   type Principal,
   type SecretScope,
 } from '@openagentix/core';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, like, ne } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { secrets, tenants } from '../db/schema.js';
@@ -186,6 +187,11 @@ export class SecretsService {
         const scopeId = await this.scopeIdOf(tx, p, input);
         const tenantScope = input.scope === 'tenant';
         const shadowed = tenantScope ? await this.checkShadowing(tx, node, input.name) : null;
+        const reserving =
+          tenantScope &&
+          (input.inherit ?? true) &&
+          !(input.allowOverride ?? node.parentId !== null);
+        if (reserving) await this.checkNothingBelow(tx, node, input.name);
         const row = {
           id,
           tenantId: node.id,
@@ -240,6 +246,38 @@ export class SecretsService {
     if (input.scope === 'personal') return p.userId;
     await this.views.assertTeam(tx, p.tenantId, input.teamId);
     return input.teamId!;
+  }
+
+  /**
+   * A secret that reserves its name (`allowOverride: false`) cannot be created while a node below
+   * already owns a secret of that name: that secret would silently keep winning for its subtree
+   * (nearest owner), which the reservation promises not to allow. Says only that a conflicting name
+   * exists below, never where or what.
+   */
+  private async checkNothingBelow(
+    tx: Db,
+    node: typeof tenants.$inferSelect,
+    name: string,
+  ): Promise<void> {
+    const [clash] = await tx
+      .select({ id: secrets.id })
+      .from(secrets)
+      .innerJoin(tenants, eq(tenants.id, secrets.tenantId))
+      .where(
+        and(
+          eq(secrets.scope, 'tenant'),
+          eq(secrets.name, name),
+          like(tenants.path, subtreePrefix(node.path)),
+          ne(tenants.id, node.id),
+        ),
+      )
+      .limit(1);
+    if (clash)
+      throw new HttpError(
+        422,
+        'secret_name_conflict',
+        `a node below already has a tenant secret named "${name}": create this one with allowOverride true, or have it removed first`,
+      );
   }
 
   /**

@@ -396,7 +396,7 @@ and the agent row lock, in this order. Under those locks, publish
 | Step | Refusal |
 | --- | --- |
 | `OAX_ROLE_BINDINGS_READ=bindings` | `409 role_bindings_read_required` (see below) |
-| `reviewId` and `expectedDigest` named | `409 approval_required` (`details.missing`) |
+| `reviewId` and `expectedDigest` named | `409 approval_required` (`details.missing`); `409 approval_required_for_foreign_secret` when the version pins a secret of a higher node (approval is then required whatever the policy says, see [`secrets.md`](secrets.md)) |
 | the review is the open review of this agent | `409 review_closed` |
 | `expectedDigest` is the digest of the head revision | `409 draft_changed` |
 | the profile expansion, recomputed from the revision's source against the connection catalog, equals the one each approval bound to | `409 approval_stale`, `details.reason = expansion_changed` |

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, secretVersions, secrets } from '../src/db/schema.js';
+import { auditLog, runSecretIssuances, secretVersions, secrets } from '../src/db/schema.js';
 import { KeyService } from '../src/mcp-oauth/key-service.js';
 import { SecretKeyRotation } from '../src/services/secret-rotation.js';
 import { SecretStore, secretAad } from '../src/services/secret-store.js';
@@ -66,6 +66,7 @@ beforeAll(async () => {
   await mkTenant('cr-two');
   await mkTenant('cr-dek');
   await mkTenant('cr-bad');
+  await mkTenant('cr-iss');
 }, 120_000);
 afterAll(async () => n?.close());
 
@@ -194,6 +195,26 @@ describe('DEK rotation with mixed versions', () => {
     expect((await versionRow(good.id)).dekVersion).toBe(2);
     // the version that the unreadable value uses is not destroyed
     expect(await rotation.retire(node)).toMatchObject({ changed: 0, remaining: 1 });
+  });
+
+  it('keeps a data key that a value issued to a still-running session uses', async () => {
+    const node = node_('cr-iss');
+    const s = await make('cr-iss', 'issued-key', 'value-issued-0001');
+    await store.recordIssued(
+      n.ctx.db,
+      {
+        runId: randomUUID(),
+        sessionId: randomUUID(),
+        expiresAt: new Date(Date.now() + 3_600_000),
+        secret: s,
+      },
+      'value-issued-0001',
+    );
+    await rotation.rotateDataKey(node);
+    await rotation.reencrypt(node);
+    expect(await rotation.retire(node)).toMatchObject({ changed: 0, remaining: 1 });
+    await n.ctx.db.update(runSecretIssuances).set({ expiresAt: new Date(Date.now() - 1000) });
+    expect(await rotation.retire(node)).toMatchObject({ changed: 1, remaining: 0 });
   });
 
   it('a rotated secret is sealed under the new data key', async () => {
