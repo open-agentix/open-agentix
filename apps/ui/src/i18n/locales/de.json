@@ -358,7 +358,24 @@
       "confirm": "Version veröffentlichen",
       "invalid": "Der Entwurf hat Prüffehler.",
       "done": "Version {version} veröffentlicht.",
-      "unchanged": "Version {version} ist mit diesem Inhalt bereits veröffentlicht."
+      "unchanged": "Version {version} ist mit diesem Inhalt bereits veröffentlicht.",
+      "approval": {
+        "noReview": "Verlangt die Richtlinie des Mandanten eine Freigabe für diesen Agenten, fordere zuerst im Tab Review eine Prüfung an und veröffentliche nach der Freigabe.",
+        "required": "Freigabe erforderlich: {count} von {required} Freigaben zählen jetzt.",
+        "advisory": "Für diesen Agenten ist keine Freigabe erforderlich; die Prüfung ist unverbindlich."
+      },
+      "errors": {
+        "approval_required": "Für diesen Agenten ist eine Freigabe erforderlich. Fordere im Tab Review eine Prüfung an und veröffentliche nach der Freigabe.",
+        "approval_insufficient": "Die Prüfung hat jetzt nicht genug gültige Freigaben (eine Freigabe kann abgelaufen sein, durch eine neue Revision verfallen oder ihre Rolle verloren haben), oder jemand hat Änderungen angefordert.",
+        "approval_stale": "Die Freigaben passen nicht mehr zum Entwurf. Öffne den Tab Review und hole neue Freigaben ein.",
+        "stale_expansion_changed": "Die Werkzeuge hinter den Profilen dieses Agenten haben sich seit der Freigabe geändert. Hole eine neue Freigabe ein.",
+        "stale_secret_resolution_changed": "Die Geheimnisse, die dieser Agent auflöst, haben sich seit der Freigabe geändert. Hole eine neue Freigabe ein.",
+        "draft_changed": "Der Entwurf hat sich beim Veröffentlichen geändert. Lade neu und prüfe ihn noch einmal.",
+        "review_closed": "Diese Prüfung ist abgeschlossen. Der Tab Review zeigt die aktuelle.",
+        "publisher_not_approver": "Dieser Mandant lässt nur eine freigebende Person der Prüfung veröffentlichen.",
+        "role_bindings_read_required": "Die Freigabe kann in dieser Installation nicht durchgesetzt werden (OAX_ROLE_BINDINGS_READ=bindings ist nötig). Frage deinen Betreiber.",
+        "version_deprecated": "Dieser Inhalt ist die abgekündigte Version. Erhöhe die Versionsnummer, um ihn erneut zu veröffentlichen."
+      }
     },
     "versions": {
       "empty": "Keine veröffentlichten Versionen",
@@ -366,7 +383,23 @@
       "latest": "Aktuell",
       "publishedBy": "{when} von {who}",
       "comparePrevious": "Mit v{version} vergleichen",
-      "compareDraft": "Mit Entwurf vergleichen"
+      "compareDraft": "Mit Entwurf vergleichen",
+      "approved": "Freigegeben",
+      "deprecated": "Abgekündigt",
+      "deprecate": {
+        "button": "Abkündigen…",
+        "title": "v{version} abkündigen?",
+        "text": "Neue Läufe, die auf diese Version festgelegt sind, werden abgelehnt. Bestehende Läufe bleiben unberührt. Das lässt sich nicht rückgängig machen: veröffentliche stattdessen eine höhere Version.",
+        "rollbackText": "Das ist die neueste Version. Der Agent geht daher auf die neueste ältere Version zurück, die nicht abgekündigt ist (und, wo eine Freigabe erforderlich ist, unter einer freigegebenen Prüfung veröffentlicht wurde). Es entsteht keine Version und es ist keine Freigabe nötig.",
+        "confirm": "Version abkündigen",
+        "done": "Version {version} abgekündigt.",
+        "doneRollback": "Version {version} abgekündigt. Der Agent ist wieder auf {to}.",
+        "errors": {
+          "rollback_target_unapproved": "Keine ältere Version wurde unter einer freigegebenen Prüfung veröffentlicht, und für diesen Agenten ist eine Freigabe erforderlich. Deaktiviere den Agenten stattdessen.",
+          "no_rollback_target": "Es gibt keine ältere Version, auf die zurückgegangen werden kann. Deaktiviere den Agenten stattdessen.",
+          "already_deprecated": "Diese Version ist bereits abgekündigt."
+        }
+      }
     },
     "diff": {
       "from": "Von",

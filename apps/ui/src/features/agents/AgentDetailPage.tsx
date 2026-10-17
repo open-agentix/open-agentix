@@ -116,7 +116,7 @@ export function AgentDetailPage() {
         ) : tab === 'editor' ? (
           <EditorTab agent={a} latestSource={latest.data?.source ?? null} />
         ) : tab === 'versions' ? (
-          <VersionsTab agentId={agentId} versions={versions} />
+          <VersionsTab agentId={agentId} versions={versions} latestVersion={latestVersion} />
         ) : tab === 'diff' ? (
           <DiffTab
             agent={a}
