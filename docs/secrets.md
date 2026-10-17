@@ -99,7 +99,9 @@ agent, and nowhere else.
 - `allowPersonalSecretsInDevRuns: false` (or `allowDraftRuns: off`) refuses them (`secret_scope_not_usable`).
 - The starter must still be entitled **at the moment of issuance**: the account active and `agents:write`
   held on the agent. Otherwise nothing is issued to the run, of any scope (`secret_owner_unavailable`); the
-  personal secrets are kept (a regained role brings them back) and their owner can still delete them.
+  personal secrets are kept (a regained role brings them back) and their owner can still delete them while
+  they hold `secrets:read` (deleting needs no `agents:write`; an owner left with no role at all cannot reach the
+  route, and the secrets stay inert until the account is disabled).
 - A **disabled account** loses its personal secrets: they are deleted with their sealed values in the
   transaction that disables the account (`secret.deleted`, `reason: owner_disabled`), queued development runs
   of the account are cancelled and running ones are asked to stop. Enabling the account again does not bring

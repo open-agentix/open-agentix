@@ -574,7 +574,7 @@ describe('personal secrets in development runs', () => {
     const nodeRun = j(await devRun('peer', nodeAgent)).id as string;
     await running(nodeRun);
     const patched = await api(tok['dv-a']!, 'PATCH', `/v1/users/${uid['peer']}`, {
-      globalRoles: ['viewer'],
+      globalRoles: ['auditor'],
     });
     expect(patched.statusCode, patched.body).toBe(200);
     try {
@@ -601,7 +601,7 @@ describe('personal secrets in development runs', () => {
       await finish(nodeRun);
     }
     expect((await devIssue('peer', a)).res.statusCode).toBe(200);
-    await api(tok['dv-a']!, 'PATCH', `/v1/users/${uid['peer']}`, { globalRoles: ['viewer'] });
+    await api(tok['dv-a']!, 'PATCH', `/v1/users/${uid['peer']}`, { globalRoles: ['auditor'] });
     const del = await api(tok['peer']!, 'DELETE', `/v1/secrets/${sid}`);
     expect(del.statusCode, del.body).toBe(204);
     await api(tok['dv-a']!, 'PATCH', `/v1/users/${uid['peer']}`, {

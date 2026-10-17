@@ -113,7 +113,7 @@ All notable changes to this project are documented here. The format follows
   (`production` secrets are refused to drafts unless `allowDraftRuns: on` with the production flag,
   `development` secrets only go to development runs), and a tenant secret of a **higher node** only if its
   owner marked it `usage: development` (the draft has no review). A disabled account loses its personal
-  secrets and its development runs stop; an owner can always delete their own personal secret. Development
+  secrets and its development runs stop; an owner without `agents:write` (but with `secrets:read`) can still delete their own personal secret. Development
   spend has its own budget: explicit (`PUT/DELETE /v1/budgets/development`) or 10 % of the node's monthly
   cap, hard stop (`development_budget_exceeded`, `control_budget_development`), alerts under the scope
   `development`, never counted against the production budgets; cost lines, the costs export

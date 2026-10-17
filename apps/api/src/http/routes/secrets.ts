@@ -170,9 +170,7 @@ export function registerSecretRoutes(app: ZApp, { services }: Deps): void {
   app.delete(
     '/v1/secrets/:id',
     {
-      // The service decides: secrets:write for tenant and team secrets, ownership for a personal one
-      // (an owner who lost their role can still delete it).
-      config: { access: 'authenticated' },
+      config: { access: 'secrets:read' },
       schema: {
         tags,
         summary: 'Delete a secret',
