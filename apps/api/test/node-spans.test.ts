@@ -51,7 +51,7 @@ agents:
     runtime: { runner: container }
     tools:
       - { server: jira, tool: get_issue }
-      - { server: jira, tool: list_* }
+      - { server: jira, tool: list_issues }
   - id: h
     provider: claude
     model: claude-x
@@ -395,12 +395,14 @@ describe('gate policy check for nodes', () => {
     expect(everything().toLowerCase()).not.toContain(CANARY.toLowerCase());
   });
 
-  it('exports the grant, not the node text, for a wildcard grant', async () => {
+  it('exports the grant for a granted call (a wildcard grant of an older version: matchGrant unit test)', async () => {
     const m = await dispatch();
-    await gate(m, 'jira', `list_${CANARY}`);
+    await gate(m, 'jira', 'list_issues');
     const check = one('oax.policy.check');
-    expect(check.name).toBe('oax.policy.check jira/list_*');
-    expect(check.attributes['gen_ai.tool.name']).toBe('list_*');
+    expect(check.name).toBe('oax.policy.check jira/list_issues');
+    expect(check.attributes['gen_ai.tool.name']).toBe('list_issues');
+    // publish no longer stores a prefix wildcard (AEP-0002, D4): text beyond the grant is never exported
+    await gate(m, 'jira', `list_${CANARY}`);
     expect(everything()).not.toContain(CANARY);
   });
 });
@@ -614,12 +616,12 @@ describe('node threat tests', () => {
     const m = await dispatch();
     await report(m, { kind: 'tool_call', name: `jira/${CANARY}`, status: 'ok' });
     await report(m, { kind: 'tool_call', name: `other-server/get_issue`, status: 'ok' });
-    await report(m, { kind: 'tool_call', name: 'jira/list_anything', status: 'ok' });
+    await report(m, { kind: 'tool_call', name: 'jira/list_issues', status: 'ok' });
     await n.services.runNodes.revoke(m.sessionId, 'step_end');
     const evs = events(one('oax.node.session'));
     expect(evs[0]).not.toHaveProperty('gen_ai.tool.name');
     expect(evs[1]).not.toHaveProperty('gen_ai.tool.name');
-    expect(evs[2]).toMatchObject({ 'gen_ai.tool.name': 'list_*', 'oax.mcp.server': 'jira' });
+    expect(evs[2]).toMatchObject({ 'gen_ai.tool.name': 'list_issues', 'oax.mcp.server': 'jira' });
     expect(everything()).not.toContain(CANARY);
   });
 

@@ -124,8 +124,9 @@ All notable changes to this project are documented here. The format follows
   the vendored schema). New static rules, shared by `agents.md` validation, the manifest validator and the
   exporter: `args.pattern-invalid` (no backreference, lookaround, or repeated group with a repetition or
   alternation), `args.pattern-unbounded` (a `pattern` needs `maxLength`), `args.type-mismatch`,
-  `args.range`, `args.with-deny`, `args.limit`. The `agents.md` examples gain the `maxLength` they now
-  need. A stored constraint that breaks a rule makes the export fail with `constraint_not_representable`.
+  `args.range`, `args.with-deny`, `args.limit`. The `agents.md` examples, the demo agents and the
+  workspace tool grants gain the `maxLength` they now need (a stored `agents.md` with a `pattern` and no
+  `maxLength` is refused on the next validate or publish). A stored constraint that breaks a rule makes the export fail with `constraint_not_representable`.
   **Prefix wildcards are deprecated (decision D4)**: publish replaces `get_*` / `*` by one explicit grant
   per tool of the approved snapshot of a pinned connection, each with the limits of the wildcard, under the
   existing expansion digest and publish gate, and fails with `wildcard_unreviewed` / `wildcard_empty`
