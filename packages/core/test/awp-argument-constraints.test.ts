@@ -610,9 +610,8 @@ describe('validator rules for argument constraints (AEP-0002 sections 7.5.5 and 
     delete entry['x-openagentix-args'];
     delete entry['x-openagentix-allowAdditionalArgs'];
     delete (m.metadata as Obj).requiredExtensions;
-    const args: Obj = {};
+    const args: Obj = { many: { deny: Array.from({ length: 65 }, () => 'x') } };
     for (let i = 0; i < 300; i++) args[`a${i}`] = { type: 'string', deny: ['x'] };
-    args.many = { deny: Array.from({ length: 65 }, () => 'x') };
     entry.args = args;
     expect(errors(run(m, { awp: futureSchema() }))).toEqual([
       `args.limit ${P}/args`,

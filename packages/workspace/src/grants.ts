@@ -3,6 +3,8 @@ import { WORKSPACE_TOOL_ACCESS, SERVER_NAME, type WorkspaceToolName } from './se
 /** Grant constraint for the path argument of write tools (design D3/D7), repeated by the server. */
 export const WRITE_PATH_CONSTRAINT = {
   pattern: '^(src|test)/[A-Za-z0-9._/-]{1,200}$',
+  /** A pattern needs a length bound (AEP-0002): the pattern allows 5 + 200 characters at most. */
+  maxLength: 220,
   deny: ['\\.\\.', '^\\.'],
 } as const;
 
@@ -55,7 +57,14 @@ function argsOf(tool: WorkspaceToolName, testFilePattern: string): Record<string
         content: { type: 'string', required: true, maxLength: 65_536 },
       };
     case 'run_tests':
-      return { file: { type: 'string', pattern: testFilePattern, deny: ['\\.\\.', '^[.-]'] } };
+      return {
+        file: {
+          type: 'string',
+          pattern: testFilePattern,
+          maxLength: 120,
+          deny: ['\\.\\.', '^[.-]'],
+        },
+      };
     case 'diff':
       return {};
   }
