@@ -388,7 +388,8 @@ and the agent row lock, in this order. Under those locks, publish
    draft_changed`; a save that slips in after the checks is refused, nothing is published);
 2. applies the version rules again to the versions as they are now (a concurrent publish of the same
    version is refused);
-3. decides whether approval is required (the policy at the agent's node, and the stricter snapshot of
+3. reads the tenant row again under the tree lock (a tenant move changes the chain of policies that apply
+   and holds the lock exclusively) and decides whether approval is required (the policy at the agent's node, and the stricter snapshot of
    an open review) and, if it is, runs the gate:
 
 | Step | Refusal |
@@ -413,8 +414,8 @@ relaxes an open review; a stricter one applies at once.
 
 On success the version is inserted **from the revision's source** (never from a value read earlier)
 with the approval record (`agent_versions.review_id`, `approved_by`, `policy_digest`,
-`expansion_digest`, `resolution_digest`, and `secret_resolution`, the references pinned for production
-runs; names only until slice S4), `agents.latest_version_id` moves, the review is closed as `published`
+`expansion_digest`, `resolution_digest`, and `secret_resolution`, the secret reference names the source
+declares; names only until slice S4), `agents.latest_version_id` moves, the review is closed as `published`
 (`agent_reviews.published_version_id`) and `agent.published` and `agent.review.closed` are appended in
 the same transaction. Every refusal is audited as `agent.publish.refused { code, review }` (at most one
 entry per agent, user and code and minute). A review approves exactly one version.
@@ -476,8 +477,21 @@ be published again under its number (`409 version_deprecated`).
   resolution digest binds the names until then).
 - The connection catalog behind the expansion digest is read just before the locks are taken (a
   connection change is not serialised with publish): a change after that read and before the commit is not
-  seen by this publish. It can only matter for an approval that was bound to an older expansion, which
-  the next publish refuses.
+  seen by this publish. **That includes revocations and narrowings**: a connection or tool grant removed,
+  or an MCP tool review revoked, after the early read can still be published once with the expansion
+  that was read. The window is a few milliseconds wide; the next publish sees the change. Follow-up:
+  read the catalog inside the transaction on PostgreSQL.
+- **A root administrator can still publish their own draft.** A root's policy is not clamped by the
+  installation default. A root administrator with no unfinished review in the organisation can set
+  `requireApprovalForPublish` to `off`, publish their own unreviewed draft and switch it on again. Every
+  step is audited (`tenant.lifecycle_policy_changed`, `agent.published` with `approved: false`), but it
+  is the administrator exception that ADR 0017 decision 11 rules out. Mitigations until a follow-up
+  makes `OAX_LIFECYCLE_REQUIRE_APPROVAL=on` a floor for root policies and counts authors of unpublished
+  drafts in the loosening guard: limit organisation administrators, watch for
+  `tenant.lifecycle_policy_changed` entries that loosen `requireApprovalForPublish`.
+- Secret resolution is **names-only** until slice S4: `agent_versions.secret_resolution` records the
+  secret reference names a version declares, and the resolution digest binds those names. Nothing is
+  pinned to a concrete secret yet.
 - A rollback target that was published under approval is not re-checked against today's approvers: the
   approval was valid when the version was published (the version keeps the record).
 - Run admission sees a deprecation at once on the replica that deprecated; other replicas cache the

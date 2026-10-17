@@ -23,16 +23,23 @@ All notable changes to this project are documented here. The format follows
 - **Publish is refused without an approved review where the policy requires approval; the `shadow`
   report is gone (ADR 0017 S3, #246)**. `POST /v1/agents/{id}/publish` now needs `reviewId` and
   `expectedDigest` of an approved review wherever `requireApprovalForPublish` applies (`on`, or
-  `production-only` for a production use case; `OAX_LIFECYCLE_REQUIRE_APPROVAL=auto` is `on` with more
-  than one tenant). Clients that published without a body get `409 approval_required`. The response
-  field `shadow` is replaced by `approval` (`null` when none was required). **With
-  `OAX_ROLE_BINDINGS_READ=legacy` such a publish is refused (`409 role_bindings_read_required`)**: set
-  `bindings` before upgrading a multi-tenant installation (read the notes of that switch first), or set
-  `OAX_LIFECYCLE_REQUIRE_APPROVAL=off` if there is no second person to approve. Versions published
-  before this release have no approval record, so a rollback onto them is refused (`409
-  rollback_target_unapproved`) where approval is required. Migration `0038_agent_publish_gate`; revert
-  with `apps/api/drizzle/down/0038_agent_publish_gate.down.sql` before the down scripts of `0037`,
-  `0034` and `0032`.
+  `production-only` for a production use case). `OAX_LIFECYCLE_REQUIRE_APPROVAL=auto` counts **all
+  tenants of the installation**: as soon as a second tenant exists approval is `on` everywhere, and a
+  single administrator alone cannot publish any more (a second person has to approve). Clients that
+  published without a body get `409 approval_required`. **With `OAX_ROLE_BINDINGS_READ=legacy`, the
+  default, every such publish gets `409 role_bindings_read_required`**: set `bindings` before upgrading
+  (read the notes of that switch first), or set `OAX_LIFECYCLE_REQUIRE_APPROVAL=off` if there is no
+  second person to approve. Clients that read the `shadow` field of the publish response break: it is
+  replaced by `approval` (`null` when none was required). Versions published before this release have no
+  approval record and are **not rollback targets** where approval is required (`409
+  rollback_target_unapproved`). `pnpm seed:demo` now needs `OAX_DEMO_MODE=true`. Migration
+  `0038_agent_publish_gate` (its two CHECK constraints are added `NOT VALID` and validated afterwards, so
+  large installations do not hold an exclusive lock for a full scan); revert with
+  `apps/api/drizzle/down/0038_agent_publish_gate.down.sql` before the down scripts of `0037`, `0034` and
+  `0032`. **Known limits**: a root administrator with no unfinished review can still switch the policy
+  off, publish their own draft and switch it on again (audited, but it is the administrator exception
+  ADR 0017 decision 11 rules out; see `docs/agent-lifecycle.md`), and a connection change after the early
+  catalog read, revocations included, is not seen by the publish in flight.
 
 ### Security
 
@@ -89,8 +96,8 @@ All notable changes to this project are documented here. The format follows
   again (rules A1 to A8 and A10 with the bindings, grant chains, expiry and policy of that moment) and
   publishes from the revision's source (`409 draft_changed`, `approval_stale`, `approval_insufficient`,
   `approval_required`, `review_closed`, `publisher_not_approver`). The version row records the review,
-  the distinct approvers, the policy digest, the expansion and resolution digests and the pinned secret
-  references; the review is closed as `published`; every refusal is audited as `agent.publish.refused`.
+  the distinct approvers, the policy digest, the expansion and resolution digests and the secret reference
+  names (names-only until S4); the review is closed as `published`; every refusal is audited as `agent.publish.refused`.
   `POST /v1/agents/{id}/versions/{version}/deprecate` refuses new pinned runs (`409 version_deprecated`);
   deprecating the latest version rolls back to the newest non-deprecated version published under an
   approved review (no new version, no approval, audited as `agent.version.deprecated`). There is no
