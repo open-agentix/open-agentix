@@ -136,10 +136,14 @@ const BATCH = 50;
  * concurrent run is skipped (idempotent), re-running converts nothing. Source, digest and definition
  * of a published version are only read.
  */
-export async function convertLegacyVersions(db: Db): Promise<BackfillResult> {
+export async function convertLegacyVersions(
+  db: Db,
+  onError: (agentId: string, error: unknown) => void = () => undefined,
+): Promise<BackfillResult> {
   const total: BackfillResult = { agents: 0, converted: 0, unconvertible: 0 };
-  // An agent whose transaction fails stays unconverted (converted on read); do not retry it forever.
-  const failed = new Set<string>();
+  // Every agent is tried once per run: a failing agent stays unconverted (converted on read) and the
+  // loop always ends, whatever the data looks like.
+  const tried = new Set<string>();
   for (;;) {
     const pending = await db
       .selectDistinct({ agentId: agentVersions.agentId })
@@ -147,17 +151,19 @@ export async function convertLegacyVersions(db: Db): Promise<BackfillResult> {
       .leftJoin(agentVersionAwp, eq(agentVersionAwp.versionId, agentVersions.id))
       .where(isNull(agentVersionAwp.versionId))
       .orderBy(asc(agentVersions.agentId))
-      .limit(BATCH + failed.size);
-    const todo = pending.map((p) => p.agentId).filter((id) => !failed.has(id));
+      .limit(BATCH + tried.size);
+    const todo = pending.map((p) => p.agentId).filter((id) => !tried.has(id));
     if (todo.length === 0) return total;
     for (const agentId of todo) {
+      tried.add(agentId);
       try {
         const r = await convertAgent(db, agentId);
         total.agents += 1;
         total.converted += r.converted;
         total.unconvertible += r.unconvertible;
-      } catch {
-        failed.add(agentId);
+      } catch (e) {
+        // left for the read path; the next run tries it again
+        onError(agentId, e);
       }
     }
   }

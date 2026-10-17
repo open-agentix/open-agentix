@@ -170,7 +170,9 @@ export async function createContext(
     if (db.migrateOnStart) {
       await database.migrate();
       // AWP-3b: the one-time conversion of the published versions (idempotent, after the schema).
-      const r = await convertLegacyVersions(database.db);
+      const r = await convertLegacyVersions(database.db, (agent, err) =>
+        logger.warn({ agent, err }, 'conversion to an AWP manifest failed; converted on read'),
+      );
       if (r.converted + r.unconvertible > 0)
         logger.info(r, 'converted published versions to AWP manifests');
     }
