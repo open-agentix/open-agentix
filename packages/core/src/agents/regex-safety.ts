@@ -1,5 +1,10 @@
 import { unsafeRegexReason } from './json-schema.js';
-import { compileLinear, repeatBoundsIssue } from './linear-regex.js';
+import {
+  MAX_PATTERN_SOURCE,
+  compileLinear,
+  patternSetIssue,
+  repeatBoundsIssue,
+} from './linear-regex.js';
 
 /**
  * Static rules for the regular expressions of argument constraints (AEP-0002 rule 4,
@@ -7,7 +12,7 @@ import { compileLinear, repeatBoundsIssue } from './linear-regex.js';
  * linear-time engine (`linear-regex.ts`), so a match never takes more than time linear in the text.
  * The static rules are the contract an author can rely on, and defence in depth:
  *
- * - the source is at most {@link MAX_PATTERN_LENGTH} characters, is valid ECMA-262 and is accepted by
+ * - the source is at most {@link MAX_PATTERN_LENGTH} (256) characters, is valid ECMA-262 and is accepted by
  *   the linear-time engine (which has no backreferences and no lookaround);
  * - the rules of handover schemas apply (`unsafeRegexReason`), which also name backreferences,
  *   lookaround and a quantified group that contains a quantifier (`(a+)+`);
@@ -28,7 +33,7 @@ export interface RegexIssue {
 }
 
 /** Longest accepted pattern source (characters). */
-export const MAX_PATTERN_LENGTH = 1024;
+export const MAX_PATTERN_LENGTH = MAX_PATTERN_SOURCE;
 
 const BRACE_QUANTIFIER = /^\{(\d+)(?:(,)(\d*))?\}/;
 
@@ -99,5 +104,23 @@ export function checkRegexSource(source: string): RegexIssue | null {
       message:
         'pattern uses a construct the linear-time matcher does not support, or compiles to a program above 512 instructions',
     };
+  return null;
+}
+
+/**
+ * A list of patterns written by an administrator (policy bundle, guideline set): the limits of the
+ * set first (nothing is compiled when they are exceeded), then the rules of every pattern. Returns the
+ * first problem, or `null`.
+ */
+export function checkPatternList(
+  sources: readonly string[],
+  maxCount: number,
+): { index: number | null; message: string } | null {
+  const set = patternSetIssue(sources, maxCount);
+  if (set) return { index: null, message: set };
+  for (const [index, source] of sources.entries()) {
+    const issue = checkRegexSource(source);
+    if (issue) return { index, message: issue.message };
+  }
   return null;
 }

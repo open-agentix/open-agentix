@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
-  checkRegexSource,
+  MAX_POLICY_PATTERNS,
+  checkPatternList,
   getEgressPolicy,
   hasPermission,
   hasTenantPrefix,
@@ -78,15 +79,18 @@ export type ConnectionRow = typeof connections.$inferSelect;
 export type PolicyRow = typeof policies.$inferSelect;
 
 function assertRegexes(bundle: PolicyBundle): void {
-  for (const f of bundle.forbiddenArgPatterns) {
-    const issue = checkRegexSource(f.pattern);
-    if (issue)
-      throw new HttpError(
-        400,
-        'validation_failed',
-        `invalid pattern ${f.pattern}: ${issue.message}`,
-      );
-  }
+  const issue = checkPatternList(
+    bundle.forbiddenArgPatterns.map((f) => f.pattern),
+    MAX_POLICY_PATTERNS,
+  );
+  if (issue)
+    throw new HttpError(
+      400,
+      'validation_failed',
+      issue.index === null
+        ? `forbiddenArgPatterns: ${issue.message}`
+        : `invalid pattern ${bundle.forbiddenArgPatterns[issue.index]!.pattern}: ${issue.message}`,
+    );
 }
 
 /** Where a run executes: connections resolve most specific first (agent, team, tenant, platform). */

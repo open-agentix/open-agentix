@@ -2,7 +2,15 @@ import { z } from 'zod';
 import { CLASSIFICATIONS, mayFlow, type Classification } from '../classification.js';
 import type { AgentDefinition, AgentSpec } from '../agents/parser.js';
 import type { ToolAccess } from '../agents/profiles.js';
-import { compileLinear } from '../agents/linear-regex.js';
+import {
+  COMPILE_STEPS_PER_CHAR,
+  MAX_DEFINITION_PATTERNS,
+  MAX_POLICY_PATTERNS,
+  compileLinear,
+  isCachedLinear,
+  patternSetIssue,
+  type LinearRegex,
+} from '../agents/linear-regex.js';
 import type { ArgConstraint, ToolGrant } from '../agents/schema.js';
 
 /**
@@ -113,17 +121,19 @@ function typeOf(v: unknown): string {
 }
 
 /**
- * Longest string (UTF-16 code units) a `pattern`, `deny` or policy `forbiddenArgPatterns`
- * expression is run against; a longer string is denied, never matched. Expressions run on a
- * linear-time engine (`compileLinear`), and this limit and {@link REGEX_WORK_BUDGET} bound the work
- * independently of it (AEP-0002 rule 4).
+ * Bounds of the pattern work of one decision (AEP-0002 rule 4). Matching is linear-time
+ * (`compileLinear`), and its cost is bounded three ways, independent of the engine:
+ *
+ * - a string above {@link REGEX_INPUT_LIMIT} UTF-16 units is denied, never matched;
+ * - matching is charged in steps (characters times program size) against {@link REGEX_WORK_BUDGET},
+ *   about half a second at 50 ns per step; a decision that needs more is denied (fail closed);
+ * - compiling is charged too ({@link COMPILE_STEPS_PER_CHAR} steps per source character of a pattern
+ *   that is not in the cache), and the source is limited (one pattern, the patterns of a grant or a
+ *   policy in total, their count; see `patternSetIssue`), so cold compiles stay within the budget;
+ *   stored data above the limits is denied without being compiled.
  */
 export const REGEX_INPUT_LIMIT = 16_384;
-/**
- * Matcher steps (characters scanned times program size) all expressions of one decision may use
- * together, about half a second at the measured 45 ns per step. A decision that needs more is denied
- * (fail closed), so many patterns over many large strings cannot hold the process.
- */
+/** Matcher steps all expressions of one decision may use together (see above). */
 export const REGEX_WORK_BUDGET = 10_000_000;
 
 /** Work left for the expressions of one decision. */
@@ -132,6 +142,13 @@ export class RegexWork {
   take(n: number): boolean {
     this.left -= n;
     return this.left >= 0;
+  }
+
+  /** The compiled `source`, or `null` when it cannot be taken or compiling it exceeds the budget. */
+  regex(source: string, ignoreCase = false): LinearRegex | null {
+    if (!isCachedLinear(source, ignoreCase) && !this.take(source.length * COMPILE_STEPS_PER_CHAR))
+      return null;
+    return compileLinear(source, ignoreCase);
   }
 }
 
@@ -235,7 +252,7 @@ export function checkArg(
           message: `argument "${name}" is longer than ${REGEX_INPUT_LIMIT} and cannot be matched`,
         });
       else {
-        const re = compileLinear(c.pattern);
+        const re = work.regex(c.pattern);
         if (re === null || !work.take(value.length * re.size))
           reasons.push({
             code: 'arg_pattern',
@@ -279,7 +296,7 @@ export function checkArg(
       });
     } else {
       for (const d of c.deny) {
-        const re = compileLinear(d);
+        const re = work.regex(d);
         if (re === null || !work.take(strings.reduce((n, x) => n + x.length, 0) * re.size)) {
           reasons.push({
             code: 'arg_denied',
@@ -332,6 +349,22 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
     reasons.push({ code: 'arg_type', message: 'the arguments of a tool call must be an object' });
     return { effect: 'deny', reasons, grant };
   }
+  // Stored data above the pattern limits is refused without compiling anything (the limits are what
+  // bounds the compile cost); the reason is audited like every other.
+  const grantIssue = patternSetIssue(
+    Object.values(grant.args).flatMap((c) => [
+      ...(c.pattern !== undefined ? [c.pattern] : []),
+      ...(c.deny ?? []),
+    ]),
+    MAX_DEFINITION_PATTERNS,
+  );
+  if (grantIssue) {
+    reasons.push({
+      code: 'arg_pattern',
+      message: `the pattern limits of this grant are exceeded: ${grantIssue}`,
+    });
+    return { effect: 'deny', reasons, grant };
+  }
   const work = new RegexWork();
   for (const [name, c] of Object.entries(grant.args)) {
     // Own properties only: `toString` or `__proto__` is not an argument somebody declared.
@@ -358,8 +391,19 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
     // value that cannot be inspected completely is denied, never let through.
     const strings = boundedStrings(args);
     for (const b of bundles) {
+      const issue = patternSetIssue(
+        b.forbiddenArgPatterns.map((f) => f.pattern),
+        MAX_POLICY_PATTERNS,
+      );
+      if (issue) {
+        reasons.push({
+          code: 'arg_forbidden_pattern',
+          message: `the pattern limits of a policy are exceeded: ${issue}`,
+        });
+        continue;
+      }
       for (const f of b.forbiddenArgPatterns) {
-        const re = compileLinear(f.pattern, true);
+        const re = work.regex(f.pattern, true);
         if (
           strings === null ||
           re === null ||

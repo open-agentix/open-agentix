@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   REGEX_INPUT_LIMIT,
   REGEX_WORK_BUDGET,
+  MAX_PATTERN_CHARS,
+  checkPatternList,
   compileLinear,
+  resetLinearCache,
   usesDotOrSpaceClass,
   ToolGrantSchema,
   argConstraintIssues,
@@ -1033,7 +1036,7 @@ describe('programs of bounded size', () => {
   ];
 
   it.each(BIG)('refuses %#: at validation and at run time, in under 100 ms', (pattern, text) => {
-    expect(checkRegexSource(pattern)?.code).toBe('too-large');
+    expect(['too-large', 'too-long']).toContain(checkRegexSource(pattern)?.code);
     expect(compileLinear(pattern)).toBeNull();
     const started = performance.now();
     // a stored constraint of an older version: never compiled, never run
@@ -1069,7 +1072,7 @@ describe('programs of bounded size', () => {
     expect(checkRegexSource('^a{100}b{100}c{100}d{100}$')).toBeNull();
     expect(checkRegexSource('^a{100}b{100}c{100}d{100}e{1}$')?.code).toBe('too-large');
     // a long flat pattern with no repeat at all is a long program
-    expect(checkRegexSource(`^${'(abc|def)'.repeat(110)}$`)?.code).toBe('unsupported');
+    expect(checkRegexSource('^(ab){100}(cd){100}(ef){100}(gh){100}$')?.code).toBe('unsupported');
     expect(compileLinear('^(src|test)/[A-Za-z0-9._/-]{1,200}$')?.size).toBeLessThan(512);
   });
 
@@ -1136,16 +1139,16 @@ describe('programs of bounded size', () => {
     expect(run([bundle(wide)], { x: text }, { allowAdditionalArgs: true }).effect).toBe('allow');
   });
 
-  it('allows at most 256 pattern and deny expressions in one definition', () => {
+  it('allows at most 128 pattern and deny expressions in one definition', () => {
     const args = (n: number, from: number) =>
       Array.from(
         { length: n },
         (_, i) => `k${from + i}: { type: string, maxLength: 9, deny: ["x"] }`,
       ).join(', ');
     const src = (n: number) => fm(`{ server: s, tool: t, args: { ${args(n, 0)} } }`);
-    expect(validateAgentSource(src(256)).errors).toEqual([]);
-    expect(validateAgentSource(src(257)).errors.map((e) => e.message)).toEqual([
-      'at most 256 pattern and deny expressions per definition',
+    expect(validateAgentSource(src(128)).errors).toEqual([]);
+    expect(validateAgentSource(src(129)).errors.map((e) => e.message)).toEqual([
+      'pattern and deny expressions of one definition: at most 128 patterns are allowed here',
     ]);
   });
 });
@@ -1195,5 +1198,126 @@ describe('the matcher contract is RE2, not ECMA-262', () => {
       fm('{ server: s, tool: t, args: { k: { pattern: "^a.b$", maxLength: 9 } } }'),
     ).warnings.map((x) => x.message);
     expect(w.join()).toMatch(/RE2 semantics/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Compile cost: bounded by the source that is written (third security review)
+// ---------------------------------------------------------------------------------------------
+
+describe('compile cost is bounded by source size', () => {
+  // About 11 instructions per 23 characters, unique suffix so that nothing is shared or cached.
+  const slow = (i: number, chars = 250): string => {
+    const unit = '[\\p{L}\\p{N}\\p{P}\\p{S}]';
+    return (
+      unit.repeat(Math.max(0, Math.floor((chars - 12) / unit.length))) +
+      `u${String(i).padStart(10, '0')}`
+    );
+  };
+  const timed = <T>(fn: () => T): [T, number] => {
+    const t0 = performance.now();
+    const out = fn();
+    return [out, performance.now() - t0];
+  };
+
+  it('refuses a pattern source above 256 characters, at validation and at run time', () => {
+    expect(checkRegexSource(slow(1, 256))).toBeNull();
+    expect(checkRegexSource(slow(1, 880))?.code).toBe('too-long');
+    expect(compileLinear(slow(1, 880))).toBeNull();
+    expect(compileLinear(slow(1, 250))).not.toBeNull();
+  });
+
+  it('caps the patterns of a set by count and by total characters', () => {
+    const many = (n: number, chars: number) => Array.from({ length: n }, (_, i) => slow(i, chars));
+    expect(checkPatternList(many(64, 128), 64)).toBeNull(); // 8192 characters
+    expect(checkPatternList(many(65, 8), 64)?.message).toMatch(/at most 64/);
+    expect(checkPatternList(many(40, 250), 64)?.message).toMatch(/together.*8192/);
+    expect(MAX_PATTERN_CHARS).toBe(8192);
+  });
+
+  it('validates a definition at the limit in under 1 s, and one above it without compiling', () => {
+    const arg = (k: number, n: number, chars: number) =>
+      `k${k}: { type: string, maxLength: 9, deny: [${Array.from({ length: n }, (_, i) => JSON.stringify(slow(k * 100 + i, chars))).join(', ')}] }`;
+    // 32 x 250 = 8000 characters: accepted and compiled by validation
+    const ok = fm(`{ server: s, tool: t, args: { ${arg(0, 32, 250)} } }`);
+    const [r, ms] = timed(() => validateAgentSource(ok));
+    expect(
+      r.errors.map((e) => e.message).filter((m) => !/deny patterns must not use/.test(m)),
+    ).toEqual([]);
+    expect(ms).toBeLessThan(1000);
+    // 40 x 250 = 10000 characters: refused up front, nothing is compiled
+    const over = fm(`{ server: s, tool: t, args: { ${arg(0, 40, 250)} } }`);
+    const [r2, ms2] = timed(() => validateAgentSource(over));
+    expect(r2.errors.map((e) => e.message).join()).toMatch(/together.*8192/);
+    expect(ms2).toBeLessThan(200);
+  });
+
+  it('decides with 32 cold slow-compiling deny patterns in under 1 s', () => {
+    resetLinearCache();
+    const deny = Array.from({ length: 32 }, (_, i) => slow(i, 250));
+    const [reasons, ms] = timed(() => checkArg('k', 'hello', { required: false, deny }));
+    expect(reasons).toEqual([]);
+    expect(ms).toBeLessThan(1000);
+    // the compile is charged to the budget: the same set twice more is still within it
+    resetLinearCache();
+    const [again, ms2] = timed(() => checkArg('k', 'hello', { required: false, deny }));
+    expect(again).toEqual([]);
+    expect(ms2).toBeLessThan(1000);
+  });
+
+  it('charges cold compiles to the budget, so a decision with too many is denied', () => {
+    resetLinearCache();
+    const patterns = Array.from({ length: 64 }, (_, i) => slow(i, 128));
+    const bundle = (k: number) => ({
+      forbiddenTools: [],
+      forbiddenArgPatterns: patterns
+        .slice(0, 64)
+        .map((p) => ({ pattern: `${p}${k}`, reason: 'no' })),
+      requireApprovalTools: [],
+    });
+    // 8 bundles x 64 cold patterns x 130 characters x 400 steps is far above 10,000,000
+    const t0 = performance.now();
+    const d = evaluateToolCall(
+      { server: 's', tool: 't', args: { x: 'hello' } },
+      {
+        definition: { classification: 'internal' },
+        agent: { id: 'a', tools: [grant({ server: 's', tool: 't', allowAdditionalArgs: true })] },
+        bundles: Array.from({ length: 8 }, (_, k) => bundle(k)),
+      },
+    );
+    expect(d.effect).toBe('deny');
+    expect(d.reasons.map((r) => r.message).join()).toMatch(
+      /cannot be checked against a policy pattern/,
+    );
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+
+  it('refuses stored data above the limits without compiling anything', () => {
+    resetLinearCache();
+    const huge = Array.from({ length: 300 }, (_, i) => slow(i, 250));
+    const t0 = performance.now();
+    const policy = evaluateToolCall(
+      { server: 's', tool: 't', args: { x: 'hello' } },
+      {
+        definition: { classification: 'internal' },
+        agent: { id: 'a', tools: [grant({ server: 's', tool: 't', allowAdditionalArgs: true })] },
+        bundles: [
+          {
+            forbiddenTools: [],
+            forbiddenArgPatterns: huge.map((pattern) => ({ pattern, reason: 'no' })),
+            requireApprovalTools: [],
+          },
+        ],
+      },
+    );
+    expect(policy.effect).toBe('deny');
+    expect(policy.reasons.map((r) => r.message).join()).toMatch(/pattern limits of a policy/);
+    const stored = decide(
+      { server: 's', tool: 't', args: { k: { type: 'string', deny: huge } } },
+      { k: 'hello' },
+    );
+    expect(stored.reasons.map((r) => r.message).join()).toMatch(/pattern limits of this grant/);
+    expect(performance.now() - t0).toBeLessThan(100);
+    expect(compileLinear(huge[0]!, false, true)).not.toBeNull(); // nothing was cached before this line
   });
 });

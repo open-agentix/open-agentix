@@ -19,7 +19,23 @@ export const MAX_REPEAT_SUM = 400;
 /** Largest compiled program (instructions of the matcher's NFA). */
 export const MAX_PROGRAM_SIZE = 512;
 /** Total instructions of all cached programs; the cache is dropped when it would grow beyond this. */
-const CACHE_PROGRAM_BUDGET = 8192;
+const CACHE_PROGRAM_BUDGET = 16_384;
+
+/**
+ * Limits on the SOURCE of patterns. Compiling costs about 10 ms and megabytes for a 900-character
+ * pattern, so the compile cost of a set of patterns is bounded by the characters written, which is
+ * what an author controls: one pattern is at most {@link MAX_PATTERN_SOURCE} characters, the patterns
+ * of one definition, manifest, policy bundle or guideline set add up to at most
+ * {@link MAX_PATTERN_CHARS}, and a policy or guideline holds at most {@link MAX_POLICY_PATTERNS}.
+ * The same limits apply when data is written and when it runs (stored data above them is refused
+ * without being compiled).
+ */
+export const MAX_PATTERN_SOURCE = 256;
+export const MAX_PATTERN_CHARS = 8192;
+export const MAX_POLICY_PATTERNS = 64;
+export const MAX_DEFINITION_PATTERNS = 128;
+/** Steps charged to the work budget of a decision per source character of a cold compile. */
+export const COMPILE_STEPS_PER_CHAR = 400;
 
 export interface LinearRegex {
   test(text: string): boolean;
@@ -78,7 +94,7 @@ export function compileLinear(
   const key = `${ignoreCase ? 'i' : 's'}:${source}`;
   if (useCache && cache.has(key)) return cache.get(key) ?? null;
   let compiled: LinearRegex | null = null;
-  if (repeatBoundsIssue(source) === null) {
+  if (source.length <= MAX_PATTERN_SOURCE && repeatBoundsIssue(source) === null) {
     try {
       const re = RE2JS.compile(source, ignoreCase ? RE2JS.CASE_INSENSITIVE : 0);
       // `re2Input.prog.inst` is internal to re2js (pinned): if it is not there after an upgrade,
@@ -101,4 +117,32 @@ export function compileLinear(
     cachedProgram += add;
   }
   return compiled;
+}
+
+/** Whether `compileLinear` would answer from the cache (no compile work). */
+export function isCachedLinear(source: string, ignoreCase = false): boolean {
+  return cache.has(`${ignoreCase ? 'i' : 's'}:${source}`);
+}
+
+/** Drops the cache (tests). */
+export function resetLinearCache(): void {
+  cache.clear();
+  cachedProgram = 0;
+}
+
+/**
+ * Whether a set of pattern sources is within the limits (count, characters in total, characters each).
+ * Returns the reason or `null`.
+ */
+export function patternSetIssue(sources: readonly string[], maxCount: number): string | null {
+  if (sources.length > maxCount) return `at most ${maxCount} patterns are allowed here`;
+  let chars = 0;
+  for (const source of sources) {
+    if (source.length > MAX_PATTERN_SOURCE)
+      return `a pattern is limited to ${MAX_PATTERN_SOURCE} characters`;
+    chars += source.length;
+  }
+  if (chars > MAX_PATTERN_CHARS)
+    return `the patterns together are limited to ${MAX_PATTERN_CHARS} characters`;
+  return null;
 }

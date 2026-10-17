@@ -4,6 +4,7 @@ import { OaxError, ValidationError, type ValidationIssue } from '../errors.js';
 import { compareSemver, isSemver } from '../semver.js';
 import { checkJsonSchemaSubset, JSON_SCHEMA_LIMITS, SCHEMA_REF_PREFIX } from './json-schema.js';
 import { argConstraintIssues, usesDotOrSpaceClass } from './arg-rules.js';
+import { MAX_DEFINITION_PATTERNS, patternSetIssue } from './linear-regex.js';
 import { parseAgentDefinition, type AgentDefinition, type AgentSpec } from './parser.js';
 import {
   CONFIG_PLACEHOLDER,
@@ -12,9 +13,6 @@ import {
   type CredentialRef,
 } from './schema.js';
 import { parseWhen, whenStepRefs } from './when.js';
-
-/** Most `pattern` and `deny` expressions in one definition. */
-export const MAX_PATTERNS_PER_DEFINITION = 256;
 
 /** Publish-time knowledge the core cannot have on its own (filled by the control node). */
 export interface DefinitionContext {
@@ -241,26 +239,25 @@ export function checkDefinition(
     if (!seen.has(id))
       warnings.push({ path: 'pipeline', message: `agent "${id}" is never executed` });
   }
-  // Compiling a pattern costs time and memory: one definition may not bring an unbounded number.
-  const patternCount = def.agents.reduce(
-    (n, a) =>
-      n +
-      a.tools.reduce(
-        (m, t) =>
-          m +
-          Object.values(t.args).reduce(
-            (k, c) => k + (c.pattern !== undefined ? 1 : 0) + (c.deny?.length ?? 0),
-            0,
-          ),
-        0,
-      ),
-    0,
+  // Compiling a pattern costs time and memory in proportion to its source: one definition may not
+  // bring an unbounded amount (count and total characters; one pattern is limited by its own rule).
+  const sources = def.agents.flatMap((a) =>
+    a.tools.flatMap((t) =>
+      Object.values(t.args).flatMap((c) => [
+        ...(c.pattern !== undefined ? [c.pattern] : []),
+        ...(c.deny ?? []),
+      ]),
+    ),
   );
-  if (patternCount > MAX_PATTERNS_PER_DEFINITION)
+  const tooMany = patternSetIssue(sources, MAX_DEFINITION_PATTERNS);
+  if (tooMany) {
     errors.push({
       path: 'agents',
-      message: `at most ${MAX_PATTERNS_PER_DEFINITION} pattern and deny expressions per definition`,
+      message: `pattern and deny expressions of one definition: ${tooMany}`,
     });
+    // Nothing is compiled for a definition over the limits: that cost is what they bound.
+    return { errors, warnings };
+  }
   def.agents.forEach((a, i) => {
     const grants = new Set<string>();
     a.tools.forEach((t, j) => {

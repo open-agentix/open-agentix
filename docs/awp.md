@@ -215,7 +215,7 @@ exporter share one implementation, `arg-rules.ts`). They are the rule names of t
 - `args.range`: `minimum > maximum`, `minLength > maxLength`.
 - `args.with-deny` (AWP manifests): `args` or a call limit on an entry with `allow: false`.
 - `args.limit`: more than 64 `deny` patterns on one argument (also in `agents.md`); in manifests also more than
-  256 constrained arguments on one entry or more than 256 patterns in one document.
+  256 constrained arguments on one entry or more than 128 patterns or 8192 pattern characters in one document.
 
 The path of a finding in a manifest is the member that breaks the rule, for example
 `/spec/agents/0/permissions/tools/jira.get_issue/x-openagentix-args/key/pattern`. The AEP's invalid
@@ -253,12 +253,20 @@ twenty of them 24 s), so the size is bounded too:
   program has at most 512 instructions (read from `re2Input.prog.inst`, an internal field of the pinned
   version; if it is missing nothing compiles and everything denies). Patterns above these are refused at
   validation (`args.pattern-invalid`) and never compiled at run time (the call is denied);
-- a definition may hold at most 256 `pattern` and `deny` expressions (a manifest document too), a pattern is at
-  most 1024 characters; validation does not fill the compile cache, the run-time cache is bounded by total
-  program size;
+- compiling is bounded by the **source that is written**, because a cold compile costs about 10 ms and
+  megabytes for a 900-character pattern (256 such `deny` patterns took 2.2 s per decision, 27.6 s for a policy
+  of 950): one pattern is at most 256 characters; the `pattern` and `deny` expressions of a definition or manifest
+  add up to at most 8192 characters and 128 expressions; a policy bundle or a guideline set holds at most 64
+  `forbiddenArgPatterns` and 8192 characters in total. The limits apply when the data is written
+  (`agents.md` validation and publish, the AWP manifest validator, `POST/PUT /v1/policies`, guideline
+  creation, all with the rules above) **and when it runs**: stored data above them is denied with an audited
+  reason without being compiled. Validation does not fill the compile cache; the run-time cache is bounded by
+  total program size;
 - a string above 16384 units is denied; the work of all expressions of one decision is charged in
   **steps (characters scanned times program size)**, at most 10,000,000 per decision (about half a second
-  at the measured 45 ns per step); a decision that needs more is denied (fail closed); a `deny` rule that
+  at the measured 45 ns per step); a cold compile is charged to the same budget (400 steps per source character), so a
+  decision that must compile many patterns is bounded in time too, whatever the cache holds; a decision that
+  needs more is denied (fail closed); a `deny` rule that
   cannot inspect the whole value denies; a pattern the matcher cannot take denies.
 
 Semantics are those of RE2, which differ from ECMA-262 (pinned by tests): `.` matches CR (not LF) and the

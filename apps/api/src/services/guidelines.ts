@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
+  MAX_POLICY_PATTERNS,
+  checkPatternList,
   GuidelineRulesSchema,
   guidelinesToPolicyBundle,
   isSemver,
@@ -67,6 +69,19 @@ export class GuidelinesService {
     if (!isSemver(input.version))
       throw new HttpError(400, 'validation_failed', 'version must be SemVer');
     const rules = GuidelineRulesSchema.parse(input.rules);
+    // Guideline patterns become policy patterns of every run: same limits and rules as a policy.
+    const bad = checkPatternList(
+      rules.forbiddenArgPatterns.map((f) => f.pattern),
+      MAX_POLICY_PATTERNS,
+    );
+    if (bad)
+      throw new HttpError(
+        400,
+        'validation_failed',
+        bad.index === null
+          ? `forbiddenArgPatterns: ${bad.message}`
+          : `invalid pattern in forbiddenArgPatterns.${bad.index}: ${bad.message}`,
+      );
     const [exists] = await this.ctx.db
       .select({ id: guidelines.id })
       .from(guidelines)

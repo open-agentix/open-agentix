@@ -65,10 +65,16 @@ All notable changes to this project are documented here. The format follows
   Matching time is linear in input times program size, so the program is bounded too (a flat
   `.{0,999}` x 20 + `x` compiled to 4000 instructions and blocked the process for 24 s): repeat bounds
   above 200 (sum 400) and programs above 512 instructions are refused and never compiled, the work budget is
-  charged in steps (length x program size, 10,000,000 per decision), a definition may hold 256 patterns, the
+  charged in steps (length x program size, 10,000,000 per decision), a definition may hold 128 patterns (see below), the
   compile cache is bounded by program size and validation does not fill it. The contract is RE2, not
   ECMA-262 (`.` matches CR, `\s` misses no-break space): `deny` patterns must not use `.` or `\s`, `.` in a
   `pattern` warns, the policy-wide reason no longer repeats the pattern.
+  Compiling is bounded by the source written: one pattern is at most 256 characters, the patterns of a
+  definition, manifest, policy or guideline set at most 8192 characters in total (128 per definition, 64 per
+  policy or guideline set), checked when written (including guidelines, which were not validated at all)
+  and when run (stored data above the limits is denied without compiling); a cold compile is charged to the
+  decision's work budget (400 steps per source character). Measured before: 256 accepted deny patterns made
+  every decision take 2.2 s, a policy of 950 patterns took 27.6 s to validate.
   Patterns are unanchored (substring match); validation warns when a `pattern` has no `^...$`. The
   no-widening check refuses an `allow` / `allowAdditionalArgs` that is not a boolean.
 - **Argument checks of the policy engine fail closed (AWP-7, #261)**: a bound that does not fit the type
