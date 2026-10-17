@@ -189,10 +189,14 @@ describe('checkArg', () => {
     expect(codes({ a: ['secret'] }, { deny: ['secr'] })).toEqual(['arg_denied']);
     expect(codes(5, { pattern: '\\d' })).toEqual(['arg_type']);
   });
-  it('stops recursing into very deep values', () => {
+  it('denies a value too deep to inspect instead of letting it pass a deny rule', () => {
     let deep: unknown = 'secret';
     for (let i = 0; i < 40; i++) deep = [deep];
-    expect(codes(deep, { deny: ['secret'] })).toEqual([]);
+    expect(codes(deep, { deny: ['secret'] })).toEqual(['arg_denied']);
+    let shallow: unknown = 'secret';
+    for (let i = 0; i < 10; i++) shallow = [shallow];
+    expect(codes(shallow, { deny: ['secret'] })).toEqual(['arg_denied']);
+    expect(codes(shallow, { deny: ['other'] })).toEqual([]);
   });
 });
 
