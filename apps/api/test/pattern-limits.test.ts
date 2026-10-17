@@ -71,8 +71,8 @@ describe('guideline patterns', () => {
       },
     });
 
-  it('accepts the maximum and refuses beyond it, a bad pattern included', async () => {
-    const ok = await create('1.0.0', patterns(64, 128));
+  it('accepts the maximum of a global set (half of a policy) and refuses beyond it', async () => {
+    const ok = await create('1.0.0', patterns(32, 128));
     expect(ok.statusCode, ok.body).toBe(201);
     expect((await create('1.0.1', patterns(65, 8))).statusCode).toBe(400);
     expect((await create('1.0.2', patterns(1, 880))).statusCode).toBe(400);
@@ -81,5 +81,108 @@ describe('guideline patterns', () => {
     expect(lookahead.statusCode).toBe(400);
     const nested = await create('1.0.5', [{ pattern: '^((a|a))*$', reason: 'no' }]);
     expect(nested.statusCode).toBe(400);
+  });
+});
+
+describe('limits that hold for what applies together', () => {
+  it('refuses the 33rd enabled policy, and patterns beyond 128 across enabled policies', async () => {
+    const t0 = performance.now();
+    const make = (name: string, bundle: unknown, enabled = true) =>
+      n.req({ method: 'POST', url: '/v1/policies', payload: { name, enabled, bundle } });
+    const first = await make('tenant-a', { forbiddenArgPatterns: patterns(30, 8) });
+    expect(first.statusCode, first.body).toBe(201);
+    const second = await make('tenant-b', { forbiddenArgPatterns: patterns(30, 9) });
+    expect(second.statusCode, second.body).toBe(201);
+    // 64 (earlier test) + 30 + 30 + 9 > 128 enabled patterns of the tenant
+    const third = await make('tenant-c', { forbiddenArgPatterns: patterns(9, 10) });
+    expect(third.statusCode).toBe(422);
+    expect(third.json().error).toBe('policy_limits_exceeded');
+    // disabled policies do not count, and enabling one that would exceed is refused too
+    const off = await make('tenant-d', { forbiddenArgPatterns: patterns(9, 11) }, false);
+    expect(off.statusCode, off.body).toBe(201);
+    const enable = await n.req({
+      method: 'PUT',
+      url: `/v1/policies/${off.json().id}`,
+      payload: { enabled: true },
+    });
+    expect(enable.statusCode).toBe(422);
+    // the number of enabled policies
+    for (let i = 0; i < 30; i++) {
+      const ok = await make(`small-${i}`, { forbiddenTools: [`x/${i}`] });
+      if (i < 28) expect(ok.statusCode, ok.body).toBe(201);
+      else if (ok.statusCode === 422) break;
+    }
+    expect((await make('one-too-many', { forbiddenTools: ['x/last'] })).statusCode).toBe(422);
+    expect(performance.now() - t0).toBeLessThan(5000);
+  });
+
+  it('refuses globs above the limits when a policy or a guideline is written', async () => {
+    const policy = await n.req({
+      method: 'POST',
+      url: '/v1/policies',
+      payload: { name: 'globby', bundle: { forbiddenTools: ['*a*a*a*a*a*a*a*a*a*!'] } },
+    });
+    expect(policy.statusCode).toBe(400);
+    const guideline = await n.req({
+      method: 'POST',
+      url: '/v1/guidelines',
+      payload: {
+        scope: 'global',
+        name: 'globby',
+        version: '1.0.0',
+        content: '# R',
+        rules: { requireApprovalTools: ['a'.repeat(200)] },
+      },
+    });
+    expect(guideline.statusCode).toBe(400);
+  });
+
+  it('refuses a guideline set whose merge with the others exceeds a policy (422)', async () => {
+    const g = (scope: string, name: string, version: string, count: number, chars = 8) =>
+      n.req({
+        method: 'POST',
+        url: '/v1/guidelines',
+        payload: {
+          scope,
+          name,
+          version,
+          content: '# R',
+          rules: {
+            forbiddenArgPatterns: patterns(count, chars).map((p, i) => ({
+              ...p,
+              pattern: `${p.pattern}${scope}${name}${version}${i}`.slice(-250),
+            })),
+          },
+        },
+      });
+    // a global set uses at most half of a policy: the earlier test created 32 patterns already
+    const more = await g('global', 'second', '1.0.0', 1);
+    expect(more.statusCode).toBe(422);
+    expect(more.json().error).toBe('guideline_limits_exceeded');
+    // the tenant has room for 64 - 32 patterns, over all its versions
+    expect((await g('tenant', 'own', '1.0.0', 30)).statusCode).toBe(201);
+    expect((await g('tenant', 'own', '1.0.1', 30)).statusCode).toBe(422);
+  });
+});
+
+describe('evaluate and dry-run are bounded', () => {
+  it('rate-limits POST /v1/policies/evaluate like validation', async () => {
+    const strict = await testNode({ OAX_RATE_LIMIT_VALIDATE_MAX: '3' });
+    try {
+      const statuses: number[] = [];
+      for (let i = 0; i < 5; i++)
+        statuses.push(
+          (
+            await strict.req({
+              method: 'POST',
+              url: '/v1/policies/evaluate',
+              payload: { source: 'x', agentId: 'a', call: { server: 's', tool: 't', args: {} } },
+            })
+          ).statusCode,
+        );
+      expect(statuses.slice(3)).toEqual([429, 429]);
+    } finally {
+      await strict.close();
+    }
   });
 });

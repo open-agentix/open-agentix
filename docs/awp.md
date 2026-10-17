@@ -260,14 +260,32 @@ twenty of them 24 s), so the size is bounded too:
   `forbiddenArgPatterns` and 8192 characters in total. The limits apply when the data is written
   (`agents.md` validation and publish, the AWP manifest validator, `POST/PUT /v1/policies`, guideline
   creation, all with the rules above) **and when it runs**: stored data above them is denied with an audited
-  reason without being compiled. Validation does not fill the compile cache; the run-time cache is bounded by
-  total program size;
-- a string above 16384 units is denied; the work of all expressions of one decision is charged in
-  **steps (characters scanned times program size)**, at most 10,000,000 per decision (about half a second
-  at the measured 45 ns per step); a cold compile is charged to the same budget (400 steps per source character), so a
-  decision that must compile many patterns is bounded in time too, whatever the cache holds; a decision that
-  needs more is denied (fail closed); a `deny` rule that
-  cannot inspect the whole value denies; a pattern the matcher cannot take denies.
+  reason without being compiled. Validation does not fill the compile cache. Everything that **applies together
+  to one decision** is bounded as a whole: at most 64 policies, 256 patterns and 32768 pattern characters over
+  platform policies, tenant policies and the merged guidelines, and per tenant the enabled policies at write
+  time (create, update, enable: at most 32 policies, 128 patterns, 16384 characters; platform: 16, 64, 8192,
+  `422 policy_limits_exceeded`). Guideline sets are merged (all versions of all sets) into one policy, so the
+  limits of a policy hold for the merge (`422 guideline_limits_exceeded`; a global set may use half so every
+  tenant keeps room);
+- a string above 16384 units is denied. **Matching** is charged in steps (characters scanned times program
+  size) against 2,000,000 steps per decision (about 100 ms at the measured 50 ns per step). **Compiling** is
+  charged separately, after the compile, for a pattern not in the cache: 1500 steps per source character plus
+  100 per instruction, against 3,000,000 steps (about 150 ms; the charge is deliberately above measured
+  compile times, which were 0.5 to 146 us per character). When a budget is gone nothing more is compiled or
+  matched in that decision (it denies, fail closed); compiled patterns stay cached (up to 65,536 source
+  characters, about 40 MB), so a large policy that does not fit one decision is compiled over a few
+  decisions, denying until it is complete. A dry run (`/v1/agents/:id/dry-run`) shares one budget over all its
+  scripted calls (at most 32 calls per response, 64 responses), and `POST /v1/policies/evaluate` is
+  rate-limited like validation. Measured with the real code (this implementation, warm): a maximum policy
+  set of 8 x 32 patterns of 128 characters takes 22 to 61 ms per cold decision (up to 146 ms with case-insensitive
+  `\p{Ll}` classes), converges in 15 to 16 decisions, and then 2 ms; the matching budget is exhausted in
+  under 1 ms by a request that asks for more;
+- a `deny` rule that cannot inspect the whole value denies; a pattern the matcher cannot take denies;
+- **globs** (`forbiddenTools`, `requireApprovalTools`, `forbiddenDependencies`) are matched without a regular
+  expression (iterative two-pointer, `*a*a*a*a*!` against a 200-character name: under 5 ms; the previous
+  implementation built a backtracking `RegExp`, 24.8 s). A glob is at most 128 characters with at most 8
+  `*`, checked when written; a stored glob above that forbids (or requires approval), and a tool name above
+  256 characters is denied.
 
 Semantics are those of RE2, which differ from ECMA-262 (pinned by tests): `.` matches CR (not LF) and the
 Unicode line separators, so `^a.b$` accepts `a\rb`; `\s` does not match no-break space or vertical tab, so

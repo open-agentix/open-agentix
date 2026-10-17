@@ -73,7 +73,7 @@ All notable changes to this project are documented here. The format follows
   definition, manifest, policy or guideline set at most 8192 characters in total (128 per definition, 64 per
   policy or guideline set), checked when written (including guidelines, which were not validated at all)
   and when run (stored data above the limits is denied without compiling); a cold compile is charged to the
-  decision's work budget (400 steps per source character). Measured before: 256 accepted deny patterns made
+  decision's compile budget (1500 steps per source character plus 100 per instruction, 3,000,000 steps; matching has its own 2,000,000). Everything that applies together is bounded (64 policies, 256 patterns, 32768 characters per decision; per tenant 32 enabled policies, 128 patterns, `422 policy_limits_exceeded`; merged guideline sets, `422 guideline_limits_exceeded`), a dry run shares one budget and is capped at 32 scripted calls per response, `POST /v1/policies/evaluate` is rate-limited, and globs are matched in linear time (128 characters, 8 `*`). Measured before: 256 accepted deny patterns made
   every decision take 2.2 s, a policy of 950 patterns took 27.6 s to validate.
   Patterns are unanchored (substring match); validation warns when a `pattern` has no `^...$`. The
   no-widening check refuses an `allow` / `allowAdditionalArgs` that is not a boolean.

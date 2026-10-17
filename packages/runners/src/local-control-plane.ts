@@ -1,6 +1,7 @@
 import {
   createAuditEntry,
   evaluateToolCall,
+  RegexWork,
   stepAuditEntry,
   verifyAuditChain,
   type AgentDefinition,
@@ -40,6 +41,8 @@ export class LocalControlPlane implements ControlPlane {
   readonly results = new Map<string, RunResult>();
   private readonly cancelled = new Set<string>();
   private readonly callCounts = new Map<string, Map<string, number>>();
+  /** One pattern budget for everything this plane decides: a dry-run request cannot multiply it. */
+  private readonly work = new RegexWork();
 
   constructor(private readonly opts: LocalControlPlaneOptions) {}
 
@@ -72,6 +75,7 @@ export class LocalControlPlane implements ControlPlane {
       toolAccess: this.opts.toolAccess ?? (this.opts.definition as PublishedDefinition).toolAccess,
       bundles: this.opts.policies ?? [],
       callCounts: counts,
+      work: this.work,
     });
     if (decision.effect !== 'deny') {
       const key = `${call.server}/${call.tool}`;

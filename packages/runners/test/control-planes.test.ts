@@ -5,6 +5,31 @@ import { agentFile } from './helpers.js';
 const def = agentFile(`    tools:
       - { server: s, tool: t, maxCallsPerRun: 1 }`);
 
+describe('LocalControlPlane pattern budget', () => {
+  it('shares one pattern budget over all decisions, so a dry run cannot multiply it', async () => {
+    const wideDef = agentFile(`    tools:
+      - { server: s, tool: t, allowAdditionalArgs: true }`);
+    const cp = new LocalControlPlane({
+      definition: wideDef,
+      policies: [
+        {
+          forbiddenTools: [],
+          forbiddenArgPatterns: [{ pattern: '[a-z]{0,50}Q', reason: 'no' }],
+          requireApprovalTools: [],
+        },
+      ],
+    });
+    const call = { server: 's', tool: 't', args: { x: 'a'.repeat(16_384) } };
+    const t0 = performance.now();
+    const effects: string[] = [];
+    for (let i = 0; i < 6; i++) effects.push((await cp.decideToolCall('r', 'a', call)).effect);
+    // each decision alone fits the matching budget; together they do not
+    expect(effects[0]).toBe('allow');
+    expect(effects.at(-1)).toBe('deny');
+    expect(performance.now() - t0).toBeLessThan(1500);
+  });
+});
+
 describe('LocalControlPlane', () => {
   it('decides, counts calls, audits and verifies', async () => {
     const steps: string[] = [];

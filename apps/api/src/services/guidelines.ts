@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
+  MAX_PATTERN_CHARS,
   MAX_POLICY_PATTERNS,
   checkPatternList,
+  globIssue,
+  patternSetIssue,
   GuidelineRulesSchema,
   guidelinesToPolicyBundle,
   isSemver,
@@ -82,6 +85,21 @@ export class GuidelinesService {
           ? `forbiddenArgPatterns: ${bad.message}`
           : `invalid pattern in forbiddenArgPatterns.${bad.index}: ${bad.message}`,
       );
+    for (const g of [
+      ...rules.forbiddenTools,
+      ...rules.requireApprovalTools,
+      ...rules.forbiddenDependencies,
+    ]) {
+      const issue = globIssue(g);
+      if (issue)
+        throw new HttpError(400, 'validation_failed', `invalid glob ${g.slice(0, 64)}: ${issue}`);
+    }
+    await this.assertMergedLimits(actor.tenantId, {
+      scope: input.scope,
+      name: input.name,
+      version: input.version,
+      rules,
+    });
     const [exists] = await this.ctx.db
       .select({ id: guidelines.id })
       .from(guidelines)
@@ -121,6 +139,40 @@ export class GuidelinesService {
       payload: { scope: input.scope, rules },
     });
     return row!;
+  }
+
+  /**
+   * Guideline sets are merged (union of patterns, every version of every set) into ONE policy that
+   * applies to every tool call, so the limits of a policy hold for the merge, not for a set alone.
+   * A global set may use half of them, so that every tenant keeps room for its own. Refused with 422
+   * at write time; at run time a merge above the limits would deny every call of the tenant.
+   */
+  private async assertMergedLimits(tenantId: string, added: GuidelineSet): Promise<void> {
+    const existing = (await this.list(tenantId))
+      .filter((r) => r.scope === 'global' || r.scope === 'tenant')
+      .map(toSet);
+    const merged = (sets: GuidelineSet[], max: number, maxChars: number) =>
+      patternSetIssue(
+        resolveGuidelines(sets).forbiddenArgPatterns.map((f) => f.pattern),
+        max,
+      ) ??
+      (resolveGuidelines(sets).forbiddenArgPatterns.reduce((n, f) => n + f.pattern.length, 0) >
+      maxChars
+        ? `the merged patterns are limited to ${maxChars} characters`
+        : null);
+    const globalOnly = [...existing.filter((x) => x.scope === 'global'), added].filter(
+      (x) => x.scope === 'global',
+    );
+    const issue =
+      added.scope === 'global'
+        ? merged(globalOnly, MAX_POLICY_PATTERNS / 2, MAX_PATTERN_CHARS / 2)
+        : merged([...existing, added], MAX_POLICY_PATTERNS, MAX_PATTERN_CHARS);
+    if (issue)
+      throw new HttpError(
+        422,
+        'guideline_limits_exceeded',
+        `the guideline sets that apply together (all versions merged): ${issue}`,
+      );
   }
 
   /** Global and tenant sets plus the agent sets referenced by the definition. */

@@ -164,7 +164,7 @@ export const SimulatedToolCallSchema = z.strictObject({
 
 export const SimulatedResponseSchema = z.strictObject({
   text: z.string().optional(),
-  toolCalls: z.array(SimulatedToolCallSchema).optional(),
+  toolCalls: z.array(SimulatedToolCallSchema).max(32).optional(),
   usage: z
     .strictObject({
       inputTokens: z.number().int().nonnegative(),
@@ -239,7 +239,9 @@ export const AgentSpecSchema = z.strictObject({
   outputs: z.array(OutputSchema).default([{ format: 'markdown' }]),
   budget: BudgetSchema.optional(),
   /** Scripted model responses used by the `simulated` provider (tests, demos). */
-  simulation: z.strictObject({ responses: z.array(SimulatedResponseSchema).min(1) }).optional(),
+  simulation: z
+    .strictObject({ responses: z.array(SimulatedResponseSchema).min(1).max(64) })
+    .optional(),
   // ADR 0008 (additive, optional): typed handovers, conditions, access class, credentials, runtime.
   input: HandoverInputSchema.optional(),
   output: HandoverOutputSchema.optional(),

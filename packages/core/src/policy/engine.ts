@@ -2,8 +2,14 @@ import { z } from 'zod';
 import { CLASSIFICATIONS, mayFlow, type Classification } from '../classification.js';
 import type { AgentDefinition, AgentSpec } from '../agents/parser.js';
 import type { ToolAccess } from '../agents/profiles.js';
+import { MAX_GLOB_SUBJECT, globIssue, globMatch } from '../glob.js';
 import {
   COMPILE_STEPS_PER_CHAR,
+  COMPILE_STEPS_PER_INSTRUCTION,
+  MAX_ALL_POLICY_CHARS,
+  MAX_ALL_POLICY_PATTERNS,
+  MAX_BUNDLES,
+  bundleSetIssue,
   MAX_DEFINITION_PATTERNS,
   MAX_POLICY_PATTERNS,
   compileLinear,
@@ -87,17 +93,17 @@ export interface PolicyContext {
   bundles?: readonly PolicyBundle[];
   /** Number of calls already made in this run, keyed by `server/tool`. */
   callCounts?: ReadonlyMap<string, number>;
+  /** Shared work budget (a dry-run request shares one over all its scripted calls). */
+  work?: RegexWork;
 }
 
-/** Glob with `*` (any chars) only; everything else is literal. */
-export function globMatch(glob: string, value: string): boolean {
-  const re = new RegExp(`^${glob.split('*').map(escapeRegex).join('.*')}$`, 's');
-  return re.test(value);
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-}
+export {
+  MAX_GLOB_LENGTH,
+  MAX_GLOB_STARS,
+  MAX_GLOB_SUBJECT,
+  globIssue,
+  globMatch,
+} from '../glob.js';
 
 export function findGrant(
   tools: readonly ToolGrant[],
@@ -122,33 +128,42 @@ function typeOf(v: unknown): string {
 
 /**
  * Bounds of the pattern work of one decision (AEP-0002 rule 4). Matching is linear-time
- * (`compileLinear`), and its cost is bounded three ways, independent of the engine:
+ * (`compileLinear`), and its cost is bounded, independent of the engine:
  *
  * - a string above {@link REGEX_INPUT_LIMIT} UTF-16 units is denied, never matched;
  * - matching is charged in steps (characters times program size) against {@link REGEX_WORK_BUDGET},
- *   about half a second at 50 ns per step; a decision that needs more is denied (fail closed);
- * - compiling is charged too ({@link COMPILE_STEPS_PER_CHAR} steps per source character of a pattern
- *   that is not in the cache), and the source is limited (one pattern, the patterns of a grant or a
- *   policy in total, their count; see `patternSetIssue`), so cold compiles stay within the budget;
- *   stored data above the limits is denied without being compiled.
+ *   about 100 ms at the measured 50 ns per step; a decision that needs more is denied (fail closed);
+ * - compiling is charged separately against {@link REGEX_COMPILE_BUDGET} (about 150 ms): per source
+ *   character and per instruction, after the compile, for a pattern that is not in the cache. When
+ *   the budget is gone no further pattern is compiled in that decision (it denies), and the patterns
+ *   compiled so far stay cached, so the next decision continues where this one stopped;
+ * - the source is limited (one pattern, the patterns of a grant, of a policy and of everything that
+ *   applies together, their count; see `patternSetIssue` and `bundleSetIssue`), and stored data above
+ *   the limits is denied without being compiled.
  */
 export const REGEX_INPUT_LIMIT = 16_384;
 /** Matcher steps all expressions of one decision may use together (see above). */
-export const REGEX_WORK_BUDGET = 10_000_000;
+export const REGEX_WORK_BUDGET = 2_000_000;
+/** Compile steps all cold compiles of one decision may use together (see above). */
+export const REGEX_COMPILE_BUDGET = 3_000_000;
 
-/** Work left for the expressions of one decision. */
+/** Work left for the expressions of one decision (or of one dry-run request). */
 export class RegexWork {
   left = REGEX_WORK_BUDGET;
+  compileLeft = REGEX_COMPILE_BUDGET;
   take(n: number): boolean {
     this.left -= n;
     return this.left >= 0;
   }
 
-  /** The compiled `source`, or `null` when it cannot be taken or compiling it exceeds the budget. */
+  /** The compiled `source`, or `null` when it cannot be taken or the compile budget is gone. */
   regex(source: string, ignoreCase = false): LinearRegex | null {
-    if (!isCachedLinear(source, ignoreCase) && !this.take(source.length * COMPILE_STEPS_PER_CHAR))
-      return null;
-    return compileLinear(source, ignoreCase);
+    if (isCachedLinear(source, ignoreCase)) return compileLinear(source, ignoreCase);
+    if (this.compileLeft <= 0) return null;
+    const re = compileLinear(source, ignoreCase);
+    this.compileLeft -=
+      source.length * COMPILE_STEPS_PER_CHAR + (re?.size ?? 0) * COMPILE_STEPS_PER_INSTRUCTION;
+    return re;
   }
 }
 
@@ -324,12 +339,31 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
   const bundles = ctx.bundles ?? [];
   const reasons: PolicyReason[] = [];
 
+  // Everything that applies to one decision is bounded as a whole; stored data above the limits is
+  // refused without matching or compiling anything (the limits are what bounds the cost).
+  const applied = bundleSetIssue(bundles, {
+    bundles: MAX_BUNDLES,
+    patterns: MAX_ALL_POLICY_PATTERNS,
+    chars: MAX_ALL_POLICY_CHARS,
+  });
+  if (applied) {
+    reasons.push({
+      code: 'tool_forbidden',
+      message: `the policies that apply exceed their limits: ${applied}`,
+    });
+    return { effect: 'deny', reasons, grant: null };
+  }
+  if (key.length > MAX_GLOB_SUBJECT) {
+    reasons.push({ code: 'tool_forbidden', message: 'the tool name is too long' });
+    return { effect: 'deny', reasons, grant: null };
+  }
   for (const b of bundles) {
     for (const glob of b.forbiddenTools) {
-      if (globMatch(glob, key)) {
+      // A glob above the limits is not evaluated; a forbidden-tool rule that cannot be read forbids.
+      if (globIssue(glob) !== null || globMatch(glob, key)) {
         reasons.push({
           code: 'tool_forbidden',
-          message: `tool "${key}" is forbidden by policy (${glob})`,
+          message: `tool "${key}" is forbidden by policy (${glob.slice(0, 64)})`,
         });
       }
     }
@@ -365,7 +399,7 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
     });
     return { effect: 'deny', reasons, grant };
   }
-  const work = new RegexWork();
+  const work = ctx.work ?? new RegexWork();
   for (const [name, c] of Object.entries(grant.args)) {
     // Own properties only: `toString` or `__proto__` is not an argument somebody declared.
     if (!Object.hasOwn(args, name) || (args as Record<string, unknown>)[name] === undefined) {
@@ -452,7 +486,7 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
   if (reasons.length > 0) return { effect: 'deny', reasons, grant };
 
   const approvalByBundle = bundles.some((b) =>
-    b.requireApprovalTools.some((g) => globMatch(g, key)),
+    b.requireApprovalTools.some((g) => globIssue(g) !== null || globMatch(g, key)),
   );
   if (grant.approval === 'required' || approvalByBundle) {
     return {

@@ -668,7 +668,10 @@ export function registerCatalogRoutes(app: ZApp, { ctx, services }: Deps): void 
   app.post(
     '/v1/policies/evaluate',
     {
-      config: { access: 'policies:read' },
+      config: {
+        access: 'policies:read',
+        rateLimit: { max: ctx.config.rateLimit.validateMax, timeWindow: '1 minute' },
+      },
       schema: {
         tags: ['policies'],
         summary: 'Dry-run the policy gate for a tool call',

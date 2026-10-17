@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
+  MAX_ENABLED_POLICIES,
+  MAX_ENABLED_POLICY_CHARS,
+  MAX_ENABLED_POLICY_PATTERNS,
+  MAX_PATTERN_CHARS,
   MAX_POLICY_PATTERNS,
+  bundleSetIssue,
   checkPatternList,
+  globIssue,
   getEgressPolicy,
   hasPermission,
   hasTenantPrefix,
@@ -91,7 +97,23 @@ function assertRegexes(bundle: PolicyBundle): void {
         ? `forbiddenArgPatterns: ${issue.message}`
         : `invalid pattern ${bundle.forbiddenArgPatterns[issue.index]!.pattern}: ${issue.message}`,
     );
+  // Globs are matched on every tool call: bounded length and number of "*" (see glob.ts).
+  for (const g of [...bundle.forbiddenTools, ...bundle.requireApprovalTools]) {
+    const bad = globIssue(g);
+    if (bad)
+      throw new HttpError(400, 'validation_failed', `invalid glob ${g.slice(0, 64)}: ${bad}`);
+  }
 }
+
+/** What the enabled policies of one tenant (or of the platform) may hold together. */
+const ENABLED_LIMITS = {
+  tenant: {
+    bundles: MAX_ENABLED_POLICIES,
+    patterns: MAX_ENABLED_POLICY_PATTERNS,
+    chars: MAX_ENABLED_POLICY_CHARS,
+  },
+  platform: { bundles: 16, patterns: MAX_POLICY_PATTERNS, chars: MAX_PATTERN_CHARS },
+} as const;
 
 /** Where a run executes: connections resolve most specific first (agent, team, tenant, platform). */
 export interface RunScope {
@@ -1174,6 +1196,32 @@ export class CatalogService {
     );
   }
 
+  /**
+   * The enabled policies of a tenant (or the platform) are bounded together, not only one by one:
+   * every enabled policy applies to every tool call of the tenant.
+   */
+  private async assertEnabledLimits(
+    tenantId: string,
+    scope: 'platform' | 'tenant',
+    excludeId: string | null,
+    bundle: PolicyBundle,
+    enabled: boolean,
+  ): Promise<void> {
+    if (!enabled) return;
+    const rows = await this.ctx.db
+      .select({ id: policies.id, bundle: policies.bundle })
+      .from(policies)
+      .where(
+        and(eq(policies.tenantId, tenantId), eq(policies.scope, scope), eq(policies.enabled, true)),
+      );
+    const others = rows
+      .filter((r) => r.id !== excludeId)
+      .map((r) => PolicyBundleSchema.parse(r.bundle));
+    const issue = bundleSetIssue([...others, bundle], ENABLED_LIMITS[scope]);
+    if (issue)
+      throw new HttpError(422, 'policy_limits_exceeded', `enabled ${scope} policies: ${issue}`);
+  }
+
   async createPolicy(
     actor: Principal,
     input: {
@@ -1189,6 +1237,7 @@ export class CatalogService {
       throw forbidden('platform policies need platform operator access');
     const bundle = PolicyBundleSchema.parse(input.bundle);
     assertRegexes(bundle);
+    await this.assertEnabledLimits(actor.tenantId, scope, null, bundle, input.enabled);
     const [exists] = await this.ctx.db
       .select({ id: policies.id })
       .from(policies)
@@ -1231,6 +1280,13 @@ export class CatalogService {
         ? PolicyBundleSchema.parse(current.bundle)
         : PolicyBundleSchema.parse(input.bundle);
     assertRegexes(bundle);
+    await this.assertEnabledLimits(
+      actor.tenantId,
+      current.scope as 'platform' | 'tenant',
+      id,
+      bundle,
+      input.enabled ?? current.enabled,
+    );
     const [row] = await this.ctx.db
       .update(policies)
       .set({

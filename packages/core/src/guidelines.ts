@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CLASSIFICATIONS, classificationRank } from './classification.js';
+import { globIssue, globMatch } from './glob.js';
 import type { PolicyBundle } from './policy/engine.js';
 
 /**
@@ -104,13 +105,7 @@ export interface GuidelineFinding {
 
 const CONVENTIONAL =
   /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([\w./-]+\))?!?: .{1,100}$/;
-const glob = (g: string, v: string) =>
-  new RegExp(
-    `^${g
-      .split('*')
-      .map((p) => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-      .join('.*')}$`,
-  ).test(v);
+const glob = (g: string, v: string) => globIssue(g) !== null || globMatch(g, v);
 
 /**
  * Deterministic review of a development agent's output (e.g. a pull request) by the hardening

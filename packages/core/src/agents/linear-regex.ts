@@ -18,8 +18,14 @@ export const MAX_REPEAT = 200;
 export const MAX_REPEAT_SUM = 400;
 /** Largest compiled program (instructions of the matcher's NFA). */
 export const MAX_PROGRAM_SIZE = 512;
-/** Total instructions of all cached programs; the cache is dropped when it would grow beyond this. */
-const CACHE_PROGRAM_BUDGET = 16_384;
+/**
+ * The cache holds the allowed maximum of one tenant's patterns (policies and a definition) so a warm
+ * decision never compiles: total source characters and entries. Measured retained memory is about
+ * 130 KB for a 230-character unicode-class pattern, so the characters bound is also a memory bound
+ * (roughly 40 MB at the limit).
+ */
+const CACHE_CHARS_BUDGET = 65_536;
+const CACHE_ENTRIES = 1024;
 
 /**
  * Limits on the SOURCE of patterns. Compiling costs about 10 ms and megabytes for a 900-character
@@ -35,7 +41,19 @@ export const MAX_PATTERN_CHARS = 8192;
 export const MAX_POLICY_PATTERNS = 64;
 export const MAX_DEFINITION_PATTERNS = 128;
 /** Steps charged to the work budget of a decision per source character of a cold compile. */
-export const COMPILE_STEPS_PER_CHAR = 400;
+export const COMPILE_STEPS_PER_CHAR = 1500;
+/** Steps charged per instruction of a compiled program (on top of the per-character charge). */
+export const COMPILE_STEPS_PER_INSTRUCTION = 100;
+/**
+ * Limits over everything that applies to one decision: all enabled policy bundles (platform,
+ * tenant, guidelines) together, and the enabled policies one tenant (or the platform) may hold.
+ */
+export const MAX_BUNDLES = 64;
+export const MAX_ALL_POLICY_PATTERNS = 256;
+export const MAX_ALL_POLICY_CHARS = 32_768;
+export const MAX_ENABLED_POLICIES = 32;
+export const MAX_ENABLED_POLICY_PATTERNS = 128;
+export const MAX_ENABLED_POLICY_CHARS = 16_384;
 
 export interface LinearRegex {
   test(text: string): boolean;
@@ -79,7 +97,7 @@ export function repeatBoundsIssue(source: string): string | null {
 }
 
 const cache = new Map<string, LinearRegex | null>();
-let cachedProgram = 0;
+let cachedChars = 0;
 
 /**
  * Compiles `source`; `null` when the linear-time engine cannot take it, or when it is too large
@@ -108,13 +126,12 @@ export function compileLinear(
     }
   }
   if (useCache) {
-    const add = compiled?.size ?? 1;
-    if (cachedProgram + add > CACHE_PROGRAM_BUDGET || cache.size >= 512) {
+    if (cachedChars + source.length > CACHE_CHARS_BUDGET || cache.size >= CACHE_ENTRIES) {
       cache.clear();
-      cachedProgram = 0;
+      cachedChars = 0;
     }
     cache.set(key, compiled);
-    cachedProgram += add;
+    cachedChars += source.length;
   }
   return compiled;
 }
@@ -127,7 +144,30 @@ export function isCachedLinear(source: string, ignoreCase = false): boolean {
 /** Drops the cache (tests). */
 export function resetLinearCache(): void {
   cache.clear();
-  cachedProgram = 0;
+  cachedChars = 0;
+}
+
+/**
+ * Limits of a list of bundles (all that applies to one decision, or all enabled policies of a
+ * tenant): count, patterns and characters in total. Returns the reason or `null`.
+ */
+export function bundleSetIssue(
+  bundles: readonly { forbiddenArgPatterns: readonly { pattern: string }[] }[],
+  limits: { bundles: number; patterns: number; chars: number },
+): string | null {
+  if (bundles.length > limits.bundles)
+    return `at most ${limits.bundles} policies may apply together`;
+  let patterns = 0;
+  let chars = 0;
+  for (const b of bundles)
+    for (const f of b.forbiddenArgPatterns) {
+      patterns++;
+      chars += f.pattern.length;
+    }
+  if (patterns > limits.patterns) return `at most ${limits.patterns} patterns may apply together`;
+  if (chars > limits.chars)
+    return `the patterns that apply together are limited to ${limits.chars} characters`;
+  return null;
 }
 
 /**
