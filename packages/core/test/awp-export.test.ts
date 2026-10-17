@@ -22,9 +22,13 @@ import {
 const EXPECTED: Record<string, 'exported' | 'refused'> = {
   'agents/bug-fix-agent.md': 'refused',
   'agents/code-quality-reviewer.md': 'refused',
+  'awp/approved-publisher.agents.md': 'exported',
   'awp/log-reader.agents.md': 'exported',
+  'awp/manual-summarizer.agents.md': 'exported',
+  'awp/nightly-digest.agents.md': 'exported',
   'awp/release-notes.agents.md': 'exported',
   'awp/ticket-commenter.agents.md': 'exported',
+  'awp/webhook-intake.agents.md': 'exported',
   'cve-triage.agents.md': 'refused',
   'ticket-triage.agents.md': 'refused',
   'ticket-updater.agents.md': 'refused',
@@ -77,6 +81,13 @@ describe('golden manifests', () => {
     ['awp/release-notes', () => definitionOf(readExample('awp/release-notes.agents.md'))],
     ['awp/ticket-commenter', () => definitionOf(readExample('awp/ticket-commenter.agents.md'))],
     ['awp/log-reader', publishedLogReader],
+    ...['approved-publisher', 'manual-summarizer', 'nightly-digest', 'webhook-intake'].map(
+      (name) =>
+        [`awp/${name}`, () => definitionOf(readExample(`awp/${name}.agents.md`))] as [
+          string,
+          () => ReturnType<typeof definitionOf>,
+        ],
+    ),
   ];
 
   it.each(cases)(

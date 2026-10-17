@@ -11,7 +11,7 @@
 --   row is converted on read and not stored.
 -- * The table is append-only (trigger below, and no UPDATE/DELETE for the application role in
 --   deploy/sql/roles.sql): a version is converted once.
--- Down path: drizzle/down/0038_agent_version_awp.down.sql
+-- Down path: drizzle/down/0039_agent_version_awp.down.sql
 CREATE TABLE "agent_version_awp" (
 	"version_id" uuid PRIMARY KEY NOT NULL,
 	"agent_id" uuid NOT NULL,

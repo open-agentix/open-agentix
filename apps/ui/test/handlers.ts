@@ -200,6 +200,7 @@ export const handlers = [
       {
         version: { ...f.versions[1]!, version: '1.1.0' },
         created: true,
+        approval: null,
         deprecations: [f.legacyDeprecation],
         awp: { status: 'converted' },
       },

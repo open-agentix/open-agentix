@@ -230,7 +230,14 @@
       "idx": 32,
       "version": "7",
       "when": 1792700000007,
-      "tag": "0038_agent_version_awp",
+      "tag": "0038_agent_publish_gate",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792700000008,
+      "tag": "0039_agent_version_awp",
       "breakpoints": true
     }
   ]

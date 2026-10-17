@@ -157,11 +157,17 @@ export async function buildWorld(target: Target, env: Record<string, string> = {
     await n.services.agents.publish({ ...op(), tenantId: id[tenant]! }, a.id);
     agent[key] = a.id;
   };
+  // The fixture agents are published while approval is off: the world is not about the gate (ADR 0017
+  // S3); a test that is switches it on through `env` and keeps it on from here.
+  const lifecycle = n.ctx.config.lifecycle as { requireApproval: string };
+  const wanted = lifecycle.requireApproval;
+  lifecycle.requireApproval = 'off';
   for (const [key, uc] of Object.entries(USE_CASE_OF)) await mkAgent(key, 'org-a', uc);
   await mkAgent('a-u1', 'unit-1', 'anything');
   await mkAgent('a-u1sub', 'unit-1-sub', null);
   await mkAgent('a-u2', 'unit-2', 'sec');
   await mkAgent('a-b', 'b-unit', 'sec');
+  lifecycle.requireApproval = wanted;
 
   for (const key of Object.keys(agent)) {
     const r = await n.services.runs.enqueue({

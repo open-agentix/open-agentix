@@ -210,6 +210,22 @@ export const VersionSchema = z.object({
   digest: z.string(),
   publishedBy: Id.nullable(),
   publishedAt: Iso,
+  reviewId: Id.nullable().describe(
+    'the approved review the version was published under (ADR 0017 S3); null when approval was not required for it, and for versions from before S3',
+  ),
+  deprecated: z
+    .object({
+      at: Iso,
+      by: Id,
+      reason: z.string().nullable(),
+      rollbackTo: Id.nullable().describe(
+        'the version the agent went back to, when this was the latest version',
+      ),
+    })
+    .nullable()
+    .describe(
+      'set when the version was deprecated: it takes no new pinned runs (409 version_deprecated)',
+    ),
 });
 export const ExpansionRecordSchema = z.object({
   agentId: z.string(),
@@ -314,6 +330,24 @@ export const LegacyReportSchema = z.object({
   ),
   nextCursor: z.string().nullable(),
 });
+/**
+ * Body of publish (ADR 0017 section 4.3). Strict on purpose: there is no parameter that skips an
+ * approval, and an unknown key is a 400 instead of being ignored.
+ */
+export const PublishBody = z
+  .strictObject({
+    reviewId: Id.optional().describe(
+      'the approved review to publish under; required where approval is required',
+    ),
+    expectedDigest: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional()
+      .describe(
+        'digest of the revision you checked (SHA-256 of the normalised source); required where approval is required',
+      ),
+  })
+  .nullish();
 export const PublishResultSchema = z.object({
   version: VersionSchema,
   created: z.boolean(),
@@ -322,20 +356,26 @@ export const PublishResultSchema = z.object({
     .object({ status: z.enum(['converted', 'legacy-unconvertible']) })
     .nullable()
     .describe('result of the conversion stored with the version'),
-  shadow: z
+  approval: z
     .object({
-      enforced: z.literal(false).describe('this version only reports; publish is not refused'),
-      approvalRequired: z.boolean(),
-      wouldRefuse: z
-        .boolean()
-        .describe('publish would have been refused if approvals were enforced (ADR 0017 S1)'),
-      reviewId: Id.nullable(),
-      state: z.string().nullable(),
-      reasons: z.array(z.object({ code: z.string(), message: z.string() })),
+      reviewId: Id,
+      approvedBy: z.array(Id),
+      policyDigest: z.string(),
     })
-    .optional()
+    .nullable()
+    .describe('the approvals the version was published under; null when approval was not required'),
+});
+
+export const DeprecateBody = z.strictObject({ reason: z.string().max(500).optional() }).nullish();
+export const DeprecateResultSchema = z.object({
+  versionId: Id,
+  version: z.string(),
+  deprecatedAt: Iso,
+  rollbackTo: z
+    .object({ id: Id, version: z.string() })
+    .nullable()
     .describe(
-      'shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed',
+      'set when the deprecated version was the latest one: the version the agent went back to',
     ),
 });
 

@@ -1,5 +1,5 @@
 {
-  "id": "9c3acc1d-cb0a-4375-a942-9d42a3948958",
+  "id": "8ea55a5f-37f4-425f-8e71-81130f67a979",
   "prevId": "638bf32a-cad9-4787-b511-81f4f886d0e0",
   "version": "7",
   "dialect": "postgresql",
@@ -880,6 +880,12 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
+        },
+        "published_version_id": {
+          "name": "published_version_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1007,6 +1013,19 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "agent_reviews_published_version_id_agent_versions_id_fk": {
+          "name": "agent_reviews_published_version_id_agent_versions_id_fk",
+          "tableFrom": "agent_reviews",
+          "tableTo": "agent_versions",
+          "columnsFrom": [
+            "published_version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1034,6 +1053,10 @@
         "agent_reviews_closed_check": {
           "name": "agent_reviews_closed_check",
           "value": "(\"agent_reviews\".\"status\" = 'open') = (\"agent_reviews\".\"closed_at\" is null)"
+        },
+        "agent_reviews_published_check": {
+          "name": "agent_reviews_published_check",
+          "value": "(\"agent_reviews\".\"status\" = 'published') = (\"agent_reviews\".\"published_version_id\" is not null)"
         }
       },
       "isRLSEnabled": false
@@ -1153,8 +1176,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.agent_version_awp": {
-      "name": "agent_version_awp",
+    "public.agent_version_deprecations": {
+      "name": "agent_version_deprecations",
       "schema": "",
       "columns": {
         "version_id": {
@@ -1169,74 +1192,46 @@
           "primaryKey": false,
           "notNull": true
         },
-        "status": {
-          "name": "status",
-          "type": "text",
+        "deprecated_by": {
+          "name": "deprecated_by",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
-        "manifest": {
-          "name": "manifest",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "manifest_digest": {
-          "name": "manifest_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "findings": {
-          "name": "findings",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "converter": {
-          "name": "converter",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "converted_at": {
-          "name": "converted_at",
+        "deprecated_at": {
+          "name": "deprecated_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rollback_to_version_id": {
+          "name": "rollback_to_version_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
-        "agent_version_awp_agent_idx": {
-          "name": "agent_version_awp_agent_idx",
+        "agent_version_deprecations_agent_idx": {
+          "name": "agent_version_deprecations_agent_idx",
           "columns": [
             {
               "expression": "agent_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "agent_version_awp_status_idx": {
-          "name": "agent_version_awp_status_idx",
-          "columns": [
-            {
-              "expression": "status",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             },
             {
-              "expression": "agent_id",
+              "expression": "deprecated_at",
               "isExpression": false,
-              "asc": true,
+              "asc": false,
               "nulls": "last"
             }
           ],
@@ -1247,9 +1242,9 @@
         }
       },
       "foreignKeys": {
-        "agent_version_awp_version_id_agent_versions_id_fk": {
-          "name": "agent_version_awp_version_id_agent_versions_id_fk",
-          "tableFrom": "agent_version_awp",
+        "agent_version_deprecations_version_id_agent_versions_id_fk": {
+          "name": "agent_version_deprecations_version_id_agent_versions_id_fk",
+          "tableFrom": "agent_version_deprecations",
           "tableTo": "agent_versions",
           "columnsFrom": [
             "version_id"
@@ -1260,12 +1255,25 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "agent_version_awp_agent_id_agents_id_fk": {
-          "name": "agent_version_awp_agent_id_agents_id_fk",
-          "tableFrom": "agent_version_awp",
+        "agent_version_deprecations_agent_id_agents_id_fk": {
+          "name": "agent_version_deprecations_agent_id_agents_id_fk",
+          "tableFrom": "agent_version_deprecations",
           "tableTo": "agents",
           "columnsFrom": [
             "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_version_deprecations_rollback_to_version_id_agent_versions_id_fk": {
+          "name": "agent_version_deprecations_rollback_to_version_id_agent_versions_id_fk",
+          "tableFrom": "agent_version_deprecations",
+          "tableTo": "agent_versions",
+          "columnsFrom": [
+            "rollback_to_version_id"
           ],
           "columnsTo": [
             "id"
@@ -1278,13 +1286,9 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "agent_version_awp_status": {
-          "name": "agent_version_awp_status",
-          "value": "\"agent_version_awp\".\"status\" in ('converted', 'legacy-unconvertible')"
-        },
-        "agent_version_awp_shape": {
-          "name": "agent_version_awp_shape",
-          "value": "(\"agent_version_awp\".\"status\" = 'converted' and \"agent_version_awp\".\"manifest\" is not null and \"agent_version_awp\".\"manifest_digest\" is not null)\n        or (\"agent_version_awp\".\"status\" = 'legacy-unconvertible' and \"agent_version_awp\".\"manifest\" is null and \"agent_version_awp\".\"manifest_digest\" is null)"
+        "agent_version_deprecations_reason_len": {
+          "name": "agent_version_deprecations_reason_len",
+          "value": "char_length(\"agent_version_deprecations\".\"reason\") <= 500"
         }
       },
       "isRLSEnabled": false
@@ -1347,6 +1351,42 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
+        },
+        "review_id": {
+          "name": "review_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approved_by": {
+          "name": "approved_by",
+          "type": "uuid[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "policy_digest": {
+          "name": "policy_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expansion_digest": {
+          "name": "expansion_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolution_digest": {
+          "name": "resolution_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "secret_resolution": {
+          "name": "secret_resolution",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1391,6 +1431,22 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "agent_versions_review_uq": {
+          "name": "agent_versions_review_uq",
+          "columns": [
+            {
+              "expression": "review_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"agent_versions\".\"review_id\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -1406,12 +1462,30 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "agent_versions_review_id_agent_reviews_id_fk": {
+          "name": "agent_versions_review_id_agent_reviews_id_fk",
+          "tableFrom": "agent_versions",
+          "tableTo": "agent_reviews",
+          "columnsFrom": [
+            "review_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "agent_versions_approval_check": {
+          "name": "agent_versions_approval_check",
+          "value": "(\"agent_versions\".\"review_id\" is null) = (\"agent_versions\".\"approved_by\" is null) and (\"agent_versions\".\"approved_by\" is null or cardinality(\"agent_versions\".\"approved_by\") >= 1)"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.agents": {

@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedDemo } from '../src/demo/seed.js';
+import { randomUUID } from 'node:crypto';
+import { DEFAULT_TENANT_ID, agents } from '../src/db/schema.js';
+import { demoId } from '../src/demo/ids.js';
+import { agentSource } from './fixtures.js';
 import { testNode, type TestNode } from './helpers.js';
 
 let n: TestNode;
@@ -112,8 +116,45 @@ describe('demo seed', () => {
     expect(dry.json().status).toBe('succeeded');
   });
 
+  it('publishes without approval only the first version of a seeded agent', async () => {
+    const [seeded] = await n.ctx.db.select().from(agents).limit(1);
+    const principal = { userId: 'x', tenantId: seeded!.tenantId } as never;
+    await expect(n.services.agents.publishDemoSeed(principal, seeded!.id)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+  });
+
   it('is idempotent', async () => {
     const r = await seedDemo(n.ctx, n.services, { password: PW });
     expect(r).toMatchObject({ seeded: false, agents: 6, auditValid: true });
+  });
+
+  it('publishes a fresh seeded agent without approval in demo mode only', async () => {
+    const op = {
+      kind: 'user',
+      userId: randomUUID(),
+      tenantId: DEFAULT_TENANT_ID,
+      displayName: 'op',
+      platformAdmin: true,
+      bindings: [{ role: 'admin', teamId: null }],
+    } as never;
+    const mk = async (name: string) =>
+      n.services.agents.create(op, agentSource(name, 'nobody', '1.0.0'), {
+        id: demoId('agent', name),
+      });
+    const one = await mk('seed-guard-one');
+    const two = await mk('seed-guard-two');
+    const demo = n.ctx.config.demo as { enabled: boolean };
+    demo.enabled = false;
+    try {
+      await expect(n.services.agents.publishDemoSeed(op, two.id)).rejects.toMatchObject({
+        statusCode: 403,
+      });
+    } finally {
+      demo.enabled = true;
+    }
+    const ok = await n.services.agents.publishDemoSeed(op, one.id);
+    expect(ok.created).toBe(true);
+    expect(ok.approval).toBeNull();
   });
 });

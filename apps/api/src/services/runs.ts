@@ -18,7 +18,14 @@ import {
 import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { agents, approvals, events, runSteps, runs } from '../db/schema.js';
+import {
+  agentVersionDeprecations,
+  agents,
+  approvals,
+  events,
+  runSteps,
+  runs,
+} from '../db/schema.js';
 import { HttpError, forbidden, notFound } from '../errors.js';
 import { startGuardedSpan } from '../telemetry.js';
 import {
@@ -51,6 +58,9 @@ function triggerKind(triggeredBy: string): string {
   const kind = triggeredBy.split(':')[0] ?? '';
   return /^[a-z][a-z0-9_-]{0,31}$/.test(kind) ? kind : 'other';
 }
+
+/** Thrown inside admission when the cached latest version turned out to be deprecated. */
+class StaleLatestVersion extends Error {}
 
 /** The 409 every trigger path gets for a disabled agent. */
 export const agentDisabled = () =>
@@ -134,15 +144,26 @@ export class RunsService {
   }): Promise<RunRow> {
     // Reads of immutable or cached data happen before the transaction: PGlite (tests, demo) runs
     // one connection, so a query on `ctx.db` while a transaction is open would wait for it.
-    const latest = await this.agents.latestVersionId(input.agentId);
-    const versionId = input.versionId ?? latest.versionId;
-    // Release N+1 of the legacy format: a version that cannot be converted is not run (AWP-3b).
-    const legacyRefused = versionId ? await this.agents.legacyRunRefused(versionId) : false;
-    const definition = versionId ? (await this.agents.definitionOf(versionId)).definition : null;
-    const plan = { latest, versionId, definition, legacyRefused };
-    const outcome = input.tx
-      ? await this.admit(input.tx, input, plan)
-      : await this.ctx.db.transaction((tx) => this.admit(tx as unknown as Db, input, plan));
+    const attempt = async () => {
+      const latest = await this.agents.latestVersionId(input.agentId);
+      const versionId = input.versionId ?? latest.versionId;
+      // Release N+1 of the legacy format: a version that cannot be converted is not run (AWP-3b).
+      const legacyRefused = versionId ? await this.agents.legacyRunRefused(versionId) : false;
+      const definition = versionId ? (await this.agents.definitionOf(versionId)).definition : null;
+      const plan = { latest, versionId, definition, legacyRefused };
+      return input.tx
+        ? this.admit(input.tx, input, plan)
+        : this.ctx.db.transaction((tx) => this.admit(tx as unknown as Db, input, plan));
+    };
+    let outcome;
+    try {
+      outcome = await attempt();
+    } catch (e) {
+      // The cached latest version was deprecated (a rollback on another replica): read it again once.
+      if (!(e instanceof StaleLatestVersion)) throw e;
+      await this.ctx.cache.del(`agent-latest:${input.agentId}`);
+      outcome = await attempt();
+    }
     if (outcome.refused)
       throw outcome.reason === 'legacy_format_removed'
         ? new HttpError(400, LEGACY_REMOVED_CODE, legacyRemovedMessage(LEGACY_RUN_DETAIL))
@@ -179,6 +200,30 @@ export class RunsService {
     }
   }
 
+  /**
+   * A deprecated version takes no new pinned run (`409 version_deprecated`, ADR 0017 section 3.1).
+   * Deprecating takes the agent row lock exclusively, so after the share lock above the answer is
+   * final for this admission. A run that follows the latest version and finds it deprecated read a
+   * stale cache: it is read again (`StaleLatestVersion`).
+   */
+  private async assertNotDeprecated(
+    db: Db,
+    input: Parameters<RunsService['enqueue']>[0],
+    versionId: string,
+  ): Promise<void> {
+    const [gone] = await db
+      .select({ v: agentVersionDeprecations.versionId })
+      .from(agentVersionDeprecations)
+      .where(eq(agentVersionDeprecations.versionId, versionId));
+    if (!gone) return;
+    if (!input.versionId) throw new StaleLatestVersion();
+    throw new HttpError(
+      409,
+      'version_deprecated',
+      'this version was deprecated and takes no new runs; pin another version or omit the version',
+    );
+  }
+
   private async admit(
     db: Db,
     input: Parameters<RunsService['enqueue']>[0],
@@ -195,6 +240,7 @@ export class RunsService {
     const disabled = lockedRes.rows[0]!.disabled_at !== null;
     if (!disabled && !versionId)
       throw new HttpError(409, 'invalid_state', 'agent has no published version');
+    if (!disabled) await this.assertNotDeprecated(db, input, versionId!);
     let eventRowId = input.eventRowId ?? null;
     if (!eventRowId) {
       eventRowId = randomUUID();

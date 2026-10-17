@@ -1584,7 +1584,7 @@ export interface paths {
         put?: never;
         /**
          * Publish the draft as an immutable version
-         * @description Needs `agents:publish`. Not yet refused without an approval: `shadow` reports whether publish would have been refused (ADR 0017 S1 shadow mode); the same report is in the audit entry `agent.published`.
+         * @description Needs `agents:publish`. Where the tenant policy requires approval for the agent (`requireApprovalForPublish`, `production-only` with the union of the published and the draft use case), the body names the approved `reviewId` and the `expectedDigest` of the revision you checked. In one transaction under the tree, binding and agent locks the API then checks (ADR 0017 section 4.3): the draft is that revision (`409 draft_changed`); the profile expansion and the secret resolution are recomputed and equal what was approved (`409 approval_stale` with `reason` `expansion_changed` or `secret_resolution_changed`); every approval is judged again against the bindings, grant chains, expiry and policy of this moment and enough remain, with no open request for changes (`409 approval_insufficient`); `publishBy: approver-only` lets only an approver publish (`403 publisher_not_approver`). Also `409 approval_required` (no review or digest named), `409 review_closed`, `409 role_bindings_read_required` (approval cannot be enforced race-free with `OAX_ROLE_BINDINGS_READ=legacy`), `409 version_deprecated` (the draft equals a deprecated version) and the version rules. The version is published from the revision's source, records the review, the distinct approvers, the policy digest and the pinned secret resolution, and the review is closed as `published`. There is no emergency or break-glass publish: no parameter, role or setting skips the approvals, and unknown body fields are a 400. Refusals are audited as `agent.publish.refused`.
          */
         post: {
             parameters: {
@@ -1595,7 +1595,19 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description the approved review to publish under; required where approval is required
+                         */
+                        reviewId?: string;
+                        /** @description digest of the revision you checked (SHA-256 of the normalised source); required where approval is required */
+                        expectedDigest?: string;
+                    } | null;
+                };
+            };
             responses: {
                 /** @description Default Response */
                 200: {
@@ -1614,6 +1626,18 @@ export interface paths {
                                 publishedBy: string | null;
                                 /** @description ISO 8601 timestamp */
                                 publishedAt: string;
+                                /** @description the approved review the version was published under (ADR 0017 S3); null when approval was not required for it, and for versions from before S3 */
+                                reviewId: string | null;
+                                /** @description set when the version was deprecated: it takes no new pinned runs (409 version_deprecated) */
+                                deprecated: {
+                                    /** @description ISO 8601 timestamp */
+                                    at: string;
+                                    /** Format: uuid */
+                                    by: string;
+                                    reason: string | null;
+                                    /** @description the version the agent went back to, when this was the latest version */
+                                    rollbackTo: string | null;
+                                } | null;
                             };
                             created: boolean;
                             deprecations: {
@@ -1630,23 +1654,13 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "converted" | "legacy-unconvertible";
                             } | null;
-                            /** @description shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed */
-                            shadow?: {
-                                /**
-                                 * @description this version only reports; publish is not refused
-                                 * @enum {boolean}
-                                 */
-                                enforced: false;
-                                approvalRequired: boolean;
-                                /** @description publish would have been refused if approvals were enforced (ADR 0017 S1) */
-                                wouldRefuse: boolean;
-                                reviewId: string | null;
-                                state: string | null;
-                                reasons: {
-                                    code: string;
-                                    message: string;
-                                }[];
-                            };
+                            /** @description the approvals the version was published under; null when approval was not required */
+                            approval: {
+                                /** Format: uuid */
+                                reviewId: string;
+                                approvedBy: string[];
+                                policyDigest: string;
+                            } | null;
                         };
                     };
                 };
@@ -1667,6 +1681,18 @@ export interface paths {
                                 publishedBy: string | null;
                                 /** @description ISO 8601 timestamp */
                                 publishedAt: string;
+                                /** @description the approved review the version was published under (ADR 0017 S3); null when approval was not required for it, and for versions from before S3 */
+                                reviewId: string | null;
+                                /** @description set when the version was deprecated: it takes no new pinned runs (409 version_deprecated) */
+                                deprecated: {
+                                    /** @description ISO 8601 timestamp */
+                                    at: string;
+                                    /** Format: uuid */
+                                    by: string;
+                                    reason: string | null;
+                                    /** @description the version the agent went back to, when this was the latest version */
+                                    rollbackTo: string | null;
+                                } | null;
                             };
                             created: boolean;
                             deprecations: {
@@ -1683,23 +1709,143 @@ export interface paths {
                                 /** @enum {string} */
                                 status: "converted" | "legacy-unconvertible";
                             } | null;
-                            /** @description shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed */
-                            shadow?: {
-                                /**
-                                 * @description this version only reports; publish is not refused
-                                 * @enum {boolean}
-                                 */
-                                enforced: false;
-                                approvalRequired: boolean;
-                                /** @description publish would have been refused if approvals were enforced (ADR 0017 S1) */
-                                wouldRefuse: boolean;
-                                reviewId: string | null;
-                                state: string | null;
-                                reasons: {
-                                    code: string;
-                                    message: string;
-                                }[];
-                            };
+                            /** @description the approvals the version was published under; null when approval was not required */
+                            approval: {
+                                /** Format: uuid */
+                                reviewId: string;
+                                approvedBy: string[];
+                                policyDigest: string;
+                            } | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/versions/{version}/deprecate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deprecate a version; deprecating the latest version rolls the agent back
+         * @description Needs `agents:publish` on the agent. New runs pinned to a deprecated version are refused with `409 version_deprecated`; runs that already exist are not touched. Deprecating the **latest** version is a rollback: `agents.latestVersion` goes back to the newest other version that is not deprecated and, where approval is required for the agent today, was published under an approved review. A rollback creates no version, needs no approval and is audited as `agent.version.deprecated` (with `rollbackTo`). `409 rollback_target_unapproved` when approval is required and no such version was published under an approved review, `409 no_rollback_target` when there is no other version that is not deprecated (disable the agent instead), `409 already_deprecated`. Deprecating cannot be undone: publish a version with a higher number. This is the way out of an incident; there is no break-glass publish.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    version: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        reason?: string;
+                    } | null;
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            versionId: string;
+                            version: string;
+                            /** @description ISO 8601 timestamp */
+                            deprecatedAt: string;
+                            /** @description set when the deprecated version was the latest one: the version the agent went back to */
+                            rollbackTo: {
+                                /** Format: uuid */
+                                id: string;
+                                version: string;
+                            } | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
                         };
                     };
                 };
@@ -1721,13 +1867,17 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description Not found */
+                /** @description Default Response */
                 404: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Error"];
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
                     };
                 };
                 /** @description Default Response */
@@ -2125,6 +2275,18 @@ export interface paths {
                                 publishedBy: string | null;
                                 /** @description ISO 8601 timestamp */
                                 publishedAt: string;
+                                /** @description the approved review the version was published under (ADR 0017 S3); null when approval was not required for it, and for versions from before S3 */
+                                reviewId: string | null;
+                                /** @description set when the version was deprecated: it takes no new pinned runs (409 version_deprecated) */
+                                deprecated: {
+                                    /** @description ISO 8601 timestamp */
+                                    at: string;
+                                    /** Format: uuid */
+                                    by: string;
+                                    reason: string | null;
+                                    /** @description the version the agent went back to, when this was the latest version */
+                                    rollbackTo: string | null;
+                                } | null;
                             }[];
                         };
                     };
@@ -2202,6 +2364,18 @@ export interface paths {
                             publishedBy: string | null;
                             /** @description ISO 8601 timestamp */
                             publishedAt: string;
+                            /** @description the approved review the version was published under (ADR 0017 S3); null when approval was not required for it, and for versions from before S3 */
+                            reviewId: string | null;
+                            /** @description set when the version was deprecated: it takes no new pinned runs (409 version_deprecated) */
+                            deprecated: {
+                                /** @description ISO 8601 timestamp */
+                                at: string;
+                                /** Format: uuid */
+                                by: string;
+                                reason: string | null;
+                                /** @description the version the agent went back to, when this was the latest version */
+                                rollbackTo: string | null;
+                            } | null;
                             source: string;
                             definition: {
                                 [key: string]: unknown;

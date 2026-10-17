@@ -355,7 +355,24 @@
       "confirm": "Publish version",
       "invalid": "The draft has validation errors.",
       "done": "Version {version} published.",
-      "unchanged": "Version {version} is already published with this content."
+      "unchanged": "Version {version} is already published with this content.",
+      "approval": {
+        "noReview": "If the tenant policy requires approval for this agent, request a review in the Review tab first and publish once it is approved.",
+        "required": "Approval is required: {count} of {required} approvals count now.",
+        "advisory": "Approval is not required for this agent; the review is advisory."
+      },
+      "errors": {
+        "approval_required": "Approval is required for this agent. Request a review in the Review tab and publish when it is approved.",
+        "approval_insufficient": "The review does not have enough valid approvals now (an approval may have expired, been dismissed by a new revision or lost its role), or a reviewer requested changes.",
+        "approval_stale": "The approvals no longer match the draft. Open the Review tab and ask for new approvals.",
+        "stale_expansion_changed": "The tools behind the profiles of this agent changed since it was approved. Ask for a new approval.",
+        "stale_secret_resolution_changed": "The secrets this agent resolves changed since it was approved. Ask for a new approval.",
+        "draft_changed": "The draft changed while you were publishing. Reload and check it again.",
+        "review_closed": "This review is closed. Open the Review tab for the current one.",
+        "publisher_not_approver": "This tenant lets only an approver of the review publish.",
+        "role_bindings_read_required": "Approval cannot be enforced on this installation (OAX_ROLE_BINDINGS_READ=bindings is required). Ask your operator.",
+        "version_deprecated": "This content is the deprecated version. Raise the version number to publish it again."
+      }
     },
     "versions": {
       "empty": "No published versions",
@@ -363,7 +380,23 @@
       "latest": "Latest",
       "publishedBy": "{when} by {who}",
       "comparePrevious": "Compare with v{version}",
-      "compareDraft": "Compare with draft"
+      "compareDraft": "Compare with draft",
+      "approved": "Approved",
+      "deprecated": "Deprecated",
+      "deprecate": {
+        "button": "Deprecate…",
+        "title": "Deprecate v{version}?",
+        "text": "New runs pinned to this version are refused. Runs that already exist are not touched. This cannot be undone: publish a higher version instead.",
+        "rollbackText": "This is the latest version, so the agent goes back to the newest older version that is not deprecated (and, where approval is required, was published under an approved review). No version is created and no approval is needed.",
+        "confirm": "Deprecate version",
+        "done": "Version {version} deprecated.",
+        "doneRollback": "Version {version} deprecated. The agent is back on {to}.",
+        "errors": {
+          "rollback_target_unapproved": "No older version was published under an approved review, and approval is required for this agent. Disable the agent instead.",
+          "no_rollback_target": "There is no older version to go back to. Disable the agent instead.",
+          "already_deprecated": "This version is already deprecated."
+        }
+      }
     },
     "diff": {
       "from": "From",

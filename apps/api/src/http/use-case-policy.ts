@@ -38,6 +38,7 @@ const SCOPED = [
   'POST /v1/agents/:id/publish',
   'POST /v1/agents/:id/disable',
   'POST /v1/agents/:id/enable',
+  'POST /v1/agents/:id/versions/:version/deprecate',
   'GET /v1/agents/:id/versions',
   'GET /v1/agents/:id/versions/:version',
   'GET /v1/agents/:id/versions/:version/awp',

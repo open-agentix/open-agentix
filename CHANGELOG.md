@@ -20,6 +20,36 @@ All notable changes to this project are documented here. The format follows
   `agent-maintainer`. Revert with `apps/api/drizzle/down/0030_agent_roles.down.sql` (refuses while
   `agent-developer` bindings exist). The OpenAPI role enums changed accordingly.
 
+- **Publish is refused without an approved review where the policy requires approval; the `shadow`
+  report is gone (ADR 0017 S3, #246)**. `POST /v1/agents/{id}/publish` now needs `reviewId` and
+  `expectedDigest` of an approved review wherever `requireApprovalForPublish` applies (`on`, or
+  `production-only` for a production use case). `OAX_LIFECYCLE_REQUIRE_APPROVAL=auto` counts **all
+  tenants of the installation**: as soon as a second tenant exists approval is `on` everywhere, and a
+  single administrator alone cannot publish any more (a second person has to approve). Clients that
+  published without a body get `409 approval_required`. **With `OAX_ROLE_BINDINGS_READ=legacy`, the
+  default, every such publish gets `409 role_bindings_read_required`**: set `bindings` before upgrading
+  (read the notes of that switch first), or set `OAX_LIFECYCLE_REQUIRE_APPROVAL=off` if there is no
+  second person to approve. Clients that read the `shadow` field of the publish response break: it is
+  replaced by `approval` (`null` when none was required). Versions published before this release have no
+  approval record and are **not rollback targets** where approval is required (`409
+  rollback_target_unapproved`). `pnpm seed:demo` now needs `OAX_DEMO_MODE=true`. Migration
+  `0038_agent_publish_gate` (its two CHECK constraints are added `NOT VALID` and validated afterwards, so
+  large installations do not hold an exclusive lock for a full scan); revert with
+  `apps/api/drizzle/down/0038_agent_publish_gate.down.sql` before the down scripts of `0037`, `0034` and
+  `0032`. **Known limits**: a root administrator with no unfinished review can still switch the policy
+  off, publish their own draft and switch it on again (audited, but it is the administrator exception
+  ADR 0017 decision 11 rules out; see `docs/agent-lifecycle.md`), and a connection change after the early
+  catalog read, revocations included, is not seen by the publish in flight.
+
+### Fixed
+
+- **`/readyz` no longer reports ready when the stored role restrictions cannot be counted (follow-up of
+  ADR 0014 S9, #346)**: on the legacy read path a failing count was treated as "none stored"; it now makes
+  the probe `503` (`checks.restrictions: false`), also with `OAX_ALLOW_UNENFORCED_RESTRICTIONS=1`. Start-up
+  logs the failure. Tests now cover each platform-operator exemption layer on its own, the organisation cap
+  with a one-for-one replacement in a single `PUT`, and the core cost test is steadier on loaded runners.
+  `docs/tenancy.md` gains the runbook step "lift the restrictions before rolling back the image".
+
 ### Security
 
 - **Rule A4 follows the grant chain, pins the policy of an open review and fails closed on an unknown
@@ -74,7 +104,7 @@ All notable changes to this project are documented here. The format follows
   now reports the deprecation `legacy_format` (`deprecations` in the API, a warning from `oax validate`,
   the audit event `agent.legacy_format_read`, the header `x-oax-deprecation` on the manifest export); the
   legacy format is rejected from release `0.4.0` (the switch is a constant tied to the version, tested
-  with the constant forced). Migration `0038_agent_version_awp` and a one-time, idempotent conversion
+  with the constant forced). Migration `0039_agent_version_awp` and a one-time, idempotent conversion
   (per agent in a transaction, run by `db:migrate` and on start) store the effective AWP manifest of
   every published version **next to** the unchanged source and digest, or mark it `legacy-unconvertible`
   with field-level reasons: no lossy conversion is ever stored, and an independent check refuses a
@@ -82,9 +112,38 @@ All notable changes to this project are documented here. The format follows
   `oax awp legacy-report`, `GET /v1/agents/legacy-report`, and the stored conversion on
   `GET /v1/agents/{id}/versions/{version}` (`awp`). Existing agents keep running unchanged. AWP is a draft
   (`v1alpha1`); openagentix is not conformant to any profile. Down path:
-  `apps/api/drizzle/down/0038_agent_version_awp.down.sql` (drops only the new table). See
+  `apps/api/drizzle/down/0039_agent_version_awp.down.sql` (drops only the new table). See
   [docs/agents-md.md](docs/agents-md.md#transition-to-awp-manifests).
 
+- **Approval is a gate at publish; version deprecation and rollback (ADR 0017 S3, #246)**. In one
+  transaction under the tree, binding and agent locks, publish re-checks the draft digest, recomputes the
+  profile expansion and the secret resolution from the revision's source, judges every stored approval
+  again (rules A1 to A8 and A10 with the bindings, grant chains, expiry and policy of that moment) and
+  publishes from the revision's source (`409 draft_changed`, `approval_stale`, `approval_insufficient`,
+  `approval_required`, `review_closed`, `publisher_not_approver`). The version row records the review,
+  the distinct approvers, the policy digest, the expansion and resolution digests and the secret reference
+  names (names-only until S4); the review is closed as `published`; every refusal is audited as `agent.publish.refused`.
+  `POST /v1/agents/{id}/versions/{version}/deprecate` refuses new pinned runs (`409 version_deprecated`);
+  deprecating the latest version rolls back to the newest non-deprecated version published under an
+  approved review (no new version, no approval, audited as `agent.version.deprecated`). There is no
+  break-glass (a test walks the route table). Console: the publish dialog names the open review and
+  explains refusals, the Versions tab shows approved and deprecated versions and deprecates (English and
+  German). `docs/agent-lifecycle.md`, `docs/configuration.md`, OpenAPI and the UI types updated.
+
+
+- **AWP conformance harness (AWP-4, #258)**: `pnpm awp:conformance` (CI job `awp-conformance`) runs, offline, (a)
+  every case of the vendored `conformance/index.json` through the OpenAgentix validator, (b) every
+  `examples/**/*.agents.md` through the real exporter and the exports (and the golden files) through the
+  vendored reference checker with `--verify-digest`, and (c) the vendored suite itself (`awp-check.mjs run`,
+  unmodified, on a temporary copy). It writes `awp-report.json` (suite version, AWP commit from
+  `PROVENANCE.json`, every case with its result, profiles; no timestamps, so local and CI output are the
+  same) and fails on a regression: a case listed in `packages/awp/conformance/baseline.json` (on pull
+  requests also the baseline of the base branch) that stops passing or disappears. A case that never
+  passed is reported without failing. Four new AWP-native examples (`manual-summarizer`, `nightly-digest`,
+  `webhook-intake`, `approved-publisher`) with golden manifests from the real exporter; an API test publishes
+  examples and checks their exports with the reference checker. The report states measured pass counts
+  only: AWP is a draft (`v1alpha1`) and openagentix is **not** conformant to any profile; no badge and no
+  claim. See [docs/awp.md](docs/awp.md).
 - **Validation of AWP manifests (AWP-3, #256)**: `POST /v1/agents/validate` and `oax validate` accept an
   `agents.md` whose front matter is an AWP `v1alpha1` manifest (`apiVersion: awp.agenticworkflowprotocol.org/v1alpha1`,
   `## Agent: <id>` sections become the `instructions`) and plain `.awp.yaml`/`.awp.json` files, and report the
@@ -174,8 +233,8 @@ All notable changes to this project are documented here. The format follows
   included (`403 self_approval`); bindings granted by a contributor do not make a reviewer eligible; API
   tokens decide only when the tenant allows it; the default approvers are `admin` and `agent-maintainer`. The
   tenant policy `settings.agentLifecycle` (`GET/PATCH /v1/tenants/{id}/settings/agent-lifecycle`, installation
-  defaults `OAX_LIFECYCLE_*`) is narrowing only (`422 not_narrowing`). **Publish is not refused yet**: its
-  response and audit entry carry a `shadow` report of what it would have been refused for. New audit events
+  defaults `OAX_LIFECYCLE_*`) is narrowing only (`422 not_narrowing`). Publish only reported what it would have been refused for (a `shadow` report; replaced by the
+  enforcement of S3, below). New audit events
   `agent.revision.created`, `agent.review.*` and `tenant.lifecycle_policy_changed`. Migration
   `0032_agent_lifecycle_reviews` (additive; adds `granted_by` to team and agent bindings). Role-binding
   changes that widen a binding now make the person who made them its grantor. See

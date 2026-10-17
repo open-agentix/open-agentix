@@ -1,0 +1,29 @@
+{
+  "logs": {
+    "tools": { "get_lines": "read", "get_errors": "read", "purge": "write" },
+    "profiles": {},
+    "version": "v1",
+    "pin": {
+      "connectionId": "logs-connection",
+      "snapshot": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tools": [
+          { "name": "get_lines", "inputSchema": {} },
+          { "name": "get_errors", "inputSchema": {} },
+          { "name": "purge", "inputSchema": {} }
+        ]
+      }
+    }
+  },
+  "cve-db": { "tools": { "lookup_cve": "read" }, "profiles": {}, "version": "v1" },
+  "github-read": {
+    "tools": { "get_pr": "read", "list_files": "read" },
+    "profiles": { "read": ["get_pr", "list_files"] },
+    "version": "v1"
+  },
+  "github-pr": {
+    "tools": { "comment_pr": "write" },
+    "profiles": { "pr-comment": ["comment_pr"] },
+    "version": "v1"
+  }
+}

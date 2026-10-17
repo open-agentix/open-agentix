@@ -5,7 +5,7 @@ import { lineHash } from '@openagentix/core';
 import { agentReviewComments, agentReviewThreads, auditLog } from '../src/db/schema.js';
 import { agentSource } from './fixtures.js';
 import { PG_URL, openPglite, openPostgres, type Sql } from './db-targets.js';
-import { testNode, type TestNode } from './helpers.js';
+import { insertVersion, testNode, type TestNode } from './helpers.js';
 
 /**
  * ADR 0017 slice S2: review comment threads over HTTP. Authorisation (agents:review, 404 parity,
@@ -196,7 +196,7 @@ describe('starting threads', () => {
         .id,
       name,
     };
-    expect((await req(tok['author']!, 'POST', `/v1/agents/${a.id}/publish`)).statusCode).toBe(201);
+    await insertVersion(n, a.id);
     await edit(tok['author']!, a, '1.0.1');
     const review = j(await req(tok['author']!, 'POST', `/v1/agents/${a.id}/reviews`));
     const res = await startThread(tok['rev1']!, review.id, {
@@ -653,7 +653,7 @@ describe('the changes endpoint', () => {
         .id,
       name,
     };
-    await req(tok['author']!, 'POST', `/v1/agents/${a.id}/publish`);
+    await insertVersion(n, a.id);
     await edit(
       tok['author']!,
       a,

@@ -11,28 +11,28 @@ import { example } from './fixtures.js';
 import { failure, sqlTargets, type Sql } from './db-targets.js';
 
 /**
- * Migration 0038 (AWP-3b): the table for the stored effective AWP manifests, the one-time conversion
+ * Migration 0039 (AWP-3b): the table for the stored effective AWP manifests, the one-time conversion
  * that runs after it (up, re-run, rollback path), and what it must never touch: source, digest and
  * definition of a published version. Runs on PGlite and, with OAX_TEST_DATABASE_URL, on PostgreSQL.
  */
-const TAG = '0038_agent_version_awp';
+const TAG = '0039_agent_version_awp';
 const journal = JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, 'meta/_journal.json'), 'utf8')) as {
   entries: { idx: number; tag: string; when: number }[];
 };
 
-describe('migration 0038 files', () => {
-  it('is strictly newer than 0037, chains its snapshot, keeps the index contiguous, has a down path', () => {
+describe('migration 0039 files', () => {
+  it('is strictly newer than 0038, chains its snapshot, keeps the index contiguous, has a down path', () => {
     const at = journal.entries.findIndex((e) => e.tag === TAG);
     expect(at).toBeGreaterThan(0);
-    expect(journal.entries[at - 1]!.tag).toBe('0037_stored_grant_chain');
+    expect(journal.entries[at - 1]!.tag).toBe('0038_agent_publish_gate');
     expect(journal.entries.map((e) => e.idx)).toEqual(journal.entries.map((_, i) => i));
     const whens = journal.entries.map((e) => e.when);
     expect([...whens].sort((a, b) => a - b)).toEqual(whens);
     expect(new Set(whens).size).toBe(whens.length);
     const read = (n: string) =>
       JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, `meta/${n}_snapshot.json`), 'utf8'));
-    expect(read('0038').prevId).toBe(read('0037').id);
-    expect(read('0038').tables['public.agent_version_awp'].columns.version_id.primaryKey).toBe(
+    expect(read('0039').prevId).toBe(read('0038').id);
+    expect(read('0039').tables['public.agent_version_awp'].columns.version_id.primaryKey).toBe(
       true,
     );
     expect(existsSync(join(MIGRATIONS_FOLDER, `down/${TAG}.down.sql`))).toBe(true);
@@ -45,7 +45,7 @@ describe('migration 0038 files', () => {
   });
 });
 
-describe.each(sqlTargets)('migration 0038 on existing data (%s)', (_kind, enabled, open) => {
+describe.each(sqlTargets)('migration 0039 on existing data (%s)', (_kind, enabled, open) => {
   if (!enabled()) {
     it.skip('needs OAX_TEST_DATABASE_URL', () => undefined);
     return;

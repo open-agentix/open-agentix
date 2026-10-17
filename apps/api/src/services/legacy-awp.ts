@@ -11,7 +11,7 @@ import { lockAgent } from './agent-revisions.js';
 
 /**
  * AWP-3b: the effective AWP manifest of a published version, stored next to it (table
- * `agent_version_awp`, migration 0038). AWP is a draft (`v1alpha1`); a stored manifest is a mapping
+ * `agent_version_awp`, migration 0039). AWP is a draft (`v1alpha1`); a stored manifest is a mapping
  * of the stored definition, not a conformance claim. Published content is never rewritten.
  */
 

@@ -45,9 +45,14 @@ export function registerSystemRoutes(app: ZApp, { ctx, services }: Deps): void {
       const schema = db ? await ctx.database.schemaStatus().catch(() => null) : null;
       // Stored role restrictions the legacy read path ignores widen access silently: not ready
       // (unless accepted with OAX_ALLOW_UNENFORCED_RESTRICTIONS), ADR 0014 S9.
-      const unenforced = db ? await services.roleRestrictions.countUnenforced().catch(() => 0) : 0;
-      if (db) ctx.metrics.unenforcedRestrictions.set(unenforced);
-      const restricted = unenforced > 0 && !ctx.config.auth.allowUnenforcedRestrictions;
+      // A failed count is "unknown", not "none": while the read path is legacy that is not ready
+      // either (the count only queries on the legacy path, so an error cannot occur on bindings).
+      const unenforced = db
+        ? await services.roleRestrictions.countUnenforced().catch(() => null)
+        : 0;
+      if (unenforced !== null) ctx.metrics.unenforcedRestrictions.set(unenforced);
+      const restricted =
+        unenforced === null || (unenforced > 0 && !ctx.config.auth.allowUnenforcedRestrictions);
       const ok = db && !!schema?.ok && !restricted;
       return reply.status(ok ? 200 : 503).send({
         status: ok ? 'ok' : 'unavailable',

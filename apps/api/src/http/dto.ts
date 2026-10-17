@@ -6,7 +6,12 @@ import {
   type PublishedExpansion,
 } from '@openagentix/core';
 import type { AgentSummary } from '../services/agent-summaries.js';
-import type { AgentVersionRow, VersionSummary } from '../services/agents.js';
+import {
+  summary,
+  type AgentVersionRow,
+  type DeprecationRow,
+  type VersionSummary,
+} from '../services/agents.js';
 import type { StoredAwpRow } from '../services/legacy-awp.js';
 import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
 import type { PublicUser, TeamRow, TenantRow, TokenInfo } from '../services/identity.js';
@@ -57,19 +62,19 @@ export const awpStatusDto = (row: StoredAwpRow | undefined) =>
       }
     : null;
 
-export const versionDto = (v: VersionSummary) => ({ ...v, publishedAt: iso(v.publishedAt) });
+export const versionDto = (v: VersionSummary) => ({
+  ...v,
+  publishedAt: iso(v.publishedAt),
+  deprecated: v.deprecated ? { ...v.deprecated, at: iso(v.deprecated.at) } : null,
+});
 
 export const versionDetailDto = (
   v: AgentVersionRow,
+  d: DeprecationRow | undefined,
   awp: StoredAwpRow | undefined,
   deprecations: readonly Deprecation[],
 ) => ({
-  id: v.id,
-  agentId: v.agentId,
-  version: v.version,
-  digest: v.digest,
-  publishedBy: v.publishedBy,
-  publishedAt: iso(v.publishedAt),
+  ...versionDto(summary(v, d)),
   source: v.source,
   definition: v.definition as Record<string, unknown>,
   ...expansionOf(v.definition),

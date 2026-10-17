@@ -163,7 +163,7 @@ project releases when it is ready, and the date follows the release notes of `0.
   metric `oax_legacy_format_reads_total{surface}`. The dedupe window is the cache (Valkey when
   configured, otherwise per replica). A request that is denied or finds nothing writes none. The agent list and the console views that do not show the draft or a
   version do not count as a read.
-- **One-time conversion (migration `0038_agent_version_awp`).** The migration creates the table
+- **One-time conversion (migration `0039_agent_version_awp`).** The migration creates the table
   `agent_version_awp`; right after it (`pnpm --filter @openagentix/api db:migrate`, or migrate-on-start)
   the conversion converts every published version once, **per agent in its own transaction**
   (idempotent: a version with a row is skipped; a re-run converts nothing). Each version gets one row:
@@ -239,6 +239,6 @@ unit test enforces this: it fails while the version of the build (or of the CLI)
 
 ### Rollback
 
-The down script `apps/api/drizzle/down/0038_agent_version_awp.down.sql` drops `agent_version_awp`
+The down script `apps/api/drizzle/down/0039_agent_version_awp.down.sql` drops `agent_version_awp`
 (stored manifests and markers are lost; no agent, version or run is affected, and the conversion can be
 repeated). An application version before this one ignores the table.

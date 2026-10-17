@@ -1,12 +1,13 @@
 # Agent lifecycle: revisions, reviews and approval records
 
 Design: [ADR 0017](adr/0017-agent-lifecycle-governance.md), slices S1 (#244) and S2 (#245).
-**Status: shadow mode, with the console.** Drafts get revisions, reviews can be opened and decided,
-approval records bind a decision to exact content, the tenant policy exists, and the console has a
-Review tab with comment threads, a decision bar and status badges. **Publishing is not yet refused
-without an approval** (slice S3 enforces it); until then the publish response and the audit entry
-report what publish *would* have been refused for. Agent rules, secret scopes and review via Git are
-later slices.
+**Status: enforced (slices S1, S2 and S3).** Drafts get revisions, reviews can be opened and decided,
+approval records bind a decision to exact content, the tenant policy exists, the console has a Review
+tab, and **publishing is refused wherever the policy requires approval and the review is not approved
+by eligible, independent approvers** (S3, #246). Versions can be deprecated, and deprecating the latest
+one is a rollback. There is **no break-glass**: no parameter, role, setting or endpoint publishes
+without the approvals that are required (ADR 0017 decision 11). Agent rules, secret scopes and review
+via Git are later slices.
 
 ## What exists
 
@@ -20,7 +21,8 @@ later slices.
 | Display names of the people of a review | `GET /v1/reviews/{id}/people` |
 | Your review inbox | `GET /v1/me/reviews` |
 | Review tab, status badges, decision bar, inbox page | console: agent page, tab "Review"; `/reviews` |
-| Shadow report of publish | `shadow` in the response of `POST /v1/agents/{id}/publish` and in the audit entry `agent.published` |
+| Publish under approval (the gate) | `POST /v1/agents/{id}/publish` with `reviewId` and `expectedDigest` |
+| Version deprecation and rollback | `POST /v1/agents/{id}/versions/{version}/deprecate` |
 | Rule module (A1 to A8, A10) | `packages/core/src/approvals/rules.ts` |
 | Policy resolver | `packages/core/src/tenancy/lifecycle-policy.ts` |
 
@@ -272,10 +274,9 @@ of that node; another administrator makes it. The rules, all fail closed (#356):
   withdrawn or rejected until an administrator **outside the contributors and their chains** releases
   it with `POST /v1/reviews/{id}/clear-hold` (a reason is required; audited as
   `agent.review.hold_cleared`; `403 hold_clear_by_contributor`, `409 not_held`). Withdraw, loosen,
-  reopen is therefore refused. **Publishing a version does not end the hold**: while approval is not
-  enforced (before S3) anyone with `agents:publish` can publish without approval, so a publish proves
-  nothing. When S3 enforces approval and closes the review on publish, a review that is `published`
-  is finished by itself. An agent with 25 withdrawn or rejected reviews nobody released cannot open
+  reopen is therefore refused. **Publishing a version does not end the hold** of a withdrawn or
+  rejected review (the publish of an agent whose approval is switched off proves nothing about that
+  review). A review that was **published** (closed by an approved publish) is finished by itself. An agent with 25 withdrawn or rejected reviews nobody released cannot open
   another (`429 review_hold_limit`), so open, withdraw, repeat cannot pile up holds without bound.
   Note that anyone with `agents:write` on an agent can fill that cap for that agent (an insider can
   block new reviews of an agent they can already write to until an administrator releases the holds);
@@ -332,6 +333,9 @@ Draft saves, withdrawals, publishes and other decisions of the same agent are se
 - the connection catalog behind the expansion digest is read just before the locks are taken (a
   connection change is not serialised with reviews); it can only make an approval stale at publish,
   where the expansion is computed again (slice S3), never let a wrong one through.
+- publish is serialised with all of the above by the same locks (tree, bindings, agent): a draft save,
+  a decision, a withdrawal, a binding change or a policy change either committed before publish
+  read its state, or waits until publish has committed and sees the review closed.
 
 ## Policy
 
@@ -367,35 +371,132 @@ is `400`. Of these keys, S1 consumes `requireApprovalForPublish`, `productionUse
 slices. The installation defaults are the `OAX_LIFECYCLE_*` variables in
 [configuration.md](configuration.md#agent-lifecycle-policy).
 
-## Shadow mode of publish
+## Publish: the approval gate
 
-`POST /v1/agents/{id}/publish` behaves as before and adds `shadow`:
+`POST /v1/agents/{id}/publish` takes `{ "reviewId": "...", "expectedDigest": "<sha-256>" }`. Both are
+required where approval is required (the tenant policy `requireApprovalForPublish` is `on`, or
+`production-only` and the **union** of the published version's and the draft's use case is a production
+use case; or an open review keeps approval required, see "Policy changes while a review is open").
+Where it is not required the body can be left out and publish behaves as it always did, except that an
+open review (advisory) is closed as `published`. Unknown body fields are a `400`: there is nothing to
+pass to skip an approval.
 
-```json
-{ "enforced": false, "approvalRequired": true, "wouldRefuse": true, "reviewId": null,
-  "state": null, "reasons": [{ "code": "no_review", "message": "..." }] }
-```
+Everything happens in **one transaction** under the organisation's tree lock (shared), its binding lock
+and the agent row lock, in this order. Under those locks, publish
 
-`wouldRefuse` is true when the policy requires an approval for this agent (`production-only` uses the
-union of the published version's and the draft's use case) and there is no open review, or it is not
-`approved` (`approval_insufficient`, `changes_requested`). The same object is in the audit entry
-`agent.published`, together with the id of the revision the version was published from
-(`agent_versions.revision_id`). A failure of the check is logged and never breaks a publish. Publish
-also reads the draft again under the agent lock now and answers `409 draft_changed` if a save slipped in
-while it was checking.
+1. reads the head revision and requires it to be the draft the earlier checks ran on (`409
+   draft_changed`; a save that slips in after the checks is refused, nothing is published);
+2. applies the version rules again to the versions as they are now (a concurrent publish of the same
+   version is refused);
+3. reads the tenant row again under the tree lock (a tenant move changes the chain of policies that apply
+   and holds the lock exclusively) and decides whether approval is required (the policy at the agent's node, and the stricter snapshot of
+   an open review) and, if it is, runs the gate:
+
+| Step | Refusal |
+| --- | --- |
+| `OAX_ROLE_BINDINGS_READ=bindings` | `409 role_bindings_read_required` (see below) |
+| `reviewId` and `expectedDigest` named | `409 approval_required` (`details.missing`) |
+| the review is the open review of this agent | `409 review_closed` |
+| `expectedDigest` is the digest of the head revision | `409 draft_changed` |
+| the profile expansion, recomputed from the revision's source against the connection catalog, equals the one each approval bound to | `409 approval_stale`, `details.reason = expansion_changed` |
+| the secret resolution, recomputed likewise, equals the approved one | `409 approval_stale`, `details.reason = secret_resolution_changed` |
+| enough approvals still count and no reviewer has an unresolved request for changes | `409 approval_insufficient` with `details.required`, `counted`, `changesRequested` and, per approval, the reasons it does not count (`expired`, `revision_changed`, `not_eligible`, `binding_granted_by_contributor`, `binding_grantor_unknown`, `approver_scope`, ...) |
+| `publishBy: approver-only`: the publisher is one of the approvers | `403 publisher_not_approver` |
+
+"Still count" means that **every stored approval is judged again at this moment** by the same code that
+judged the decision (`checkApprover`, rules A1 to A8 and A10): the reviewer is still a person with a
+session (or a token the tenant allows), holds an approver role through a binding that covers the agent
+**now** (revoked, expired and narrowed bindings no longer count), is not a contributor, was not
+granted that role by a contributor (the stored grant chain and the creator chain of the account are
+evaluated; a grantor that cannot be established refuses unless `OAX_LIFECYCLE_UNKNOWN_GRANTOR=allow`),
+has not been replaced by a later decision of their own, and has not expired. A looser policy never
+relaxes an open review; a stricter one applies at once.
+
+On success the version is inserted **from the revision's source** (never from a value read earlier)
+with the approval record (`agent_versions.review_id`, `approved_by`, `policy_digest`,
+`expansion_digest`, `resolution_digest`, and `secret_resolution`, the secret reference names the source
+declares; names only until slice S4), `agents.latest_version_id` moves, the review is closed as `published`
+(`agent_reviews.published_version_id`) and `agent.published` and `agent.review.closed` are appended in
+the same transaction. Every refusal is audited as `agent.publish.refused { code, review }` (at most one
+entry per agent, user and code and minute). A review approves exactly one version.
+
+**There is no break-glass.** No emergency publish, no ratification endpoint, no bypass parameter, no
+administrator exception, no platform-operator exception: a test walks the route table and the body
+schema for them. Incidents are handled with the actions that reduce reachability (disable the agent,
+cancel runs, roll back, below) and with a normal, fast review. The only publish without approval of a
+tenant that requires it is the **deterministic demo seed** (`AgentsService.publishDemoSeed`, used by
+`seedDemo` only): it refuses any agent whose id is not the fixed demo id of its name, which no request
+can choose, and any agent that already has a version.
+
+### `OAX_ROLE_BINDINGS_READ=bindings` is required
+
+The stored grant chains and the binding lock only hold on the resolver read path
+(`assertNodeAuthority` returns before the binding lock on `legacy`). Publish therefore **refuses** where
+approval is required and the installation reads bindings with `legacy`
+(`409 role_bindings_read_required`), and the API logs a warning at start when approval is not switched
+off. Before upgrading a multi-tenant installation (where `OAX_LIFECYCLE_REQUIRE_APPROVAL=auto` is `on`)
+either set `OAX_ROLE_BINDINGS_READ=bindings` (read "Before setting bindings with inheriting bindings
+in place" in the changelog first) or set `OAX_LIFECYCLE_REQUIRE_APPROVAL=off` if there is no second person
+to approve. Single-tenant installations are unaffected (`auto` is `off`).
+
+## Version deprecation and rollback
+
+`POST /v1/agents/{id}/versions/{version}/deprecate` (`agents:publish`, optional `{ "reason" }`) marks a
+version deprecated: **new runs pinned to it are refused** (`409 version_deprecated`, decided at
+admission under the agent row lock; runs that already exist are not touched; a cached "latest" that
+turned out to be deprecated on another replica is read again). Deprecation cannot be undone, is stored
+append-only (`agent_version_deprecations`) and is audited as `agent.version.deprecated`.
+
+Deprecating the **latest** version is a **rollback**: `agents.latestVersion` goes back to the newest
+other version that is not deprecated and, where approval is required for the agent today (the policy now;
+`production-only` with the union of the use cases of the version left and the candidate), was published
+under an approved review (`agent_versions.review_id`). A rollback creates no version, needs no approval
+and is audited with `rollbackTo`. If no such version exists: `409 rollback_target_unapproved` (older
+versions exist but none was published under approval, for example because they are from before S3), or
+`409 no_rollback_target` (nothing else to go back to); disable the agent in both cases.
+A rollback puts the agent back under the use case of the version it returns to, which is a relabel: a
+caller who holds `agents:publish` only through a use-case binding cannot roll back into a use case they
+do not hold (`403`), the same rule as relabelling in a draft save or publish. Deprecating an older
+version only marks it. After a rollback the version numbers stay ahead: the next
+publish needs a higher version than every published one, and the content of a deprecated version cannot
+be published again under its number (`409 version_deprecated`).
 
 ## Audit events
 
 `agent.revision.created`, `agent.review.opened`, `agent.review.decided`, `agent.review.refused`
 (rate-limited to one entry per review, user and code and minute), `agent.review.stale`,
 `agent.review.comment` (ids, operation and length), `agent.review.thread_resolved`,
-`agent.review.closed` (`withdrawn`, `rejected`), `tenant.lifecycle_policy_changed`, and the `shadow`
-and `revision` fields of `agent.published`. Names, ids and digests only: never comment text, never
-sources.
+`agent.review.closed` (`withdrawn`, `rejected`, `published` with the version), `agent.published`
+(version, digest, revision, review, approvers, policy, expansion and resolution digests),
+`agent.publish.refused` (code, review; rate-limited), `agent.version.deprecated` (version, `rollbackTo`),
+`tenant.lifecycle_policy_changed`. Names, ids and digests only: never comment text, never sources.
 
 ## Limits of this slice
 
-- Publish is not refused (slice S3); agent rules are S8; notifications are S13.
+- Agent rules are S8; notifications are S13; secret scopes and the concrete secret resolution are S4 (the
+  resolution digest binds the names until then).
+- The connection catalog behind the expansion digest is read just before the locks are taken (a
+  connection change is not serialised with publish): a change after that read and before the commit is not
+  seen by this publish. **That includes revocations and narrowings**: a connection or tool grant removed,
+  or an MCP tool review revoked, after the early read can still be published once with the expansion
+  that was read. The window is a few milliseconds wide; the next publish sees the change. Follow-up:
+  read the catalog inside the transaction on PostgreSQL.
+- **A root administrator can still publish their own draft.** A root's policy is not clamped by the
+  installation default. A root administrator with no unfinished review in the organisation can set
+  `requireApprovalForPublish` to `off`, publish their own unreviewed draft and switch it on again. Every
+  step is audited (`tenant.lifecycle_policy_changed`, `agent.published` with `approved: false`), but it
+  is the administrator exception that ADR 0017 decision 11 rules out. Mitigations until a follow-up
+  makes `OAX_LIFECYCLE_REQUIRE_APPROVAL=on` a floor for root policies and counts authors of unpublished
+  drafts in the loosening guard: limit organisation administrators, watch for
+  `tenant.lifecycle_policy_changed` entries that loosen `requireApprovalForPublish`.
+- Secret resolution is **names-only** until slice S4: `agent_versions.secret_resolution` records the
+  secret reference names a version declares, and the resolution digest binds those names. Nothing is
+  pinned to a concrete secret yet.
+- A rollback target that was published under approval is not re-checked against today's approvers: the
+  approval was valid when the version was published (the version keeps the record).
+- Run admission sees a deprecation at once on the replica that deprecated; other replicas cache the
+  latest version for up to 60 seconds, read it again as soon as it turns out to be deprecated, and refuse
+  pinned runs at once (the check is in the database).
 - Revert migration `0034_review_threads` before `0032_agent_lifecycle_reviews`: the thread tables
   reference the review tables.
 - Directory-mapped bindings (S11) do not exist yet; the rule module already treats the mapping creator
@@ -424,8 +525,8 @@ sources.
   binding tables, measured on a small test VM; plan a short maintenance window on large audit chains.
 - **S3 requires `OAX_ROLE_BINDINGS_READ=bindings`.** `assertNodeAuthority` returns before it takes the
   binding lock on the legacy read path, so the stored chain is only race-free (and the loosening
-  guard only sees the whole tree) with the resolver path. Do not enable approval enforcement on
-  `legacy`.
+  guard only sees the whole tree) with the resolver path. Publish therefore refuses where approval is
+  required on `legacy` (`409 role_bindings_read_required`), see "Publish: the approval gate".
 - **Operator trust.** Changes to `OAX_LIFECYCLE_*` (including `UNKNOWN_GRANTOR=allow` and
   `REQUIRE_APPROVAL`) are made by whoever runs the installation, and `REQUIRE_APPROVAL=auto` turns approval
   off again when only one tenant is left (`installationDefaults`). These are operator-trust items: the
