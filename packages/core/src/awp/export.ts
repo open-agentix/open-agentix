@@ -153,7 +153,10 @@ export function profilesOf(spec: JsonObject): string[] {
  * The result is a mapping to the AWP schema. It is not a conformance claim.
  */
 export function exportAwpManifest(def: PublishedDefinition, options: ExportOptions): ExportResult {
-  const ctx = new ExportContext(options.stepWhenSupported ?? PINNED_AWP_FEATURES.stepWhen);
+  const ctx = new ExportContext(
+    options.stepWhenSupported ?? PINNED_AWP_FEATURES.stepWhen,
+    options.toolArgsSupported ?? PINNED_AWP_FEATURES.toolArgs,
+  );
   rejectUnknownKeys(ctx, def, KNOWN_DEFINITION_KEYS, '');
   const metadata = exportMetadata(ctx, def, options.ownerTeam);
   const { spec } = exportSpec(ctx, def);
@@ -168,7 +171,7 @@ export function exportAwpManifest(def: PublishedDefinition, options: ExportOptio
   if (findings.length > 0) return refused();
   const manifest: JsonObject = { apiVersion: AWP_API_VERSION, kind: 'Workflow', metadata, spec };
   // Safety net, independent of the mapping above: a conversion never grants more than the source.
-  const widened = verifyNoWidening(def, manifest);
+  const widened = verifyNoWidening(def, manifest, { requiredExtensions: supported });
   if (widened.length > 0) return refused(widened);
   try {
     const digest = awpManifestDigest(manifest);

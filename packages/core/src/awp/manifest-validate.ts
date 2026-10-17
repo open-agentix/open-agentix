@@ -5,6 +5,7 @@ import { extensionFindings } from './manifest-extensions.js';
 import { awpManifestDigest } from './manifest-digest.js';
 import { injectAgentSections, parseManifestSource } from './manifest-parse.js';
 import { pinnedValidator, structuralFindings } from './manifest-schema.js';
+import { argFindings } from './manifest-args.js';
 import { whenFindings } from './manifest-when.js';
 import { semanticFindings } from './manifest-semantic.js';
 import {
@@ -141,6 +142,7 @@ export function validateManifestValue(
     }),
   );
   findings.push(...whenFindings(doc));
+  findings.push(...argFindings(doc));
   findings.push(
     ...semanticFindings(doc, {
       profiles: new Set<string>(options.profiles ?? SUPPORTED_AWP_PROFILES),
