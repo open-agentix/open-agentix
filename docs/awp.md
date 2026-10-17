@@ -121,6 +121,61 @@ the vendored schema disagrees, so a pin upgrade that adds AEP-0011 forces a deli
 `true`, the same code writes the extensions and lists their names, sorted, in `metadata.requiredExtensions`
 instead of refusing (tested with an override; it cannot be validated against the current schema).
 
+### Step conditions (`when`, AEP-0001)
+
+[AEP-0001](https://github.com/open-agentix/agenticWorkflowProtocol.org/blob/main/aep/0001-conditional-steps.md)
+proposes an optional step field `when` (status **Review**, not accepted, target `v1alpha2`). The pinned
+`v1alpha1` schema has **no** step `when` (only policy rules have a `when`), so today:
+
+- The exporter writes the condition of an `agents.md` agent as the critical extension
+  `x-openagentix-when` and, like every critical extension, refuses the export until the pin offers
+  `metadata.requiredExtensions` (see above). With `requiredExtensionsSupported` it is listed there.
+  When `PINNED_AWP_FEATURES.stepWhen` is `true` (a pin that contains AEP-0001; a test fails while the flag
+  and the vendored schema disagree) the same code writes the core field `when` and needs no extension.
+  Both paths are tested against a **test-only copy** of the schema with the field added; the vendored
+  files are never edited.
+- The text is **translated, not copied**. `agents.md` reads `steps.<id>.output.<path>` and
+  `event.<path>`; AEP-0001 reads `steps.<id>.outputs.<name>.<path>`, `inputs.<name>`, `event` and
+  `execution.environment`. The exporter parses the condition, rewrites the tree and prints it again:
+  `steps.a.output.severity` becomes `steps.a.outputs.result.severity` (every exported step declares
+  the output `result`), and `event.data.<path>` becomes `inputs.event.<path>` (the payload is the
+  declared input `event` of an event-triggered workflow). Strings are printed double-quoted with JSON
+  escapes. What cannot be mapped is refused with `condition_not_representable`: `event.type`,
+  `event.source` and other CloudEvent attributes, `event.data` without an event trigger, and a condition
+  that exceeds an AEP limit after the longer paths (128 tokens, 512 characters). Nothing is dropped:
+  `verifyNoWidening` also fails an export whose step lost the condition of its source agent.
+- The grammar, the limits (512 characters, 128 tokens, depth 16, 16 path segments, 32 list items, strings of
+  256 characters, indexes up to 10000), the strict typing and the fail-closed evaluation are the ones
+  `agents.md` already has (ADR 0008): AEP-0001 is based on that grammar (decision D5).
+- The validator reads `when` and `x-openagentix-when` and reports `when.syntax`, `when.limits`,
+  `when.unknown-step`, `when.not-a-dependency` and `when.undeclared-output` (errors) and
+  `when.undeclared-input` (warning), at the path of the field. It only parses; it never evaluates.
+  The AEP's invalid conformance cases are not in the vendored suite yet, so the baseline is unchanged.
+
+Safety properties, unchanged by the export: a condition can only **restrict** a step. A false condition
+skips it and grants nothing, a true condition does not bypass permissions, policies or approvals of the
+step, and a condition is not an authorisation mechanism (it may read model output, so combine it with
+typed output schemas). The evaluator is a tree walker with no `eval`, no `Function`, no regular
+expression on data, no functions, no coercion, only the documented roots and own properties, and it fails
+closed.
+
+Mapping of the run semantics (the AEP execution model against what the runtime does):
+
+| AEP-0001 | OpenAgentix |
+| --- | --- |
+| step `skipped`, reason `condition` | run step `condition` / `skipped`, audit `step.skipped` `{ agentId, when, reason: "condition" }` (`agentId` is the step id, `when` the expression text, never the values it read) |
+| evaluation error: step `failed`, reason `conditionError` | run step `condition` / `error`, audit `condition.error`, the run fails with `condition_error` (1:1; the pipeline is sequential, so no dependent step is left to skip) |
+| execution succeeds with condition skips (D6) | the run is `succeeded` |
+| reference to the output of a condition-skipped step | an error, except inside `exists()` which is `false` |
+| `skipped`, reason `dependencyFailed` | not produced: a failing step fails the run and ends the pipeline |
+
+Known differences (not conformance statements): (1) after a condition skip the next step without
+`input.from` receives the output of the last step that **ran**, whereas the exported `task`
+`${{ steps.<previous>.outputs.result }}` is an error in AEP-0001 (`missingOutput`); the AWP reading
+fails closed, so it never runs more than the source. (2) String ordering uses UTF-16 code units
+(`<`, `>`) where AEP-0001 says code points. (3) AEP-0001 allows `inputs.*` and `execution.environment`;
+`agents.md` has no such roots, so they are validated but not evaluated by this product.
+
 ### Other refusals
 
 All refusals fail closed and name the source path.
@@ -136,6 +191,7 @@ All refusals fail closed and name the source path.
 | `duplicate_grant_conflict`   | One tool is granted twice with different limits.                                                      |
 | `trigger_not_representable`  | A cron schedule that is not five-field (a seconds field).                                             |
 | `label_not_representable`, `secret_not_representable`, `pipeline_not_representable` | Names or order that AWP cannot hold. |
+| `condition_not_representable` | A `when` condition that cannot be mapped to the AEP-0001 grammar (see above). |
 | `unknown_field`              | A stored field the exporter does not know (for example from a newer build): never dropped silently.   |
 | `not_canonicalizable`        | A value outside the JSON data model (for example a lone surrogate).                                   |
 
@@ -219,7 +275,8 @@ oax validate examples/awp/ticket-updater.awp.md
 | plain JSON or YAML | `examples/awp/*.awp.json` | One or more YAML documents (spec 3.1); every document is validated on its own. |
 
 A text is treated as AWP when its `apiVersion` starts with `awp.`; a file with `openagentix.io/v1alpha1` is
-the legacy format and goes to the legacy parser unchanged (its conversion is AWP-3b). The legacy parser
+the legacy format and goes to the legacy parser unchanged (it is deprecated; the transition, the one-time
+conversion and `oax awp convert` are described in [agents.md: transition to AWP manifests](agents-md.md#transition-to-awp-manifests)). The legacy parser
 refuses an AWP file with `awp_not_runnable` instead of listing dozens of unknown fields.
 
 **Effective manifest and digest.** For `agents.md` the effective manifest is the front matter with the text
@@ -238,7 +295,7 @@ The result lists findings with the AWP diagnostic `code` and the JSON Pointer `p
 Structure comes first (`schema.<keyword>`, from the pinned schema); only a structurally valid document gets
 the semantic rules (`id.duplicate`, `dependsOn.cycle`, `profile.unsupported`, `digest.mismatch`, ...). A
 warning does not make a manifest invalid. Codes of the form `extension.*`, `wrapper.*`, `limit.*` and
-`yaml.cycle`, `yaml.unsafe-integer`, `yaml.non-json-value`, `digest.not-canonicalizable` are OpenAgentix's own.
+`when.*` (step conditions, AEP-0001, see the exporter section), `yaml.cycle`, `yaml.unsafe-integer`, `yaml.non-json-value`, `digest.not-canonicalizable` are OpenAgentix's own.
 
 **Where the code comes from.** `scripts/awp/generate-types.mjs` writes `packages/core/src/awp/generated/`
 (the embedded pinned schema, the embedded extension schema and the TypeScript types `Awp*`), each file with
@@ -303,7 +360,8 @@ any `agents.md`. The `agents.md` wrapper never lets a section override front mat
 
 ### Left out of this slice
 
-Storing, publishing and running an AWP manifest; conversion of the legacy format (AWP-3b); source positions
+Storing, publishing and running an AWP manifest (the legacy conversion of AWP-3b stores the
+manifest next to a version but does not run from it); source positions
 (line and column) in findings; the `awp-check` profile selection by the caller; `kind: Agent` and `kind:
 Policy` documents are validated but have no exporter counterpart.
 

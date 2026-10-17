@@ -498,6 +498,42 @@ export const agentVersionDeprecations = pgTable(
   ],
 );
 
+/**
+ * The effective AWP manifest of a published version (AWP-3b, decision D13), stored **next to** the
+ * version, never in it: `agent_versions` is append-only and its source and digest never change.
+ * `converted`: `manifest` is the strict conversion of the stored definition. `legacy-unconvertible`:
+ * the conversion was refused (`findings` say why, field by field) and no manifest is stored, so no
+ * lossy conversion exists. One row per version, append-only (a version is converted once).
+ */
+export const agentVersionAwp = pgTable(
+  'agent_version_awp',
+  {
+    versionId: uuid('version_id')
+      .primaryKey()
+      .references(() => agentVersions.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    status: text('status').notNull(),
+    manifest: jsonb('manifest'),
+    manifestDigest: text('manifest_digest'),
+    findings: jsonb('findings').notNull().default([]),
+    /** Which converter produced the row (the exporter changes over time; the row does not). */
+    converter: text('converter').notNull(),
+    convertedAt: ts('converted_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('agent_version_awp_agent_idx').on(t.agentId),
+    index('agent_version_awp_status_idx').on(t.status, t.agentId),
+    check('agent_version_awp_status', sql`${t.status} in ('converted', 'legacy-unconvertible')`),
+    check(
+      'agent_version_awp_shape',
+      sql`(${t.status} = 'converted' and ${t.manifest} is not null and ${t.manifestDigest} is not null)
+        or (${t.status} = 'legacy-unconvertible' and ${t.manifest} is null and ${t.manifestDigest} is null)`,
+    ),
+  ],
+);
+
 export const eventSources = pgTable(
   'event_sources',
   {

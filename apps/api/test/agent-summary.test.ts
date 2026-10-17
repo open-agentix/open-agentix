@@ -148,10 +148,11 @@ describe('agent summary fields', () => {
       budget: null,
     });
     const listed = (await listAgents(alice)).items.find((a) => a.id === draft.id)!;
-    const { draftSource: _omit, ...detailWithoutDraft } = await get(
-      alice,
-      `/v1/agents/${draft.id}`,
-    );
+    const {
+      draftSource: _omit,
+      deprecations: _deprecations,
+      ...detailWithoutDraft
+    } = await get(alice, `/v1/agents/${draft.id}`);
     expect(detailWithoutDraft).toEqual(listed);
   });
 

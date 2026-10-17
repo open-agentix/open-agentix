@@ -27,6 +27,7 @@ import { Metrics } from './metrics.js';
 import type { LdapClientFactory } from './auth/ldap.js';
 import type { OidcClient } from './auth/oidc.js';
 import { processSecrets, scrubbingDestination, type LineSink } from './mcp-oauth/index.js';
+import { convertLegacyVersions } from './services/legacy-awp.js';
 
 /** Shared dependencies of the control node services (API and in-process worker). */
 export interface AppContext {
@@ -166,7 +167,20 @@ export async function createContext(
     await waitForDatabase(database, db.connectRetries, db.connectBackoffMs, (attempt, err) =>
       logger.warn({ attempt, err: (err as Error).message }, 'database not reachable yet, retrying'),
     );
-    if (db.migrateOnStart) await database.migrate();
+    if (db.migrateOnStart) {
+      await database.migrate();
+      // AWP-3b: the one-time conversion of the published versions (idempotent, after the schema). A
+      // failure here never keeps the node from starting: unconverted versions are converted on read.
+      try {
+        const r = await convertLegacyVersions(database.db, (agent, err) =>
+          logger.warn({ agent, err }, 'conversion to an AWP manifest failed; converted on read'),
+        );
+        if (r.converted + r.unconvertible > 0)
+          logger.info(r, 'converted published versions to AWP manifests');
+      } catch (err) {
+        logger.warn({ err }, 'conversion of published versions to AWP manifests failed');
+      }
+    }
   }
   if (egress.airgapped) {
     const rows = await database.db.select().from(connections);

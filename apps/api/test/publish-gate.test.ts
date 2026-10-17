@@ -5,6 +5,7 @@ import {
   agentDraftRevisions,
   agentReviewDecisions,
   agentReviews,
+  agentVersionAwp,
   agentVersionDeprecations,
   agentVersions,
   agents,
@@ -285,6 +286,32 @@ describe('the gate: what publish needs where approval is required', () => {
       expectedDigest: otherReview.revision.digest,
     });
     expect(unknown.statusCode).toBe(409);
+  });
+
+  it('stores the AWP conversion with a version published under an approved review (AWP-3b)', async () => {
+    const { a, review } = await approved();
+    expect((await publishReview(tok['author']!, a.id, review)).statusCode).toBe(201);
+    const [v] = await versionsOf(a.id);
+    const rows = await n.ctx.db
+      .select()
+      .from(agentVersionAwp)
+      .where(eq(agentVersionAwp.versionId, v!.id));
+    expect(rows).toHaveLength(1);
+    expect(['converted', 'legacy-unconvertible']).toContain(rows[0]!.status);
+    expect(rows[0]!.converter).toBe('awp-export/1');
+  });
+
+  it('release N+1 of the legacy format refuses an approved publish too, and creates no version', async () => {
+    const { a, review } = await approved();
+    n.services.agents.legacyPhase = 'removed';
+    try {
+      const res = await publishReview(tok['author']!, a.id, review);
+      expect(res.statusCode).toBe(400);
+      expect(j(res).error).toBe('legacy_format_removed');
+    } finally {
+      n.services.agents.legacyPhase = 'deprecated';
+    }
+    expect(await versionsOf(a.id)).toHaveLength(0);
   });
 
   it('publishes an approved review: version, approval record, review closed, audit', async () => {

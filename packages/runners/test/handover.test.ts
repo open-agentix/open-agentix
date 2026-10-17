@@ -315,6 +315,7 @@ describe('when', () => {
     expect(t.control.audit.find((a) => a.action === 'step.skipped')?.payload).toEqual({
       agentId: 'action',
       when: 'steps.research.output.severity == "high"',
+      reason: 'condition',
     });
     // the later legacy step sees the previous step that actually ran
     expect(t.provider.requests[1]!.messages[0]!.content).toContain('previous agent "research"');

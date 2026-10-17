@@ -207,7 +207,10 @@ describe('stepAuditEntry', () => {
         agentId: 'a',
         output: { when: 'x == 1', extra: 'ignored' },
       }),
-    ).toEqual({ action: 'step.skipped', payload: { agentId: 'a', when: 'x == 1' } });
+    ).toEqual({
+      action: 'step.skipped',
+      payload: { agentId: 'a', when: 'x == 1', reason: 'condition' },
+    });
     expect(
       stepAuditEntry({
         kind: 'condition',

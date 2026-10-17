@@ -1,6 +1,6 @@
 {
-  "id": "932b7b90-7e95-4326-8f3a-9df35d26a129",
-  "prevId": "8ea55a5f-37f4-425f-8e71-81130f67a979",
+  "id": "67531150-0e97-4eb8-81b1-c2f232f6e882",
+  "prevId": "13ee8233-ee2b-4155-9737-b14b2299f73c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1174,6 +1174,142 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.agent_version_awp": {
+      "name": "agent_version_awp",
+      "schema": "",
+      "columns": {
+        "version_id": {
+          "name": "version_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "manifest": {
+          "name": "manifest",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "manifest_digest": {
+          "name": "manifest_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "findings": {
+          "name": "findings",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "converter": {
+          "name": "converter",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "converted_at": {
+          "name": "converted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "agent_version_awp_agent_idx": {
+          "name": "agent_version_awp_agent_idx",
+          "columns": [
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agent_version_awp_status_idx": {
+          "name": "agent_version_awp_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agent_version_awp_version_id_agent_versions_id_fk": {
+          "name": "agent_version_awp_version_id_agent_versions_id_fk",
+          "tableFrom": "agent_version_awp",
+          "tableTo": "agent_versions",
+          "columnsFrom": [
+            "version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agent_version_awp_agent_id_agents_id_fk": {
+          "name": "agent_version_awp_agent_id_agents_id_fk",
+          "tableFrom": "agent_version_awp",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agent_version_awp_status": {
+          "name": "agent_version_awp_status",
+          "value": "\"agent_version_awp\".\"status\" in ('converted', 'legacy-unconvertible')"
+        },
+        "agent_version_awp_shape": {
+          "name": "agent_version_awp_shape",
+          "value": "(\"agent_version_awp\".\"status\" = 'converted' and \"agent_version_awp\".\"manifest\" is not null and \"agent_version_awp\".\"manifest_digest\" is not null)\n        or (\"agent_version_awp\".\"status\" = 'legacy-unconvertible' and \"agent_version_awp\".\"manifest\" is null and \"agent_version_awp\".\"manifest_digest\" is null)"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.agent_version_deprecations": {

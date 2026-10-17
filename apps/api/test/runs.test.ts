@@ -725,7 +725,7 @@ describe('typed handovers over the worker contract', () => {
     const steps = await stepsOf(runId);
     expect(steps).toContainEqual(expect.objectContaining({ kind: 'condition', status: 'skipped' }));
     const skipped = (await auditOf(runId)).find((a) => a.action === 'step.skipped');
-    expect(skipped?.payload).toMatchObject({ agentId: 'action' });
+    expect(skipped?.payload).toMatchObject({ agentId: 'action', reason: 'condition' });
   });
 
   it('fails with handover_invalid and audits it without the offending value', async () => {

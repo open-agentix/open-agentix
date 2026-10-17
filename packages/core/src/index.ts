@@ -16,6 +16,8 @@ export * from './agents/handover.js';
 export * from './awp/types.js';
 export * from './awp/manifest-digest.js';
 export * from './awp/export.js';
+export * from './awp/legacy.js';
+export { verifyNoWidening } from './awp/legacy-widening.js';
 export * from './awp/generated/awp-types.js';
 export * from './awp/manifest-types.js';
 export { validateManifestSource, validateManifestValue } from './awp/manifest-validate.js';

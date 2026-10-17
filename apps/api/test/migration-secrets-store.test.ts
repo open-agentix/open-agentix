@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MIGRATIONS_FOLDER } from '../src/db/client.js';
@@ -25,15 +25,11 @@ describe('migration 0040 files', () => {
     const whens = journal.entries.map((e) => e.when);
     expect([...whens].sort((a, b) => a - b)).toEqual(whens);
     expect(new Set(whens).size).toBe(whens.length);
+    expect(journal.entries[at - 1]!.tag).toBe('0039_agent_version_awp');
+    expect(journal.entries.map((e) => e.idx)).toEqual(journal.entries.map((_, i) => i));
     const read = (n: string) =>
       JSON.parse(readFileSync(join(MIGRATIONS_FOLDER, `meta/${n}_snapshot.json`), 'utf8'));
-    // 0039 (AWP-3b) may or may not exist yet: chain to the newest snapshot below 0040.
-    const previous = readdirSync(join(MIGRATIONS_FOLDER, 'meta'))
-      .map((f) => /^(\d{4})_snapshot\.json$/.exec(f)?.[1])
-      .filter((n): n is string => !!n && n < '0040')
-      .sort()
-      .at(-1)!;
-    expect(read('0040').prevId).toBe(read(previous).id);
+    expect(read('0040').prevId).toBe(read('0039').id);
     expect(Object.keys(read('0040').tables)).toEqual(
       expect.arrayContaining(['public.secrets', 'public.secret_versions']),
     );

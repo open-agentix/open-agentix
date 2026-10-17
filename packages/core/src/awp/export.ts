@@ -3,7 +3,14 @@ import { JcsError } from '../jcs.js';
 import { exportAgent, type AgentExport } from './export-agent.js';
 import { exportBudget } from './export-budget.js';
 import { ExportContext, rejectUnknownKeys } from './export-context.js';
-import { exportApproval, exportSecrets, exportSteps, exportTriggers } from './export-workflow.js';
+import {
+  exportApproval,
+  exportSecrets,
+  exportSteps,
+  exportTriggers,
+  hasEventTrigger,
+} from './export-workflow.js';
+import { verifyNoWidening } from './legacy-widening.js';
 import { awpManifestDigest } from './manifest-digest.js';
 import {
   AWP_API_VERSION,
@@ -99,7 +106,8 @@ function exportSpec(
   ctx: ExportContext,
   def: PublishedDefinition,
 ): { spec: JsonObject; agents: AgentExport[] } {
-  const exports = def.agents.map((a, i) => exportAgent(ctx, def, a, i));
+  const hasEventInput = hasEventTrigger(def);
+  const exports = def.agents.map((a, i) => exportAgent(ctx, def, a, i, hasEventInput));
   const { triggers, hasEvent } = exportTriggers(ctx, def);
   const byId = new Map(exports.map((e) => [String(e.agent.id), e]));
   const spec: JsonObject = { triggers };
@@ -126,7 +134,8 @@ function exportSpec(
   return { spec, agents: exports };
 }
 
-function profilesOf(spec: JsonObject): string[] {
+/** Profiles a validator needs for the `spec` of a manifest (`core` plus `mcp` / `governance`). */
+export function profilesOf(spec: JsonObject): string[] {
   const agents = spec.agents as JsonObject[];
   const usesMcp = agents.some((a) => Array.isArray(a.tools) && a.tools.length > 0);
   return ['core', ...(spec.approval ? ['governance'] : []), ...(usesMcp ? ['mcp'] : [])].sort();
@@ -144,7 +153,7 @@ function profilesOf(spec: JsonObject): string[] {
  * The result is a mapping to the AWP schema. It is not a conformance claim.
  */
 export function exportAwpManifest(def: PublishedDefinition, options: ExportOptions): ExportResult {
-  const ctx = new ExportContext();
+  const ctx = new ExportContext(options.stepWhenSupported ?? PINNED_AWP_FEATURES.stepWhen);
   rejectUnknownKeys(ctx, def, KNOWN_DEFINITION_KEYS, '');
   const metadata = exportMetadata(ctx, def, options.ownerTeam);
   const { spec } = exportSpec(ctx, def);
@@ -158,6 +167,9 @@ export function exportAwpManifest(def: PublishedDefinition, options: ExportOptio
   });
   if (findings.length > 0) return refused();
   const manifest: JsonObject = { apiVersion: AWP_API_VERSION, kind: 'Workflow', metadata, spec };
+  // Safety net, independent of the mapping above: a conversion never grants more than the source.
+  const widened = verifyNoWidening(def, manifest);
+  if (widened.length > 0) return refused(widened);
   try {
     const digest = awpManifestDigest(manifest);
     metadata.integrity = { digest };

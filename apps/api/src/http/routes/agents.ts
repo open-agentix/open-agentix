@@ -1,4 +1,4 @@
-import { jcs, type Principal } from '@openagentix/core';
+import { jcs, legacyDeprecation, type Principal } from '@openagentix/core';
 import { createEvent, isCloudEvent, parseCloudEvent } from '@openagentix/events';
 import { z } from 'zod';
 import { AGENT_STATUSES } from '../../services/agent-filters.js';
@@ -8,7 +8,14 @@ import { HttpError } from '../../errors.js';
 import { exportVersionAsAwp } from '../../services/agent-awp.js';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
-import { agentDetailDto, agentDto, runDto, versionDetailDto, versionDto } from '../dto.js';
+import {
+  agentDetailDto,
+  agentDto,
+  awpStatusDto,
+  runDto,
+  versionDetailDto,
+  versionDto,
+} from '../dto.js';
 import {
   AgentDetailSchema,
   AgentSchema,
@@ -21,6 +28,7 @@ import {
   ErrorSchema,
   Id,
   IdParams,
+  LegacyReportSchema,
   ManualRunBody,
   MembersBody,
   PageQuery,
@@ -113,6 +121,7 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
               principalOf(req),
               await agents.create(principalOf(req), req.body.source),
             ),
+            [legacyDeprecation()],
           ),
         ),
   );
@@ -149,8 +158,26 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
         digest: r.digest,
         definition: (r.definition as unknown as Record<string, unknown> | null) ?? null,
         manifest: r.manifest,
+        deprecations: r.deprecations,
       };
     },
+  );
+
+  app.get(
+    '/v1/agents/legacy-report',
+    {
+      config: { access: 'agents:read' },
+      schema: {
+        tags,
+        summary: 'Legacy format conversion report (AWP-3b)',
+        description:
+          'The stored versions of the agents the caller may read: how many are converted to an AWP manifest, unconvertible or not yet converted, and the unconvertible ones with the field-level reasons of the refusal. The API form of `oax awp legacy-report`. AWP is a draft (v1alpha1); a conversion is a mapping, not a conformance claim.',
+        security: sec,
+        querystring: PageQuery,
+        response: { 200: LegacyReportSchema },
+      },
+    },
+    async (req) => agents.legacyReport(principalOf(req), req.query),
   );
 
   app.get(
@@ -168,7 +195,8 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
     async (req) => {
       const a = await agents.get(req.params.id, principalOf(req));
       await agents.assertAccess(principalOf(req), a, 'agents:read');
-      return agentDetailDto(await summarize(principalOf(req), a));
+      const deprecations = await agents.legacyRead(principalOf(req), a, 'agent');
+      return agentDetailDto(await summarize(principalOf(req), a), deprecations);
     },
   );
 
@@ -192,6 +220,7 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
           principal,
           await agents.updateDraft(principal, req.params.id, req.body.source),
         ),
+        [legacyDeprecation()],
       );
     },
   );
@@ -219,10 +248,13 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
     },
     async (req, reply) => {
       const r = await agents.publish(principalOf(req), req.params.id, req.body ?? {});
+      const stored = await agents.awpOf(r.version.id);
       return reply.status(r.created ? 201 : 200).send({
         version: versionDto(r.version),
         created: r.created,
         approval: r.approval,
+        deprecations: [legacyDeprecation()],
+        awp: stored ? { status: awpStatusDto(stored)!.status } : null,
       });
     },
   );
@@ -282,7 +314,7 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
       async (req) => {
         const principal = principalOf(req);
         const { agent } = await agents[action](principal, req.params.id, req.body?.reason);
-        return agentDetailDto(await summarize(principal, agent));
+        return agentDetailDto(await summarize(principal, agent), [legacyDeprecation()]);
       },
     );
   }
@@ -322,13 +354,21 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
       },
     },
     async (req) => {
-      await agents.assertAccess(
+      const agent = await agents.get(req.params.id, principalOf(req));
+      await agents.assertAccess(principalOf(req), agent, 'agents:read');
+      const version = await agents.getVersion(req.params.id, req.params.version);
+      const deprecations = await agents.legacyRead(
         principalOf(req),
-        await agents.get(req.params.id, principalOf(req)),
-        'agents:read',
+        agent,
+        'version',
+        version.version,
       );
-      const v = await agents.getVersion(req.params.id, req.params.version);
-      return versionDetailDto(v, await agents.deprecationOf(v.id));
+      return versionDetailDto(
+        version,
+        await agents.deprecationOf(version.id),
+        await agents.awpOf(version.id),
+        deprecations,
+      );
     },
   );
 
@@ -350,10 +390,12 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
       const principal = principalOf(req);
       const agent = await agents.get(req.params.id, principal);
       await agents.assertAccess(principal, agent, 'agents:read');
+      const version = await agents.getVersion(agent.id, req.params.version);
       const result = await exportVersionAsAwp(
         agent,
-        await agents.getVersion(agent.id, req.params.version),
+        version,
         (slug) => agents.teamIdForOwner(agent.tenantId, slug),
+        await agents.awpOf(version.id),
       );
       if (!result.ok)
         throw new HttpError(
@@ -362,9 +404,11 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
           `the version cannot be exported as an AWP manifest (${result.findings.length} finding(s))`,
           { findings: result.findings },
         );
+      await agents.legacyRead(principal, agent, 'awp-export', version.version);
       reply
         .type('application/json; charset=utf-8')
-        .header('x-oax-source-digest', result.sourceDigest);
+        .header('x-oax-source-digest', result.sourceDigest)
+        .header('x-oax-deprecation', 'legacy_format');
       // A string payload is sent as is, so the RFC 8785 bytes (which the digest covers) are the body.
       return reply.send(jcs(result.manifest) as unknown as Record<string, unknown>);
     },

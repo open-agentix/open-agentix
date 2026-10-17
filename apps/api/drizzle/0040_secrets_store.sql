@@ -8,7 +8,6 @@
 -- * A trigger keeps the identity columns of a secret (the AAD inputs) immutable.
 -- * agent_versions.secret_resolution (jsonb, since 0038) now holds pins ({ ref, state, ... }) next to
 --   the legacy names; no data change is needed (old rows keep their string entries).
--- Journal note: this is idx 34 / 0040 because the AWP-3b migration (#366) takes 0039 / idx 33.
 -- Down path: drizzle/down/0040_secrets_store.down.sql
 CREATE TABLE "secret_versions" (
 	"secret_id" uuid NOT NULL,
