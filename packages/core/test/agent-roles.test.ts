@@ -27,6 +27,7 @@ const DEVELOPER: Permission[] = [
   'policies:read',
   'tokens:read',
   'tokens:write',
+  'secrets:read',
 ];
 
 /** The permissions the removed role `agent-engineer` held before this slice. */
@@ -43,7 +44,12 @@ const OLD_ENGINEER: Permission[] = [
   'tokens:write',
 ];
 
-const NEW_PERMISSIONS: Permission[] = ['agents:review', 'agents:approve', 'agents:rules'];
+const NEW_PERMISSIONS: Permission[] = [
+  'agents:review',
+  'agents:approve',
+  'agents:rules',
+  'secrets:read',
+];
 
 const sorted = (p: readonly Permission[]) => [...p].sort();
 
@@ -121,8 +127,8 @@ describe('agent roles', () => {
     expect(holders('agents:publish')).toEqual(['admin', 'agent-maintainer']);
   });
 
-  it('leaves viewer and pentest without any of the new permissions', () => {
-    for (const role of ['viewer', 'pentest'] as Role[])
+  it('leaves the viewer without any of the new permissions (the pentest role sees secret metadata only)', () => {
+    for (const role of ['viewer'] as Role[])
       for (const p of NEW_PERMISSIONS)
         expect(ROLE_PERMISSIONS[role], `${role} ${p}`).not.toContain(p);
     expect(sorted(ROLE_PERMISSIONS.viewer)).toEqual(sorted(READ_BASICS));
@@ -162,9 +168,13 @@ describe('agent roles', () => {
     };
     for (const [role, old] of Object.entries(before)) {
       const now = ROLE_PERMISSIONS[role as Role].filter((p) => !old.includes(p));
-      expect(sorted(now), role).toEqual(
-        sorted(role === 'operator' ? ['agents:review', 'agents:approve'] : ['agents:review']),
-      );
+      // ADR 0017 section 13.4: integrator manages secrets, the auditor sees their metadata.
+      const added: Record<string, Permission[]> = {
+        operator: ['agents:review', 'agents:approve'],
+        integrator: ['agents:review', 'secrets:read', 'secrets:write'],
+        auditor: ['agents:review', 'secrets:read'],
+      };
+      expect(sorted(now), role).toEqual(sorted(added[role]!));
       for (const p of old) expect(ROLE_PERMISSIONS[role as Role], `${role} ${p}`).toContain(p);
     }
   });

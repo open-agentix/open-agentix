@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { OaxError } from '@openagentix/core';
-import { and, eq, max } from 'drizzle-orm';
+import { and, eq, max, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { tenantDataKeys } from '../db/schema.js';
 import { KEY_BYTES, open, seal, type BindingContext, bindingAad } from './envelope.js';
@@ -25,6 +25,21 @@ export interface KekConfig {
   id: string;
 }
 
+/** The second KEK slot (ADR 0017 section 13.6): opens keys wrapped before the current KEK. */
+export interface PreviousKek {
+  key: Buffer;
+  id: string;
+}
+
+/**
+ * What a sealed value is bound to when the caller builds the additional authenticated data itself
+ * (secrets, ADR 0017 section 13.6): the owning node (whose data key seals it) and the AAD bytes.
+ */
+export interface SealTarget {
+  tenantId: string;
+  aad: Buffer;
+}
+
 export interface SealedSecret {
   keyVersion: number;
   ciphertext: string;
@@ -35,7 +50,13 @@ export class KeyService {
     private readonly db: Db,
     private readonly kek: KekConfig,
     private readonly now: () => Date = () => new Date(),
+    private readonly previous: PreviousKek | null = null,
   ) {}
+
+  /** Id of the key-encryption key that wraps new data keys. */
+  get kekId(): string {
+    return this.kek.id;
+  }
 
   get configured(): boolean {
     return this.kek.key !== null;
@@ -60,6 +81,35 @@ export class KeyService {
     try {
       const aad = bindingAad(binding);
       return { keyVersion: version, ciphertexts: plaintexts.map((p) => seal(key, p, aad)) };
+    } finally {
+      key.fill(0);
+    }
+  }
+
+  /** Seals values under the active data key of `target.tenantId` with the caller's AAD. */
+  async sealTo(
+    plaintexts: readonly string[],
+    target: SealTarget,
+    db: Db = this.db,
+  ): Promise<{ keyVersion: number; ciphertexts: string[] }> {
+    const { version, key } = await this.activeKey(target.tenantId, db);
+    try {
+      return { keyVersion: version, ciphertexts: plaintexts.map((p) => seal(key, p, target.aad)) };
+    } finally {
+      key.fill(0);
+    }
+  }
+
+  /** Opens a value sealed with {@link sealTo}; fails for any other AAD, node or a destroyed key. */
+  async openFrom(
+    keyVersion: number,
+    ciphertext: string,
+    target: SealTarget,
+    db: Db = this.db,
+  ): Promise<string> {
+    const key = await this.dataKey(target.tenantId, keyVersion, db);
+    try {
+      return open(key, ciphertext, target.aad).toString('utf8');
     } finally {
       key.fill(0);
     }
@@ -91,6 +141,111 @@ export class KeyService {
       .where(eq(tenantDataKeys.tenantId, tenantId))
       .returning({ v: tenantDataKeys.version });
     return rows.length;
+  }
+
+  /**
+   * KEK rotation (ADR 0017 section 13.6): wraps every data key that is wrapped with the previous
+   * KEK again with the current one. Only the small wrapped keys change, no data is re-encrypted.
+   * Idempotent and resumable; returns how many keys were rewrapped in this call (at most `limit`).
+   */
+  async rewrapKeys(limit = 500): Promise<number> {
+    const kek = this.kekKey();
+    if (!this.previous) return 0;
+    const rows = await this.db
+      .select()
+      .from(tenantDataKeys)
+      .where(
+        and(eq(tenantDataKeys.kekId, this.previous.id), ne(tenantDataKeys.status, 'destroyed')),
+      )
+      .limit(limit);
+    let done = 0;
+    for (const row of rows) {
+      const dataKey = this.unwrap(kek, row);
+      try {
+        const wrapped = seal(kek, dataKey, this.wrapAad(row.tenantId, row.version, this.kek.id));
+        const updated = await this.db
+          .update(tenantDataKeys)
+          .set({ wrappedKey: wrapped, kekId: this.kek.id })
+          .where(
+            and(
+              eq(tenantDataKeys.tenantId, row.tenantId),
+              eq(tenantDataKeys.version, row.version),
+              eq(tenantDataKeys.kekId, this.previous.id),
+            ),
+          )
+          .returning({ v: tenantDataKeys.version });
+        done += updated.length;
+      } finally {
+        dataKey.fill(0);
+      }
+    }
+    return done;
+  }
+
+  /** Live data keys per KEK id: the previous slot may be removed when its count is 0. */
+  async keysPerKek(): Promise<Record<string, number>> {
+    const rows = await this.db
+      .select({ id: tenantDataKeys.kekId, n: sql<number>`count(*)::int` })
+      .from(tenantDataKeys)
+      .where(ne(tenantDataKeys.status, 'destroyed'))
+      .groupBy(tenantDataKeys.kekId);
+    return Object.fromEntries(rows.map((r) => [r.id, r.n]));
+  }
+
+  /**
+   * DEK rotation: retires the active data key of a tenant and creates the next version. New writes
+   * use it; rows sealed under older versions open until they are re-encrypted and the old version
+   * is destroyed ({@link destroyKeyVersion}). Returns the new version.
+   */
+  async rotateDataKey(tenantId: string): Promise<number> {
+    const kek = this.kekKey();
+    return this.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      await tx
+        .update(tenantDataKeys)
+        .set({ status: 'retired' })
+        .where(and(eq(tenantDataKeys.tenantId, tenantId), eq(tenantDataKeys.status, 'active')));
+      await this.createKey(kek, tenantId, tx);
+      const [row] = await tx
+        .select({ v: max(tenantDataKeys.version) })
+        .from(tenantDataKeys)
+        .where(eq(tenantDataKeys.tenantId, tenantId));
+      return row?.v ?? 0;
+    });
+  }
+
+  /** The version new writes of a tenant use, or `null` when the tenant has no data key yet. */
+  async activeVersionOf(tenantId: string): Promise<number | null> {
+    const [row] = await this.db
+      .select({ v: tenantDataKeys.version })
+      .from(tenantDataKeys)
+      .where(and(eq(tenantDataKeys.tenantId, tenantId), eq(tenantDataKeys.status, 'active')));
+    return row?.v ?? null;
+  }
+
+  /** Retired (not yet destroyed) data key versions of a tenant. */
+  async retiredVersionsOf(tenantId: string): Promise<number[]> {
+    const rows = await this.db
+      .select({ v: tenantDataKeys.version })
+      .from(tenantDataKeys)
+      .where(and(eq(tenantDataKeys.tenantId, tenantId), eq(tenantDataKeys.status, 'retired')));
+    return rows.map((r) => r.v).sort((a, b) => a - b);
+  }
+
+  /** Destroys one RETIRED data key version; the caller checked that nothing is sealed under it. */
+  async destroyKeyVersion(tenantId: string, version: number): Promise<boolean> {
+    const rows = await this.db
+      .update(tenantDataKeys)
+      .set({ status: 'destroyed', wrappedKey: null, destroyedAt: this.now() })
+      .where(
+        and(
+          eq(tenantDataKeys.tenantId, tenantId),
+          eq(tenantDataKeys.version, version),
+          eq(tenantDataKeys.status, 'retired'),
+        ),
+      )
+      .returning({ v: tenantDataKeys.version });
+    return rows.length > 0;
   }
 
   private kekKey(): Buffer {
@@ -147,13 +302,14 @@ export class KeyService {
   }
 
   private unwrap(kek: Buffer, row: typeof tenantDataKeys.$inferSelect): Buffer {
-    if (!row.wrappedKey || row.kekId !== this.kek.id)
+    const wrapper = this.wrapperFor(kek, row.kekId);
+    if (!row.wrappedKey || !wrapper)
       throw new OaxError(
         'key_unavailable',
         'the data key was wrapped with a different key-encryption key',
       );
     try {
-      return open(kek, row.wrappedKey, this.wrapAad(row.tenantId, row.version, row.kekId));
+      return open(wrapper, row.wrappedKey, this.wrapAad(row.tenantId, row.version, row.kekId));
     } catch {
       // Same key id, different key material: the operator replaced the KEK without a rotation.
       throw new OaxError(
@@ -161,5 +317,12 @@ export class KeyService {
         'the data key cannot be unwrapped: the key-encryption key differs from the one that wrapped it',
       );
     }
+  }
+
+  /** The key that wraps rows of this KEK id: the current KEK or, during a rotation, the previous one. */
+  private wrapperFor(kek: Buffer, kekId: string): Buffer | null {
+    if (kekId === this.kek.id) return kek;
+    if (this.previous && kekId === this.previous.id) return this.previous.key;
+    return null;
   }
 }

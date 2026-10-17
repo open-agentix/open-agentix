@@ -29,6 +29,11 @@ import { McpToolsService } from './mcp-tools.js';
 import { ModelsService } from './models.js';
 import { PentestService } from './pentest.js';
 import { RunNodesService } from './run-nodes.js';
+import { ScopedSecretBroker } from './secret-broker.js';
+import { SecretResolution } from './secret-resolution.js';
+import { SecretKeyRotation } from './secret-rotation.js';
+import { SecretStore } from './secret-store.js';
+import { SecretsService } from './secrets.js';
 import { RunsService } from './runs.js';
 import { SubtreeScopes } from './subtree-scope.js';
 import { AccessExplainService } from './access-explain.js';
@@ -78,6 +83,10 @@ export interface Services {
   agentCheck: AgentCheckService;
   /** Key service, encrypted token stores and credentials of MCP OAuth (ADR 0016 S5). */
   mcpOauth: McpOauthStores;
+  /** Scoped secrets: metadata API and the write-only encrypted store (ADR 0017 S4). */
+  secrets: SecretsService;
+  /** Operator-driven KEK and DEK rotation (used by the `db:keys` tool). */
+  secretRotation: SecretKeyRotation;
   /** OAuth flows of HTTP MCP connections (authorize, renew, revoke); trusted processes only. */
   mcpOauthFlows: McpOauthService;
   subtree: SubtreeScopes;
@@ -90,9 +99,17 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const catalog = new CatalogService(ctx, audit);
   const agents = new AgentsService(ctx, audit, catalog);
   const lifecyclePolicy = new LifecyclePolicyService(ctx, audit);
-  const agentReviews = new AgentReviewsService(ctx, audit, agents, lifecyclePolicy, catalog);
+  const secretResolution = new SecretResolution(ctx);
+  const agentReviews = new AgentReviewsService(
+    ctx,
+    audit,
+    agents,
+    lifecyclePolicy,
+    catalog,
+    secretResolution,
+  );
   const publishGate = new PublishGate(ctx, agentReviews);
-  agents.publisher = new AgentPublisher(ctx, audit, publishGate, lifecyclePolicy);
+  agents.publisher = new AgentPublisher(ctx, audit, publishGate, lifecyclePolicy, secretResolution);
   const agentDeprecation = new AgentDeprecationService(
     ctx,
     audit,
@@ -142,6 +159,10 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const modelProxy = new ModelProxyService(ctx, audit, agents, models, modelAccounting, runNodes);
   const agentCheck = new AgentCheckService(ctx, audit, catalog, models, budgets);
   const mcpOauth = createMcpOauth(ctx, role);
+  const secretStore = new SecretStore(ctx, mcpOauth.keys);
+  const secrets = new SecretsService(ctx, audit, secretStore, secretResolution);
+  const secretRotation = new SecretKeyRotation(ctx, audit, mcpOauth.keys, secretStore);
+  runNodes.scoped = new ScopedSecretBroker(ctx, secretStore, secretResolution);
   const mcpOauthFlows = new McpOauthService(ctx, audit, catalog, runNodes, mcpOauth);
   const mcpTest = new McpTestService(ctx, catalog, runNodes, audit, mcpOauthFlows);
   const mcpTools = new McpToolsService(ctx, audit, catalog, mcpTest, runNodes);
@@ -190,6 +211,8 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     mcpRelay,
     agentCheck,
     mcpOauth,
+    secrets,
+    secretRotation,
     mcpOauthFlows,
     subtree: new SubtreeScopes(ctx),
   };

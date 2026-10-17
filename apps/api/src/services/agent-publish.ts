@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import {
   checkPublish,
-  declaredSecretReferences,
   LEGACY_REMOVED_CODE,
   legacyRemovedMessage,
   type LegacyPhase,
   type PublishedDefinition,
+  type SecretPin,
   type AgentDefinition,
   type Principal,
 } from '@openagentix/core';
@@ -26,6 +26,13 @@ import type {
   PublishGate,
 } from './publish-gate.js';
 import { convertDefinition, storeConversion, teamLookup } from './legacy-awp.js';
+import {
+  foreignOf,
+  stateOf,
+  type ForeignSecret,
+  type Resolved,
+  type SecretResolution,
+} from './secret-resolution.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 
 /**
@@ -85,6 +92,7 @@ export class AgentPublisher {
     private readonly audit: AuditService,
     private readonly gate: PublishGate,
     private readonly policy: LifecyclePolicyService,
+    private readonly secretResolution: SecretResolution,
   ) {}
 
   /** Publishes or throws the refusal of the gate (audited, rate-limited) as an `HttpError`. */
@@ -110,10 +118,35 @@ export class AgentPublisher {
       if (head.digest !== p.def.digest)
         throw new HttpError(409, 'draft_changed', 'the draft changed while publishing; try again');
       await this.assertVersionRule(tx, agent.id, p.def);
-      const gated = await this.decide(tx, p, { agent, head, node });
+      // The secret resolution is read once, here, under the locks: what is checked, what an approval
+      // bound to and what the version pins are the same value (ADR 0017 section 13.3).
+      const secrets = await this.secretResolution.pinsFor(
+        tx,
+        { tenantId: agent.tenantId, teamId: agent.teamId },
+        p.def,
+      );
+      const unusable = this.secretRefusal(secrets.resolved);
+      if (unusable && !p.seed) return { kind: 'refused', refusal: unusable };
+      const gated = await this.decide(tx, p, {
+        agent,
+        head,
+        node,
+        foreign: foreignOf(agent, secrets.resolved),
+      });
       if (gated.kind === 'refused') return { kind: 'refused', refusal: gated.refusal };
       const record = gated.kind === 'approved' ? gated.record : null;
-      const version = await this.insertVersion(tx, p, head, record);
+      if (record && record.resolutionDigest !== secrets.digest)
+        return {
+          kind: 'refused',
+          refusal: {
+            status: 409,
+            code: 'approval_stale',
+            message: 'the secret resolution changed since the approval',
+            reviewId: record.reviewId,
+            details: { reason: 'secret_resolution_changed' },
+          },
+        };
+      const version = await this.insertVersion(tx, p, head, record, secrets.pins);
       await this.storeAwpConversion(tx, agent, version);
       await tx
         .update(agents)
@@ -143,7 +176,12 @@ export class AgentPublisher {
   private async decide(
     tx: Db,
     p: CommitParams,
-    at: { agent: AgentRow; head: RevisionRow; node: typeof tenants.$inferSelect },
+    at: {
+      agent: AgentRow;
+      head: RevisionRow;
+      node: typeof tenants.$inferSelect;
+      foreign: ForeignSecret[];
+    },
   ): Promise<GateOutcome> {
     if (p.seed) return { kind: 'not_required', advisoryReviewId: null };
     return this.gate.decide(tx, {
@@ -154,6 +192,7 @@ export class AgentPublisher {
       catalog: p.catalog,
       policy: await this.policy.effectiveFor(at.node, tx),
       input: p.input,
+      foreignSecrets: at.foreign,
     });
   }
 
@@ -197,6 +236,7 @@ export class AgentPublisher {
     p: CommitParams,
     head: RevisionRow,
     record: ApprovalRecord | null,
+    pins: SecretPin[],
   ) {
     const [v] = await tx
       .insert(agentVersions)
@@ -210,7 +250,7 @@ export class AgentPublisher {
         definition: p.expanded as unknown as object,
         publishedBy: p.principal.userId,
         revisionId: head.id,
-        secretResolution: declaredSecretReferences(p.def),
+        secretResolution: pins,
         ...(record
           ? {
               reviewId: record.reviewId,
@@ -223,6 +263,38 @@ export class AgentPublisher {
       })
       .returning();
     return v!;
+  }
+
+  /**
+   * Publish refuses a scoped reference that does not resolve to a secret the agent may use in
+   * production (ADR 0017 section 13.2): a missing, revoked or expired secret, one limited to
+   * development, or a personal secret (never part of a version while
+   * `allowPersonalSecretsInPublishedAgents` is `never`, the only value this slice supports).
+   */
+  private secretRefusal(resolved: readonly Resolved[]): GateRefusal | null {
+    const now = this.ctx.now();
+    const problems = resolved.flatMap((r) => {
+      if (r.pin.state === 'legacy') return [];
+      if (r.pin.state === 'unresolved')
+        return [
+          { ref: r.pin.ref, reason: r.pin.code === 'secret_not_found' ? 'not_found' : r.pin.code },
+        ];
+      const state = stateOf(r.secret!, now);
+      if (state !== 'active') return [{ ref: r.pin.ref, reason: state }];
+      if (r.secret!.usage === 'development') return [{ ref: r.pin.ref, reason: 'usage' }];
+      return [];
+    });
+    if (problems.length === 0) return null;
+    const personal = problems.some((x) => x.reason === 'personal_secret_in_version');
+    return {
+      status: 422,
+      code: personal ? 'personal_secret_in_version' : 'secret_not_usable',
+      message: personal
+        ? 'a personal secret cannot be part of a published version'
+        : 'a secret reference of this agent does not resolve to a secret that can be used in production',
+      reviewId: null,
+      details: { references: problems },
+    };
   }
 
   /** ADR 4.3 step 6: the review ends as `published` and names its version. */

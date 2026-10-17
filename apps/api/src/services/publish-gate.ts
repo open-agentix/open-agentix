@@ -4,6 +4,7 @@ import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { agentReviews, type agentDraftRevisions } from '../db/schema.js';
 import type { AgentRow } from './agent-revisions.js';
+import type { ForeignSecret } from './secret-resolution.js';
 import { reviewPolicy, type AgentReviewsService, type Evaluation } from './agent-reviews.js';
 
 /**
@@ -73,6 +74,11 @@ export interface GateInput {
   /** The effective policy at the agent's node (read under the lock). */
   policy: LifecyclePolicy;
   input: PublishApprovalInput;
+  /**
+   * Scoped secrets owned by another node than the agent's (inherited): their presence makes approval
+   * required whatever the policy says (ADR 0017 section 13.3, review of slice S4).
+   */
+  foreignSecrets?: readonly ForeignSecret[];
 }
 
 const refuse = (
@@ -112,11 +118,13 @@ export class PublishGate {
       .for('update');
     const policy = open ? reviewPolicy(open, g.policy) : g.policy;
     // `production-only` uses the union of the base version's and the draft's use case.
-    const required = this.reviews.approvalRequired(
-      policy,
-      g.agent.latestVersionId ? g.agent.useCase : null,
-      g.useCase,
-    );
+    const required =
+      (g.foreignSecrets?.length ?? 0) > 0 ||
+      this.reviews.approvalRequired(
+        policy,
+        g.agent.latestVersionId ? g.agent.useCase : null,
+        g.useCase,
+      );
     if (!required) return { kind: 'not_required', advisoryReviewId: open?.id ?? null };
     return this.enforce(tx, g, open, policy);
   }
@@ -136,7 +144,7 @@ export class PublishGate {
         'approval is required for this agent and the approvals can only be checked race-free with OAX_ROLE_BINDINGS_READ=bindings',
         reviewId,
       );
-    const named = this.named(g.input, reviewId);
+    const named = this.named(g.input, reviewId, g.foreignSecrets ?? []);
     if (named) return named;
     if (!open)
       return refuse(409, 'review_closed', 'the review is not open', null, {
@@ -146,7 +154,8 @@ export class PublishGate {
       return refuse(409, 'draft_changed', 'the draft is not the revision you checked', reviewId);
     // Recomputed from the revision's source under the lock, with the policy that applies to the
     // review: an approval that bound to another expansion or resolution no longer counts.
-    const { binding, useCase } = this.reviews.bindingOf(
+    const { binding, useCase } = await this.reviews.bindingOf(
+      tx,
       g.agent,
       g.head.source,
       g.head.digest,
@@ -162,7 +171,11 @@ export class PublishGate {
   }
 
   /** `approval_required` when the caller named no review or digest; the review must be the open one. */
-  private named(input: PublishApprovalInput, openId: string | null): GateOutcome | null {
+  private named(
+    input: PublishApprovalInput,
+    openId: string | null,
+    foreign: readonly ForeignSecret[],
+  ): GateOutcome | null {
     const missing = (
       [
         ['reviewId', input.reviewId],
@@ -171,6 +184,14 @@ export class PublishGate {
     )
       .filter(([, v]) => v === undefined)
       .map(([k]) => k);
+    if (missing.length > 0 && foreign.length > 0)
+      return refuse(
+        409,
+        'approval_required_for_foreign_secret',
+        `this version uses a secret of a higher node; approval is required whatever the policy says: name ${missing.join(' and ')} of an approved review`,
+        openId,
+        { missing, foreignSecrets: foreign },
+      );
     if (missing.length > 0)
       return refuse(
         409,

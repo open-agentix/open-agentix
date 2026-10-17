@@ -4971,6 +4971,54 @@ paths:
                         - counted
                         - reasons
                       additionalProperties: false
+                  secrets:
+                    description: the secret references of the head revision and what each resolves to now; never a value
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ref:
+                          type: string
+                        state:
+                          type: string
+                          enum:
+                            - legacy
+                            - resolved
+                            - unresolved
+                        scope:
+                          type:
+                            - string
+                            - "null"
+                        ownerNode:
+                          anyOf:
+                            - type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                slugPath:
+                                  type: string
+                              required:
+                                - id
+                                - slugPath
+                              additionalProperties: false
+                            - type: "null"
+                        foreign:
+                          type: boolean
+                          description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                        code:
+                          type:
+                            - string
+                            - "null"
+                      required:
+                        - ref
+                        - state
+                        - scope
+                        - ownerNode
+                        - foreign
+                        - code
+                      additionalProperties: false
                   you:
                     type: object
                     properties:
@@ -5352,6 +5400,54 @@ paths:
                               - counted
                               - reasons
                             additionalProperties: false
+                        secrets:
+                          description: the secret references of the head revision and what each resolves to now; never a value
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              ref:
+                                type: string
+                              state:
+                                type: string
+                                enum:
+                                  - legacy
+                                  - resolved
+                                  - unresolved
+                              scope:
+                                type:
+                                  - string
+                                  - "null"
+                              ownerNode:
+                                anyOf:
+                                  - type: object
+                                    properties:
+                                      id:
+                                        type: string
+                                        format: uuid
+                                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                      slugPath:
+                                        type: string
+                                    required:
+                                      - id
+                                      - slugPath
+                                    additionalProperties: false
+                                  - type: "null"
+                              foreign:
+                                type: boolean
+                                description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                              code:
+                                type:
+                                  - string
+                                  - "null"
+                            required:
+                              - ref
+                              - state
+                              - scope
+                              - ownerNode
+                              - foreign
+                              - code
+                            additionalProperties: false
                         you:
                           type: object
                           properties:
@@ -5707,6 +5803,54 @@ paths:
                         - current
                         - counted
                         - reasons
+                      additionalProperties: false
+                  secrets:
+                    description: the secret references of the head revision and what each resolves to now; never a value
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ref:
+                          type: string
+                        state:
+                          type: string
+                          enum:
+                            - legacy
+                            - resolved
+                            - unresolved
+                        scope:
+                          type:
+                            - string
+                            - "null"
+                        ownerNode:
+                          anyOf:
+                            - type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                slugPath:
+                                  type: string
+                              required:
+                                - id
+                                - slugPath
+                              additionalProperties: false
+                            - type: "null"
+                        foreign:
+                          type: boolean
+                          description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                        code:
+                          type:
+                            - string
+                            - "null"
+                      required:
+                        - ref
+                        - state
+                        - scope
+                        - ownerNode
+                        - foreign
+                        - code
                       additionalProperties: false
                   you:
                     type: object
@@ -6094,6 +6238,54 @@ paths:
                             - current
                             - counted
                             - reasons
+                          additionalProperties: false
+                      secrets:
+                        description: the secret references of the head revision and what each resolves to now; never a value
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            ref:
+                              type: string
+                            state:
+                              type: string
+                              enum:
+                                - legacy
+                                - resolved
+                                - unresolved
+                            scope:
+                              type:
+                                - string
+                                - "null"
+                            ownerNode:
+                              anyOf:
+                                - type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                      format: uuid
+                                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                    slugPath:
+                                      type: string
+                                  required:
+                                    - id
+                                    - slugPath
+                                  additionalProperties: false
+                                - type: "null"
+                            foreign:
+                              type: boolean
+                              description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                            code:
+                              type:
+                                - string
+                                - "null"
+                          required:
+                            - ref
+                            - state
+                            - scope
+                            - ownerNode
+                            - foreign
+                            - code
                           additionalProperties: false
                       you:
                         type: object
@@ -6603,6 +6795,54 @@ paths:
                         - current
                         - counted
                         - reasons
+                      additionalProperties: false
+                  secrets:
+                    description: the secret references of the head revision and what each resolves to now; never a value
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ref:
+                          type: string
+                        state:
+                          type: string
+                          enum:
+                            - legacy
+                            - resolved
+                            - unresolved
+                        scope:
+                          type:
+                            - string
+                            - "null"
+                        ownerNode:
+                          anyOf:
+                            - type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                slugPath:
+                                  type: string
+                              required:
+                                - id
+                                - slugPath
+                              additionalProperties: false
+                            - type: "null"
+                        foreign:
+                          type: boolean
+                          description: "the secret belongs to a higher node than the agent: publishing needs an approved review whatever the policy says"
+                        code:
+                          type:
+                            - string
+                            - "null"
+                      required:
+                        - ref
+                        - state
+                        - scope
+                        - ownerNode
+                        - foreign
+                        - code
                       additionalProperties: false
                   you:
                     type: object
@@ -16885,6 +17125,8 @@ paths:
                       - tokens:write
                       - settings:read
                       - settings:write
+                      - secrets:read
+                      - secrets:write
                 expiresInDays:
                   default: 90
                   type: integer
@@ -18785,7 +19027,7 @@ paths:
                   maxLength: 64
                   description: "any role but `admin` (422 `restriction_on_admin`; unknown roles: 422 `unknown_role`)"
                 permissions:
-                  maxItems: 27
+                  maxItems: 29
                   type: array
                   items:
                     type: string
@@ -20521,6 +20763,1470 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/secrets:
+    get:
+      summary: List secrets (metadata only)
+      tags:
+        - secrets
+      description: Tenant scope lists the secrets of the acting node and the inheritable ones of its ancestors (flagged `inherited`, without the creator). Team scope needs `teamId`. Personal scope lists your own. Values are never returned.
+      parameters:
+        - schema:
+            default: tenant
+            type: string
+            enum:
+              - personal
+              - team
+              - tenant
+          in: query
+          name: scope
+          required: false
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: query
+          name: teamId
+          required: false
+        - schema:
+            default: 50
+            type: integer
+            minimum: 1
+            maximum: 200
+          in: query
+          name: limit
+          required: false
+        - schema:
+            type: string
+            maxLength: 400
+          in: query
+          name: cursor
+          required: false
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        scope:
+                          type: string
+                          enum:
+                            - personal
+                            - team
+                            - tenant
+                        name:
+                          type: string
+                        reference:
+                          type: string
+                          description: "what an agent writes: `<scope>:<name>`"
+                        ownerNode:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            slugPath:
+                              type: string
+                          required:
+                            - id
+                            - slugPath
+                          additionalProperties: false
+                        teamId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                        backend:
+                          type: string
+                          enum:
+                            - internal
+                            - env
+                        pointer:
+                          description: own secrets only
+                          type:
+                            - string
+                            - "null"
+                        version:
+                          type: integer
+                          minimum: -9007199254740991
+                          maximum: 9007199254740991
+                        description:
+                          type:
+                            - string
+                            - "null"
+                        usage:
+                          type: string
+                          enum:
+                            - development
+                            - production
+                            - any
+                        allowedDestinations:
+                          type: array
+                          items:
+                            type: string
+                        inherit:
+                          type: boolean
+                        allowOverride:
+                          type: boolean
+                        state:
+                          type: string
+                          enum:
+                            - active
+                            - expired
+                            - revoked
+                        inherited:
+                          type: boolean
+                          description: owned by an ancestor node and visible here by inheritance
+                        createdBy:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                          description: own secrets only
+                        createdAt:
+                          type: string
+                          description: ISO 8601 timestamp
+                        rotatedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        expiresAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                        revokedAt:
+                          anyOf:
+                            - type: string
+                              description: ISO 8601 timestamp
+                            - type: "null"
+                      required:
+                        - id
+                        - scope
+                        - name
+                        - reference
+                        - ownerNode
+                        - teamId
+                        - backend
+                        - pointer
+                        - version
+                        - description
+                        - usage
+                        - allowedDestinations
+                        - inherit
+                        - allowOverride
+                        - state
+                        - inherited
+                        - createdBy
+                        - createdAt
+                        - rotatedAt
+                        - expiresAt
+                        - revokedAt
+                      additionalProperties: false
+                  nextCursor:
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - items
+                  - nextCursor
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    post:
+      summary: Create a secret
+      tags:
+        - secrets
+      description: The value is accepted here and never returned. At least 8 characters, at most 64 KiB. `pointer` instead of `value` creates a pointer to an operator environment secret (no value is copied). A tenant secret owned by a root node cannot be shadowed below unless `allowOverride` is true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum:
+                    - personal
+                    - team
+                    - tenant
+                name:
+                  type: string
+                  pattern: ^[a-z0-9][a-z0-9_.-]{0,127}$
+                teamId:
+                  description: required for scope=team
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                value:
+                  description: write-only; required unless `pointer` is given
+                  type: string
+                  minLength: 8
+                pointer:
+                  description: "import helper: the legacy reference (OAX_SECRET_<NAME> or file) this secret points at; no value is copied"
+                  type: string
+                  pattern: ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$
+                description:
+                  type: string
+                  maxLength: 500
+                usage:
+                  default: any
+                  type: string
+                  enum:
+                    - development
+                    - production
+                    - any
+                allowedDestinations:
+                  default: []
+                  maxItems: 64
+                  type: array
+                  items:
+                    type: string
+                expiresAt:
+                  type: string
+                  format: date-time
+                  pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+                  description: ISO 8601 timestamp
+                inherit:
+                  description: "tenant scope: inherit down the tree (default true); false keeps it node-only"
+                  type: boolean
+                allowOverride:
+                  description: "tenant scope: a lower node may shadow the name (default false on a root node, true below)"
+                  type: boolean
+              required:
+                - scope
+                - name
+              additionalProperties: false
+      security:
+        - bearer: []
+      responses:
+        "201":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - personal
+                      - team
+                      - tenant
+                  name:
+                    type: string
+                  reference:
+                    type: string
+                    description: "what an agent writes: `<scope>:<name>`"
+                  ownerNode:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slugPath:
+                        type: string
+                    required:
+                      - id
+                      - slugPath
+                    additionalProperties: false
+                  teamId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  backend:
+                    type: string
+                    enum:
+                      - internal
+                      - env
+                  pointer:
+                    description: own secrets only
+                    type:
+                      - string
+                      - "null"
+                  version:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  description:
+                    type:
+                      - string
+                      - "null"
+                  usage:
+                    type: string
+                    enum:
+                      - development
+                      - production
+                      - any
+                  allowedDestinations:
+                    type: array
+                    items:
+                      type: string
+                  inherit:
+                    type: boolean
+                  allowOverride:
+                    type: boolean
+                  state:
+                    type: string
+                    enum:
+                      - active
+                      - expired
+                      - revoked
+                  inherited:
+                    type: boolean
+                    description: owned by an ancestor node and visible here by inheritance
+                  createdBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: own secrets only
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  rotatedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  expiresAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  revokedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                required:
+                  - id
+                  - scope
+                  - name
+                  - reference
+                  - ownerNode
+                  - teamId
+                  - backend
+                  - pointer
+                  - version
+                  - description
+                  - usage
+                  - allowedDestinations
+                  - inherit
+                  - allowOverride
+                  - state
+                  - inherited
+                  - createdBy
+                  - createdAt
+                  - rotatedAt
+                  - expiresAt
+                  - revokedAt
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "422":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "503":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/secrets/policy:
+    get:
+      summary: Inherited secret names this node blocks
+      tags:
+        - secrets
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  blockInherited:
+                    type: array
+                    items:
+                      type: string
+                    description: what this node stores itself
+                  effectiveBlocked:
+                    type: array
+                    items:
+                      type: string
+                    description: "the union down the chain: own globs and those of the ancestors"
+                required:
+                  - blockInherited
+                  - effectiveBlocked
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    put:
+      summary: Block inherited secret names for this node and its subtree
+      tags:
+        - secrets
+      description: "Narrowing only: a blocked inherited name resolves to `secret_not_found` below this node unless the node or a descendant defines its own."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                blockInherited:
+                  maxItems: 64
+                  type: array
+                  items:
+                    type: string
+                    pattern: ^[a-z0-9*][a-z0-9_.*-]{0,127}$
+                  description: name globs ("*" only) of inherited tenant secrets this node and its subtree do not see
+              required:
+                - blockInherited
+              additionalProperties: false
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  blockInherited:
+                    type: array
+                    items:
+                      type: string
+                    description: what this node stores itself
+                  effectiveBlocked:
+                    type: array
+                    items:
+                      type: string
+                    description: "the union down the chain: own globs and those of the ancestors"
+                required:
+                  - blockInherited
+                  - effectiveBlocked
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/secrets/{id}:
+    get:
+      summary: Metadata of a secret
+      tags:
+        - secrets
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - personal
+                      - team
+                      - tenant
+                  name:
+                    type: string
+                  reference:
+                    type: string
+                    description: "what an agent writes: `<scope>:<name>`"
+                  ownerNode:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slugPath:
+                        type: string
+                    required:
+                      - id
+                      - slugPath
+                    additionalProperties: false
+                  teamId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  backend:
+                    type: string
+                    enum:
+                      - internal
+                      - env
+                  pointer:
+                    description: own secrets only
+                    type:
+                      - string
+                      - "null"
+                  version:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  description:
+                    type:
+                      - string
+                      - "null"
+                  usage:
+                    type: string
+                    enum:
+                      - development
+                      - production
+                      - any
+                  allowedDestinations:
+                    type: array
+                    items:
+                      type: string
+                  inherit:
+                    type: boolean
+                  allowOverride:
+                    type: boolean
+                  state:
+                    type: string
+                    enum:
+                      - active
+                      - expired
+                      - revoked
+                  inherited:
+                    type: boolean
+                    description: owned by an ancestor node and visible here by inheritance
+                  createdBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: own secrets only
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  rotatedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  expiresAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  revokedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                required:
+                  - id
+                  - scope
+                  - name
+                  - reference
+                  - ownerNode
+                  - teamId
+                  - backend
+                  - pointer
+                  - version
+                  - description
+                  - usage
+                  - allowedDestinations
+                  - inherit
+                  - allowOverride
+                  - state
+                  - inherited
+                  - createdBy
+                  - createdAt
+                  - rotatedAt
+                  - expiresAt
+                  - revokedAt
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    delete:
+      summary: Delete a secret
+      tags:
+        - secrets
+      description: Removes the secret and its values. A published version that pinned it fails closed at run time until a new revision is approved.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "204":
+          description: Default Response
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/secrets/{id}/rotate:
+    post:
+      summary: Rotate a secret to a new value
+      tags:
+        - secrets
+      description: Creates the next version; new issuances use it, sessions that already received the old value keep it until their step ends. Only on the owning node.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value:
+                  type: string
+                  minLength: 8
+                expiresAt:
+                  description: a new expiry; null clears it
+                  anyOf:
+                    - type: string
+                      format: date-time
+                      pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z))$
+                      description: ISO 8601 timestamp
+                    - type: "null"
+              required:
+                - value
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - personal
+                      - team
+                      - tenant
+                  name:
+                    type: string
+                  reference:
+                    type: string
+                    description: "what an agent writes: `<scope>:<name>`"
+                  ownerNode:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slugPath:
+                        type: string
+                    required:
+                      - id
+                      - slugPath
+                    additionalProperties: false
+                  teamId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  backend:
+                    type: string
+                    enum:
+                      - internal
+                      - env
+                  pointer:
+                    description: own secrets only
+                    type:
+                      - string
+                      - "null"
+                  version:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  description:
+                    type:
+                      - string
+                      - "null"
+                  usage:
+                    type: string
+                    enum:
+                      - development
+                      - production
+                      - any
+                  allowedDestinations:
+                    type: array
+                    items:
+                      type: string
+                  inherit:
+                    type: boolean
+                  allowOverride:
+                    type: boolean
+                  state:
+                    type: string
+                    enum:
+                      - active
+                      - expired
+                      - revoked
+                  inherited:
+                    type: boolean
+                    description: owned by an ancestor node and visible here by inheritance
+                  createdBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: own secrets only
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  rotatedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  expiresAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  revokedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                required:
+                  - id
+                  - scope
+                  - name
+                  - reference
+                  - ownerNode
+                  - teamId
+                  - backend
+                  - pointer
+                  - version
+                  - description
+                  - usage
+                  - allowedDestinations
+                  - inherit
+                  - allowOverride
+                  - state
+                  - inherited
+                  - createdBy
+                  - createdAt
+                  - rotatedAt
+                  - expiresAt
+                  - revokedAt
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "503":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/secrets/{id}/revoke:
+    post:
+      summary: Revoke a secret
+      tags:
+        - secrets
+      description: Blocks new issuances immediately and removes the stored values. The name stays taken. Cannot be undone.
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  scope:
+                    type: string
+                    enum:
+                      - personal
+                      - team
+                      - tenant
+                  name:
+                    type: string
+                  reference:
+                    type: string
+                    description: "what an agent writes: `<scope>:<name>`"
+                  ownerNode:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slugPath:
+                        type: string
+                    required:
+                      - id
+                      - slugPath
+                    additionalProperties: false
+                  teamId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  backend:
+                    type: string
+                    enum:
+                      - internal
+                      - env
+                  pointer:
+                    description: own secrets only
+                    type:
+                      - string
+                      - "null"
+                  version:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  description:
+                    type:
+                      - string
+                      - "null"
+                  usage:
+                    type: string
+                    enum:
+                      - development
+                      - production
+                      - any
+                  allowedDestinations:
+                    type: array
+                    items:
+                      type: string
+                  inherit:
+                    type: boolean
+                  allowOverride:
+                    type: boolean
+                  state:
+                    type: string
+                    enum:
+                      - active
+                      - expired
+                      - revoked
+                  inherited:
+                    type: boolean
+                    description: owned by an ancestor node and visible here by inheritance
+                  createdBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: own secrets only
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  rotatedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  expiresAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  revokedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                required:
+                  - id
+                  - scope
+                  - name
+                  - reference
+                  - ownerNode
+                  - teamId
+                  - backend
+                  - pointer
+                  - version
+                  - description
+                  - usage
+                  - allowedDestinations
+                  - inherit
+                  - allowOverride
+                  - state
+                  - inherited
+                  - createdBy
+                  - createdAt
+                  - rotatedAt
+                  - expiresAt
+                  - revokedAt
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "409":
           description: Default Response
           content:
             application/json:

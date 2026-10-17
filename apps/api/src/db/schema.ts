@@ -1,3 +1,4 @@
+import type { SecretPin } from '@openagentix/core';
 import { sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
@@ -450,8 +451,12 @@ export const agentVersions = pgTable(
     /** Digest of the profile expansion and of the secret resolution the approvals bound to. */
     expansionDigest: text('expansion_digest'),
     resolutionDigest: text('resolution_digest'),
-    /** The secret references pinned for production runs (names only until ADR 0017 S4). */
-    secretResolution: jsonb('secret_resolution').$type<string[]>(),
+    /**
+     * The secret references pinned for production runs (ADR 0017 section 13.3): one `SecretPin` per
+     * credential reference, with the owning node and secret id a scoped reference resolved to at
+     * publish. Versions published before slice S4 hold plain names (legacy references).
+     */
+    secretResolution: jsonb('secret_resolution').$type<(string | SecretPin)[]>(),
   },
   (t) => [
     uniqueIndex('agent_versions_agent_version_uq').on(t.agentId, t.version),
@@ -921,6 +926,117 @@ export const tenantDataKeys = pgTable(
       'tenant_data_keys_material',
       sql`(${t.status} = 'destroyed') = (${t.wrappedKey} is null)`,
     ),
+  ],
+);
+
+/**
+ * Secrets of the internal store (ADR 0017 section 13, slice S4). One row per secret: identity,
+ * scope and metadata, never a value. `tenant_id` is the OWNING node (whose data key seals the
+ * values); `scope_id` is that node for `tenant`, the team for `team` and the user for `personal`.
+ * `inherit` and `allow_override` exist for `tenant` secrets only (inheritance down the tree,
+ * section 13.3). `backend = 'env'` is a pointer to an operator environment secret (the import
+ * helper) and has no versions. A revoked secret keeps its row (so the name stays reserved and a
+ * pinned reference fails closed) but loses its values. Read by no API route as anything but metadata.
+ */
+export const secrets = pgTable(
+  'secrets',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    scope: text('scope').notNull(),
+    scopeId: uuid('scope_id').notNull(),
+    name: text('name').notNull(),
+    backend: text('backend').notNull().default('internal'),
+    /** `env` backend only: the legacy reference the pointer names (never a value). */
+    pointer: text('pointer'),
+    currentVersion: integer('current_version').notNull().default(1),
+    description: text('description'),
+    usage: text('usage').notNull().default('any'),
+    allowedDestinations: jsonb('allowed_destinations').$type<string[]>().notNull().default([]),
+    inherit: boolean('inherit').notNull().default(false),
+    allowOverride: boolean('allow_override').notNull().default(false),
+    createdBy: uuid('created_by'),
+    createdAt: created(),
+    rotatedAt: ts('rotated_at'),
+    expiresAt: ts('expires_at'),
+    revokedAt: ts('revoked_at'),
+    revokedBy: uuid('revoked_by'),
+  },
+  (t) => [
+    uniqueIndex('secrets_identity_uq').on(t.tenantId, t.scope, t.scopeId, t.name),
+    index('secrets_scope_idx').on(t.scope, t.scopeId),
+    check('secrets_scope_check', sql`${t.scope} in ('personal', 'team', 'tenant')`),
+    check('secrets_usage_check', sql`${t.usage} in ('development', 'production', 'any')`),
+    check('secrets_backend_check', sql`${t.backend} in ('internal', 'env')`),
+    check('secrets_pointer_check', sql`(${t.backend} = 'env') = (${t.pointer} is not null)`),
+    check('secrets_name_check', sql`${t.name} ~ '^[a-z0-9][a-z0-9_.-]{0,127}$'`),
+    check('secrets_description_len', sql`char_length(${t.description}) <= 500`),
+    // A tenant secret is owned by its own node; inheritance exists for tenant secrets only.
+    check(
+      'secrets_tenant_scope_check',
+      sql`${t.scope} <> 'tenant' or ${t.scopeId} = ${t.tenantId}`,
+    ),
+    check(
+      'secrets_inherit_check',
+      sql`${t.scope} = 'tenant' or (not ${t.inherit} and not ${t.allowOverride})`,
+    ),
+  ],
+);
+
+/**
+ * The sealed values of a secret, one row per version (`oaxe1` envelope, AES-256-GCM under the owning
+ * node's data key `dek_version`). The AAD binds `tenant_id | scope | scope_id | name | secret id |
+ * version`, so a ciphertext copied to another row, secret or node does not open; `aad_digest` is the
+ * SHA-256 of that AAD, a cheap integrity check that a row's identity columns were not edited.
+ */
+export const secretVersions = pgTable(
+  'secret_versions',
+  {
+    secretId: uuid('secret_id')
+      .notNull()
+      .references(() => secrets.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    ciphertext: text('ciphertext').notNull(),
+    dekVersion: integer('dek_version').notNull(),
+    aadDigest: text('aad_digest').notNull(),
+    createdBy: uuid('created_by'),
+    createdAt: created(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.secretId, t.version] }),
+    index('secret_versions_dek_idx').on(t.tenantId, t.dekVersion),
+  ],
+);
+
+/**
+ * The scoped secret values a run's nodes were given (ADR 0017 section 13.8), sealed under the data key
+ * of the secret's owning node, so that the redaction of a run still covers a value after its secret
+ * was rotated, revoked or deleted. AAD = owner | run | session | secret | version. Rows are only read by
+ * the redaction of that run and are purged one day after the session expired. Never selected by a route.
+ */
+export const runSecretIssuances = pgTable(
+  'run_secret_issuances',
+  {
+    id: uuid('id').primaryKey(),
+    runId: uuid('run_id').notNull(),
+    sessionId: uuid('session_id').notNull(),
+    tenantId: uuid('tenant_id').notNull(),
+    secretId: uuid('secret_id').notNull(),
+    version: integer('version').notNull(),
+    ciphertext: text('ciphertext').notNull(),
+    dekVersion: integer('dek_version').notNull(),
+    createdAt: created(),
+    expiresAt: ts('expires_at').notNull(),
+  },
+  (t) => [
+    index('run_secret_issuances_run_idx').on(t.runId),
+    index('run_secret_issuances_expiry_idx').on(t.expiresAt),
+    index('run_secret_issuances_dek_idx').on(t.tenantId, t.dekVersion),
   ],
 );
 

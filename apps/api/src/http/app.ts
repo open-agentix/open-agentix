@@ -43,6 +43,7 @@ import { registerPlanRoutes } from './routes/plans.js';
 import { registerRunRoutes } from './routes/runs.js';
 import { registerSystemRoutes } from './routes/system.js';
 import { registerBudgetRoutes } from './routes/budgets.js';
+import { registerSecretRoutes } from './routes/secrets.js';
 import { registerReviewRoutes } from './routes/reviews.js';
 import { registerReviewThreadRoutes } from './routes/review-threads.js';
 import { registerTenantRoutes } from './routes/tenants.js';
@@ -381,6 +382,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   registerLocateRoutes(typed, deps);
   registerDemoRoutes(typed, deps);
   registerBudgetRoutes(typed, deps);
+  registerSecretRoutes(typed, deps);
   registerWorkerRoutes(typed, deps);
   registerPlanRoutes(typed, deps);
   // Stops the role binding reconcile (timer and running targeted runs) before the database closes.
@@ -390,6 +392,9 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   // Stops the expiry reaper (ADR 0014 S6) before the database closes.
   app.addHook('onClose', async () => {
     await deps.services.pentest.stop();
+  });
+  app.addHook('onClose', async () => {
+    await deps.services.secretRotation.stopPurge();
   });
   await app.ready();
   return app;

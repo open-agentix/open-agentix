@@ -239,6 +239,13 @@
       "when": 1792700000008,
       "tag": "0039_agent_version_awp",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792700000009,
+      "tag": "0040_secrets_store",
+      "breakpoints": true
     }
   ]
 }

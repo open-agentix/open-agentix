@@ -363,7 +363,7 @@ describe('the gate: what publish needs where approval is required', () => {
     const { a, review } = await approved('', CREDENTIALS);
     expect((await publishReview(tok['author']!, a.id, review)).statusCode).toBe(201);
     const [v] = await versionsOf(a.id);
-    expect(v!.secretResolution).toEqual(['mail-hook']);
+    expect(v!.secretResolution).toEqual([{ ref: 'mail-hook', state: 'legacy' }]);
     expect(v!.resolutionDigest).toBe(review.digests.resolutionDigest);
     expect(review.digests.resolutionDigest).not.toBe(
       (await approved()).review.digests.resolutionDigest,

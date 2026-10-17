@@ -102,7 +102,12 @@ export const HandoverOutputSchema = z.strictObject({
 export type HandoverOutput = z.infer<typeof HandoverOutputSchema>;
 
 /** Same format as the secret resolver accepts (see `secrets.ts`). */
-export const SECRET_REF_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
+/**
+ * A legacy reference (operator environment or files) or a scoped one (`personal:`, `team:`,
+ * `tenant:` plus a lower case name, ADR 0017 section 13.2).
+ */
+export const SECRET_REF_PATTERN =
+  /^(?:[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}|(?:personal|team|tenant):[a-z0-9][a-z0-9_.-]{0,127})$/;
 
 /** A secret reference a step needs (never a value); issued by the credential broker per step. */
 export const CredentialRefSchema = z.strictObject({

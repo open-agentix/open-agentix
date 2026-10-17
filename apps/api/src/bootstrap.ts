@@ -5,6 +5,9 @@ import { buildApp } from './http/app.js';
 import { seedDemo } from './demo/seed.js';
 import { createServices, type Services } from './services/index.js';
 
+/** Seconds between two passes of the purge of issued secret values. */
+const ISSUED_PURGE_SECONDS = 900;
+
 export interface ControlNode {
   ctx: AppContext;
   services: Services;
@@ -71,6 +74,8 @@ export async function createControlNode(
     ctx.logger.error({ err: e }, 'binding reaper failed');
   });
   services.pentest.start(config.tenancy.bindingReaperIntervalSeconds);
+  // Sealed copies of issued secret values are deleted a day after their session expired.
+  services.secretRotation.startPurge(ISSUED_PURGE_SECONDS);
 
   return { ctx, services, app };
 }

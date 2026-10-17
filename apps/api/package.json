@@ -20,6 +20,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node dist/migrate-cli.js",
     "db:reconcile-bindings": "node dist/reconcile-bindings-cli.js",
+    "db:keys": "node dist/keys-cli.js",
     "seed:demo": "node dist/seed-demo-cli.js"
   },
   "dependencies": {

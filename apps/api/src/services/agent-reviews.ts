@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
   checkApprover,
-  declaredSecretReferences,
   expandProfiles,
   isProductionUseCase,
   lifecyclePolicyDigest,
@@ -9,7 +8,6 @@ import {
   policyFromSnapshot,
   requiredApprovals,
   reviewState,
-  secretResolutionDigest,
   stricterPolicy,
   stripInvisible,
   summariseDecisions,
@@ -50,7 +48,9 @@ import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import { isTenantAdminAt, loadActor } from './grant-authority.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
+import { foreignOf, type SecretResolution } from './secret-resolution.js';
 import { reviewContributors, reviewHeadOf } from './review-contributors.js';
+import { TenantTree } from './tenant-tree.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 
 /**
@@ -154,7 +154,23 @@ export interface ReviewView {
   contributors: string[];
   unknownAuthor: boolean;
   approvals: ApprovalView[];
+  /**
+   * The secret references of the head revision with what each resolves to now: scope, owning node
+   * and whether the owner is another node than the agent's (`foreign`, which makes approval required
+   * at publish whatever the policy says). Never a value.
+   */
+  secrets: ReviewSecretView[];
   you: { eligible: boolean; code: RefusalCode | null; message: string | null };
+}
+
+export interface ReviewSecretView {
+  ref: string;
+  state: 'legacy' | 'resolved' | 'unresolved';
+  scope: string | null;
+  ownerNode: { id: string; slugPath: string } | null;
+  foreign: boolean;
+  /** Why an unresolved reference does not resolve. */
+  code: string | null;
 }
 
 const authString = (a: ApproverAuth): string =>
@@ -206,6 +222,7 @@ export class AgentReviewsService {
     private readonly agents: AgentsService,
     private readonly policy: LifecyclePolicyService,
     private readonly catalog: CatalogService,
+    private readonly secretResolution: SecretResolution,
   ) {}
 
   // ------------------------------------------------------------------ revisions
@@ -301,24 +318,35 @@ export class AgentReviewsService {
     });
   }
 
-  /** The digests an approval binds to, for a source and the policy that applies (slice S3 recomputes them under the lock). */
-  bindingOf(
+  /**
+   * The digests an approval binds to, for a source and the policy that applies (slice S3 recomputes
+   * them under the lock). The secret resolution is read from `db` (ADR 0017 section 13.3): every
+   * credential reference with the owning node and secret id it resolves to now, so a reviewer
+   * approves concrete credentials and a secret created later at a nearer node leaves the approval
+   * stale. `resolved` carries what publish pins and checks.
+   */
+  async bindingOf(
+    db: Db,
     agent: AgentRow,
     source: string,
     digest: string,
     policy: LifecyclePolicy,
     catalog: Awaited<ReturnType<AgentReviewsService['catalogOf']>>,
   ) {
-    void agent;
     const def = loadAgentDefinition(source);
     const { definition } = expandProfiles(def, catalog);
+    const secrets = await this.secretResolution.pinsFor(
+      db,
+      { tenantId: agent.tenantId, teamId: agent.teamId },
+      def,
+    );
     const binding: Binding = {
       digest,
       expansionDigest: definition.expansionDigest ?? '',
-      resolutionDigest: secretResolutionDigest(declaredSecretReferences(def)),
+      resolutionDigest: secrets.digest,
       policyDigest: lifecyclePolicyDigest(policy),
     };
-    return { binding, useCase: def.labels.useCase || null };
+    return { binding, useCase: def.labels.useCase || null, secrets };
   }
 
   /** Whether publishing this agent needs an approval under the effective policy (section 6). */
@@ -364,7 +392,14 @@ export class AgentReviewsService {
     const head = cached?.head ?? (await reviewHead(db, agent, review));
     const computed = cached ?? {
       head,
-      ...this.bindingOf(agent, head.source, head.digest, policy, await this.catalogOf(agent)),
+      ...(await this.bindingOf(
+        db,
+        agent,
+        head.source,
+        head.digest,
+        policy,
+        await this.catalogOf(agent),
+      )),
     };
     const {
       set: contributors,
@@ -480,8 +515,34 @@ export class AgentReviewsService {
     };
   }
 
+  /** What each secret reference of a revision resolves to now, for the people who decide. */
+  private async secretViewsOf(agent: AgentRow, source: string): Promise<ReviewSecretView[]> {
+    const def = loadAgentDefinition(source);
+    const { resolved } = await this.secretResolution.pinsFor(
+      this.ctx.db,
+      { tenantId: agent.tenantId, teamId: agent.teamId },
+      def,
+    );
+    const owners = [...new Set(resolved.flatMap((r) => (r.secret ? [r.secret.tenantId] : [])))];
+    const nodes = owners.length
+      ? await this.ctx.db.select().from(tenants).where(inArray(tenants.id, owners))
+      : [];
+    const paths = await new TenantTree(this.ctx).slugPaths(nodes);
+    return resolved.map(({ pin, secret }) => ({
+      ref: pin.ref,
+      state: pin.state,
+      scope: pin.state === 'resolved' ? pin.scope : pin.state === 'legacy' ? 'legacy' : null,
+      ownerNode: secret
+        ? { id: secret.tenantId, slugPath: paths.get(secret.tenantId) ?? secret.tenantId }
+        : null,
+      foreign: !!secret && secret.scope === 'tenant' && secret.tenantId !== agent.tenantId,
+      code: pin.state === 'unresolved' ? pin.code : null,
+    }));
+  }
+
   private async viewOf(p: Principal, agent: AgentRow, ev: Evaluation): Promise<ReviewView> {
     const you = await this.verdictFor(this.ctx.db, p, agent, ev, ev.binding.digest);
+    const secrets = await this.secretViewsOf(agent, ev.head.source);
     return {
       id: ev.review.id,
       agentId: ev.review.agentId,
@@ -507,11 +568,12 @@ export class AgentReviewsService {
         createdAt: ev.head.createdAt,
       },
       requiredApprovals: ev.required,
-      approvalRequired: ev.approvalRequired,
+      approvalRequired: ev.approvalRequired || secrets.some((x) => x.foreign),
       digests: ev.binding,
       contributors: [...ev.contributors].sort(),
       unknownAuthor: ev.unknownAuthor,
       approvals: ev.approvals,
+      secrets,
       you: you.ok
         ? { eligible: true, code: null, message: null }
         : { eligible: false, code: you.code, message: you.message },
@@ -677,7 +739,14 @@ export class AgentReviewsService {
           );
         const head = await ensureHead(tx, agent, (r) => this.auditRevision(tx, agent, r, true));
         const policy = await this.policy.effectiveFor(node, tx);
-        const { binding } = this.bindingOf(agent, head.source, head.digest, policy, catalog);
+        const { binding } = await this.bindingOf(
+          tx,
+          agent,
+          head.source,
+          head.digest,
+          policy,
+          catalog,
+        );
         let base: VersionRow | null = null;
         if (agent.latestVersionId) {
           const [v] = await tx
@@ -794,15 +863,21 @@ export class AgentReviewsService {
       );
       if (!verdict.ok)
         return { kind: 'refused', code: verdict.code, message: verdict.message, agent };
-      const { binding, useCase } = this.bindingOf(agent, head.source, head.digest, policy, catalog);
+      const { binding, useCase, secrets } = await this.bindingOf(
+        tx,
+        agent,
+        head.source,
+        head.digest,
+        policy,
+        catalog,
+      );
       // An approval binds to the expansion, the secret resolution and the policy the reviewer saw
       // (A10): a client that leaves them out would bind it to something it never looked at. They are
       // required for every approval, and for any decision while approval is required (finding 3).
-      const required = this.approvalRequired(
-        policy,
-        review.baseVersionId ? agent.useCase : null,
-        useCase,
-      );
+      // A secret of a higher node makes approval required whatever the policy says (same predicate as publish).
+      const required =
+        foreignOf(agent, secrets.resolved).length > 0 ||
+        this.approvalRequired(policy, review.baseVersionId ? agent.useCase : null, useCase);
       if (input.decision === 'approve' || required) {
         const missing = (
           [

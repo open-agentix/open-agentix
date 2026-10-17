@@ -3,6 +3,7 @@ import {
   OaxError,
   StaticCredentialSource,
   canonicalSecretRef,
+  isScopedRef,
   credentialEnvName,
   issueRunToken,
   redact,
@@ -28,6 +29,13 @@ import { runNodeSessions, runs, tenants } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
 import { platformSecretRefs } from './platform-secrets.js';
+import {
+  SecretDenied,
+  issuanceRecord,
+  stepDestinations,
+  type PreparedSecret,
+  type ScopedSecretBroker,
+} from './secret-broker.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import {
@@ -104,6 +112,12 @@ export class RunNodesService {
     private readonly source: CredentialSource = new StaticCredentialSource(ctx.secrets),
   ) {}
 
+  /**
+   * Issues scoped secrets (`team:`, `tenant:`, `personal:`) from the encrypted store; set by
+   * `createServices`. Without it a step that declares a scoped reference is denied (fail closed).
+   */
+  scoped: ScopedSecretBroker | undefined;
+
   private readonly revokeListeners: ((s: { sessionId: string; runId: string }) => void)[] = [];
 
   /** Called (best effort, same replica) after a node session was revoked. */
@@ -118,6 +132,13 @@ export class RunNodesService {
    * ACCIDENTAL leaks: a compromised node holds the plain values and can encode them.
    */
   async knownSecrets(runId: string): Promise<string[]> {
+    // Scoped values come from what was issued (sealed per run), whatever the credential source is,
+    // and survive a rotation or revocation of the secret.
+    const issued = (await this.scoped?.issuedValues(runId)) ?? [];
+    return [...new Set([...issued, ...(await this.legacyKnownSecrets(runId))])];
+  }
+
+  private async legacyKnownSecrets(runId: string): Promise<string[]> {
     if (this.source.name !== 'static') return [];
     const sessions = await this.ctx.db
       .select({ issued: runNodeSessions.credentialsIssued })
@@ -131,7 +152,7 @@ export class RunNodesService {
       const agent = definition.agents.find((a) => a.id === id);
       if (!agent) continue;
       const needs = this.needs(agent, await this.configsFor(run, agent));
-      for (const ref of needs.refs) {
+      for (const ref of needs.refs.filter((r) => !isScopedRef(r))) {
         try {
           out.add(await this.ctx.secrets.resolve(ref));
         } catch {
@@ -718,6 +739,14 @@ export class RunNodesService {
     if (!row) throw new HttpError(409, 'conflict', 'the step result was already submitted');
   }
 
+  /** Takes `agentId` out of the issued marks of a session (the issuance failed before anything left). */
+  private async unmarkIssued(sessionId: string, agentId: string): Promise<void> {
+    await this.ctx.db
+      .update(runNodeSessions)
+      .set({ credentialsIssued: sql`${runNodeSessions.credentialsIssued} - ${agentId}::text` })
+      .where(eq(runNodeSessions.id, sessionId));
+  }
+
   private async deny(
     s: SessionRow,
     agentId: string,
@@ -742,6 +771,50 @@ export class RunNodesService {
   }
 
   /**
+   * Checks the scoped references of a step before anything is marked as issued (ADR 0017 section
+   * 13.8): pinned secret, scope, chain, usage, `allowedDestinations`, revoked and expired. A refusal
+   * is audited as `secret.access_denied` and `credential.denied` with a code, never a reason text.
+   * Only the `credentials` of a step are pinned: a scoped reference that reaches a connection (the save
+   * rules refuse it) has no pin and is therefore refused here as `secret_unavailable`.
+   */
+  private async prepareScoped(
+    s: SessionRow,
+    run: typeof runs.$inferSelect,
+    definition: AgentDefinition,
+    agent: AgentSpec,
+    configs: readonly McpServerConfig[],
+    needs: StepNeeds,
+  ): Promise<Map<string, PreparedSecret>> {
+    const scopedRefs = needs.refs.filter(isScopedRef);
+    if (scopedRefs.length === 0) return new Map();
+    if (!this.scoped) {
+      await this.auditDenied(s, run.tenantId, scopedRefs[0]!, 'secret_unavailable');
+      return this.deny(s, agent.id, 'secret_unavailable', { refs: scopedRefs });
+    }
+    try {
+      const list = await this.scoped.prepare(run, scopedRefs, {
+        destinations: stepDestinations(definition, agent, configs),
+      });
+      return new Map(list.map((p) => [p.ref, p]));
+    } catch (e) {
+      if (!(e instanceof SecretDenied)) throw e;
+      await this.auditDenied(s, run.tenantId, e.ref, e.code);
+      return this.deny(s, agent.id, e.code, { refs: [e.ref] });
+    }
+  }
+
+  private auditDenied(s: SessionRow, tenantId: string, ref: string, code: string) {
+    return this.audit.append({
+      actor: `node:${s.nodeId}`,
+      tenantId,
+      action: 'secret.access_denied',
+      target: ref,
+      runId: s.runId,
+      payload: { ref, code },
+    });
+  }
+
+  /**
    * The broker: hands out the values of exactly the references the step declares (plus those of the
    * MCP connections it holds grants for), once per step and session, only for references the
    * tenant allows. Values are resolved after the issue is recorded, so a failure never leaves a
@@ -757,19 +830,23 @@ export class RunNodesService {
     const { run, definition } = await this.runContext(runId);
     const agent = (definition as AgentDefinition).agents.find((a) => a.id === agentId);
     if (!agent) return this.deny(s, agentId, 'unknown_agent');
-    const needs = this.needs(agent, await this.configsFor(run, agent));
+    const configs = await this.configsFor(run, agent);
+    const needs = this.needs(agent, configs);
     const [tenant] = await this.ctx.db
       .select({ secretRefs: tenants.secretRefs })
       .from(tenants)
       .where(eq(tenants.id, run.tenantId));
     const allowed = tenant?.secretRefs ?? [];
+    // Legacy references (operator environment and files) keep today's rules exactly.
+    const legacy = needs.refs.filter((r) => !isScopedRef(r));
     // Platform secrets (provider keys, event sources, platform connections) never reach a node.
     const platform = await this.platformSecretRefs();
-    const platformHit = needs.refs.filter((r) => platform.has(canonicalSecretRef(r)));
+    const platformHit = legacy.filter((r) => platform.has(canonicalSecretRef(r)));
     if (platformHit.length > 0)
       return this.deny(s, agentId, 'platform_secret', { refs: platformHit });
-    const refused = needs.refs.filter((r) => !secretRefAllowed(allowed, r));
+    const refused = legacy.filter((r) => !secretRefAllowed(allowed, r));
     if (refused.length > 0) return this.deny(s, agentId, 'secret_not_allowed', { refs: refused });
+    const prepared = await this.prepareScoped(s, run, definition, agent, configs, needs);
     const [mark] = await this.ctx.db
       .update(runNodeSessions)
       .set({
@@ -794,8 +871,22 @@ export class RunNodesService {
           .where(eq(runNodeSessions.id, s.id));
     };
     let expiresAt = s.expiresAt;
+    let scopedFailed = false;
     try {
       for (const ref of needs.refs) {
+        const scoped = prepared.get(ref);
+        if (scoped) {
+          try {
+            const value = await this.scoped!.open(scoped);
+            // Recorded before the value leaves: a value that cannot be remembered is not issued.
+            await this.scoped!.recordIssued(run, s, scoped, value);
+            values.set(ref, value);
+          } catch (e) {
+            scopedFailed = true;
+            throw e;
+          }
+          continue;
+        }
         const issued = await this.source.issue(ref, {
           runId,
           tenantId: run.tenantId,
@@ -809,6 +900,9 @@ export class RunNodesService {
     } catch {
       // Handles issued before the failure are still recalled when the session is revoked.
       await persistHandles();
+      // Our own store failed before any dynamic credential was handed out and nothing left the
+      // control node: give the step its one issuance back so that a retry can work.
+      if (scopedFailed && handles.length === 0) await this.unmarkIssued(s.id, agentId);
       // The reason stays out of the response (it can name backends); the audit entry has the refs.
       return this.deny(s, agentId, 'unavailable', { refs: needs.refs });
     }
@@ -843,6 +937,7 @@ export class RunNodesService {
         connections: needs.connections.map((c) => c.server),
         expiresAt: result.expiresAt,
         source: this.source.name,
+        ...(prepared.size > 0 ? { secrets: [...prepared.values()].map(issuanceRecord) } : {}),
       },
     });
     return result;
