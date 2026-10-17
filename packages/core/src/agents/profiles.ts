@@ -249,6 +249,75 @@ function pinTools(
   return out;
 }
 
+/**
+ * Replaces every prefix wildcard grant (`get_*`, `*`) by the explicit tools of the approved tool
+ * snapshot of its pinned connection (decision D4 of the AWP alignment, AEP-0002): the stored
+ * definition then names exactly what was reviewed, and a tool a server adds later is not matched by a
+ * prefix. A wildcard without such a reviewed list is an error (`wildcard_unreviewed`), never a
+ * silent widening and never a silent narrowing to nothing.
+ *
+ * What an expanded grant may do is what the wildcard allowed: it keeps `args`,
+ * `allowAdditionalArgs`, `approval`, `maxCallsPerRun` and `classification`, so a constraint can only
+ * restrict, never widen. Overlaps resolve as at run time (`findGrant`): an exact grant wins over a
+ * wildcard, and of two wildcards the first one in the list wins, so no tool gets looser limits than
+ * the run time would have given it.
+ */
+function expandWildcards(
+  a: AgentSpec,
+  index: number,
+  catalog: AccessCatalog,
+  errors: ValidationIssue[],
+): AgentSpec {
+  if (!a.tools.some((t) => t.tool.includes('*'))) return a;
+  const exact = new Set(
+    a.tools.filter((t) => !t.tool.includes('*')).map((t) => `${t.server}/${t.tool}`),
+  );
+  const taken = new Set<string>();
+  const tools: ToolGrant[] = [];
+  a.tools.forEach((t, j) => {
+    if (!t.tool.includes('*')) {
+      tools.push(t);
+      return;
+    }
+    const path = `agents.${index}.tools.${j}.tool`;
+    const pin = catalog[t.server]?.pin;
+    if (pin && !pin.snapshot) {
+      // The pin check cannot report this: the wildcard is dropped here, so the server may have no
+      // other grant. Same code and message as there, so a client sends the user to the Tools tab.
+      const message = `connection "${t.server}" has no approved tool snapshot (refresh and approve its tools first)`;
+      if (!errors.some((e) => e.code === 'mcp_tools_unreviewed' && e.message === message))
+        errors.push({ path: `agents.${index}.tools`, code: 'mcp_tools_unreviewed', message });
+      return;
+    }
+    if (!pin?.snapshot) {
+      errors.push({
+        path,
+        code: 'wildcard_unreviewed',
+        message:
+          `prefix wildcard "${t.server}/${t.tool}" has no reviewed tool list: ` +
+          'it needs a connection with an approved tool snapshot, or the tools listed one by one',
+      });
+      return;
+    }
+    const names = [...new Set(pin.snapshot.tools.map((p) => p.name))]
+      .filter((n) => matchesGrant(t.tool, n))
+      .sort();
+    if (names.length === 0)
+      errors.push({
+        path,
+        code: 'wildcard_empty',
+        message: `prefix wildcard "${t.server}/${t.tool}" matches no tool of the approved snapshot`,
+      });
+    for (const name of names) {
+      const key = `${t.server}/${name}`;
+      if (exact.has(key) || taken.has(key)) continue;
+      taken.add(key);
+      tools.push({ ...t, tool: name });
+    }
+  });
+  return { ...a, tools };
+}
+
 /** Enumerates every wildcard grant from the approved snapshot of its pinned connection, if any. */
 function enumerateWildcards(
   agents: readonly AgentSpec[],
@@ -275,7 +344,8 @@ function enumerateWildcards(
 export function expandProfiles(def: AgentDefinition, catalog: AccessCatalog): ExpansionResult {
   const errors: ValidationIssue[] = [];
   const expansion: ExpansionRecord[] = [];
-  const agents = def.agents.map((a, i) => expandAgent(a, i, catalog, expansion, errors));
+  const withProfiles = def.agents.map((a, i) => expandAgent(a, i, catalog, expansion, errors));
+  const agents = withProfiles.map((a, i) => expandWildcards(a, i, catalog, errors));
   const servers = new Set(
     def.agents.flatMap((a) => [
       ...a.tools.map((t) => t.server),
@@ -290,7 +360,7 @@ export function expandProfiles(def: AgentDefinition, catalog: AccessCatalog): Ex
         toolAccess[`${server}/${tool}`] = access;
   }
   const toolPins = pinTools(agents, catalog, errors);
-  const wildcardExpansion = enumerateWildcards(agents, catalog);
+  const wildcardExpansion = enumerateWildcards(withProfiles, catalog);
   const hasPins = Object.keys(toolPins).length > 0;
   // `toolPins` only enters the digest when there are pins, so the digest of a definition without
   // pinned connections is the one it always had.

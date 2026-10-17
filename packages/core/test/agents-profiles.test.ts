@@ -5,6 +5,7 @@ import {
   evaluateToolCall,
   expandProfiles,
   loadAgentDefinition,
+  ToolGrantSchema,
   toolAccessOf,
   validateAgentSource,
   type AccessCatalog,
@@ -119,9 +120,14 @@ describe('expandProfiles', () => {
 
   it('refuses a write tool for a read-only step, directly and through wildcards', () => {
     expect(expand('      - { server: jira, tool: create_issue }').errors).toHaveLength(1);
-    expect(expand('      - { server: jira, tool: "*" }').errors.length).toBeGreaterThanOrEqual(2);
-    expect(expand('      - { server: jira, tool: "delete_*" }').errors).toHaveLength(1);
-    expect(expand('      - { server: jira, tool: "get_*" }').errors).toEqual([]);
+    // a wildcard without a reviewed tool list is refused on top (wildcard_unreviewed, AEP-0002 / D4)
+    const writes = (tool: string) =>
+      expand(`      - { server: jira, tool: "${tool}" }`).errors.filter((e) =>
+        /must not receive write tool/.test(e.message),
+      );
+    expect(writes('*').length).toBeGreaterThanOrEqual(2);
+    expect(writes('delete_*')).toHaveLength(1);
+    expect(writes('get_*')).toEqual([]);
     // undeclared tools count as write
     expect(expand('      - { server: jira, tool: unlisted }').errors).toHaveLength(1);
     // a server that is not in the catalog cannot be classified
@@ -185,12 +191,18 @@ describe('classifyTool', () => {
 });
 
 describe('policy gate for read-only agents (second wall)', () => {
-  const published = () =>
-    expand(
-      ['      - { server: jira, profile: read }', '      - { server: jira, tool: "get_*" }'].join(
-        '\n',
-      ),
-    ).definition;
+  // The stored form of a version published by an older build still holds the wildcard grant: the
+  // second wall must keep denying what the classification does not call `read`.
+  const published = () => {
+    const def = expand('      - { server: jira, profile: read }').definition;
+    const agent = def.agents[0]!;
+    const wildcard = ToolGrantSchema.parse({
+      server: 'jira',
+      tool: 'get_*',
+      allowAdditionalArgs: true,
+    });
+    return { ...def, agents: [{ ...agent, tools: [...agent.tools, wildcard] }] };
+  };
   const decide = (tool: string, over: { access?: 'read-only' | 'write'; noMap?: boolean } = {}) => {
     const def = published();
     const agent = { ...def.agents[0]!, ...(over.access ? { access: over.access } : {}) };
