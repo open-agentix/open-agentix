@@ -25,7 +25,15 @@ import { and, desc, eq, inArray, isNotNull, isNull, lt, or, type SQL } from 'dri
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { agentReviewDecisions, agentReviews, agentVersions, agents, teams } from '../db/schema.js';
+import {
+  agentReviewDecisions,
+  agentReviews,
+  agentVersionDeprecations,
+  agentVersions,
+  agents,
+  teams,
+} from '../db/schema.js';
+import { demoId } from '../demo/ids.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import { decodeTimeCursor, encodeTimeCursor, page } from '../pagination.js';
 import { statusFilter, textFilter, useCaseFilter, type AgentStatus } from './agent-filters.js';
@@ -37,7 +45,8 @@ import {
   lockAgent,
   type RevisionRow,
 } from './agent-revisions.js';
-import type { ShadowReport } from './agent-reviews.js';
+import type { AgentPublisher } from './agent-publish.js';
+import type { ApprovalRecord, PublishApprovalInput } from './publish-gate.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import type { ResolvedScope } from './subtree-scope.js';
@@ -85,21 +94,48 @@ export interface VersionSummary {
   digest: string;
   publishedBy: string | null;
   publishedAt: Date;
+  /** The approved review the version was published under; `null` when approval was not required. */
+  reviewId: string | null;
+  deprecated: { at: Date; by: string; reason: string | null; rollbackTo: string | null } | null;
 }
 
-const summary = (v: AgentVersionRow): VersionSummary => ({
+/** What a publish records about the approvals it counted (`null` when none was required). */
+export interface PublishApproval {
+  reviewId: string;
+  approvedBy: string[];
+  policyDigest: string;
+}
+
+export interface PublishResult {
+  version: VersionSummary;
+  created: boolean;
+  approval: PublishApproval | null;
+}
+
+const approvalOf = (a: ApprovalRecord | null): PublishApproval | null =>
+  a ? { reviewId: a.reviewId, approvedBy: a.approvedBy, policyDigest: a.policyDigest } : null;
+
+export type DeprecationRow = typeof agentVersionDeprecations.$inferSelect;
+
+export const summary = (v: AgentVersionRow, d?: DeprecationRow | undefined): VersionSummary => ({
   id: v.id,
   agentId: v.agentId,
   version: v.version,
   digest: v.digest,
   publishedBy: v.publishedBy,
   publishedAt: v.publishedAt,
+  reviewId: v.reviewId,
+  deprecated: d
+    ? {
+        at: d.deprecatedAt,
+        by: d.deprecatedBy,
+        reason: d.reason,
+        rollbackTo: d.rollbackToVersionId,
+      }
+    : null,
 });
 
 const IMMUTABLE_TTL = 3_600_000;
-
-/** Reports what publish would have been refused for (ADR 0017 S1, set once the services exist). */
-export type ShadowPublish = (agent: AgentRow, source: string) => Promise<ShadowReport>;
 
 /** Filters of {@link AgentsService.list}; all of them narrow the principal's visible agents. */
 export interface AgentListQuery {
@@ -125,8 +161,8 @@ export class AgentsService {
     private readonly catalog: CatalogService,
   ) {}
 
-  /** Wired by `createServices`: the shadow-mode check of publish (ADR 0017 S1). */
-  shadowPublish: ShadowPublish | undefined;
+  /** Wired by `createServices`: the transaction of a publish with its approval gate (ADR 0017 S3). */
+  publisher: AgentPublisher | undefined;
 
   async teamIdForOwner(tenantId: string, owner: string): Promise<string | null> {
     const [t] = await this.ctx.db
@@ -758,11 +794,37 @@ export class AgentsService {
     return row;
   }
 
-  /** Publishes the current draft as an immutable version (idempotent for identical content). */
+  /**
+   * Publishes the current draft as an immutable version (idempotent for identical content). Where
+   * the tenant policy requires approval, the caller names the approved review and the digest they
+   * checked (`input`); see `publish-gate.ts` for what is checked under the lock.
+   */
   async publish(
     principal: Principal,
     id: string,
-  ): Promise<{ version: VersionSummary; created: boolean; shadow?: ShadowReport }> {
+    input: PublishApprovalInput = {},
+  ): Promise<PublishResult> {
+    return this.publishWith(principal, id, input, false);
+  }
+
+  /**
+   * The first publish of an agent of the deterministic demo seed, without approval (ADR 0017: demo
+   * seed excepted, demo mode only). Refused unless the agent is the seeded one (its id is the
+   * deterministic demo id of its name, which no request can choose) and has no version yet.
+   */
+  async publishDemoSeed(principal: Principal, id: string): Promise<PublishResult> {
+    const agent = await this.get(id, principal);
+    if (demoId('agent', agent.name) !== agent.id || agent.latestVersionId)
+      throw forbidden('only the demo seed publishes without approval');
+    return this.publishWith(principal, id, {}, true);
+  }
+
+  private async publishWith(
+    principal: Principal,
+    id: string,
+    input: PublishApprovalInput,
+    seed: boolean,
+  ): Promise<PublishResult> {
     const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:publish');
     const def = loadAgentDefinition(agent.draftSource);
@@ -773,117 +835,28 @@ export class AgentsService {
       .from(agentVersions)
       .where(eq(agentVersions.agentId, id));
     const outcome = checkPublish(published, def);
-    // ADR 0017 S1, shadow mode: report what publish would be refused for once approvals are
-    // enforced. It never refuses anything and must never break a publish.
-    const shadow = await this.shadow(agent);
-    if (outcome === 'unchanged') {
-      return {
-        version: summary(published.find((p) => p.version === def.version)!),
-        created: false,
-        ...(shadow ? { shadow } : {}),
-      };
-    }
+    if (outcome === 'unchanged') return this.unchangedResult(id, published, def);
     // Profile grants become concrete grants now and are stored with the version: a later change
     // of a profile never widens it. Read-only steps never receive a write tool.
-    const { definition, errors } = expandProfiles(
-      def,
-      await this.catalog.accessCatalog({
-        tenantId: principal.tenantId,
-        teamId: agent.teamId,
-        agentId: id,
-      }),
-    );
-    if (errors.length > 0) {
-      await this.audit.append({
-        actor: principal.userId,
-        tenantId: principal.tenantId,
-        action: 'agent.publish.denied',
-        target: id,
-        payload: { version: def.version, digest: def.digest, errors },
-      });
-      // ADR 0016 S3: tool definitions that were never reviewed (or a tool the review does not list)
-      // are a refusal of their own, so a client can send the user to the Tools tab.
-      const pinCode = errors.find(
-        (e) => e.code === 'mcp_tools_unreviewed' || e.code === 'mcp_tool_unknown',
-      )?.code;
-      throw new HttpError(
-        400,
-        pinCode ?? 'validation_failed',
-        pinCode
-          ? 'the tool definitions of an MCP connection are not approved for these grants'
-          : 'tool grants are not allowed on this platform',
-        errors,
-      );
-    }
-    // ADR 0016 S0: a tenant-defined stdio server never starts in the worker process.
-    const stdio = await this.catalog.stdioIsolationIssues(def, {
+    const catalog = await this.catalog.accessCatalog({
       tenantId: principal.tenantId,
       teamId: agent.teamId,
       agentId: id,
     });
-    if (stdio.length > 0) {
-      const errors = stdio.map(({ path, message }) => ({ path, message }));
-      await this.audit.append({
-        actor: principal.userId,
-        tenantId: principal.tenantId,
-        action: 'agent.publish.denied',
-        target: id,
-        payload: {
-          version: def.version,
-          digest: def.digest,
-          code: 'mcp_stdio_requires_isolation',
-          errors,
-        },
-      });
-      throw new HttpError(
-        400,
-        'mcp_stdio_requires_isolation',
-        'tenant stdio connections run only in run nodes',
-        errors,
-      );
-    }
-    const row = await this.ctx.db.transaction(async (t) => {
-      const tx = t as unknown as Db;
-      // The draft is read again under the agent lock: a save that slipped in since the checks above
-      // would otherwise publish content that was never validated (ADR 0017 section 4.3).
-      const locked = await lockAgent(tx, id);
-      if (locked.draftSource !== agent.draftSource)
-        throw new HttpError(409, 'draft_changed', 'the draft changed while publishing; try again');
-      const head = await ensureHead(tx, locked, (r) =>
-        this.auditRevision(tx, locked, r, 'system').then(() => undefined),
-      );
-      const [v] = await tx
-        .insert(agentVersions)
-        .values({
-          id: randomUUID(),
-          agentId: id,
-          version: def.version,
-          digest: def.digest,
-          source: agent.draftSource,
-          definition: definition as unknown as object,
-          publishedBy: principal.userId,
-          revisionId: head.id,
-        })
-        .returning();
-      await tx
-        .update(agents)
-        .set({ latestVersionId: v!.id, latestVersion: v!.version, useCase: useCaseOf(def) })
-        .where(eq(agents.id, id));
-      return v!;
+    const { definition, errors } = expandProfiles(def, catalog);
+    if (errors.length > 0) await this.refuseExpansion(principal, id, def, errors);
+    await this.refuseStdio(principal, agent, def);
+    const { version: row, approval } = await this.requirePublisher().commit({
+      principal,
+      agentId: id,
+      def,
+      expanded: definition,
+      catalog,
+      input,
+      seed,
+      onRevision: (tx, locked, r) => this.auditRevision(tx, locked, r, 'system').then(() => undefined),
     });
     await this.ctx.cache.del(`agent-latest:${id}`);
-    await this.audit.append({
-      actor: principal.userId,
-      tenantId: principal.tenantId,
-      action: 'agent.published',
-      target: id,
-      payload: {
-        version: row.version,
-        digest: row.digest,
-        revision: row.revisionId,
-        ...(shadow ? { shadow } : {}),
-      },
-    });
     if (definition.expansion?.length) {
       await this.audit.append({
         actor: principal.userId,
@@ -897,27 +870,102 @@ export class AgentsService {
         },
       });
     }
-    return { version: summary(row), created: true, ...(shadow ? { shadow } : {}) };
+    return { version: summary(row), created: true, approval: approvalOf(approval) };
   }
 
-  /** The shadow report of a publish, or `undefined` when it cannot be computed (never an error). */
-  private async shadow(agent: AgentRow): Promise<ShadowReport | undefined> {
-    if (!this.shadowPublish) return undefined;
-    try {
-      return await this.shadowPublish(agent, agent.draftSource);
-    } catch (e) {
-      this.ctx.logger.warn({ err: e, agent: agent.id }, 'publish shadow check failed');
-      return undefined;
-    }
+  private requirePublisher(): AgentPublisher {
+    if (!this.publisher) throw new Error('the publisher is not wired');
+    return this.publisher;
+  }
+
+  /**
+   * The draft is already published with this content: nothing is created. A deprecated version is
+   * not handed out again (it takes no new pinned runs): bump the version to publish the content anew.
+   */
+  private async unchangedResult(
+    id: string,
+    published: AgentVersionRow[],
+    def: AgentDefinition,
+  ): Promise<PublishResult> {
+    const same = published.find((p) => p.version === def.version)!;
+    const [gone] = await this.ctx.db
+      .select({ at: agentVersionDeprecations.deprecatedAt })
+      .from(agentVersionDeprecations)
+      .where(eq(agentVersionDeprecations.versionId, same.id));
+    if (gone)
+      throw new HttpError(
+        409,
+        'version_deprecated',
+        `version ${same.version} of agent ${id} was deprecated; raise the version to publish this content again`,
+      );
+    return { version: summary(same), created: false, approval: null };
+  }
+
+  private async refuseExpansion(
+    principal: Principal,
+    id: string,
+    def: AgentDefinition,
+    errors: ReturnType<typeof expandProfiles>['errors'],
+  ): Promise<never> {
+    await this.audit.append({
+      actor: principal.userId,
+      tenantId: principal.tenantId,
+      action: 'agent.publish.denied',
+      target: id,
+      payload: { version: def.version, digest: def.digest, errors },
+    });
+    // ADR 0016 S3: tool definitions that were never reviewed (or a tool the review does not list)
+    // are a refusal of their own, so a client can send the user to the Tools tab.
+    const pinCode = errors.find(
+      (e) => e.code === 'mcp_tools_unreviewed' || e.code === 'mcp_tool_unknown',
+    )?.code;
+    throw new HttpError(
+      400,
+      pinCode ?? 'validation_failed',
+      pinCode
+        ? 'the tool definitions of an MCP connection are not approved for these grants'
+        : 'tool grants are not allowed on this platform',
+      errors,
+    );
+  }
+
+  /** ADR 0016 S0: a tenant-defined stdio server never starts in the worker process. */
+  private async refuseStdio(principal: Principal, agent: AgentRow, def: AgentDefinition) {
+    const stdio = await this.catalog.stdioIsolationIssues(def, {
+      tenantId: principal.tenantId,
+      teamId: agent.teamId,
+      agentId: agent.id,
+    });
+    if (stdio.length === 0) return;
+    const errors = stdio.map(({ path, message }) => ({ path, message }));
+    await this.audit.append({
+      actor: principal.userId,
+      tenantId: principal.tenantId,
+      action: 'agent.publish.denied',
+      target: agent.id,
+      payload: {
+        version: def.version,
+        digest: def.digest,
+        code: 'mcp_stdio_requires_isolation',
+        errors,
+      },
+    });
+    throw new HttpError(
+      400,
+      'mcp_stdio_requires_isolation',
+      'tenant stdio connections run only in run nodes',
+      errors,
+    );
   }
 
   async versions(id: string): Promise<VersionSummary[]> {
     const rows = await this.ctx.db
-      .select()
+      .select({ v: agentVersions, d: agentVersionDeprecations })
       .from(agentVersions)
+      .leftJoin(agentVersionDeprecations, eq(agentVersionDeprecations.versionId, agentVersions.id))
       .where(eq(agentVersions.agentId, id))
       .orderBy(desc(agentVersions.publishedAt));
-    return rows.map(summary);
+    return rows.map((r) => summary(r.v, r.d ?? undefined));
   }
 
   async getVersion(agentId: string, version: string): Promise<AgentVersionRow> {
@@ -926,6 +974,15 @@ export class AgentsService {
       .from(agentVersions)
       .where(and(eq(agentVersions.agentId, agentId), eq(agentVersions.version, version)));
     if (!row) throw notFound('agent version');
+    return row;
+  }
+
+  /** The deprecation record of a version, if it was deprecated. */
+  async deprecationOf(versionId: string): Promise<DeprecationRow | undefined> {
+    const [row] = await this.ctx.db
+      .select()
+      .from(agentVersionDeprecations)
+      .where(eq(agentVersionDeprecations.versionId, versionId));
     return row;
   }
 

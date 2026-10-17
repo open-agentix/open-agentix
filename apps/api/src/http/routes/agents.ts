@@ -15,6 +15,8 @@ import {
   AwpExportRefusalSchema,
   AwpManifestSchema,
   AgentSourceBody,
+  DeprecateBody,
+  DeprecateResultSchema,
   DisableBody,
   ErrorSchema,
   Id,
@@ -23,6 +25,7 @@ import {
   MembersBody,
   PageQuery,
   SubtreeQuery,
+  PublishBody,
   PublishResultSchema,
   RunSchema,
   TeamMemberSchema,
@@ -201,19 +204,52 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
         tags,
         summary: 'Publish the draft as an immutable version',
         description:
-          'Needs `agents:publish`. Not yet refused without an approval: `shadow` reports whether publish would have been refused (ADR 0017 S1 shadow mode); the same report is in the audit entry `agent.published`.',
+          'Needs `agents:publish`. Where the tenant policy requires approval for the agent (`requireApprovalForPublish`, `production-only` with the union of the published and the draft use case), the body names the approved `reviewId` and the `expectedDigest` of the revision you checked. In one transaction under the tree, binding and agent locks the API then checks (ADR 0017 section 4.3): the draft is that revision (`409 draft_changed`); the profile expansion and the secret resolution are recomputed and equal what was approved (`409 approval_stale` with `reason` `expansion_changed` or `secret_resolution_changed`); every approval is judged again against the bindings, grant chains, expiry and policy of this moment and enough remain, with no open request for changes (`409 approval_insufficient`); `publishBy: approver-only` lets only an approver publish (`403 publisher_not_approver`). Also `409 approval_required` (no review or digest named), `409 review_closed`, `409 role_bindings_read_required` (approval cannot be enforced race-free with `OAX_ROLE_BINDINGS_READ=legacy`), `409 version_deprecated` (the draft equals a deprecated version) and the version rules. The version is published from the revision\'s source, records the review, the distinct approvers, the policy digest and the pinned secret resolution, and the review is closed as `published`. There is no emergency or break-glass publish: no parameter, role or setting skips the approvals, and unknown body fields are a 400. Refusals are audited as `agent.publish.refused`.',
         security: sec,
         params: IdParams,
-        response: { 200: PublishResultSchema, 201: PublishResultSchema, 409: ErrorSchema },
+        body: PublishBody,
+        response: {
+          200: PublishResultSchema,
+          201: PublishResultSchema,
+          400: ErrorSchema,
+          403: ErrorSchema,
+          409: ErrorSchema,
+        },
       },
     },
     async (req, reply) => {
-      const r = await agents.publish(principalOf(req), req.params.id);
+      const r = await agents.publish(principalOf(req), req.params.id, req.body ?? {});
       return reply.status(r.created ? 201 : 200).send({
         version: versionDto(r.version),
         created: r.created,
-        ...(r.shadow ? { shadow: r.shadow } : {}),
+        approval: r.approval,
       });
+    },
+  );
+
+  app.post(
+    '/v1/agents/:id/versions/:version/deprecate',
+    {
+      config: { access: 'agents:publish' },
+      schema: {
+        tags,
+        summary: 'Deprecate a version; deprecating the latest version rolls the agent back',
+        description:
+          'Needs `agents:publish` on the agent. New runs pinned to a deprecated version are refused with `409 version_deprecated`; runs that already exist are not touched. Deprecating the **latest** version is a rollback: `agents.latestVersion` goes back to the newest other version that is not deprecated and, where approval is required for the agent today, was published under an approved review. A rollback creates no version, needs no approval and is audited as `agent.version.deprecated` (with `rollbackTo`). `409 rollback_target_unapproved` when approval is required and no such version was published under an approved review, `409 no_rollback_target` when there is no other version that is not deprecated (disable the agent instead), `409 already_deprecated`. Deprecating cannot be undone: publish a version with a higher number. This is the way out of an incident; there is no break-glass publish.',
+        security: sec,
+        params: IdParams.extend({ version: z.string() }),
+        body: DeprecateBody,
+        response: { 200: DeprecateResultSchema, 400: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
+      },
+    },
+    async (req) => {
+      const r = await services.agentDeprecation.deprecate(
+        principalOf(req),
+        req.params.id,
+        req.params.version,
+        req.body?.reason,
+      );
+      return { ...r, deprecatedAt: r.deprecatedAt.toISOString() };
     },
   );
 
@@ -286,7 +322,8 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
         await agents.get(req.params.id, principalOf(req)),
         'agents:read',
       );
-      return versionDetailDto(await agents.getVersion(req.params.id, req.params.version));
+      const v = await agents.getVersion(req.params.id, req.params.version);
+      return versionDetailDto(v, await agents.deprecationOf(v.id));
     },
   );
 

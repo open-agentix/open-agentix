@@ -5,7 +5,7 @@ import {
   type PublishedExpansion,
 } from '@openagentix/core';
 import type { AgentSummary } from '../services/agent-summaries.js';
-import type { AgentVersionRow, VersionSummary } from '../services/agents.js';
+import { summary, type AgentVersionRow, type DeprecationRow, type VersionSummary } from '../services/agents.js';
 import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
 import type { PublicUser, TeamRow, TenantRow, TokenInfo } from '../services/identity.js';
 import type { EventRow, SourceRow } from '../services/ingest.js';
@@ -42,15 +42,14 @@ export const agentDetailDto = (s: AgentSummary) => ({
   draftSource: s.agent.draftSource,
 });
 
-export const versionDto = (v: VersionSummary) => ({ ...v, publishedAt: iso(v.publishedAt) });
-
-export const versionDetailDto = (v: AgentVersionRow) => ({
-  id: v.id,
-  agentId: v.agentId,
-  version: v.version,
-  digest: v.digest,
-  publishedBy: v.publishedBy,
+export const versionDto = (v: VersionSummary) => ({
+  ...v,
   publishedAt: iso(v.publishedAt),
+  deprecated: v.deprecated ? { ...v.deprecated, at: iso(v.deprecated.at) } : null,
+});
+
+export const versionDetailDto = (v: AgentVersionRow, d?: DeprecationRow) => ({
+  ...versionDto(summary(v, d)),
   source: v.source,
   definition: v.definition as Record<string, unknown>,
   ...expansionOf(v.definition),

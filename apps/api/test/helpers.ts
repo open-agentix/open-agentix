@@ -1,6 +1,9 @@
-import { StaticSecretResolver } from '@openagentix/core';
+import { randomUUID } from 'node:crypto';
+import { StaticSecretResolver, loadAgentDefinition } from '@openagentix/core';
+import { eq } from 'drizzle-orm';
 import type { FetchFn } from '@openagentix/runners';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
+import { agentReviews, agentVersions, agents } from '../src/db/schema.js';
 import { createControlNode, loadConfig, type AppContext, type ControlNode } from '../src/index.js';
 
 export const ADMIN = { email: 'admin@example.com', password: 'admin-password-123' };
@@ -84,4 +87,58 @@ export function injectFetch(app: FastifyInstance): FetchFn {
       headers: { 'content-type': String(res.headers['content-type'] ?? 'application/json') },
     });
   };
+}
+
+/**
+ * Inserts a published version row for an agent the way a publish does (revision, definition,
+ * latest version), without the approval gate: a fixture for tests that need a base version while
+ * approval is on. The code path under test never uses it. `setLatest: false` adds a version that
+ * the agent does not point to (a version of a review that is finished only for the test).
+ */
+export async function insertVersion(
+  n: TestNode,
+  agentId: string,
+  opts: { version?: string; setLatest?: boolean; reviewId?: string } = {},
+): Promise<string> {
+  const [agent] = await n.ctx.db.select().from(agents).where(eq(agents.id, agentId));
+  // Fixtures of other tests store sources that are not valid agents.md files.
+  const def = (() => {
+    try {
+      return loadAgentDefinition(agent!.draftSource);
+    } catch {
+      return { version: '0.0.0', digest: randomUUID().replaceAll('-', '').repeat(2) };
+    }
+  })();
+  const id = randomUUID();
+  const approved = opts.reviewId ? { reviewId: opts.reviewId, approvedBy: [randomUUID()] } : {};
+  await n.ctx.db.insert(agentVersions).values({
+    id,
+    agentId,
+    version: opts.version ?? def.version,
+    digest: opts.version ? randomUUID().replaceAll('-', '').repeat(2) : def.digest,
+    source: agent!.draftSource,
+    definition: def as unknown as object,
+    publishedBy: null,
+    revisionId: agent!.draftRevisionId,
+    ...approved,
+  });
+  if (opts.setLatest !== false)
+    await n.ctx.db
+      .update(agents)
+      .set({ latestVersionId: id, latestVersion: opts.version ?? def.version })
+      .where(eq(agents.id, agentId));
+  return id;
+}
+
+/** Ends an open review as `published` the way the database requires: with the version it ended in. */
+export async function settleReviewPublished(n: TestNode, reviewId: string): Promise<void> {
+  const [review] = await n.ctx.db.select().from(agentReviews).where(eq(agentReviews.id, reviewId));
+  const versionId = await insertVersion(n, review!.agentId, {
+    version: `settled-${randomUUID()}`,
+    setLatest: false,
+  });
+  await n.ctx.db
+    .update(agentReviews)
+    .set({ status: 'published', closedAt: new Date(), publishedVersionId: versionId })
+    .where(eq(agentReviews.id, reviewId));
 }

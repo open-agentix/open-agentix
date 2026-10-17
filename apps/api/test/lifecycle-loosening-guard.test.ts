@@ -13,7 +13,7 @@ import {
 import { LOOSENING_LIMITS } from '../src/services/lifecycle-policy.js';
 import { agentSource } from './fixtures.js';
 import { PG_URL, openPglite, openPostgres, type Sql } from './db-targets.js';
-import { testNode, type TestNode } from './helpers.js';
+import { settleReviewPublished, testNode, type TestNode } from './helpers.js';
 
 /**
  * Finding 3 of #356: the guard against loosening the lifecycle policy by a contributor of an unfinished
@@ -90,10 +90,11 @@ const expectRefused = (res: { statusCode: number; body: string; json: () => unkn
  * published, and withdrawn or rejected ones are released the way an administrator would.
  */
 async function settleAll() {
-  await n.ctx.db
-    .update(agentReviews)
-    .set({ status: 'published', closedAt: new Date() })
+  const open = await n.ctx.db
+    .select({ id: agentReviews.id })
+    .from(agentReviews)
     .where(eq(agentReviews.status, 'open'));
+  for (const r of open) await settleReviewPublished(n, r.id);
   const closed = await n.ctx.db
     .select({ id: agentReviews.id })
     .from(agentReviews)
@@ -153,9 +154,11 @@ describe('withdraw, loosen, reopen', () => {
     expect((await setPolicy({ minApprovals: 3 }, tok['c']!)).statusCode).toBe(200);
     expect((await setPolicy(LOOSEN)).statusCode).toBe(200);
     expect((await strict()).statusCode).toBe(200);
-    // publishing does not end the hold: it needs no approval while approval is not enforced
+    // publishing does not end the hold, and cannot: approval is required, so the contributor's
+    // publish without an approved review is refused
     const pub = await req(tok['c']!, 'POST', `/v1/agents/${agent}/publish`);
-    expect(pub.statusCode, pub.body).toBe(201);
+    expect(pub.statusCode, pub.body).toBe(409);
+    expect(j(pub).error).toBe('approval_required');
     expectRefused(await setPolicy(LOOSEN, tok['c']!));
     // the contributor cannot release it, nor can an account whose authority comes from one
     const own = await req(tok['c']!, 'POST', `/v1/reviews/${review.id}/clear-hold`, {

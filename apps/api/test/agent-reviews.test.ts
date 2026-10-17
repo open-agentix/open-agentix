@@ -11,7 +11,7 @@ import {
 } from '../src/db/schema.js';
 import { agentSource } from './fixtures.js';
 import { PG_URL, openPglite, openPostgres, type Sql } from './db-targets.js';
-import { testNode, type TestNode } from './helpers.js';
+import { insertVersion, settleReviewPublished, testNode, type TestNode } from './helpers.js';
 
 /**
  * ADR 0017 slice S1: draft revisions, reviews, decisions and the approval rules over HTTP, on the
@@ -275,7 +275,7 @@ describe('opening a review', () => {
 
   it('has nothing to review when the draft equals the latest published version', async () => {
     const a = await newAgent(tok['author']!);
-    expect((await req(tok['author']!, 'POST', `/v1/agents/${a.id}/publish`)).statusCode).toBe(201);
+    await insertVersion(n, a.id);
     const res = await open(tok['author']!, a.id);
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe('nothing_to_review');
@@ -405,10 +405,7 @@ describe('who may decide (rules A1 to A7, A10)', () => {
     expect(res.json().error).toBe('self_approval');
     // The operator made the organisation administrator, so a review the operator contributed to that
     // stays unfinished would stop that administrator from loosening the policy in later tests (#356).
-    await n.ctx.db
-      .update(agentReviews)
-      .set({ status: 'published', closedAt: new Date() })
-      .where(eq(agentReviews.id, review.id));
+    await settleReviewPublished(n, review.id);
   });
 
   it('lets a platform administrator approve the work of somebody else, as a distinct person', async () => {
@@ -1000,93 +997,6 @@ describe('withdrawing', () => {
       expect(x.digest).toBe(review.revision.digest);
     }
     expect(after.approvals.every((x: Json) => !x.counted)).toBe(true);
-  });
-});
-
-describe('shadow mode of publish', () => {
-  it('reports the refusal publish would get without refusing, in the response and the audit entry', async () => {
-    const a = await newAgent(tok['author']!);
-    const none = await req(tok['author']!, 'POST', `/v1/agents/${a.id}/publish`);
-    expect(none.statusCode, none.body).toBe(201);
-    expect(j(none).shadow).toMatchObject({
-      enforced: false,
-      approvalRequired: true,
-      wouldRefuse: true,
-      reviewId: null,
-      reasons: [{ code: 'no_review' }],
-    });
-    const [published] = await auditActions(a.id, 'agent.published');
-    expect(published!.payload.shadow).toMatchObject({ wouldRefuse: true, enforced: false });
-    expect(published!.payload.revision).toEqual(expect.any(String));
-    const [version] = await n.ctx.db
-      .select()
-      .from(agentVersions)
-      .where(eq(agentVersions.agentId, a.id));
-    expect(version!.revisionId).toBe(published!.payload.revision);
-  });
-
-  it('would refuse an unapproved review, and would not refuse an approved one', async () => {
-    const a = await newAgent(tok['author']!);
-    const review = j(await open(tok['author']!, a.id));
-    const dry = await req(tok['author']!, 'POST', `/v1/agents/${a.id}/publish`);
-    expect(j(dry).shadow).toMatchObject({
-      wouldRefuse: true,
-      reviewId: review.id,
-      state: 'review_requested',
-      reasons: [{ code: 'approval_insufficient' }],
-    });
-    const b = await newAgent(tok['author']!);
-    const rb = j(await open(tok['author']!, b.id));
-    await decide(tok['rev1']!, rb, 'approve');
-    const ok = await req(tok['author']!, 'POST', `/v1/agents/${b.id}/publish`);
-    expect(ok.statusCode).toBe(201);
-    expect(j(ok).shadow).toMatchObject({ wouldRefuse: false, state: 'approved', reasons: [] });
-    const c = await newAgent(tok['author']!);
-    const rc = j(await open(tok['author']!, c.id));
-    await decide(tok['rev1']!, rc, 'request_changes', { comment: 'no' });
-    expect(
-      j(await req(tok['author']!, 'POST', `/v1/agents/${c.id}/publish`)).shadow.reasons[0].code,
-    ).toBe('changes_requested');
-  });
-
-  it('says approval is not required when the policy is off, and for production-only outside production use cases', async () => {
-    await setPolicy({ requireApprovalForPublish: 'off' });
-    try {
-      const a = await newAgent(tok['author']!);
-      const res = await req(tok['author']!, 'POST', `/v1/agents/${a.id}/publish`);
-      expect(j(res).shadow).toMatchObject({ approvalRequired: false, wouldRefuse: false });
-    } finally {
-      await setPolicy({ requireApprovalForPublish: null });
-    }
-    await setPolicy({
-      requireApprovalForPublish: 'production-only',
-      productionUseCases: ['prod/**'],
-    });
-    try {
-      const plain = await newAgent(tok['author']!);
-      expect(
-        j(await req(tok['author']!, 'POST', `/v1/agents/${plain.id}/publish`)).shadow
-          .approvalRequired,
-      ).toBe(false);
-      const prod = await newAgent(tok['author']!, 'labels:\n  useCase: prod/support');
-      expect(
-        j(await req(tok['author']!, 'POST', `/v1/agents/${prod.id}/publish`)).shadow,
-      ).toMatchObject({
-        approvalRequired: true,
-        wouldRefuse: true,
-      });
-    } finally {
-      await setPolicy({ requireApprovalForPublish: null, productionUseCases: null });
-    }
-  });
-
-  it('does not change what publish does: the version is created either way and a republish stays idempotent', async () => {
-    const a = await newAgent(tok['author']!);
-    const first = await req(tok['author']!, 'POST', `/v1/agents/${a.id}/publish`);
-    const again = await req(tok['author']!, 'POST', `/v1/agents/${a.id}/publish`);
-    expect([first.statusCode, again.statusCode]).toEqual([201, 200]);
-    expect(j(again).created).toBe(false);
-    expect(j(again).shadow).toBeDefined();
   });
 });
 
