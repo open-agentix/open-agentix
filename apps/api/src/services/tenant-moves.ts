@@ -268,6 +268,17 @@ export class TenantMoves {
           now,
         });
 
+        // A move that loosens the policy inside the subtree is a loosening like a policy write: a
+        // contributor of an unfinished review there (or an account their authority comes from) must
+        // not relax the rules of their own review by moving the node (#356). Dry runs refuse too.
+        if (widened.length > 0)
+          await this.lifecycle.assertNoOwnOpenReview(
+            tx,
+            p.userId,
+            fresh,
+            widened as LifecycleKey[],
+          );
+
         const newPath = `${newParent.path}${fresh.id}/`;
         const slugs = await tree.slugPaths([fresh, newParent]);
         const report: MoveReport = {

@@ -4,6 +4,8 @@ import type { RevisionRow } from '../../services/agent-revisions.js';
 import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import {
+  ClearHoldBody,
+  ClearHoldResultSchema,
   DecisionBody,
   DecisionResultSchema,
   LifecyclePatchBody,
@@ -193,6 +195,32 @@ export function registerReviewRoutes(app: ZApp, { services }: Deps): void {
     async (req) => reviewDto(await agentReviews.withdraw(principalOf(req), req.params.id)),
   );
 
+  app.post(
+    '/v1/reviews/:id/clear-hold',
+    {
+      config: { access: 'agents:write' },
+      schema: {
+        tags,
+        summary: 'Release a withdrawn or rejected review from the policy-loosening hold',
+        description:
+          "A withdrawn or rejected review keeps blocking `policy_loosening_by_contributor` for its contributors (and the accounts whose authority comes from them) until an administrator releases it here. Needs an administrator of the agent's tenant who is not a contributor of the review and whose own authority does not come from one (`403 hold_clear_by_contributor`); `409 not_held` for an open or published review or one already released. Audited as `agent.review.hold_cleared`. An agent with 25 unreleased withdrawn or rejected reviews cannot open another (`429 review_hold_limit`).",
+        security: sec,
+        params: IdParams,
+        body: ClearHoldBody,
+        response: {
+          200: ClearHoldResultSchema,
+          403: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
+      },
+    },
+    async (req) => {
+      const r = await agentReviews.clearHold(principalOf(req), req.params.id, req.body.reason);
+      return { ...r, clearedAt: iso(r.clearedAt) };
+    },
+  );
+
   app.get(
     '/v1/tenants/:id/settings/agent-lifecycle',
     {
@@ -218,7 +246,7 @@ export function registerReviewRoutes(app: ZApp, { services }: Deps): void {
         tags,
         summary: 'Change the agent lifecycle policy of a tenant',
         description:
-          "Send the keys to change; `null` removes a value (the node then inherits). Needs `settings:write` on the node. Narrowing only: below a parent a value that would make the effective policy looser than the parent's is refused with `422 not_narrowing` and the keys named (the root of an organisation chooses freely). A change that loosens the effective policy is refused with `403 policy_loosening_by_contributor` when the caller contributed to an open review in the subtree (another administrator makes it); an open review is judged by the stricter of its own snapshot and the current policy. Keys that do not exist, `breakGlass*` and `approverBindingMinAgeHours` included, are 400. Audited as `tenant.lifecycle_policy_changed`.",
+          "Send the keys to change; `null` removes a value (the node then inherits). Needs `settings:write` on the node. Narrowing only: below a parent a value that would make the effective policy looser than the parent's is refused with `422 not_narrowing` and the keys named (the root of an organisation chooses freely). A change that loosens the effective policy is refused with `403 policy_loosening_by_contributor` when the caller, or somebody the caller's authority comes from (the account that made them, the grantors of their administrator bindings), contributed to an unfinished review in the subtree: open, or withdrawn or rejected with nothing published for the agent since; more unfinished reviews than can be checked are refused too (another administrator makes it); an open review is judged by the stricter of its own snapshot and the current policy. Keys that do not exist, `breakGlass*` and `approverBindingMinAgeHours` included, are 400. Audited as `tenant.lifecycle_policy_changed`.",
         security: sec,
         params: IdParams,
         body: LifecyclePatchBody,

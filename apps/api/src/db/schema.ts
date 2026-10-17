@@ -154,6 +154,20 @@ export const users = pgTable('users', {
    * migration 0036 that the audit chain could not attribute).
    */
   createdBy: uuid('created_by').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
+  /**
+   * Everybody the creation of this account depended on, stored when the account was created under
+   * the binding lock: the creator, the account that created the creator and whoever granted the
+   * creator the roles that allow creating accounts (migration 0037). Plain ids, no foreign key, so
+   * the chain survives the deletion of a link (a creator that is deleted, a grant that is revoked
+   * or expires afterwards). `null` = none recorded (see `creatorUnknown`).
+   */
+  grantChain: uuid('grant_chain').array(),
+  /**
+   * `true` = the creator of this account is **unknown** (created before the creator was recorded,
+   * or the creator was deleted before a chain was stored), as opposed to `created_by is null` with
+   * this flag false = nobody made it (bootstrap, identity provider).
+   */
+  creatorUnknown: boolean('creator_unknown').notNull().default(false),
   createdAt: created(),
   lastLoginAt: ts('last_login_at'),
 });
@@ -199,6 +213,13 @@ export const tenantRoleBindings = pgTable(
      * home-move trigger re-created, and when the grantor's account was deleted (migration 0036).
      */
     grantorUnknown: boolean('grantor_unknown').notNull().default(false),
+    /**
+     * Every user the grant depended on when it was made (the grantor, whoever made the grantor and
+     * whoever granted the grantor the right to grant), plus every user who widened the binding later
+     * (migration 0037). Plain ids without a foreign key: a link that is revoked, expires or is
+     * deleted afterwards stays in the chain. `null` with `granted_by` set = not recorded = unknown.
+     */
+    grantChain: uuid('grant_chain').array(),
     /**
      * `mirror` = a row that mirrors `users.global_roles` (home node, legacy roles; owned by the
      * mirror, the reconcile and the home-move trigger), `grant` = created through the role-binding
@@ -324,6 +345,8 @@ export const teamMembers = pgTable(
     grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
     /** The grantor is unknown (see `tenant_role_bindings.grantor_unknown`). */
     grantorUnknown: boolean('grantor_unknown').notNull().default(false),
+    /** The stored grant chain (see `tenant_role_bindings.grant_chain`). */
+    grantChain: uuid('grant_chain').array(),
   },
   (t) => [
     primaryKey({ columns: [t.teamId, t.userId, t.role] }),
@@ -1145,6 +1168,8 @@ export const agentRoleBindings = pgTable(
     grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
     /** The grantor is unknown (see `tenant_role_bindings.grantor_unknown`). */
     grantorUnknown: boolean('grantor_unknown').notNull().default(false),
+    /** The stored grant chain (see `tenant_role_bindings.grant_chain`). */
+    grantChain: uuid('grant_chain').array(),
   },
   (t) => [
     primaryKey({ columns: [t.userId, t.agentId, t.role] }),
@@ -1248,6 +1273,15 @@ export const agentReviews = pgTable(
     openedAt: ts('opened_at').notNull().defaultNow(),
     closedAt: ts('closed_at'),
     closedBy: uuid('closed_by'),
+    /**
+     * The head revision of the agent when the review was withdrawn or rejected (#356): the window of
+     * contributors of a closed review ends here, so later editors of the agent do not become
+     * contributors of an old held review. `null` for open and published reviews and when no revision
+     * existed.
+     */
+    closedRevisionId: uuid('closed_revision_id').references(
+      (): AnyPgColumn => agentDraftRevisions.id,
+    ),
   },
   (t) => [
     // At most one open review per agent; also the lock-free guard against two openers.
@@ -1266,6 +1300,20 @@ export const agentReviews = pgTable(
     check('agent_reviews_closed_check', sql`(${t.status} = 'open') = (${t.closedAt} is null)`),
   ],
 );
+
+/**
+ * An administrator's explicit release of a withdrawn or rejected review from the loosening hold
+ * (#356): such a review keeps blocking policy loosening by its contributors until it is cleared here
+ * by an administrator who is not one of them (or their chain). One row per review, append-only.
+ */
+export const agentReviewHoldClears = pgTable('agent_review_hold_clears', {
+  reviewId: uuid('review_id')
+    .primaryKey()
+    .references(() => agentReviews.id, { onDelete: 'cascade' }),
+  clearedBy: uuid('cleared_by').notNull(),
+  clearedAt: ts('cleared_at').notNull().defaultNow(),
+  reason: text('reason').notNull(),
+});
 
 /**
  * One decision of one reviewer on one revision, with everything an approval binds to (ADR 0017

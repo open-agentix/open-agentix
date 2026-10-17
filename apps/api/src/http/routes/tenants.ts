@@ -249,7 +249,10 @@ export function registerTenantRoutes(app: ZApp, { services, ctx }: Deps): void {
           '`restriction_removal_forbidden`, whatever the role: also for a role nobody holds yet), or ' +
           'loosening the agent lifecycle policy (ADR 0017) that applies inside the subtree because ' +
           'the ancestors that set it are left behind (403 `policy_widening_forbidden`; the ' +
-          'widened keys are listed as `policiesWidened`). Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 ' +
+          'widened keys are listed as `policiesWidened`). A move that widens the policy is a ' +
+          'loosening: it is also refused with 403 `policy_loosening_by_contributor` when the caller, or ' +
+          "somebody the caller's authority comes from, contributed to an unfinished review in the moved " +
+          'subtree (dry runs included). Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 ' +
           '`role_bindings_read_required`). Bindings on the moved tenants move with them; bindings ' +
           'inherited from the old ancestors stop, those inheriting from the new ancestors start; ' +
           'restrictions of the old ancestors stop narrowing the bindings inside, those of the new ' +

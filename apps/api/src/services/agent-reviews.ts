@@ -24,12 +24,13 @@ import {
   type RefusalCode,
   type ReviewState,
 } from '@openagentix/core';
-import { and, asc, desc, eq, lte, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import {
   agentDraftRevisions,
   agentReviewDecisions,
+  agentReviewHoldClears,
   agentReviews,
   agentVersions,
   tenants,
@@ -43,13 +44,13 @@ import {
   type AgentRow,
   type RevisionRow,
 } from './agent-revisions.js';
-import { loadApproverFacts } from './approver-facts.js';
+import { followGrantChain, loadApproverFacts } from './approver-facts.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import { isTenantAdminAt, loadActor } from './grant-authority.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
-import { reviewContributors } from './review-contributors.js';
+import { reviewContributors, reviewHeadOf } from './review-contributors.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 
 /**
@@ -76,6 +77,9 @@ type DecisionRow = typeof agentReviewDecisions.$inferSelect;
 type VersionRow = typeof agentVersions.$inferSelect;
 
 export const MAX_COMMENT_LENGTH = 10_000;
+
+/** Withdrawn or rejected reviews of one agent that no administrator released; more refuse a new review. */
+export const MAX_UNCLEARED_CLOSED_REVIEWS = 25;
 
 export type ReviewStatus = 'open' | 'withdrawn' | 'rejected' | 'published';
 
@@ -651,6 +655,24 @@ export class AgentReviewsService {
           throw new HttpError(409, 'review_open', 'the agent already has an open review', {
             reviewId: existing.id,
           });
+        // Open, withdraw, repeat must not pile up holds without bound (#356): an administrator
+        // releases abandoned ones with `clear-hold`.
+        const [held] = await tx
+          .select({ n: count() })
+          .from(agentReviews)
+          .where(
+            and(
+              eq(agentReviews.agentId, agent.id),
+              inArray(agentReviews.status, ['withdrawn', 'rejected']),
+              sql`not exists (select 1 from ${agentReviewHoldClears} c where c.review_id = ${agentReviews.id})`,
+            ),
+          );
+        if (Number(held?.n ?? 0) >= MAX_UNCLEARED_CLOSED_REVIEWS)
+          throw new HttpError(
+            429,
+            'review_hold_limit',
+            `this agent has ${MAX_UNCLEARED_CLOSED_REVIEWS} withdrawn or rejected reviews that no administrator released; an administrator has to release them (clear-hold) first`,
+          );
         const head = await ensureHead(tx, agent, (r) => this.auditRevision(tx, agent, r, true));
         const policy = await this.policy.effectiveFor(node, tx);
         const { binding } = this.bindingOf(agent, head.source, head.digest, policy, catalog);
@@ -864,7 +886,12 @@ export class AgentReviewsService {
       if (input.decision === 'reject') {
         await tx
           .update(agentReviews)
-          .set({ status: 'rejected', closedAt: now, closedBy: p.userId })
+          .set({
+            status: 'rejected',
+            closedAt: now,
+            closedBy: p.userId,
+            closedRevisionId: agent.draftRevisionId,
+          })
           .where(eq(agentReviews.id, review.id));
         await this.audit.append(
           {
@@ -960,7 +987,12 @@ export class AgentReviewsService {
         throw new HttpError(409, 'review_closed', `the review is ${review.status}`);
       await tx
         .update(agentReviews)
-        .set({ status: 'withdrawn', closedAt: this.ctx.now(), closedBy: p.userId })
+        .set({
+          status: 'withdrawn',
+          closedAt: this.ctx.now(),
+          closedBy: p.userId,
+          closedRevisionId: locked.draftRevisionId,
+        })
         .where(eq(agentReviews.id, reviewId));
       await this.audit.append(
         {
@@ -975,6 +1007,84 @@ export class AgentReviewsService {
       return locked;
     });
     return this.get(p, reviewId).then((v) => ({ ...v, agentId: agent.id }));
+  }
+
+  // ------------------------------------------------------------------ clear hold
+
+  /**
+   * Releases a withdrawn or rejected review from the policy-loosening hold (#356). Needs an
+   * administrator of the agent's node who is not a contributor of the review and whose own authority
+   * does not come from one (the same chain as the loosening guard). Audited as
+   * `agent.review.hold_cleared`; the row is append-only.
+   */
+  async clearHold(
+    p: Principal,
+    reviewId: string,
+    reason: string,
+  ): Promise<{ reviewId: string; clearedBy: string; clearedAt: Date }> {
+    const { agent: foundAgent } = await this.loadReview(p, reviewId);
+    return this.ctx.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      const node = await this.nodeOf(tx, foundAgent.tenantId);
+      await lockTreeShared(tx, node.rootId);
+      await lockBindings(tx, node.rootId);
+      const locked = await lockAgent(tx, foundAgent.id);
+      if (!isTenantAdminAt(await loadActor(tx, p), node, this.ctx.now()))
+        throw forbidden("only an administrator of the agent's tenant can release a hold");
+      const [review] = await tx
+        .select()
+        .from(agentReviews)
+        .where(eq(agentReviews.id, reviewId))
+        .for('update');
+      if (!review || review.tenantId !== p.tenantId) throw notFound('review');
+      if (review.status !== 'withdrawn' && review.status !== 'rejected')
+        throw new HttpError(
+          409,
+          'not_held',
+          `the review is ${review.status}; only a withdrawn or rejected review is held`,
+        );
+      const [done] = await tx
+        .select()
+        .from(agentReviewHoldClears)
+        .where(eq(agentReviewHoldClears.reviewId, reviewId));
+      if (done) throw new HttpError(409, 'not_held', 'the hold was already released');
+      const chain = await followGrantChain(
+        tx,
+        [{ userId: p.userId, unknown: false }],
+        this.ctx.now(),
+      );
+      const mine = new Set([p.userId, ...chain.users]);
+      const head = await reviewHeadOf(tx, locked, review);
+      const contributors = head ? (await reviewContributors(tx, locked, review, head)).set : null;
+      const untraceable = chain.unknown && this.ctx.config.lifecycle.unknownGrantor !== 'allow';
+      // A review whose head cannot be read cannot be shown to be free of the caller; a platform
+      // operator may still release it (the way out of an unreadable head, #356).
+      const unreadableButOperator = contributors === null && p.platformAdmin;
+      if (
+        !unreadableButOperator &&
+        (contributors === null || untraceable || [...contributors].some((c) => mine.has(c)))
+      )
+        throw new HttpError(
+          403,
+          'hold_clear_by_contributor',
+          'you, or somebody your authority comes from, contributed to this review (or your authority cannot be traced); another administrator has to release the hold',
+        );
+      const clearedAt = this.ctx.now();
+      await tx
+        .insert(agentReviewHoldClears)
+        .values({ reviewId, clearedBy: p.userId, clearedAt, reason });
+      await this.audit.append(
+        {
+          actor: p.userId,
+          tenantId: locked.tenantId,
+          action: 'agent.review.hold_cleared',
+          target: locked.id,
+          payload: { review: reviewId, status: review.status },
+        },
+        tx,
+      );
+      return { reviewId, clearedBy: p.userId, clearedAt };
+    });
   }
 
   // ------------------------------------------------------------------ shadow publish

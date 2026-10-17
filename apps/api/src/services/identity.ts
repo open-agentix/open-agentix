@@ -42,6 +42,7 @@ import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { Db } from '../db/client.js';
 import type { AuditService } from './audit.js';
 import { BindingReconciler } from './binding-reconciler.js';
+import { chainForGrant } from './grant-chain.js';
 import {
   currentAuthzEpoch,
   loadAuthzEpoch,
@@ -455,6 +456,7 @@ export class IdentityService {
         ).map((r) => [`${r.userId}|${r.role}`, r] as const),
       );
       await tx.delete(agentRoleBindings).where(eq(agentRoleBindings.agentId, agentId));
+      const actorChain = await chainForGrant(tx as unknown as Db, actor.userId, this.ctx.now());
       if (members.length)
         await tx
           .insert(agentRoleBindings)
@@ -468,6 +470,10 @@ export class IdentityService {
                 : grantorOf(actor.userId),
               // a membership that stays keeps an unknown grantor unknown; a new one is known
               grantorUnknown: kept.get(`${m.userId}|${m.role}`)?.grantorUnknown ?? false,
+              // ... and its stored chain; a new one gets the chain of the actor (rule A4, #356)
+              grantChain: kept.has(`${m.userId}|${m.role}`)
+                ? kept.get(`${m.userId}|${m.role}`)!.grantChain
+                : (actorChain ?? null),
             })),
           )
           .onConflictDoNothing();
@@ -897,16 +903,37 @@ export class IdentityService {
           .from(teams)
           .where(and(inArray(teams.slug, slugs), eq(teams.tenantId, tenantId)))
       : [];
-    await this.ctx.db.delete(teamMembers).where(eq(teamMembers.userId, id));
-    const values = mapped
-      .filter((m) => m.teamSlug)
-      .map((m) => ({
-        teamId: teamRows.find((t) => t.slug === m.teamSlug)?.id,
-        userId: id,
-        role: m.role,
-      }))
-      .filter((v): v is { teamId: string; userId: string; role: Role } => !!v.teamId);
-    if (values.length) await this.ctx.db.insert(teamMembers).values(values).onConflictDoNothing();
+    // The login rewrites the memberships from the group mapping. A membership that stays keeps who
+    // granted it (an administrator may have set it through `team.members.set`): the rewrite must not
+    // turn it into one nobody granted (rule A4, #356). Only a membership the mapping adds is nobody's.
+    // Read, delete and insert are one transaction under the binding lock, like every other writer of
+    // a grantor (a concurrent `team.members.set` must not be lost between the read and the insert).
+    await this.ctx.db.transaction(async (t) => {
+      const tx = t as unknown as Db;
+      const [home] = await tx.select().from(tenants).where(eq(tenants.id, tenantId));
+      if (home) {
+        await lockTreeShared(tx, home.rootId);
+        await lockBindings(tx, home.rootId);
+      }
+      const previous = await tx.select().from(teamMembers).where(eq(teamMembers.userId, id));
+      await tx.delete(teamMembers).where(eq(teamMembers.userId, id));
+      const values = mapped
+        .filter((m) => m.teamSlug)
+        .map((m) => {
+          const teamId = teamRows.find((r) => r.slug === m.teamSlug)?.id;
+          const kept = previous.find((r) => r.teamId === teamId && r.role === m.role);
+          return {
+            teamId,
+            userId: id,
+            role: m.role,
+            grantedBy: kept?.grantedBy ?? null,
+            grantorUnknown: kept?.grantorUnknown ?? false,
+            grantChain: kept?.grantChain ?? null,
+          };
+        })
+        .filter((v): v is typeof v & { teamId: string } => !!v.teamId);
+      if (values.length) await tx.insert(teamMembers).values(values).onConflictDoNothing();
+    });
     const [row] = await this.ctx.db.select().from(users).where(eq(users.id, id));
     return row!;
   }
@@ -1074,6 +1101,11 @@ export class IdentityService {
         tenantId: actor.tenantId,
         // rule A4 of ADR 0017: an account a contributor made counts as contributor-made
         createdBy: grantorOf(actor.userId),
+        // every link the creation depends on, stored now; it survives the deletion or revocation of
+        // any of them (#356). No account behind the actor (a system actor) = nobody made it.
+        grantChain:
+          (await chainForGrant(tx as unknown as Db, actor.userId, this.ctx.now())) ?? null,
+        creatorUnknown: false,
       });
       await mirrorGlobalRoles(
         tx as unknown as Db,
@@ -1343,6 +1375,7 @@ export class IdentityService {
         ),
       );
       await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
+      const actorChain = await chainForGrant(tx as unknown as Db, actor.userId, this.ctx.now());
       if (members.length)
         await tx
           .insert(teamMembers)
@@ -1356,6 +1389,10 @@ export class IdentityService {
                 : grantorOf(actor.userId),
               // a membership that stays keeps an unknown grantor unknown; a new one is known
               grantorUnknown: kept.get(`${m.userId}|${m.role}`)?.grantorUnknown ?? false,
+              // ... and its stored chain; a new one gets the chain of the actor (rule A4, #356)
+              grantChain: kept.has(`${m.userId}|${m.role}`)
+                ? kept.get(`${m.userId}|${m.role}`)!.grantChain
+                : (actorChain ?? null),
             })),
           )
           .onConflictDoNothing();

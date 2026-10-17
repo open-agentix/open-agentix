@@ -20,7 +20,8 @@ const uuidOr = (v: string): string | null => (UUID.test(v) ? v : null);
 export async function reviewContributors(
   db: Db,
   agent: AgentRow,
-  review: Pick<ReviewRow, 'openedBy' | 'baseVersionId'>,
+  review: Pick<ReviewRow, 'openedBy' | 'baseVersionId'> &
+    Partial<Pick<ReviewRow, 'status' | 'closedAt'>>,
   head: RevisionRow,
 ): Promise<{ set: Set<string>; unknownAuthor: boolean; base: VersionRow | null }> {
   let base: VersionRow | null = null;
@@ -66,6 +67,10 @@ export async function reviewContributors(
           eq(auditLog.target, agent.id),
           inArray(auditLog.action, ['agent.created', 'agent.draft.updated']),
           base ? gt(auditLog.ts, base.publishedAt) : undefined,
+          // the window of a closed review ends when it closed (#356)
+          review.status && review.status !== 'open' && review.closedAt
+            ? lte(auditLog.ts, review.closedAt)
+            : undefined,
         ),
       );
     fallback = [...new Set(rows.map((r) => uuidOr(r.actor)).filter((x): x is string => !!x))];
@@ -77,4 +82,22 @@ export async function reviewContributors(
     agentCreator: agent.createdBy,
   });
   return { set, unknownAuthor, base };
+}
+
+/**
+ * The head a review is judged at: the current head of the agent while it is open, the revision that was
+ * the head when it was withdrawn or rejected afterwards (`closed_revision_id`; #356), so that people who
+ * edit the agent later do not become contributors of an old, held review. A closed review without a
+ * recorded revision (nothing existed then) falls back to the current head.
+ */
+export async function reviewHeadOf(
+  db: Db,
+  agent: Pick<AgentRow, 'draftRevisionId'>,
+  review: Pick<ReviewRow, 'status' | 'closedRevisionId'>,
+): Promise<RevisionRow | undefined> {
+  if (review.status !== 'open' && review.closedRevisionId) {
+    const closed = await revisionById(db, review.closedRevisionId);
+    if (closed) return closed;
+  }
+  return agent.draftRevisionId ? revisionById(db, agent.draftRevisionId) : undefined;
 }

@@ -26,6 +26,7 @@ import {
   users,
 } from '../db/schema.js';
 import { HttpError } from '../errors.js';
+import { chainForGrant } from './grant-chain.js';
 
 /**
  * Persistence of tenant role bindings (ADR 0014 section 4), slices S1 and S4.
@@ -98,6 +99,12 @@ export async function mirrorGlobalRoles(
     grantedBy && UUID.test(grantedBy)
       ? sql<string | null>`(select id from users where id = ${grantedBy})`
       : null;
+  // The chain of the grant (ADR 0017 rule A4, #356): `undefined` = nobody (no account granted it),
+  // `null` = a grantor whose own chain cannot be established (stored as no chain: unknown).
+  const chain =
+    opts.grantorUnknown === true || !grantedBy || !UUID.test(grantedBy)
+      ? undefined
+      : await chainForGrant(db, grantedBy, new Date());
   const inserted = await db
     .insert(tenantRoleBindings)
     .values(
@@ -109,6 +116,7 @@ export async function mirrorGlobalRoles(
         inherit: false,
         source: 'mirror' as const,
         grantedBy: by,
+        grantChain: chain ?? null,
         // `granted_by is null` alone means "nobody granted it" (identity provider, bootstrap); a
         // caller that cannot say who did (the reconcile) marks the row unknown instead.
         grantorUnknown: opts.grantorUnknown === true,

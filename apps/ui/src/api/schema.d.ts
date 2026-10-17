@@ -3666,6 +3666,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/reviews/{id}/clear-hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release a withdrawn or rejected review from the policy-loosening hold
+         * @description A withdrawn or rejected review keeps blocking `policy_loosening_by_contributor` for its contributors (and the accounts whose authority comes from them) until an administrator releases it here. Needs an administrator of the agent's tenant who is not a contributor of the review and whose own authority does not come from one (`403 hold_clear_by_contributor`); `409 not_held` for an open or published review or one already released. Audited as `agent.review.hold_cleared`. An agent with 25 unreleased withdrawn or rejected reviews cannot open another (`429 review_hold_limit`).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description why the hold is released (kept in the hold record) */
+                        reason: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            reviewId: string;
+                            /** Format: uuid */
+                            clearedBy: string;
+                            clearedAt: string;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tenants/{id}/settings/agent-lifecycle": {
         parameters: {
             query?: never;
@@ -3796,7 +3898,7 @@ export interface paths {
         head?: never;
         /**
          * Change the agent lifecycle policy of a tenant
-         * @description Send the keys to change; `null` removes a value (the node then inherits). Needs `settings:write` on the node. Narrowing only: below a parent a value that would make the effective policy looser than the parent's is refused with `422 not_narrowing` and the keys named (the root of an organisation chooses freely). A change that loosens the effective policy is refused with `403 policy_loosening_by_contributor` when the caller contributed to an open review in the subtree (another administrator makes it); an open review is judged by the stricter of its own snapshot and the current policy. Keys that do not exist, `breakGlass*` and `approverBindingMinAgeHours` included, are 400. Audited as `tenant.lifecycle_policy_changed`.
+         * @description Send the keys to change; `null` removes a value (the node then inherits). Needs `settings:write` on the node. Narrowing only: below a parent a value that would make the effective policy looser than the parent's is refused with `422 not_narrowing` and the keys named (the root of an organisation chooses freely). A change that loosens the effective policy is refused with `403 policy_loosening_by_contributor` when the caller, or somebody the caller's authority comes from (the account that made them, the grantors of their administrator bindings), contributed to an unfinished review in the subtree: open, or withdrawn or rejected with nothing published for the agent since; more unfinished reviews than can be checked are refused too (another administrator makes it); an open review is judged by the stricter of its own snapshot and the current policy. Keys that do not exist, `breakGlass*` and `approverBindingMinAgeHours` included, are 400. Audited as `tenant.lifecycle_policy_changed`.
          */
         patch: {
             parameters: {
@@ -11129,7 +11231,7 @@ export interface paths {
         put?: never;
         /**
          * Move a tenant and its subtree below another parent of the same organisation
-         * @description ADR 0014 section 7 (slice S10) and ADR 0013 section 9.1. Needs an **inheriting** `admin` binding (without use case) that covers the tenant, its old parent and the new parent, or platform operator access (403 `inheritance_required` for a direct admin); the mover therefore gains no coverage it did not have. Both tenants must be visible to the caller (404 otherwise, the same as for an id that does not exist). Refused: an organisation root (403 `move_not_allowed`, 422 `move_not_supported` for operators), another organisation (422 `move_not_supported`), the tenant itself or a descendant as parent (422 `move_cycle`), the current parent (409 `move_noop`), a depth above the limit (422 `tenant_depth_exceeded`), a parent below a node with a monthly budget (403 `budget_capped`, operators excepted), leaving a node whose role restrictions narrow bindings inside the subtree without the authority to lift them (403 `restriction_removal_forbidden`, whatever the role: also for a role nobody holds yet), or loosening the agent lifecycle policy (ADR 0017) that applies inside the subtree because the ancestors that set it are left behind (403 `policy_widening_forbidden`; the widened keys are listed as `policiesWidened`). Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 `role_bindings_read_required`). Bindings on the moved tenants move with them; bindings inherited from the old ancestors stop, those inheriting from the new ancestors start; restrictions of the old ancestors stop narrowing the bindings inside, those of the new ancestors start. The tenant is detached from its use case (re-attach with PATCH). `dryRun: true` runs every check and lists the users the caller may see who gain or lose permissions inside the subtree (at most 100, computed with the resolver of the request path); users outside the caller's visible set are not listed. The applied move runs under the exclusive tree lock of the organisation, bumps its authz epoch (every cached principal is rebuilt on its next request) and is audited as `tenant.moved` in the partitions of the tenant, the old and the new parent (ids only). Open event streams keep the authorisation they were opened with until they end.
+         * @description ADR 0014 section 7 (slice S10) and ADR 0013 section 9.1. Needs an **inheriting** `admin` binding (without use case) that covers the tenant, its old parent and the new parent, or platform operator access (403 `inheritance_required` for a direct admin); the mover therefore gains no coverage it did not have. Both tenants must be visible to the caller (404 otherwise, the same as for an id that does not exist). Refused: an organisation root (403 `move_not_allowed`, 422 `move_not_supported` for operators), another organisation (422 `move_not_supported`), the tenant itself or a descendant as parent (422 `move_cycle`), the current parent (409 `move_noop`), a depth above the limit (422 `tenant_depth_exceeded`), a parent below a node with a monthly budget (403 `budget_capped`, operators excepted), leaving a node whose role restrictions narrow bindings inside the subtree without the authority to lift them (403 `restriction_removal_forbidden`, whatever the role: also for a role nobody holds yet), or loosening the agent lifecycle policy (ADR 0017) that applies inside the subtree because the ancestors that set it are left behind (403 `policy_widening_forbidden`; the widened keys are listed as `policiesWidened`). A move that widens the policy is a loosening: it is also refused with 403 `policy_loosening_by_contributor` when the caller, or somebody the caller's authority comes from, contributed to an unfinished review in the moved subtree (dry runs included). Only with `OAX_ROLE_BINDINGS_READ=bindings` (409 `role_bindings_read_required`). Bindings on the moved tenants move with them; bindings inherited from the old ancestors stop, those inheriting from the new ancestors start; restrictions of the old ancestors stop narrowing the bindings inside, those of the new ancestors start. The tenant is detached from its use case (re-attach with PATCH). `dryRun: true` runs every check and lists the users the caller may see who gain or lose permissions inside the subtree (at most 100, computed with the resolver of the request path); users outside the caller's visible set are not listed. The applied move runs under the exclusive tree lock of the organisation, bumps its authz epoch (every cached principal is rebuilt on its next request) and is audited as `tenant.moved` in the partitions of the tenant, the old and the new parent (ids only). Open event streams keep the authorisation they were opened with until they end.
          */
         post: {
             parameters: {

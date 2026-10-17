@@ -140,6 +140,16 @@ export const ReviewListSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 
+export const ClearHoldBody = z.object({
+  reason: z.string().min(1).max(500).describe('why the hold is released (kept in the hold record)'),
+});
+
+export const ClearHoldResultSchema = z.object({
+  reviewId: Id,
+  clearedBy: Id,
+  clearedAt: z.string(),
+});
+
 export const DecisionBody = z.object({
   decision: DecisionKindSchema,
   expectedDigest: Digest.describe('the digest of the revision you looked at (`revision.digest`)'),
