@@ -15,6 +15,7 @@ import { HttpError, notFound } from '../errors.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
+import type { DevRunGate } from './dev-run-gate.js';
 import { BUDGET_LIMITS, BUDGET_SCOPES, closed } from '../metric-labels.js';
 import { recordStepMetric, type ProviderLabelResolver } from './step-metrics.js';
 import { writeStepRows, type LedgerExtras, type StepMetric } from './step-writer.js';
@@ -301,7 +302,27 @@ export class ModelAccountingService {
    * One transaction under a per-tenant advisory lock: concurrent reservations of a tenant queue up
    * behind each other, so the sum of settled and reserved cost of any scope never exceeds its limit.
    */
+  /** The checks of a development run (policy, starter); set by `createServices`. */
+  devGate: DevRunGate | undefined;
+
+  /** A development run stops getting model calls once its policy or its starter changes. */
+  private async assertDevRunActive(scope: AccountingScope, runId: string): Promise<void> {
+    if (!this.devGate) return;
+    const [run] = await this.ctx.db
+      .select({
+        stage: runs.stage,
+        startedBy: runs.startedBy,
+        tenantId: runs.tenantId,
+        teamId: runs.teamId,
+        agentId: runs.agentId,
+      })
+      .from(runs)
+      .where(and(eq(runs.id, runId), eq(runs.tenantId, scope.tenantId)));
+    if (run) await this.devGate.assertActive(run);
+  }
+
   async reserve(scope: AccountingScope, req: ReserveRequest): Promise<Reservation> {
+    await this.assertDevRunActive(scope, req.runId);
     if (!isCount(req.inputTokens) || !isCount(req.maxOutputTokens) || req.maxOutputTokens < 1) {
       throw new HttpError(400, 'model_request_invalid', 'token bounds must be positive integers');
     }

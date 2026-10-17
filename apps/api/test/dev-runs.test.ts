@@ -104,13 +104,14 @@ async function personal(user: string, name: string, v: string, extra: Json = {})
 interface Agent {
   id: string;
   name: string;
+  creds: string[];
 }
-const source = (name: string, creds: string[], extra = '') => `---
+const source = (name: string, creds: string[], extra = '', owner = 'nobody') => `---
 apiVersion: openagentix.io/v1alpha1
 kind: AgentPipeline
 name: ${name}
 version: 1.0.0
-owner: nobody
+owner: ${owner}
 runtime:
   runner: container
   egress: [jira.example.org]
@@ -123,13 +124,20 @@ agents:
 ${creds.length ? `    credentials:\n${creds.map((c, i) => `      - { secret: ${c}, env: CRED_${i} }`).join('\n')}` : ''}
 ---
 `;
-async function newAgent(creds: string[], by = 'author'): Promise<Agent> {
+async function newAgent(creds: string[], by = 'author', owner = 'nobody'): Promise<Agent> {
   const name = `dv-agent-${++seq}`;
-  const res = await api(tok[by]!, 'POST', '/v1/agents', { source: source(name, creds) });
+  const res = await api(tok[by]!, 'POST', '/v1/agents', { source: source(name, creds, '', owner) });
   expect(res.statusCode, res.body).toBe(201);
-  return { id: j(res).id, name };
+  return { id: j(res).id, name, creds };
 }
 
+/** A new revision of the draft by this user (they become its author). */
+async function editDraft(user: string, a: Agent, note: string) {
+  const res = await api(tok[user]!, 'PUT', `/v1/agents/${a.id}/draft`, {
+    source: source(a.name, a.creds, `\n    # ${note}`),
+  });
+  expect(res.statusCode, res.body).toBe(200);
+}
 const devRun = (user: string, a: Agent, payload: Json = { data: { go: true } }) =>
   api(tok[user]!, 'POST', `/v1/agents/${a.id}/dev-runs`, payload);
 const running = (runId: string) =>
@@ -462,25 +470,40 @@ describe('personal secrets in development runs', () => {
     expect(JSON.stringify(await n.ctx.db.select().from(auditLog))).not.toContain(v);
   });
 
-  it('are not resolvable by another user, also not by a reviewer who runs the same draft', async () => {
+  it('are not resolvable by another user: a peer or a reviewer who runs the draft of the author gets nothing', async () => {
     const v = value('only-author');
     await personal('author', 'only-author', v);
+    const theirs = value('peer-own');
+    await personal('peer', 'only-author', theirs);
+    await personal('rev', 'only-author', value('rev-own'));
     const a = await newAgent(['personal:only-author']);
     for (const other of ['peer', 'rev']) {
       const { runId, res } = await devIssue(other, a);
       expect(res.statusCode, `${other}: ${res.body}`).toBe(403);
-      expect(res.body).toContain('secret_not_found');
+      expect(res.body).toContain('secret_scope_not_usable');
       expect(res.body).not.toContain(v);
+      expect(res.body).not.toContain(theirs);
       expect(await auditOf('secret.access_denied', runId)).toMatchObject([
-        { ref: 'personal:only-author', code: 'secret_not_found', stage: 'development' },
+        { ref: 'personal:only-author', code: 'secret_scope_not_usable', stage: 'development' },
       ]);
     }
-    // a reviewer with a personal secret of the same name uses their own
-    const theirs = value('reviewers-own');
-    await personal('rev', 'only-author', theirs);
-    const { res } = await devIssue('rev', a);
-    expect(values(res)).toEqual([theirs]);
-    expect(values(res)).not.toContain(v);
+    // the author's own run gets the author's secret
+    expect(values((await devIssue('author', a)).res)).toEqual([v]);
+  });
+
+  it('go to somebody else only after they edited the draft: then the run is theirs and uses their own secret', async () => {
+    const v = value('author-secret');
+    await personal('author', 'swap', v);
+    const theirs = value('reviewer-secret');
+    await personal('rev', 'swap', theirs);
+    const a = await newAgent(['personal:swap']);
+    await editDraft('rev', a, 'reviewer edit');
+    const own = await devIssue('rev', a);
+    expect(values(own.res)).toEqual([theirs]);
+    // the author now runs a revision the reviewer wrote: refused, the reviewer's code gets no credential
+    const back = await devIssue('author', a);
+    expect(back.res.statusCode).toBe(403);
+    expect(back.res.body).not.toContain(v);
   });
 
   it('are never issued to a run of a published version, whoever starts it', async () => {
@@ -564,7 +587,7 @@ describe('personal secrets in development runs', () => {
   it('stop for a person who lost agents:write (secret_owner_unavailable), and come back with the role', async () => {
     const v = value('role-loss');
     const sid = await personal('peer', 'role-loss', v);
-    const a = await newAgent(['personal:role-loss']);
+    const a = await newAgent(['personal:role-loss'], 'peer');
     const start = await devRun('peer', a);
     const runId = j(start).id as string;
     await running(runId);
@@ -573,23 +596,27 @@ describe('personal secrets in development runs', () => {
     const nodeAgent = await newAgent(['tenant:role-loss-node'], 'rev');
     const nodeRun = j(await devRun('peer', nodeAgent)).id as string;
     await running(nodeRun);
+    const roleToken = (await session(runId)).token;
+    const nodeToken = (await session(nodeRun)).token;
     const patched = await api(tok['dv-a']!, 'PATCH', `/v1/users/${uid['peer']}`, {
       globalRoles: ['auditor'],
     });
     expect(patched.statusCode, patched.body).toBe(200);
     try {
-      const res = await credentials(runId, (await session(runId)).token);
+      const res = await credentials(runId, roleToken);
       expect(res.statusCode, res.body).toBe(403);
-      expect(res.body).toContain('secret_owner_unavailable');
+      expect(res.body).toContain('dev_run_not_permitted');
       expect(res.body).not.toContain(v);
-      expect(await auditOf('secret.access_denied', runId)).toMatchObject([
-        { code: 'secret_owner_unavailable' },
-      ]);
       // the run acts as its starter: secrets of the node are not issued to it either
-      const nodeRes = await credentials(nodeRun, (await session(nodeRun)).token);
+      const nodeRes = await credentials(nodeRun, nodeToken);
       expect(nodeRes.statusCode, nodeRes.body).toBe(403);
-      expect(nodeRes.body).toContain('secret_owner_unavailable');
+      expect(nodeRes.body).toContain('dev_run_not_permitted');
       expect(nodeRes.body).not.toContain(nodeValue);
+      // the broker refuses on its own as well (second wall)
+      const row = (await n.ctx.db.select().from(runs).where(eq(runs.id, runId)))[0]!;
+      await expect(
+        n.services.runNodes.scoped!.prepare(row, ['personal:role-loss'], { destinations: [] }),
+      ).rejects.toMatchObject({ code: 'secret_owner_unavailable' });
       // the secret is kept, and its owner can still delete it without the role
       const mine = await n.ctx.db.select().from(secrets).where(eq(secrets.id, sid));
       expect(mine).toHaveLength(1);
@@ -618,6 +645,7 @@ describe('personal secrets in development runs', () => {
     const queued = j(await devRun('leaver', a));
     const going = j(await devRun('leaver', a));
     await running(going.id);
+    const goingToken = (await session(going.id)).token;
     const off = await api(tok['dv-a']!, 'PATCH', `/v1/users/${uid['leaver']}`, { disabled: true });
     expect(off.statusCode, off.body).toBe(200);
     expect(
@@ -632,7 +660,7 @@ describe('personal secrets in development runs', () => {
       (await n.ctx.db.select().from(runs).where(eq(runs.id, going.id)))[0]!.cancelRequested,
     ).toBe(true);
     // nothing is issued from a disabled account, and enabling it again does not restore the secret
-    const res = await credentials(going.id, (await session(going.id)).token);
+    const res = await credentials(going.id, goingToken);
     expect(res.statusCode).toBe(403);
     expect(res.body).not.toContain(v);
     await api(tok['dv-a']!, 'PATCH', `/v1/users/${uid['leaver']}`, { disabled: false });
@@ -759,17 +787,209 @@ describe('side effects and bookkeeping', () => {
     await personal('author', 'apart', mine);
     await personal('peer', 'apart', theirs);
     const a = await newAgent(['personal:apart']);
-    const first = await devRun('author', a);
-    const second = await devRun('peer', a);
-    for (const [r, expected] of [
-      [first, mine],
-      [second, theirs],
-    ] as const) {
-      const runId = j(r).id as string;
-      await running(runId);
-      const res = await credentials(runId, (await session(runId)).token);
-      expect(values(res)).toEqual([expected]);
+    const first = j(await devRun('author', a));
+    await running(first.id);
+    expect(values(await credentials(first.id, (await session(first.id)).token))).toEqual([mine]);
+    await finish(first.id);
+    await editDraft('peer', a, 'peer edit');
+    const second = j(await devRun('peer', a));
+    await running(second.id);
+    expect(values(await credentials(second.id, (await session(second.id)).token))).toEqual([
+      theirs,
+    ]);
+    await finish(second.id);
+  });
+});
+
+describe('who may start a development run (resource-scoped access)', () => {
+  it('needs agents:write on the team of the agent, not just somewhere', async () => {
+    await mkUser('teamer', 'dv-a', ['viewer']);
+    const mkTeam = async (slug: string) => {
+      const res = await api(tok['dv-a']!, 'POST', '/v1/teams', { slug, name: slug });
+      expect(res.statusCode, res.body).toBe(201);
+      return j(res).id as string;
+    };
+    const teamA = await mkTeam('dv-team-a');
+    await mkTeam('dv-team-b');
+    const put = await api(tok['dv-a']!, 'PUT', `/v1/teams/${teamA}/members`, {
+      members: [{ userId: uid['teamer'], role: 'agent-developer' }],
+    });
+    expect(put.statusCode, put.body).toBe(204);
+    tok['teamer'] = await n.login('teamer@dv.example.org', PW);
+    const inA = await newAgent([], 'dv-a', 'dv-team-a');
+    const inB = await newAgent([], 'dv-a', 'dv-team-b');
+    // the agent of the other team is readable but not writable for this person
+    const denied = await devRun('teamer', inB);
+    expect(denied.statusCode, denied.body).toBe(403);
+    expect(await n.ctx.db.select().from(runs).where(eq(runs.agentId, inB.id))).toHaveLength(0);
+    const ok = await devRun('teamer', inA);
+    expect(ok.statusCode, ok.body).toBe(202);
+    await finish(j(ok).id);
+  });
+});
+
+describe('a development run stops when its starter or the policy changes', () => {
+  const reserve = (runId: string) =>
+    n.services.modelAccounting.reserve(
+      { tenantId: id['dv-a']! },
+      { runId, agentId: 'research', inputTokens: 10, maxOutputTokens: 10 },
+    );
+  const code = async (p: Promise<unknown>) =>
+    p.then(
+      () => undefined,
+      (e: { code?: string }) => e.code,
+    );
+
+  it('refuses a claim and a model reservation after the starter lost agents:write, and cancels queued runs', async () => {
+    await mkUser('roler', 'dv-a', ['agent-developer']);
+    const a = await newAgent([], 'roler');
+    const queued = j(await devRun('roler', a)).id as string;
+    const going = j(await devRun('roler', a)).id as string;
+    await running(going);
+    expect(await code(n.services.control.prepare(going))).toBeUndefined();
+    const patched = await api(tok['dv-a']!, 'PATCH', `/v1/users/${uid['roler']}`, {
+      globalRoles: ['auditor'],
+    });
+    expect(patched.statusCode, patched.body).toBe(200);
+    expect(await code(n.services.control.prepare(going))).toBe('dev_run_not_permitted');
+    expect(await code(reserve(going))).toBe('dev_run_not_permitted');
+    expect(await code(session(going))).toBe('dev_run_not_permitted');
+    expect((await n.ctx.db.select().from(runs).where(eq(runs.id, queued)))[0]!.status).toBe(
+      'cancelled',
+    );
+    await finish(going);
+  });
+
+  it('refuses a claim, a reservation and a session once the policy switches draft runs off', async () => {
+    const a = await newAgent([]);
+    const runId = j(await devRun('author', a)).id as string;
+    await running(runId);
+    await policy({ allowDraftRuns: 'off' });
+    try {
+      expect(await code(n.services.control.prepare(runId))).toBe('dev_run_not_permitted');
+      expect(await code(reserve(runId))).toBe('dev_run_not_permitted');
+      expect(await code(session(runId))).toBe('dev_run_not_permitted');
+    } finally {
+      await resetPolicy();
       await finish(runId);
     }
+  });
+
+  it('does not admit a run for an account that was disabled after the request was authenticated', async () => {
+    await mkUser('ghost', 'dv-a', ['agent-developer']);
+    const a = await newAgent([], 'ghost');
+    const principal = await n.services.identity.principalForUser(uid['ghost']!);
+    await api(tok['dv-a']!, 'PATCH', `/v1/users/${uid['ghost']}`, { disabled: true });
+    expect(await code(n.services.devRuns.start(principal, a.id, {}))).toBe('dev_run_not_permitted');
+    expect(await n.ctx.db.select().from(runs).where(eq(runs.agentId, a.id))).toHaveLength(0);
+  });
+});
+
+describe('credentials that are not scoped secrets count as production credentials', () => {
+  const legacyAgent = () => newAgent(['plain-legacy-ref']);
+
+  it('refuses a draft that references an operator secret, unless drafts may use production credentials', async () => {
+    const a = await legacyAgent();
+    const res = await devRun('author', a);
+    expect(res.statusCode, res.body).toBe(400);
+    expect(j(res)).toMatchObject({
+      error: 'production_credentials_in_draft',
+      details: { legacyReferences: ['plain-legacy-ref'] },
+    });
+    try {
+      await policy({ allowProductionSecretsInDraftRuns: true });
+      expect((await devRun('author', a)).statusCode).toBe(400);
+      await policy({ allowDraftRuns: 'on', allowProductionSecretsInDraftRuns: true });
+      const ok = await devRun('author', a);
+      expect(ok.statusCode, ok.body).toBe(202);
+      await finish(j(ok).id);
+    } finally {
+      await resetPolicy();
+    }
+  });
+
+  it('refuses to issue a legacy reference to a run admitted under a looser policy, and audits it', async () => {
+    const a = await legacyAgent();
+    await policy({ allowDraftRuns: 'on', allowProductionSecretsInDraftRuns: true });
+    let runId: string;
+    try {
+      runId = j(await devRun('author', a)).id as string;
+    } finally {
+      await resetPolicy();
+    }
+    await running(runId);
+    const res = await credentials(runId, (await session(runId)).token);
+    expect(res.statusCode, res.body).toBe(403);
+    expect(res.body).toContain('production_credentials_in_draft');
+    expect(await auditOf('secret.access_denied', runId)).toMatchObject([
+      { ref: 'plain-legacy-ref', code: 'production_credentials_in_draft', stage: 'development' },
+    ]);
+    await finish(runId);
+  });
+});
+
+describe('approvals of a development run', () => {
+  const approvalFor = async (runId: string) => {
+    const approvalId = await n.services.control.requestApproval(
+      runId,
+      'research',
+      { server: 'jira', tool: 'write_issue', args: { a: 1 } },
+      [],
+    );
+    const [row] = await n.ctx.db
+      .execute(sql`select approver_roles from approvals where id = ${approvalId}`)
+      .then((r) => (r as unknown as { rows: Json[] }).rows);
+    return { approvalId, roles: row!.approver_roles as string[] };
+  };
+  const decide = (user: string, approvalId: string) =>
+    api(tok[user]!, 'POST', `/v1/approvals/${approvalId}/decision`, { decision: 'approve' });
+
+  it('use the default approver roles whatever the draft says, and the starter cannot approve their own run', async () => {
+    await mkUser('adm2', 'dv-a', ['admin']);
+    const a = await newAgent([], 'adm2');
+    // the draft asks for its own approvers
+    const edit = await api(tok['adm2']!, 'PUT', `/v1/agents/${a.id}/draft`, {
+      source: source(a.name, [], '').replace(
+        'budget:',
+        'approvals: { approverRoles: [agent-developer], timeoutSeconds: 600 }\nbudget:',
+      ),
+    });
+    expect(edit.statusCode, edit.body).toBe(200);
+    const runId = j(await devRun('adm2', a)).id as string;
+    await running(runId);
+    const { approvalId, roles } = await approvalFor(runId);
+    expect(roles.sort()).toEqual(['admin', 'operator']);
+    const self = await decide('adm2', approvalId);
+    expect(self.statusCode, self.body).toBe(403);
+    expect(j(self).error).toBe('self_approval');
+    // somebody else with an approver role can
+    const other = await decide('dv-a', approvalId);
+    expect(other.statusCode, other.body).toBe(200);
+    await finish(runId);
+  });
+});
+
+describe('who can see a development run', () => {
+  it('shows it to its starter and to node administrators, not to other readers', async () => {
+    const a = await newAgent([]);
+    const runId = j(await devRun('author', a)).id as string;
+    const get = (user: string) => api(tok[user]!, 'GET', `/v1/runs/${runId}`);
+    // sanity: the same reader can read an ordinary run of that agent
+    await forgeVersion(a, []);
+    const prod = j(await api(tok['author']!, 'POST', `/v1/agents/${a.id}/runs`, { data: {} })).id;
+    expect((await api(tok['peer']!, 'GET', `/v1/runs/${prod}`)).statusCode).toBe(200);
+    expect((await get('author')).statusCode).toBe(200);
+    expect((await get('dv-a')).statusCode).toBe(200);
+    expect((await get('peer')).statusCode).toBe(404);
+    expect((await get('rev')).statusCode).toBe(404);
+    const ids = async (user: string) =>
+      ((await api(tok[user]!, 'GET', `/v1/runs?agentId=${a.id}`)).json().items as Json[]).map(
+        (r) => r.id,
+      );
+    expect(await ids('author')).toContain(runId);
+    expect(await ids('dv-a')).toContain(runId);
+    expect(await ids('peer')).not.toContain(runId);
+    expect((await api(tok['peer']!, 'GET', `/v1/runs/${runId}/steps`)).statusCode).toBe(404);
+    await finish(runId);
   });
 });

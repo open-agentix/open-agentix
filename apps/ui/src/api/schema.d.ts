@@ -13575,10 +13575,10 @@ export interface paths {
                                 /** @description alert thresholds (50, 80, 100) raised this month */
                                 alerts: number[];
                                 /**
-                                 * @description explicit: set by an administrator; default: 10 % of the monthly cap of the node; none: the node has neither, so development runs have no node limit
+                                 * @description explicit: set by an administrator; default: 10 % of the monthly cap of the node; platform: the node has neither a cap nor an explicit budget, so the platform default (OAX_DEV_BUDGET_DEFAULT_USD) applies
                                  * @enum {string}
                                  */
-                                source: "explicit" | "default" | "none";
+                                source: "explicit" | "default" | "platform";
                             } | null;
                             /** @description with scope=subtree: the budgets of every readable node of the subtree (the acting node included), ordered by slug path */
                             nodes?: {

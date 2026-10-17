@@ -12,13 +12,15 @@ import { createEvent, isCloudEvent, parseCloudEvent } from '@openagentix/events'
 import { and, count, eq, inArray, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
-import { agentDraftRevisions, devRunDefinitions, events, runs } from '../db/schema.js';
+import { agentDraftRevisions, devRunDefinitions, events, runs, users } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
 import { triggerLabel } from '../metric-labels.js';
 import type { AgentRow, AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
 import type { BudgetsService } from './budgets.js';
 import type { CatalogService } from './catalog.js';
+import type { DevRunGate } from './dev-run-gate.js';
+import { DEV_RUN_LOCK_NS } from './dev-run-lock.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
 
 /**
@@ -27,9 +29,6 @@ import type { LifecyclePolicyService } from './lifecycle-policy.js';
  * development budget of the node and the budget of the run itself.
  */
 export const MAX_ACTIVE_DEV_RUNS_PER_USER = 3;
-
-/** Advisory lock namespace that serialises the admission of one person's development runs. */
-const DEV_RUN_LOCK_NS = 734_213;
 
 /** The statuses in which a run still counts as active. */
 const ACTIVE = ['queued', 'running', 'awaiting_approval'];
@@ -62,6 +61,7 @@ export class DevRunsService {
     private readonly catalog: CatalogService,
     private readonly budgets: BudgetsService,
     private readonly policy: LifecyclePolicyService,
+    private readonly gate: DevRunGate,
   ) {}
 
   async start(principal: Principal, agentId: string, input: StartDevRunInput) {
@@ -78,6 +78,11 @@ export class DevRunsService {
       );
     const revision = await this.revisionOf(agent, input.revisionId);
     const definition = await this.definitionOf(principal, agent, revision.source);
+    await this.gate.assertNoProductionCredentials(definition, {
+      tenantId: agent.tenantId,
+      teamId: agent.teamId,
+      agentId: agent.id,
+    });
     await this.assertRoom(principal.userId);
     return this.admit(principal, agent, revision, definition, input.data);
   }
@@ -172,6 +177,13 @@ export class DevRunsService {
       await tx.execute(
         sql`select pg_advisory_xact_lock(${DEV_RUN_LOCK_NS}::int, hashtext(${principal.userId}))`,
       );
+      // The account may have been disabled since the request was authenticated.
+      const [account] = await tx
+        .select({ disabled: users.disabled })
+        .from(users)
+        .where(eq(users.id, principal.userId));
+      if (!account || account.disabled)
+        throw new HttpError(403, 'dev_run_not_permitted', 'the account is disabled');
       await this.assertRoom(principal.userId, tx);
       const eventRowId = randomUUID();
       await tx.insert(events).values({

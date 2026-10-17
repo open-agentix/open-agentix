@@ -38,6 +38,7 @@ import {
 } from './secret-broker.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
+import type { DevRunGate } from './dev-run-gate.js';
 import {
   appendNodeEvent,
   dispatchTraceContext,
@@ -117,6 +118,9 @@ export class RunNodesService {
    * `createServices`. Without it a step that declares a scoped reference is denied (fail closed).
    */
   scoped: ScopedSecretBroker | undefined;
+
+  /** The checks of a development run (policy, starter, credentials); set by `createServices`. */
+  devGate: DevRunGate | undefined;
 
   private readonly revokeListeners: ((s: { sessionId: string; runId: string }) => void)[] = [];
 
@@ -328,6 +332,7 @@ export class RunNodesService {
     const { run, definition } = await this.runContext(runId);
     if (!ACTIVE.includes(run.status) || run.lockedBy !== orchestratorId)
       throw new HttpError(409, 'invalid_state', 'run is not active for this worker');
+    await this.devGate?.assertActive(run);
     const agent = definition.agents.find((a) => a.id === req.agentId);
     if (!agent) throw new HttpError(400, 'validation_failed', `unknown agent "${req.agentId}"`);
     const cfg = this.ctx.config;
@@ -839,6 +844,20 @@ export class RunNodesService {
     const allowed = tenant?.secretRefs ?? [];
     // Legacy references (operator environment and files) keep today's rules exactly.
     const legacy = needs.refs.filter((r) => !isScopedRef(r));
+    if (run.stage === 'development' && this.devGate) {
+      await this.devGate.assertActive(run);
+      // Operator secrets and connection secrets are production credentials for a draft.
+      if (legacy.length > 0 && !(await this.devGate.allowsProductionCredentials(run.tenantId))) {
+        await this.auditDenied(
+          s,
+          run.tenantId,
+          legacy[0]!,
+          'production_credentials_in_draft',
+          run.stage,
+        );
+        return this.deny(s, agentId, 'production_credentials_in_draft', { refs: legacy });
+      }
+    }
     // Platform secrets (provider keys, event sources, platform connections) never reach a node.
     const platform = await this.platformSecretRefs();
     const platformHit = legacy.filter((r) => platform.has(canonicalSecretRef(r)));

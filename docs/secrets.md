@@ -98,7 +98,9 @@ agent, and nowhere else.
   personal secrets, so it never finds the author's (`secret_not_found` when they have none of that name).
 - `allowPersonalSecretsInDevRuns: false` (or `allowDraftRuns: off`) refuses them (`secret_scope_not_usable`).
 - The starter must still be entitled **at the moment of issuance**: the account active and `agents:write`
-  held on the agent. Otherwise nothing is issued to the run, of any scope (`secret_owner_unavailable`); the
+  held on the agent. The same check, with the policy, runs when a worker claims the run, at every model
+  reservation, node session and relayed call (`403 dev_run_not_permitted`), so a disabled account, a lost
+  role or `allowDraftRuns: off` stops a run that is already going. Otherwise nothing is issued to the run, of any scope (`secret_owner_unavailable`); the
   personal secrets are kept (a regained role brings them back) and their owner can still delete them while
   they hold `secrets:read` (deleting needs no `agents:write`; an owner left with no role at all cannot reach the
   route, and the secrets stay inert until the account is disabled).
@@ -117,6 +119,25 @@ agent, and nowhere else.
 | `production` | issued | refused (`secret_not_usable`), unless `allowDraftRuns: on` **and** `allowProductionSecretsInDraftRuns: true` |
 | `development` | refused (`secret_not_usable`) | issued |
 | `any` (default) | issued | issued |
+
+**Credentials that are not scoped secrets count as `production`.** Operator secrets (legacy references in
+`credentials`), the environment secrets of a stdio MCP connection, the static header secrets and the OAuth
+tokens of an HTTP MCP connection have no `usage`, so a development run is treated as asking for
+production credentials. They are refused with `400 production_credentials_in_draft` at admission (the
+draft names them), when a worker claims the run, at credential issuance
+(`production_credentials_in_draft`, audited as `secret.access_denied`) and on the relay
+(`mcp.relay.refused`, reason `development_credentials`), unless the policy lets drafts use production
+credentials (`allowDraftRuns: on` together with `allowProductionSecretsInDraftRuns`). A connection
+without secrets (`auth: none`) is not affected. Model provider keys are the platform's and are paid from
+the development budget. Connections get no `usage` field in this slice (a per-connection `usage` is in
+#376); a development run uses the same tool pins as a publish (the draft is expanded with the same
+catalog, so unreviewed tool definitions are refused as at publish, and `OAX_MCP_REQUIRE_TOOL_PIN` applies).
+
+**Personal secrets only for the author.** A personal secret is issued to a development run only if the
+starter **wrote the revision it executes**. Somebody who runs another person's draft (a peer, a reviewer)
+does not hand it their own personal credentials: the code is the author's, and an empty
+`allowedDestinations` means anywhere. They edit the draft first, which makes them its author. (A run of a
+revision whose author is not a user, such as an imported one, never gets a personal secret.)
 
 **Secrets of a higher node in a draft.** A published version can pin a tenant secret of an ancestor only under an
 approved review (`approval_required_for_foreign_secret`). A draft has no review, so a development run may use an
@@ -298,8 +319,8 @@ node X instead of node Y" (the digests carry it, the API does not render it yet)
   of unexpired sessions still use it. Watch the audit actions `secret.created`, `secret.rotated`,
   `secret.revoked` and `secret.deleted` (a rotation by an attacker with `secrets:write` is a credential
   swap): alert on them in the audit export. `secret.rotated` carries the new version only, never a value.
-- A development run is visible like any run (`runs:read`). Its credentials are redacted, but content a
-  personal credential let the run read is output of the run and visible to everybody who can read it.
+- A development run (steps, outputs, stream) is visible to its starter and to node administrators
+  (`settings:write`) only. Audit entries and approvals of the run are not filtered that way (#376).
 - The foreign-secret rule for drafts is an opt-in by the owner (`usage: development`); a root secret marked
   `development` is usable by every author in the organisation who can write an agent, without a review. Use
   `inherit: false`, `allowedDestinations` and narrow tokens for such secrets.

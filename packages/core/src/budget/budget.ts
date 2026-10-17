@@ -46,24 +46,26 @@ export function describeBudget(scope: UsageScope): string {
 /** Share of a node's monthly cap that development runs may spend until an admin sets a budget (ADR 0017 decision 9). */
 export const DEFAULT_DEV_BUDGET_SHARE = 0.1;
 
-export type DevBudgetSource = 'explicit' | 'default' | 'none';
+export type DevBudgetSource = 'explicit' | 'default' | 'platform';
 
 /**
- * The monthly budget of the development runs of a node: the explicit one an admin set, else 10 % of
- * the node's monthly cap, else none (a node without a cap and without an explicit development
- * budget has no development limit; the budget of each run still applies).
+ * The monthly budget of the development runs of a node. With a monthly cap on the node the budget is
+ * the explicit one an administrator set, never above the cap (development spend is outside the cap, so
+ * the budget may not be a way around it), else 10 % of the cap. Without a cap it is the explicit one,
+ * else the platform default (`OAX_DEV_BUDGET_DEFAULT_USD`): there is always a limit.
  */
 export function developmentBudget(
   explicitMicros: number | null,
   nodeCapMicros: number | null,
-): { limitMicros: number | null; source: DevBudgetSource } {
+  platformDefaultMicros: number,
+): { limitMicros: number; source: DevBudgetSource } {
+  if (nodeCapMicros !== null) {
+    if (explicitMicros !== null)
+      return { limitMicros: Math.min(explicitMicros, nodeCapMicros), source: 'explicit' };
+    return { limitMicros: Math.floor(nodeCapMicros * DEFAULT_DEV_BUDGET_SHARE), source: 'default' };
+  }
   if (explicitMicros !== null) return { limitMicros: explicitMicros, source: 'explicit' };
-  if (nodeCapMicros !== null)
-    return {
-      limitMicros: Math.floor(nodeCapMicros * DEFAULT_DEV_BUDGET_SHARE),
-      source: 'default',
-    };
-  return { limitMicros: null, source: 'none' };
+  return { limitMicros: platformDefaultMicros, source: 'platform' };
 }
 
 /**

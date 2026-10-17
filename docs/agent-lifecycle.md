@@ -495,6 +495,8 @@ POST /v1/agents/{id}/dev-runs   { "revisionId": "<optional>", "data": { ... } } 
 | Definition | frozen at admission (`dev_run_definitions`): the profiles are expanded then, a later save or catalog change does not widen a run that is going | the version |
 | Secrets | resolved live, see [`secrets.md`](secrets.md) | pinned at publish |
 | Budget | the development budget of the node, [`budgets.md`](budgets.md) | the normal budgets |
+| Approvals | the approver roles are the default (`operator`, `admin`), not the draft's `approvals.approverRoles`; the person who started the run cannot approve its tool calls (`403 self_approval`) | as published |
+| Visible to | the starter and node administrators (`settings:write`) | everybody with `runs:read` |
 | Side effects | no pull request delivery (`pull_request_not_in_development`); tools are real and go through the policy and approval gates as usual | as published |
 | Records | `run.queued`, `credential.issued`, `secret.access_denied` and `run.completed` carry `stage: development`; the run, the cost lines and the export say `development` | `production` |
 
@@ -503,6 +505,12 @@ draft_runs_disabled`; `development-credentials` (default) lets the run use secre
 or `any` and the starter's personal secrets; `on` with `allowProductionSecretsInDraftRuns` also lets it
 use secrets of usage `production`. `allowPersonalSecretsInDevRuns: false` takes the personal secrets
 away. The policy is read at every issuance, so tightening it affects runs that already started.
+
+The policy is read when a worker claims the run, at every model reservation, node session, credential
+issuance and relayed MCP call, not only at admission. A run that uses operator secrets or credentialed MCP
+connections is refused (`400 production_credentials_in_draft`) unless the policy lets drafts use production
+credentials, see [`secrets.md`](secrets.md). Changing a person's global roles to ones without
+`agents:write` cancels their queued development runs and asks the running ones to stop.
 
 Limits: a person can have at most three development runs queued or running (`429 dev_run_limit`); a
 disabled agent refuses them (`409 agent_disabled`); the draft is validated, its runner checked and its
@@ -517,8 +525,7 @@ are cancelled, running ones are asked to stop.
   resolution are S4 ([`secrets.md`](secrets.md)); development runs and personal secrets in development runs
   are S5 (above). The `with-approval` path for personal secrets in published agents is not part of S5 (a
   follow-up issue lists it).
-- A development run is visible like any run (`runs:read`): its output can contain what a personal
-  credential let the run read. The credentials themselves are redacted, derived content is not.
+- Development runs are visible to their starter and node administrators only; audit entries and the approval inbox are not filtered by that rule yet (#376).
 - The connection catalog behind the expansion digest is read just before the locks are taken (a
   connection change is not serialised with publish): a change after that read and before the commit is not
   seen by this publish. **That includes revocations and narrowings**: a connection or tool grant removed,

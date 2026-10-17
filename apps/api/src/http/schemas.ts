@@ -1698,9 +1698,9 @@ export const BudgetLineSchema = z.object({
 export const DevelopmentBudgetSchema = BudgetLineSchema.extend({
   scope: z.literal('development'),
   source: z
-    .enum(['explicit', 'default', 'none'])
+    .enum(['explicit', 'default', 'platform'])
     .describe(
-      'explicit: set by an administrator; default: 10 % of the monthly cap of the node; none: the node has neither, so development runs have no node limit',
+      'explicit: set by an administrator; default: 10 % of the monthly cap of the node; platform: the node has neither a cap nor an explicit budget, so the platform default (OAX_DEV_BUDGET_DEFAULT_USD) applies',
     ),
 });
 export const BudgetOverviewSchema = z.object({

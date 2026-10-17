@@ -119,6 +119,14 @@ All notable changes to this project are documented here. The format follows
   `development`, never counted against the production budgets; cost lines, the costs export
   (`stage` column), `groupBy=stage`, run records and audit entries carry the stage. Migration
   `0041_dev_runs`; down path `apps/api/drizzle/down/0041_dev_runs.down.sql` (deletes development runs).
+  Hardening from the security review of the PR: operator secrets, credentialed MCP connections
+  and OAuth tokens count as production credentials for a draft (refused unless `allowDraftRuns: on` with
+  `allowProductionSecretsInDraftRuns`); the explicit development budget never exceeds the node cap and a
+  node without cap gets `OAX_DEV_BUDGET_DEFAULT_USD`; policy and starter are re-checked when a worker
+  claims the run and at every model reservation, session and relayed call; development runs use the
+  default approver roles and their starter cannot approve them; personal secrets only for the author of
+  the revision that runs; development runs are visible to their starter and administrators. The CSV
+  export gets `stage` as its last column.
   Left out: the `with-approval` path for personal secrets in published versions. See
   [docs/agent-lifecycle.md](docs/agent-lifecycle.md#development-runs),
   [docs/secrets.md](docs/secrets.md#development-runs-and-personal-secrets) and

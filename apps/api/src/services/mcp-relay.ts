@@ -1,3 +1,5 @@
+import type { DevRunGate } from './dev-run-gate.js';
+import { connectionCarriesCredentials } from './dev-run-gate.js';
 import { createHash } from 'node:crypto';
 import { and, count, eq, sql } from 'drizzle-orm';
 import {
@@ -179,6 +181,9 @@ export class McpRelayService {
     this.outbound = undefined;
   }
 
+  /** The checks of a development run (policy, starter, credentials); set by `createServices`. */
+  devGate: DevRunGate | undefined;
+
   async handle(req: RelayRequest): Promise<RelayAnswer> {
     let method = 'other';
     let outcome = 'error';
@@ -225,6 +230,23 @@ export class McpRelayService {
     const agent = definition.agents.find((a) => a.id === agentId);
     if (run.tenantId !== node.tenantId || !agent) throw refused();
     const reason = await this.connectionOf(run, agent, req.server);
+    if (typeof reason !== 'string' && run.stage === 'development' && this.devGate) {
+      // A development run reaches a credentialed connection only where the policy lets drafts use
+      // production credentials, and only while its policy and starter still allow it.
+      const denied = await this.devGate
+        .assertActive(run)
+        .then(async () =>
+          connectionCarriesCredentials(reason.cfg) &&
+          !(await this.devGate!.allowsProductionCredentials(run.tenantId))
+            ? 'development_credentials'
+            : null,
+        )
+        .catch(() => 'development_not_permitted');
+      if (denied) {
+        await this.auditRefusal(node, agentId, req.server, denied);
+        throw refused();
+      }
+    }
     if (typeof reason === 'string') {
       await this.auditRefusal(node, agentId, req.server, reason);
       throw refused();

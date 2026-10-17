@@ -29,7 +29,7 @@ import {
   tenants,
   useCaseBudgets,
 } from '../db/schema.js';
-import { notFound } from '../errors.js';
+import { HttpError, notFound } from '../errors.js';
 import { decodeNameCursor, encodeNameCursor } from '../pagination.js';
 import type { AgentsService } from './agents.js';
 import type { AuditService } from './audit.js';
@@ -150,12 +150,12 @@ export class BudgetsService {
     // Development spend is counted against its own budget and nothing else.
     if (target.stage === 'development') {
       const line = tenant ? await this.developmentLine(db, tenant, month) : null;
-      if (tenant && line?.limit !== null && line)
+      if (tenant && line)
         out.push({
           scope: 'development',
           key: tenant.slug,
           scopeKey: '',
-          limitMicros: line.limit!,
+          limitMicros: line.limit,
           spentMicros: line.spent,
         });
       return out;
@@ -218,10 +218,11 @@ export class BudgetsService {
       'id' | 'devMonthlyBudgetMicros' | 'monthlyBudgetMicros'
     >,
     month: string,
-  ): Promise<{ limit: number | null; spent: number; source: DevBudgetSource }> {
+  ): Promise<{ limit: number; spent: number; source: DevBudgetSource }> {
     const budget = developmentBudget(
       tenant.devMonthlyBudgetMicros === null ? null : Number(tenant.devMonthlyBudgetMicros),
       tenant.monthlyBudgetMicros === null ? null : Number(tenant.monthlyBudgetMicros),
+      this.ctx.config.control.devBudgetDefaultMicros,
     );
     const spent = await this.spent(
       db,
@@ -629,6 +630,15 @@ export class BudgetsService {
   /** Sets the monthly development budget of the acting node (otherwise 10 % of its cap applies). */
   async setDevelopmentBudget(p: Principal, monthlyBudgetUsd: number): Promise<void> {
     const micros = Math.round(monthlyBudgetUsd * 1_000_000);
+    // Development spend is outside the node cap, and the cap is the operator's: an administrator of
+    // the node cannot use the development budget to spend more than the cap allows.
+    const [node] = await this.ctx.db.select().from(tenants).where(eq(tenants.id, p.tenantId));
+    if (node?.monthlyBudgetMicros !== null && node?.monthlyBudgetMicros !== undefined && micros > Number(node.monthlyBudgetMicros))
+      throw new HttpError(
+        422,
+        'dev_budget_above_cap',
+        'the development budget cannot be higher than the monthly cap of the node',
+      );
     await this.ctx.db
       .update(tenants)
       .set({ devMonthlyBudgetMicros: micros })

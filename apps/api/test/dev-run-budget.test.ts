@@ -25,13 +25,13 @@ let n: TestNode;
 let acc: ModelAccountingService;
 let seq = 0;
 
-const source = (name: string) => `---
+const source = (name: string, useCase?: string) => `---
 apiVersion: openagentix.io/v1alpha1
 kind: AgentPipeline
 name: ${name}
 version: 1.0.0
 owner: nobody
-agents:
+${useCase ? `labels:\n  useCase: ${useCase}\n` : ''}agents:
   - id: a
     provider: simulated
     model: sim-1
@@ -64,11 +64,11 @@ const ledger = (runId: string) =>
   n.ctx.db.select().from(costLedger).where(eq(costLedger.runId, runId));
 
 /** A running development run and a running production run of two fresh agents. */
-async function mkRun(stage: 'development' | 'production'): Promise<string> {
+async function mkRun(stage: 'development' | 'production', useCase?: string): Promise<string> {
   const create = await n.req({
     method: 'POST',
     url: '/v1/agents',
-    payload: { source: source(`bud-agent-${++seq}`) },
+    payload: { source: source(`bud-agent-${++seq}`, useCase) },
   });
   const agentId = create.json().id as string;
   let runId: string;
@@ -137,6 +137,7 @@ afterEach(async () => {
   await n.ctx.db.execute(sql`delete from model_reservations`);
   await n.ctx.db.execute(sql`delete from cost_ledger`);
   await n.ctx.db.execute(sql`delete from budget_alerts`);
+  await n.ctx.db.execute(sql`delete from use_case_budgets`);
   await setCap(null);
   await setDevBudget(null);
   await n.ctx.db.execute(
@@ -146,11 +147,10 @@ afterEach(async () => {
 
 describe('the development budget of a node', () => {
   it('is 10 % of the monthly cap until an administrator sets one', async () => {
-    await setCap(500_000);
-    const o = await overview();
-    expect(o.development).toMatchObject({
+    await setCap(5_000_000);
+    expect((await overview()).development).toMatchObject({
       scope: 'development',
-      limitUsd: 0.05,
+      limitUsd: 0.5,
       spentUsd: 0,
       source: 'default',
     });
@@ -163,24 +163,69 @@ describe('the development budget of a node', () => {
     expect((await overview()).development).toMatchObject({ limitUsd: 2, source: 'explicit' });
     const del = await n.req({ method: 'DELETE', url: '/v1/budgets/development' });
     expect(del.statusCode).toBe(204);
-    expect((await overview()).development).toMatchObject({ limitUsd: 0.05, source: 'default' });
+    expect((await overview()).development).toMatchObject({ limitUsd: 0.5, source: 'default' });
   });
 
-  it('has no limit without a cap and without an explicit budget', async () => {
-    expect((await overview()).development).toMatchObject({ limitUsd: null, source: 'none' });
+  it('cannot be set above the monthly cap of the node (it is not a way around the cap)', async () => {
+    await setCap(5_000_000);
+    const put = await n.req({
+      method: 'PUT',
+      url: '/v1/budgets/development',
+      payload: { monthlyBudgetUsd: 5.01 },
+    });
+    expect(put.statusCode, put.body).toBe(422);
+    expect(put.json().error).toBe('dev_budget_above_cap');
+    expect(
+      (
+        await n.req({
+          method: 'PUT',
+          url: '/v1/budgets/development',
+          payload: { monthlyBudgetUsd: 5 },
+        })
+      ).statusCode,
+    ).toBe(204);
+    // a cap lowered afterwards clamps an explicit budget that is now too high
+    await setCap(1_000_000);
+    expect((await overview()).development).toMatchObject({ limitUsd: 1, source: 'explicit' });
+  });
+
+  it('has the platform default for a node without a cap and without an explicit budget', async () => {
+    expect((await overview()).development).toMatchObject({ limitUsd: 10, source: 'platform' });
     const runId = await mkRun('development');
-    await spend('development', 50_000_000);
+    await spend('development', 10_000_000);
+    expect(await code(acc.reserve(scope, reserveReq(runId)))).toBe('control_budget_development');
+    // an explicit budget replaces the default where there is no cap to protect
+    await setDevBudget(50_000_000);
     expect((await acc.reserve(scope, reserveReq(runId))).reservationId).toBeTruthy();
   });
 
   it('is set by an administrator only', async () => {
-    const res = await n.req({
+    const unauth = await n.req({
       method: 'PUT',
       url: '/v1/budgets/development',
       payload: { monthlyBudgetUsd: 2 },
       token: null,
     });
-    expect(res.statusCode).toBe(401);
+    expect(unauth.statusCode).toBe(401);
+    const mk = await n.req({
+      method: 'POST',
+      url: '/v1/users',
+      payload: {
+        email: 'viewer@bud.example.org',
+        displayName: 'v',
+        password: 'long-password-123',
+        globalRoles: ['viewer'],
+      },
+    });
+    expect(mk.statusCode, mk.body).toBe(201);
+    const token = await n.login('viewer@bud.example.org', 'long-password-123');
+    const res = await n.req({
+      method: 'PUT',
+      url: '/v1/budgets/development',
+      payload: { monthlyBudgetUsd: 2 },
+      token,
+    });
+    expect(res.statusCode).toBe(403);
   });
 });
 
@@ -229,15 +274,20 @@ describe('admission and hard stop', () => {
 
   it('counts development reservations and spend against the development budget only', async () => {
     await setDevBudget(10 * CALL);
-    await setCap(CALL); // production budget fits exactly one call
-    const dev = await mkRun('development');
-    const prod = await mkRun('production');
+    // the production budget (a use case budget) fits exactly one call
+    await n.req({
+      method: 'PUT',
+      url: '/v1/budgets/use-cases/uc-bud',
+      payload: { monthlyBudgetUsd: CALL / 1_000_000 },
+    });
+    const dev = await mkRun('development', 'uc-bud');
+    const prod = await mkRun('production', 'uc-bud');
     await acc.reserve(scope, reserveReq(dev));
     await acc.reserve(scope, reserveReq(dev));
     // the development reservations do not eat the production budget ...
     expect((await acc.reserve(scope, reserveReq(prod))).reservationId).toBeTruthy();
     // ... and a production reservation does not eat the development budget
-    expect(await code(acc.reserve(scope, reserveReq(prod)))).toBe('control_budget_tenant');
+    expect(await code(acc.reserve(scope, reserveReq(prod)))).toBe('control_budget_use_case');
     await finish(dev);
     await finish(prod);
   });
@@ -273,7 +323,7 @@ describe('cost lines carry the stage of their run', () => {
     expect((await ledger(dev)).map((l) => l.stage)).toEqual(['development']);
     expect((await ledger(prod)).map((l) => l.stage)).toEqual(['production']);
     const csv = await n.req({ method: 'GET', url: '/v1/costs/export?format=csv' });
-    expect(csv.body.split('\r\n')[0]).toContain(',stage,');
+    expect(csv.body.split('\r\n')[0]).toMatch(/,costUsd,stage$/);
     const by = await n.req({ method: 'GET', url: '/v1/costs/summary?groupBy=stage' });
     expect(by.statusCode, by.body).toBe(200);
     expect(

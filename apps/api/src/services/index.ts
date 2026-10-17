@@ -18,6 +18,7 @@ import { BudgetsService } from './budgets.js';
 import { CatalogService } from './catalog.js';
 import { ControlPlaneService } from './control-plane.js';
 import { CostsService } from './costs.js';
+import { DevRunGate } from './dev-run-gate.js';
 import { DevRunsService } from './dev-runs.js';
 import { GuidelinesService } from './guidelines.js';
 import { IdentityService } from './identity.js';
@@ -129,7 +130,18 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const agentSummaries = new AgentSummaryService(ctx);
   const budgets = new BudgetsService(ctx, audit, agents);
   const runs = new RunsService(ctx, audit, agents, budgets);
-  const devRuns = new DevRunsService(ctx, audit, agents, catalog, budgets, lifecyclePolicy);
+  const devGate = new DevRunGate(lifecyclePolicy, catalog, (run) =>
+    starterEntitled(ctx, identity, run),
+  );
+  const devRuns = new DevRunsService(
+    ctx,
+    audit,
+    agents,
+    catalog,
+    budgets,
+    lifecyclePolicy,
+    devGate,
+  );
   const ingest = new IngestService(ctx, audit, runs);
   const guidelines = new GuidelinesService(ctx, audit);
   const runNodes = new RunNodesService(ctx, audit, agents, catalog);
@@ -169,6 +181,9 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const secretStore = new SecretStore(ctx, mcpOauth.keys);
   const secrets = new SecretsService(ctx, audit, secretStore, secretResolution);
   const secretRotation = new SecretKeyRotation(ctx, audit, mcpOauth.keys, secretStore);
+  runNodes.devGate = devGate;
+  modelAccounting.devGate = devGate;
+  control.devGate = devGate;
   runNodes.scoped = new ScopedSecretBroker(
     ctx,
     secretStore,
@@ -190,6 +205,7 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     mcpTools,
     mcpOauthFlows,
   );
+  mcpRelay.devGate = devGate;
   return {
     audit,
     budgets,

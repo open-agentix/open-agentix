@@ -1,7 +1,8 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { runs, secrets } from '../db/schema.js';
 import type { AuditService } from './audit.js';
+import { DEV_RUN_LOCK_NS } from './dev-run-lock.js';
 
 /**
  * What stops with a person when their account is disabled (ADR 0017 section 13.5; accounts are
@@ -42,6 +43,16 @@ export async function offboardPersonalCredentials(
       },
       tx,
     );
+  await stopDevelopmentRuns(tx, userId, now);
+}
+
+/**
+ * Cancels the queued development runs of a person and asks the running ones to stop. Takes the
+ * person's admission lock first, so a run that is being admitted at this moment either commits
+ * before (and is stopped here) or waits and sees the account state.
+ */
+export async function stopDevelopmentRuns(tx: Db, userId: string, now: Date): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(${DEV_RUN_LOCK_NS}::int, hashtext(${userId}))`);
   // A queued run is cancelled outright; a running one is asked to stop at its next check.
   await tx
     .update(runs)

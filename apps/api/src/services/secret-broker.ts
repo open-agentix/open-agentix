@@ -16,7 +16,7 @@ import {
 import type { McpServerConfig } from '@openagentix/mcp';
 import { eq } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
-import { agentVersions, secrets, tenants, type runs } from '../db/schema.js';
+import { agentDraftRevisions, agentVersions, secrets, tenants, type runs } from '../db/schema.js';
 import { platformSecretRefs } from './platform-secrets.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
 import { stateOf, type Resolved, type SecretResolution } from './secret-resolution.js';
@@ -166,6 +166,10 @@ export class ScopedSecretBroker {
     const out: PreparedSecret[] = [];
     for (const ref of refs) {
       const secret = this.resolvedSecret(byRef.get(ref), ref);
+      // Confused deputy: a draft is code its author wrote. Somebody who runs another person's revision
+      // does not hand it their personal credentials (they edit the draft first, which makes them its author).
+      if (secret.scope === 'personal' && !(await this.startedByAuthor(run)))
+        throw new SecretDenied('secret_scope_not_usable', ref);
       const verdict = devRunSecretVerdict(
         {
           scope: secret.scope as 'personal' | 'team' | 'tenant',
@@ -181,6 +185,16 @@ export class ScopedSecretBroker {
       out.push({ ref, secret });
     }
     return out;
+  }
+
+  /** Whether the user who started a development run wrote the revision it executes. */
+  private async startedByAuthor(run: RunRow): Promise<boolean> {
+    if (!run.agentRevisionId || !run.startedBy) return false;
+    const [rev] = await this.ctx.db
+      .select({ authorId: agentDraftRevisions.authorId, kind: agentDraftRevisions.authorKind })
+      .from(agentDraftRevisions)
+      .where(eq(agentDraftRevisions.id, run.agentRevisionId));
+    return rev?.kind === 'user' && rev.authorId === run.startedBy;
   }
 
   private resolvedSecret(r: Resolved | undefined, ref: string): SecretRow {

@@ -53,13 +53,14 @@ const CSV_COLUMNS: (keyof CostLine)[] = [
   'useCase',
   'runId',
   'stepSeq',
-  'stage',
   'provider',
   'model',
   'tokensIn',
   'tokensOut',
   'costMicros',
   'costUsd',
+  // appended last: existing consumers of the export keep their column positions
+  'stage',
 ];
 
 /** RFC 4180 CSV with a header row; formula-like cells are prefixed to prevent CSV injection. */

@@ -153,6 +153,6 @@ describe('cost CSV', () => {
       costUsd: 0.000003,
     };
     const csv = costLinesToCsv([line]).split('\r\n');
-    expect(csv[1]).toBe(`1,t,2026-10-01,x,,a,'=cmd(),"a,b ""c""",r,1,production,,m,1,2,3,0.000003`);
+    expect(csv[1]).toBe(`1,t,2026-10-01,x,,a,'=cmd(),"a,b ""c""",r,1,,m,1,2,3,0.000003,production`);
   });
 });
