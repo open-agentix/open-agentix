@@ -37,7 +37,7 @@ import {
   teams,
   users,
 } from '../db/schema.js';
-import { tenants } from '../db/schema.js';
+import { secrets, tenants } from '../db/schema.js';
 import { HttpError, conflict, forbidden, notFound } from '../errors.js';
 import type { Db } from '../db/client.js';
 import type { AuditService } from './audit.js';
@@ -1342,6 +1342,10 @@ export class IdentityService {
       .select({ userId: teamMembers.userId })
       .from(teamMembers)
       .where(eq(teamMembers.teamId, teamId));
+    // The secrets of a team are deleted with it (their sealed values go with them, ADR 0017 13.6).
+    await this.ctx.db
+      .delete(secrets)
+      .where(and(eq(secrets.scope, 'team'), eq(secrets.scopeId, teamId)));
     await this.ctx.db.delete(teams).where(eq(teams.id, teamId));
     await Promise.all(members.map((m) => this.invalidateUserTokens(m.userId)));
     await this.ctx.cache.del(`teams:${actor.tenantId}`);

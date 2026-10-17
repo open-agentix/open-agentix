@@ -764,8 +764,8 @@ export class RunNodesService {
    * Checks the scoped references of a step before anything is marked as issued (ADR 0017 section
    * 13.8): pinned secret, scope, chain, usage, `allowedDestinations`, revoked and expired. A refusal
    * is audited as `secret.access_denied` and `credential.denied` with a code, never a reason text.
-   * Scoped references of an MCP connection are not supported (their schema has no scoped syntax) and
-   * are refused as well.
+   * Only the `credentials` of a step are pinned: a scoped reference that reaches a connection (the save
+   * rules refuse it) has no pin and is therefore refused here as `secret_unavailable`.
    */
   private async prepareScoped(
     s: SessionRow,
@@ -777,16 +777,8 @@ export class RunNodesService {
   ): Promise<Map<string, PreparedSecret>> {
     const scopedRefs = needs.refs.filter(isScopedRef);
     if (scopedRefs.length === 0) return new Map();
-    const fromConnections = needs.connections
-      .flatMap((c) => Object.values(c.env))
-      .filter(isScopedRef);
-    if (fromConnections.length > 0 || !this.scoped) {
-      await this.auditDenied(
-        s,
-        run.tenantId,
-        fromConnections[0] ?? scopedRefs[0]!,
-        'secret_unavailable',
-      );
+    if (!this.scoped) {
+      await this.auditDenied(s, run.tenantId, scopedRefs[0]!, 'secret_unavailable');
       return this.deny(s, agent.id, 'secret_unavailable', { refs: scopedRefs });
     }
     try {

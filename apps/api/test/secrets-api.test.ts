@@ -164,6 +164,9 @@ describe('create and metadata', () => {
   ])('refuses %s', async (_label, over) => {
     const res = await create(tok['sec-root']!, { scope: 'tenant', name: 'bad-input', ...over });
     expect(res.statusCode, res.body).toBe(400);
+    // an error never echoes the value it refused
+    const v = (over as { value?: string }).value;
+    if (v) expect(res.body).not.toContain(v);
   });
 
   it('accepts exactly 8 characters and exactly 64 KiB', async () => {
@@ -277,6 +280,34 @@ describe('who may do what', () => {
     const foreign = await api(tok['sec-other']!, 'GET', `/v1/secrets/${other!.id}`);
     expect(foreign.statusCode).toBe(404);
     expect(j(foreign)).toEqual(j(unknown));
+  });
+});
+
+describe('teams', () => {
+  it('deletes the secrets of a team with the team', async () => {
+    const t = await api(tok['sec-root']!, 'POST', '/v1/teams', { slug: 'doomed', name: 'Doomed' });
+    const teamId = j(t).id as string;
+    const made = await create(tok['sec-root']!, {
+      scope: 'team',
+      teamId,
+      name: 'doomed-key',
+      value: canary('doomed'),
+    });
+    expect(made.statusCode, made.body).toBe(201);
+    const del = await api(tok['sec-root']!, 'DELETE', `/v1/teams/${teamId}`);
+    expect(del.statusCode, del.body).toBe(204);
+    expect(
+      await n.ctx.db
+        .select()
+        .from(secrets)
+        .where(eq(secrets.id, j(made).id)),
+    ).toHaveLength(0);
+    expect(
+      await n.ctx.db
+        .select()
+        .from(secretVersions)
+        .where(eq(secretVersions.secretId, j(made).id)),
+    ).toHaveLength(0);
   });
 });
 

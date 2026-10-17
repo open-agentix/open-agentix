@@ -1,8 +1,15 @@
 import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { StepCredentials } from '@openagentix/core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, runNodeSessions, runs, secrets, tenants } from '../src/db/schema.js';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  auditLog,
+  connections,
+  runNodeSessions,
+  runs,
+  secrets,
+  tenants,
+} from '../src/db/schema.js';
 import { RUN_TOKEN_SECRET, testNode, type TestNode } from './helpers.js';
 
 /**
@@ -20,6 +27,7 @@ const ENV = {
   OAX_CONTAINER_EGRESS_PROXY_URL: 'http://egress-proxy:3128',
   OAX_CONTAINER_EGRESS_GRANT_SECRET: 'g'.repeat(40),
   OAX_CONTAINER_EGRESS_ALLOW: 'jira.example.org,*.corp.example',
+  OAX_MCP_STDIO_COMMANDS: '/opt/mcp/bin/*',
   OAX_MCP_OAUTH_KEK: randomBytes(32).toString('base64'),
   OAX_LIFECYCLE_REQUIRE_APPROVAL: 'on',
   OAX_ROLE_BINDINGS_READ: 'bindings',
@@ -331,6 +339,33 @@ describe('publish', () => {
     });
   });
 
+  it('refuses when the resolution read at publish differs from what was approved (race guard)', async () => {
+    await secret('sp-root', 'race-guard', value('rg'));
+    const { a, review } = await approved(['tenant:race-guard']);
+    const publisher = n.services.agents.publisher as unknown as {
+      secretResolution: { pinsFor: (...args: unknown[]) => Promise<Json> };
+    };
+    const real = publisher.secretResolution.pinsFor.bind(publisher.secretResolution);
+    const spy = vi
+      .spyOn(publisher.secretResolution, 'pinsFor')
+      .mockImplementationOnce(async (...args: unknown[]) => ({
+        ...(await real(...args)),
+        digest: 'f'.repeat(64),
+      }));
+    try {
+      const res = await publish(a, review);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(j(res)).toMatchObject({
+        error: 'approval_stale',
+        details: { reason: 'secret_resolution_changed' },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    // nothing was published, and the same request succeeds once the read is consistent
+    expect((await publish(a, review)).statusCode).toBe(201);
+  });
+
   it('refuses a personal secret in a version', async () => {
     const a = await newAgent(['personal:mine']);
     const review = await openReview(a);
@@ -527,6 +562,21 @@ describe('run time', () => {
       });
       expect(back.statusCode, back.body).toBe(200);
     }
+  });
+
+  it('does not accept scoped references in an MCP connection (they are not pinned)', async () => {
+    await secret('sp-root', 'conn-secret', value('cs'));
+    const saved = await api(tok['sp-c']!, 'POST', '/v1/connections', {
+      name: 'jira',
+      config: {
+        transport: 'stdio',
+        command: '/opt/mcp/bin/jira-mcp',
+        envSecrets: { JIRA_TOKEN: 'tenant:conn-secret' },
+        tools: { get_issue: { access: 'read' } },
+      },
+    });
+    expect(saved.statusCode, saved.body).toBe(400);
+    expect(saved.body).not.toContain('canary');
   });
 
   it('refuses a secret whose allowedDestinations do not cover the step egress', async () => {
