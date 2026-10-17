@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   evaluateWhen,
+  verifyNoWidening,
   parseWhen,
   validateManifestSource,
   WhenError,
@@ -289,6 +290,18 @@ describe('export of step conditions', () => {
     }
     const noEvent = exportOf(twoSteps('event.data.x == 1', false), { stepWhenSupported: true });
     expect(noEvent.ok).toBe(false);
+  });
+
+  it('the widening check fails a conversion that lost the condition of its source', () => {
+    const def = twoSteps('steps.a.output.k == 1');
+    const m = manifestOf(exportOf(def, { stepWhenSupported: true }));
+    expect(verifyNoWidening(def, m as never)).toEqual([]);
+    delete stepOf(m, 1).when;
+    expect(verifyNoWidening(def, m as never)).toEqual([
+      expect.objectContaining({ code: 'grant_widened', path: 'spec.workflow.1' }),
+    ]);
+    stepOf(m, 1)['x-openagentix-when'] = 'steps.a.outputs.result.k == 1';
+    expect(verifyNoWidening(def, m as never)).toEqual([]);
   });
 
   it('pins the feature flag to the vendored schema', () => {
