@@ -1,22 +1,26 @@
 import { unsafeRegexReason } from './json-schema.js';
+import { compileLinear } from './linear-regex.js';
 
 /**
- * Static safety rules for the regular expressions of argument constraints (AEP-0002 rule 4,
- * docs/agents-md.md). Patterns are ECMA-262 in Unicode mode, evaluated by the JavaScript engine,
- * which backtracks. The rules keep the cost of one match small:
+ * Static rules for the regular expressions of argument constraints (AEP-0002 rule 4,
+ * docs/agents-md.md). Patterns are ECMA-262 in Unicode mode as written, and are matched by the
+ * linear-time engine (`linear-regex.ts`), so a match never takes more than time linear in the text.
+ * The static rules are the contract an author can rely on, and defence in depth:
  *
- * - the source is at most {@link MAX_PATTERN_LENGTH} characters and compiles (`'u'` flag);
- * - the rules of handover schemas apply (`unsafeRegexReason`): no backreferences, no lookaround, no
- *   repeated group that contains a repetition (`(a+)+`);
- * - additionally no repeated group with an alternation (`(a|a)*`, `(a|aa)+`), the other classic
- *   exponential shape.
+ * - the source is at most {@link MAX_PATTERN_LENGTH} characters, is valid ECMA-262 and is accepted by
+ *   the linear-time engine (which has no backreferences and no lookaround);
+ * - the rules of handover schemas apply (`unsafeRegexReason`), which also name backreferences,
+ *   lookaround and a quantified group that contains a quantifier (`(a+)+`);
+ * - additionally no repeated group that holds an alternation, however deeply nested
+ *   (`(a|a)*`, `((a|aa))+`), the other classic exponential shape.
  *
- * A conservative syntactic check, not a proof of linear time. It is always combined with an input
- * bound: `maxLength` for `pattern` (required), the runtime limit `REGEX_INPUT_LIMIT` for `deny`. The
- * scanner is linear in the pattern and never evaluates it.
+ * These checks are conservative syntax checks, not proofs. The bound on the matched text
+ * (`maxLength`, the runtime input limit and work budget) is a separate, independent cap. The scanner is
+ * linear in the pattern and never evaluates it.
  */
 
-export type RegexIssueCode = 'too-long' | 'syntax' | 'unsafe' | 'ambiguous-repetition';
+export type RegexIssueCode =
+  'too-long' | 'syntax' | 'unsafe' | 'ambiguous-repetition' | 'unsupported';
 
 export interface RegexIssue {
   code: RegexIssueCode;
@@ -47,6 +51,8 @@ function repeatedAlternation(source: string): boolean {
       continue;
     } else if (c === ')') {
       closedWithAlternation = stack.pop() ?? false;
+      // an alternation inside a nested group is inside this group too: `((a|a))*`
+      if (closedWithAlternation && stack.length > 0) stack[stack.length - 1] = true;
       continue;
     } else if (c === '|') {
       stack[stack.length - 1] = true;
@@ -83,6 +89,11 @@ export function checkRegexSource(source: string): RegexIssue | null {
     return {
       code: 'ambiguous-repetition',
       message: 'pattern must not repeat a group that contains an alternation, such as "(a|b)*"',
+    };
+  if (compileLinear(source) === null)
+    return {
+      code: 'unsupported',
+      message: 'pattern uses a construct the linear-time matcher does not support',
     };
   return null;
 }

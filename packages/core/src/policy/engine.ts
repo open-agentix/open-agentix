@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { CLASSIFICATIONS, mayFlow, type Classification } from '../classification.js';
 import type { AgentDefinition, AgentSpec } from '../agents/parser.js';
 import type { ToolAccess } from '../agents/profiles.js';
+import { compileLinear } from '../agents/linear-regex.js';
 import type { ArgConstraint, ToolGrant } from '../agents/schema.js';
 
 /**
@@ -111,21 +112,28 @@ function typeOf(v: unknown): string {
   return typeof v;
 }
 
-function stringsIn(value: unknown, out: string[] = [], depth = 0): string[] {
-  if (depth > 32) return out;
-  if (typeof value === 'string') out.push(value);
-  else if (Array.isArray(value)) for (const v of value) stringsIn(v, out, depth + 1);
-  else if (value && typeof value === 'object')
-    for (const v of Object.values(value)) stringsIn(v, out, depth + 1);
-  return out;
-}
-
 /**
- * Longest string (UTF-16 code units) a `pattern` or `deny` expression is run against. The
- * expressions are checked statically (`checkRegexSource`), but the JavaScript engine backtracks, so
- * the runtime also bounds the input: a longer string is denied, never matched (AEP-0002 rule 4).
+ * Longest string (UTF-16 code units) a `pattern`, `deny` or policy `forbiddenArgPatterns`
+ * expression is run against; a longer string is denied, never matched. Expressions run on a
+ * linear-time engine (`compileLinear`), and this limit and {@link REGEX_WORK_BUDGET} bound the work
+ * independently of it (AEP-0002 rule 4).
  */
 export const REGEX_INPUT_LIMIT = 16_384;
+/**
+ * Characters all expressions of one decision may scan together. A decision that needs more is denied
+ * (fail closed), so many patterns over many large strings cannot hold the process.
+ */
+export const REGEX_WORK_BUDGET = 4_000_000;
+
+/** Work left for the expressions of one decision. */
+export class RegexWork {
+  left = REGEX_WORK_BUDGET;
+  take(n: number): boolean {
+    this.left -= n;
+    return this.left >= 0;
+  }
+}
+
 /** Strings and nesting depth `deny` looks at; a value beyond them cannot be checked and is denied. */
 const DENY_MAX_STRINGS = 4096;
 const DENY_MAX_DEPTH = 32;
@@ -166,18 +174,12 @@ function codePoints(s: string): number {
   return n;
 }
 
-const compiled = new Map<string, RegExp>();
-function compile(pattern: string): RegExp {
-  let re = compiled.get(pattern);
-  if (!re) {
-    re = new RegExp(pattern, 'u'); // no g/y flag: `test` carries no state
-    if (compiled.size >= 512) compiled.clear();
-    compiled.set(pattern, re);
-  }
-  return re;
-}
-
-export function checkArg(name: string, value: unknown, c: ArgConstraint): PolicyReason[] {
+export function checkArg(
+  name: string,
+  value: unknown,
+  c: ArgConstraint,
+  work: RegexWork = new RegexWork(),
+): PolicyReason[] {
   const reasons: PolicyReason[] = [];
   const actual = typeOf(value);
   if (c.type) {
@@ -231,11 +233,19 @@ export function checkArg(name: string, value: unknown, c: ArgConstraint): Policy
           code: 'arg_length',
           message: `argument "${name}" is longer than ${REGEX_INPUT_LIMIT} and cannot be matched`,
         });
-      else if (!compile(c.pattern).test(value))
-        reasons.push({
-          code: 'arg_pattern',
-          message: `argument "${name}" does not match ${c.pattern}`,
-        });
+      else {
+        const re = compileLinear(c.pattern);
+        if (re === null || !work.take(value.length))
+          reasons.push({
+            code: 'arg_pattern',
+            message: `argument "${name}" cannot be checked against its pattern`,
+          });
+        else if (!re.test(value))
+          reasons.push({
+            code: 'arg_pattern',
+            message: `argument "${name}" does not match its pattern`,
+          });
+      }
     }
   } else if (wantsString) {
     mismatch('a string');
@@ -268,13 +278,19 @@ export function checkArg(name: string, value: unknown, c: ArgConstraint): Policy
       });
     } else {
       for (const d of c.deny) {
-        const re = compile(d);
-        if (strings.some((s) => re.test(s))) {
+        const re = compileLinear(d);
+        if (re === null || !work.take(strings.reduce((n, x) => n + x.length, 0))) {
           reasons.push({
             code: 'arg_denied',
-            message: `argument "${name}" matches denied pattern ${d}`,
+            message: `argument "${name}" cannot be checked against its deny patterns`,
           });
+          break;
         }
+        if (strings.some((x) => re.test(x)))
+          reasons.push({
+            code: 'arg_denied',
+            message: `argument "${name}" matches a denied pattern`,
+          });
       }
     }
   }
@@ -315,6 +331,7 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
     reasons.push({ code: 'arg_type', message: 'the arguments of a tool call must be an object' });
     return { effect: 'deny', reasons, grant };
   }
+  const work = new RegexWork();
   for (const [name, c] of Object.entries(grant.args)) {
     // Own properties only: `toString` or `__proto__` is not an argument somebody declared.
     if (!Object.hasOwn(args, name) || (args as Record<string, unknown>)[name] === undefined) {
@@ -322,21 +339,40 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
         reasons.push({ code: 'arg_missing', message: `argument "${name}" is required` });
       continue;
     }
-    reasons.push(...checkArg(name, (args as Record<string, unknown>)[name], c));
+    reasons.push(...checkArg(name, (args as Record<string, unknown>)[name], c, work));
   }
   if (!grant.allowAdditionalArgs) {
     for (const name of Object.keys(args)) {
       if (!Object.hasOwn(grant.args, name)) {
-        reasons.push({ code: 'arg_unknown', message: `argument "${name}" is not allowed` });
+        // The name is chosen by the caller and ends up in audit reasons: it is not repeated.
+        reasons.push({
+          code: 'arg_unknown',
+          message: 'an argument that the grant does not declare is not allowed',
+        });
       }
     }
   }
-  const strings = stringsIn(args);
-  for (const b of bundles) {
-    for (const f of b.forbiddenArgPatterns) {
-      const re = new RegExp(f.pattern, 'iu');
-      if (strings.some((s) => re.test(s))) {
-        reasons.push({ code: 'arg_forbidden_pattern', message: `${f.reason} (${f.pattern})` });
+  if (bundles.some((b) => b.forbiddenArgPatterns.length > 0)) {
+    // Policy-wide patterns see every string of the call, so they get the same bounds as `deny`: a
+    // value that cannot be inspected completely is denied, never let through.
+    const strings = boundedStrings(args);
+    for (const b of bundles) {
+      for (const f of b.forbiddenArgPatterns) {
+        const re = compileLinear(f.pattern, true);
+        if (
+          strings === null ||
+          re === null ||
+          strings.some((x) => x.length > REGEX_INPUT_LIMIT) ||
+          !work.take(strings.reduce((n, x) => n + x.length, 0))
+        ) {
+          reasons.push({
+            code: 'arg_forbidden_pattern',
+            message: 'the arguments are too large or cannot be checked against a policy pattern',
+          });
+          break;
+        }
+        if (strings.some((x) => re.test(x)))
+          reasons.push({ code: 'arg_forbidden_pattern', message: `${f.reason} (${f.pattern})` });
       }
     }
   }

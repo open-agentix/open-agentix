@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   PolicyBundleSchema,
+  checkRegexSource,
   getEgressPolicy,
   hasPermission,
   hasTenantPrefix,
@@ -78,15 +79,13 @@ export type PolicyRow = typeof policies.$inferSelect;
 
 function assertRegexes(bundle: PolicyBundle): void {
   for (const f of bundle.forbiddenArgPatterns) {
-    try {
-      new RegExp(f.pattern, 'iu');
-    } catch (e) {
+    const issue = checkRegexSource(f.pattern);
+    if (issue)
       throw new HttpError(
         400,
         'validation_failed',
-        `invalid pattern ${f.pattern}: ${(e as Error).message}`,
+        `invalid pattern ${f.pattern}: ${issue.message}`,
       );
-    }
   }
 }
 

@@ -108,6 +108,15 @@ describe('policies', () => {
         })
       ).statusCode,
     ).toBe(400);
+    // lookaround and backreferences have no place in the linear-time matcher
+    for (const pattern of ['a(?=b)', '(a)\\1', '^((a|a))*$']) {
+      const bad = await n.req({
+        method: 'POST',
+        url: '/v1/policies',
+        payload: { name: 'broken-2', bundle: { forbiddenArgPatterns: [{ pattern }] } },
+      });
+      expect(bad.statusCode, pattern).toBe(400);
+    }
     const deny = await n.req({
       method: 'POST',
       url: '/v1/policies/evaluate',

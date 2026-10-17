@@ -8,7 +8,11 @@ import { checkRegexSource } from './regex-safety.js';
  */
 
 export type ArgRuleCode =
-  'args.pattern-invalid' | 'args.pattern-unbounded' | 'args.type-mismatch' | 'args.range';
+  | 'args.pattern-invalid'
+  | 'args.pattern-unbounded'
+  | 'args.type-mismatch'
+  | 'args.range'
+  | 'args.limit';
 
 export interface ArgRuleIssue {
   code: ArgRuleCode;
@@ -29,6 +33,11 @@ export interface ArgConstraintLike {
   maxItems?: unknown;
 }
 
+/** Longest `maxLength` that bounds a `pattern` or `deny` (AEP-0002: the text a pattern sees is bounded). */
+export const MAX_PATTERN_SUBJECT_LENGTH = 4096;
+/** Most `deny` patterns on one argument. */
+export const MAX_DENY_PATTERNS = 64;
+
 const isNum = (v: unknown): v is number => typeof v === 'number';
 
 export function argConstraintIssues(c: ArgConstraintLike): ArgRuleIssue[] {
@@ -38,17 +47,32 @@ export function argConstraintIssues(c: ArgConstraintLike): ArgRuleIssue[] {
     const issue = checkRegexSource(source);
     if (issue) out.push({ code: 'args.pattern-invalid', field, message: issue.message });
   };
+  const bounded = isNum(c.maxLength) && c.maxLength <= MAX_PATTERN_SUBJECT_LENGTH;
   if (c.pattern !== undefined) {
     regex(c.pattern, 'pattern');
-    // A pattern runs against attacker-influenced text: the length bound is what limits the work.
-    if (c.maxLength === undefined)
+    // A pattern runs against attacker-influenced text: the length bound limits the work.
+    if (!bounded)
       out.push({
         code: 'args.pattern-unbounded',
         field: 'pattern',
-        message: 'a pattern requires maxLength (it bounds the text the pattern is matched against)',
+        message: `a pattern requires maxLength of at most ${MAX_PATTERN_SUBJECT_LENGTH} (it bounds the text the pattern is matched against)`,
       });
   }
-  if (Array.isArray(c.deny)) c.deny.forEach((d, i) => regex(d, `deny.${i}`));
+  if (Array.isArray(c.deny)) {
+    if (c.deny.length > MAX_DENY_PATTERNS)
+      out.push({
+        code: 'args.limit',
+        field: 'deny',
+        message: `at most ${MAX_DENY_PATTERNS} deny patterns per argument`,
+      });
+    if (c.deny.length > 0 && !bounded)
+      out.push({
+        code: 'args.pattern-unbounded',
+        field: 'deny',
+        message: `deny patterns require maxLength of at most ${MAX_PATTERN_SUBJECT_LENGTH} (they run against the value)`,
+      });
+    c.deny.slice(0, MAX_DENY_PATTERNS).forEach((d, i) => regex(d, `deny.${i}`));
+  }
   const numericOnly = c.minimum !== undefined || c.maximum !== undefined;
   const stringOnly =
     c.pattern !== undefined || c.minLength !== undefined || c.maxLength !== undefined;

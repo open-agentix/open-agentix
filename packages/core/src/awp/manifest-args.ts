@@ -11,7 +11,7 @@ import type { ManifestFinding } from './manifest-types.js';
  * - `args.with-deny`: `args` or a call limit on an entry with `allow: false`;
  * - `args.pattern-invalid`: a `pattern` or `deny` entry that does not compile, uses a backreference
  *   or lookaround, or repeats a repetition or alternation (the exponential shapes);
- * - `args.pattern-unbounded`: a `pattern` without `maxLength`;
+ * - `args.pattern-unbounded`: a `pattern` or `deny` without `maxLength` of at most 4096;
  * - `args.type-mismatch`: `pattern`/`minLength`/`maxLength` on a type other than string,
  *   `minimum`/`maximum` on a non-numeric type, `maxItems` on a non-array;
  * - `args.range`: `minimum > maximum` or `minLength > maxLength`;
