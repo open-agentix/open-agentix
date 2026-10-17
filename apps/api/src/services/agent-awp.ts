@@ -1,5 +1,12 @@
-import { exportAwpManifest, type ExportResult, type PublishedDefinition } from '@openagentix/core';
+import {
+  exportAwpManifest,
+  profilesOf,
+  type ExportResult,
+  type JsonObject,
+  type PublishedDefinition,
+} from '@openagentix/core';
 import type { AgentRow, AgentVersionRow } from './agents.js';
+import type { StoredAwpRow } from './legacy-awp.js';
 
 /**
  * The AWP manifest of a published version, computed from the stored effective definition (never
@@ -14,6 +21,7 @@ export async function exportVersionAsAwp(
   agent: AgentRow,
   version: AgentVersionRow,
   teamIdOfOwner: (slug: string) => Promise<string | null>,
+  stored?: StoredAwpRow,
 ): Promise<ExportResult> {
   const definition = version.definition as PublishedDefinition;
   if (agent.teamId !== null && (await teamIdOfOwner(definition.owner)) !== agent.teamId)
@@ -26,6 +34,21 @@ export async function exportVersionAsAwp(
           message: `owner "${definition.owner}" is not the team of this agent`,
         },
       ],
+    };
+  // AWP-3b: the manifest stored next to the version is the effective one (stable across exporter
+  // versions); a version the conversion refused stays refused, with the stored reasons.
+  if (stored?.status === 'legacy-unconvertible')
+    return {
+      ok: false,
+      findings: stored.findings as unknown as Extract<ExportResult, { ok: false }>['findings'],
+    };
+  if (stored?.status === 'converted' && stored.manifest && stored.manifestDigest)
+    return {
+      ok: true,
+      manifest: stored.manifest as Extract<ExportResult, { ok: true }>['manifest'],
+      digest: stored.manifestDigest,
+      sourceDigest: version.digest,
+      profiles: profilesOf((stored.manifest as { spec: JsonObject }).spec),
     };
   return exportAwpManifest(definition, {
     ownerTeam: agent.teamId === null ? null : definition.owner,

@@ -39,6 +39,7 @@ export type ExportFindingCode =
   | 'pipeline_not_representable'
   | 'unknown_field'
   | 'grant_widened'
+  | 'conversion_error'
   | 'not_canonicalizable';
 
 export interface ExportFinding {

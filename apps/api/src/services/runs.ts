@@ -130,6 +130,8 @@ export class RunsService {
     // one connection, so a query on `ctx.db` while a transaction is open would wait for it.
     const latest = await this.agents.latestVersionId(input.agentId);
     const versionId = input.versionId ?? latest.versionId;
+    // Release N+1 of the legacy format: a version that cannot be converted is not run (AWP-3b).
+    if (versionId) await this.agents.assertVersionRunnable(versionId);
     const definition = versionId ? (await this.agents.definitionOf(versionId)).definition : null;
     const plan = { latest, versionId, definition };
     const outcome = input.tx

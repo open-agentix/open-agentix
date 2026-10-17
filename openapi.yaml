@@ -1461,6 +1461,31 @@ paths:
                     description: monthly budget closest to its limit among the scopes that apply; null without costs:read or limit
                   draftSource:
                     type: string
+                  deprecations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          enum:
+                            - legacy_format
+                        message:
+                          type: string
+                        removedIn:
+                          type: string
+                          description: first release that rejects the legacy format
+                        docs:
+                          type: string
+                          description: where the conversion is documented
+                      required:
+                        - code
+                        - message
+                        - removedIn
+                        - docs
+                      additionalProperties: false
+                      description: "A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1)."
+                    description: "`legacy_format` for a stored legacy draft (every stored agent until AWP storage)"
                 required:
                   - id
                   - name
@@ -1481,6 +1506,7 @@ paths:
                   - monthSpendUsd
                   - budget
                   - draftSource
+                  - deprecations
                 additionalProperties: false
         "400":
           description: Default Response
@@ -1626,6 +1652,31 @@ paths:
                         additionalProperties: {}
                       - type: "null"
                     description: effective AWP manifest when the source is a valid AWP manifest, otherwise null
+                  deprecations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          enum:
+                            - legacy_format
+                        message:
+                          type: string
+                        removedIn:
+                          type: string
+                          description: first release that rejects the legacy format
+                        docs:
+                          type: string
+                          description: where the conversion is documented
+                      required:
+                        - code
+                        - message
+                        - removedIn
+                        - docs
+                      additionalProperties: false
+                      description: "A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1)."
+                    description: exactly one `legacy_format` entry for an agents.md source, none for an AWP manifest
                 required:
                   - format
                   - valid
@@ -1636,6 +1687,7 @@ paths:
                   - digest
                   - definition
                   - manifest
+                  - deprecations
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -1665,6 +1717,126 @@ paths:
                   - error
                   - message
                 additionalProperties: false
+  /v1/agents/legacy-report:
+    get:
+      summary: Legacy format conversion report (AWP-3b)
+      tags:
+        - agents
+      description: "The stored versions of the agents the caller may read: how many are converted to an AWP manifest, unconvertible or not yet converted, and the unconvertible ones with the field-level reasons of the refusal. The API form of `oax awp legacy-report`. AWP is a draft (v1alpha1); a conversion is a mapping, not a conformance claim."
+      parameters:
+        - schema:
+            default: 50
+            type: integer
+            minimum: 1
+            maximum: 200
+          in: query
+          name: limit
+          required: false
+        - schema:
+            type: string
+            maxLength: 200
+          in: query
+          name: cursor
+          required: false
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  counts:
+                    type: object
+                    properties:
+                      converted:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      unconvertible:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                      pending:
+                        type: integer
+                        minimum: -9007199254740991
+                        maximum: 9007199254740991
+                        description: versions without a stored conversion yet
+                    required:
+                      - converted
+                      - unconvertible
+                      - pending
+                    additionalProperties: false
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agentId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        agentName:
+                          type: string
+                        versionId:
+                          type: string
+                          format: uuid
+                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                        version:
+                          type: string
+                        findings:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              code:
+                                type: string
+                              path:
+                                type: string
+                                description: path of the source field in the stored definition
+                              message:
+                                type: string
+                              field:
+                                description: "critical_extension: the source field"
+                                type: string
+                              extension:
+                                description: "critical_extension: the extension that would carry it"
+                                type: string
+                            required:
+                              - code
+                              - path
+                              - message
+                            additionalProperties: false
+                      required:
+                        - agentId
+                        - agentName
+                        - versionId
+                        - version
+                        - findings
+                      additionalProperties: false
+                  nextCursor:
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - counts
+                  - items
+                  - nextCursor
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /v1/agents/{id}:
     get:
       summary: Get an agent with its draft
@@ -1863,6 +2035,31 @@ paths:
                     description: monthly budget closest to its limit among the scopes that apply; null without costs:read or limit
                   draftSource:
                     type: string
+                  deprecations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          enum:
+                            - legacy_format
+                        message:
+                          type: string
+                        removedIn:
+                          type: string
+                          description: first release that rejects the legacy format
+                        docs:
+                          type: string
+                          description: where the conversion is documented
+                      required:
+                        - code
+                        - message
+                        - removedIn
+                        - docs
+                      additionalProperties: false
+                      description: "A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1)."
+                    description: "`legacy_format` for a stored legacy draft (every stored agent until AWP storage)"
                 required:
                   - id
                   - name
@@ -1883,6 +2080,7 @@ paths:
                   - monthSpendUsd
                   - budget
                   - draftSource
+                  - deprecations
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -2113,6 +2311,31 @@ paths:
                     description: monthly budget closest to its limit among the scopes that apply; null without costs:read or limit
                   draftSource:
                     type: string
+                  deprecations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          enum:
+                            - legacy_format
+                        message:
+                          type: string
+                        removedIn:
+                          type: string
+                          description: first release that rejects the legacy format
+                        docs:
+                          type: string
+                          description: where the conversion is documented
+                      required:
+                        - code
+                        - message
+                        - removedIn
+                        - docs
+                      additionalProperties: false
+                      description: "A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1)."
+                    description: "`legacy_format` for a stored legacy draft (every stored agent until AWP storage)"
                 required:
                   - id
                   - name
@@ -2133,6 +2356,7 @@ paths:
                   - monthSpendUsd
                   - budget
                   - draftSource
+                  - deprecations
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -2210,6 +2434,44 @@ paths:
                     additionalProperties: false
                   created:
                     type: boolean
+                  deprecations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          enum:
+                            - legacy_format
+                        message:
+                          type: string
+                        removedIn:
+                          type: string
+                          description: first release that rejects the legacy format
+                        docs:
+                          type: string
+                          description: where the conversion is documented
+                      required:
+                        - code
+                        - message
+                        - removedIn
+                        - docs
+                      additionalProperties: false
+                      description: "A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1)."
+                  awp:
+                    anyOf:
+                      - type: object
+                        properties:
+                          status:
+                            type: string
+                            enum:
+                              - converted
+                              - legacy-unconvertible
+                        required:
+                          - status
+                        additionalProperties: false
+                      - type: "null"
+                    description: result of the conversion stored with the version
                   shadow:
                     description: "shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed"
                     type: object
@@ -2258,6 +2520,8 @@ paths:
                 required:
                   - version
                   - created
+                  - deprecations
+                  - awp
                 additionalProperties: false
         "201":
           description: Default Response
@@ -2300,6 +2564,44 @@ paths:
                     additionalProperties: false
                   created:
                     type: boolean
+                  deprecations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          enum:
+                            - legacy_format
+                        message:
+                          type: string
+                        removedIn:
+                          type: string
+                          description: first release that rejects the legacy format
+                        docs:
+                          type: string
+                          description: where the conversion is documented
+                      required:
+                        - code
+                        - message
+                        - removedIn
+                        - docs
+                      additionalProperties: false
+                      description: "A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1)."
+                  awp:
+                    anyOf:
+                      - type: object
+                        properties:
+                          status:
+                            type: string
+                            enum:
+                              - converted
+                              - legacy-unconvertible
+                        required:
+                          - status
+                        additionalProperties: false
+                      - type: "null"
+                    description: result of the conversion stored with the version
                   shadow:
                     description: "shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed"
                     type: object
@@ -2348,6 +2650,8 @@ paths:
                 required:
                   - version
                   - created
+                  - deprecations
+                  - awp
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -2593,6 +2897,31 @@ paths:
                     description: monthly budget closest to its limit among the scopes that apply; null without costs:read or limit
                   draftSource:
                     type: string
+                  deprecations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          enum:
+                            - legacy_format
+                        message:
+                          type: string
+                        removedIn:
+                          type: string
+                          description: first release that rejects the legacy format
+                        docs:
+                          type: string
+                          description: where the conversion is documented
+                      required:
+                        - code
+                        - message
+                        - removedIn
+                        - docs
+                      additionalProperties: false
+                      description: "A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1)."
+                    description: "`legacy_format` for a stored legacy draft (every stored agent until AWP storage)"
                 required:
                   - id
                   - name
@@ -2613,6 +2942,7 @@ paths:
                   - monthSpendUsd
                   - budget
                   - draftSource
+                  - deprecations
                 additionalProperties: false
         "400":
           description: Default Response
@@ -2868,6 +3198,31 @@ paths:
                     description: monthly budget closest to its limit among the scopes that apply; null without costs:read or limit
                   draftSource:
                     type: string
+                  deprecations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          enum:
+                            - legacy_format
+                        message:
+                          type: string
+                        removedIn:
+                          type: string
+                          description: first release that rejects the legacy format
+                        docs:
+                          type: string
+                          description: where the conversion is documented
+                      required:
+                        - code
+                        - message
+                        - removedIn
+                        - docs
+                      additionalProperties: false
+                      description: "A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1)."
+                    description: "`legacy_format` for a stored legacy draft (every stored agent until AWP storage)"
                 required:
                   - id
                   - name
@@ -2888,6 +3243,7 @@ paths:
                   - monthSpendUsd
                   - budget
                   - draftSource
+                  - deprecations
                 additionalProperties: false
         "400":
           description: Default Response
@@ -3123,6 +3479,84 @@ paths:
                         - toolsDigest
                         - granted
                       additionalProperties: false
+                  awp:
+                    anyOf:
+                      - type: object
+                        properties:
+                          status:
+                            type: string
+                            enum:
+                              - converted
+                              - legacy-unconvertible
+                          manifestDigest:
+                            description: "`sha256:<hex>` of the stored manifest"
+                            type:
+                              - string
+                              - "null"
+                          findings:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                code:
+                                  type: string
+                                path:
+                                  type: string
+                                  description: path of the source field in the stored definition
+                                message:
+                                  type: string
+                                field:
+                                  description: "critical_extension: the source field"
+                                  type: string
+                                extension:
+                                  description: "critical_extension: the extension that would carry it"
+                                  type: string
+                              required:
+                                - code
+                                - path
+                                - message
+                              additionalProperties: false
+                            description: why the conversion was refused (legacy-unconvertible); empty when converted
+                          converter:
+                            type: string
+                          convertedAt:
+                            type: string
+                            description: ISO 8601 timestamp
+                        required:
+                          - status
+                          - manifestDigest
+                          - findings
+                          - converter
+                          - convertedAt
+                        additionalProperties: false
+                        description: "The stored effective AWP manifest of this version (AWP-3b), made once next to the unchanged source. The manifest itself: GET /v1/agents/{id}/versions/{version}/awp."
+                      - type: "null"
+                    description: null while the one-time conversion has not run for this version
+                  deprecations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                          enum:
+                            - legacy_format
+                        message:
+                          type: string
+                        removedIn:
+                          type: string
+                          description: first release that rejects the legacy format
+                        docs:
+                          type: string
+                          description: where the conversion is documented
+                      required:
+                        - code
+                        - message
+                        - removedIn
+                        - docs
+                      additionalProperties: false
+                      description: "A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1)."
+                    description: exactly one `legacy_format` entry per read
                 required:
                   - id
                   - agentId
@@ -3132,6 +3566,8 @@ paths:
                   - publishedAt
                   - source
                   - definition
+                  - awp
+                  - deprecations
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials

@@ -1013,6 +1013,16 @@ export interface paths {
                                 sourceName: string;
                             } | null;
                             draftSource: string;
+                            /** @description `legacy_format` for a stored legacy draft (every stored agent until AWP storage) */
+                            deprecations: {
+                                /** @enum {string} */
+                                code: "legacy_format";
+                                message: string;
+                                /** @description first release that rejects the legacy format */
+                                removedIn: string;
+                                /** @description where the conversion is documented */
+                                docs: string;
+                            }[];
                         };
                     };
                 };
@@ -1135,6 +1145,16 @@ export interface paths {
                             manifest: {
                                 [key: string]: unknown;
                             } | null;
+                            /** @description exactly one `legacy_format` entry for an agents.md source, none for an AWP manifest */
+                            deprecations: {
+                                /** @enum {string} */
+                                code: "legacy_format";
+                                message: string;
+                                /** @description first release that rejects the legacy format */
+                                removedIn: string;
+                                /** @description where the conversion is documented */
+                                docs: string;
+                            }[];
                         };
                     };
                 };
@@ -1171,6 +1191,92 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/legacy-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Legacy format conversion report (AWP-3b)
+         * @description The stored versions of the agents the caller may read: how many are converted to an AWP manifest, unconvertible or not yet converted, and the unconvertible ones with the field-level reasons of the refusal. The API form of `oax awp legacy-report`. AWP is a draft (v1alpha1); a conversion is a mapping, not a conformance claim.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            counts: {
+                                converted: number;
+                                unconvertible: number;
+                                /** @description versions without a stored conversion yet */
+                                pending: number;
+                            };
+                            items: {
+                                /** Format: uuid */
+                                agentId: string;
+                                agentName: string;
+                                /** Format: uuid */
+                                versionId: string;
+                                version: string;
+                                findings: {
+                                    code: string;
+                                    /** @description path of the source field in the stored definition */
+                                    path: string;
+                                    message: string;
+                                    /** @description critical_extension: the source field */
+                                    field?: string;
+                                    /** @description critical_extension: the extension that would carry it */
+                                    extension?: string;
+                                }[];
+                            }[];
+                            nextCursor: string | null;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1269,6 +1375,16 @@ export interface paths {
                                 sourceName: string;
                             } | null;
                             draftSource: string;
+                            /** @description `legacy_format` for a stored legacy draft (every stored agent until AWP storage) */
+                            deprecations: {
+                                /** @enum {string} */
+                                code: "legacy_format";
+                                message: string;
+                                /** @description first release that rejects the legacy format */
+                                removedIn: string;
+                                /** @description where the conversion is documented */
+                                docs: string;
+                            }[];
                         };
                     };
                 };
@@ -1408,6 +1524,16 @@ export interface paths {
                                 sourceName: string;
                             } | null;
                             draftSource: string;
+                            /** @description `legacy_format` for a stored legacy draft (every stored agent until AWP storage) */
+                            deprecations: {
+                                /** @enum {string} */
+                                code: "legacy_format";
+                                message: string;
+                                /** @description first release that rejects the legacy format */
+                                removedIn: string;
+                                /** @description where the conversion is documented */
+                                docs: string;
+                            }[];
                         };
                     };
                 };
@@ -1490,6 +1616,20 @@ export interface paths {
                                 publishedAt: string;
                             };
                             created: boolean;
+                            deprecations: {
+                                /** @enum {string} */
+                                code: "legacy_format";
+                                message: string;
+                                /** @description first release that rejects the legacy format */
+                                removedIn: string;
+                                /** @description where the conversion is documented */
+                                docs: string;
+                            }[];
+                            /** @description result of the conversion stored with the version */
+                            awp: {
+                                /** @enum {string} */
+                                status: "converted" | "legacy-unconvertible";
+                            } | null;
                             /** @description shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed */
                             shadow?: {
                                 /**
@@ -1529,6 +1669,20 @@ export interface paths {
                                 publishedAt: string;
                             };
                             created: boolean;
+                            deprecations: {
+                                /** @enum {string} */
+                                code: "legacy_format";
+                                message: string;
+                                /** @description first release that rejects the legacy format */
+                                removedIn: string;
+                                /** @description where the conversion is documented */
+                                docs: string;
+                            }[];
+                            /** @description result of the conversion stored with the version */
+                            awp: {
+                                /** @enum {string} */
+                                status: "converted" | "legacy-unconvertible";
+                            } | null;
                             /** @description shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed */
                             shadow?: {
                                 /**
@@ -1701,6 +1855,16 @@ export interface paths {
                                 sourceName: string;
                             } | null;
                             draftSource: string;
+                            /** @description `legacy_format` for a stored legacy draft (every stored agent until AWP storage) */
+                            deprecations: {
+                                /** @enum {string} */
+                                code: "legacy_format";
+                                message: string;
+                                /** @description first release that rejects the legacy format */
+                                removedIn: string;
+                                /** @description where the conversion is documented */
+                                docs: string;
+                            }[];
                         };
                     };
                 };
@@ -1860,6 +2024,16 @@ export interface paths {
                                 sourceName: string;
                             } | null;
                             draftSource: string;
+                            /** @description `legacy_format` for a stored legacy draft (every stored agent until AWP storage) */
+                            deprecations: {
+                                /** @enum {string} */
+                                code: "legacy_format";
+                                message: string;
+                                /** @description first release that rejects the legacy format */
+                                removedIn: string;
+                                /** @description where the conversion is documented */
+                                docs: string;
+                            }[];
                         };
                     };
                 };
@@ -2055,6 +2229,37 @@ export interface paths {
                                     granted: string[];
                                 };
                             };
+                            /** @description null while the one-time conversion has not run for this version */
+                            awp: {
+                                /** @enum {string} */
+                                status: "converted" | "legacy-unconvertible";
+                                /** @description `sha256:<hex>` of the stored manifest */
+                                manifestDigest: string | null;
+                                /** @description why the conversion was refused (legacy-unconvertible); empty when converted */
+                                findings: {
+                                    code: string;
+                                    /** @description path of the source field in the stored definition */
+                                    path: string;
+                                    message: string;
+                                    /** @description critical_extension: the source field */
+                                    field?: string;
+                                    /** @description critical_extension: the extension that would carry it */
+                                    extension?: string;
+                                }[];
+                                converter: string;
+                                /** @description ISO 8601 timestamp */
+                                convertedAt: string;
+                            } | null;
+                            /** @description exactly one `legacy_format` entry per read */
+                            deprecations: {
+                                /** @enum {string} */
+                                code: "legacy_format";
+                                message: string;
+                                /** @description first release that rejects the legacy format */
+                                removedIn: string;
+                                /** @description where the conversion is documented */
+                                docs: string;
+                            }[];
                         };
                     };
                 };

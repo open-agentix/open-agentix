@@ -5,6 +5,8 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { migrate as migratePg } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
+import type { Db } from '../src/db/client.js';
+import * as schema from '../src/db/schema.js';
 
 /** Minimal adapter so that the same checks run on PGlite and on a real PostgreSQL. */
 export interface Sql {
@@ -21,6 +23,8 @@ export interface Sql {
   close(): Promise<void>;
   /** Connection string for a control node on this database (memory:// for PGlite). */
   url: string;
+  /** The application's query builder on this very database (services that take a `Db`). */
+  db: Db;
 }
 
 export const PG_URL = process.env.OAX_TEST_DATABASE_URL;
@@ -36,6 +40,7 @@ export async function openPglite(): Promise<Sql> {
         throw e;
       }),
     url: 'memory://',
+    db: drizzle(c, { schema }) as unknown as Db,
     migrate: (folder) => migrate(drizzle(c) as never, { migrationsFolder: folder }),
     close: () => c.close(),
   };
@@ -53,6 +58,7 @@ export async function openPostgres(): Promise<Sql> {
     query: (q, params) => pool.query(q, params) as never,
     exec: (q) => pool.query(q),
     url: url.toString(),
+    db: drizzlePg(pool, { schema }) as unknown as Db,
     script: async (q) => {
       const c = await pool.connect();
       try {

@@ -2,10 +2,12 @@ import {
   runTraceIdentity,
   traceUrl,
   type AuditCheckpoint,
+  type Deprecation,
   type PublishedExpansion,
 } from '@openagentix/core';
 import type { AgentSummary } from '../services/agent-summaries.js';
 import type { AgentVersionRow, VersionSummary } from '../services/agents.js';
+import type { StoredAwpRow } from '../services/legacy-awp.js';
 import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
 import type { PublicUser, TeamRow, TenantRow, TokenInfo } from '../services/identity.js';
 import type { EventRow, SourceRow } from '../services/ingest.js';
@@ -37,14 +39,31 @@ export const agentDto = ({ agent: a, ...context }: AgentSummary) => ({
   disabledReason: context.disabled?.reason ?? null,
 });
 
-export const agentDetailDto = (s: AgentSummary) => ({
+export const agentDetailDto = (s: AgentSummary, deprecations: readonly Deprecation[]) => ({
   ...agentDto(s),
   draftSource: s.agent.draftSource,
+  deprecations: [...deprecations],
 });
+
+/** The stored AWP conversion of a version (AWP-3b); the manifest itself is served by `/awp`. */
+export const awpStatusDto = (row: StoredAwpRow | undefined) =>
+  row
+    ? {
+        status: row.status as 'converted' | 'legacy-unconvertible',
+        manifestDigest: row.manifestDigest,
+        findings: row.findings as { code: string; path: string; message: string }[],
+        converter: row.converter,
+        convertedAt: iso(row.convertedAt),
+      }
+    : null;
 
 export const versionDto = (v: VersionSummary) => ({ ...v, publishedAt: iso(v.publishedAt) });
 
-export const versionDetailDto = (v: AgentVersionRow) => ({
+export const versionDetailDto = (
+  v: AgentVersionRow,
+  awp: StoredAwpRow | undefined,
+  deprecations: readonly Deprecation[],
+) => ({
   id: v.id,
   agentId: v.agentId,
   version: v.version,
@@ -54,6 +73,8 @@ export const versionDetailDto = (v: AgentVersionRow) => ({
   source: v.source,
   definition: v.definition as Record<string, unknown>,
   ...expansionOf(v.definition),
+  awp: awpStatusDto(awp),
+  deprecations: [...deprecations],
 });
 
 /** Profile expansion stored with a version (absent for versions published before profiles). */

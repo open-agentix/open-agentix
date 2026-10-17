@@ -127,7 +127,8 @@ function exportSpec(
   return { spec, agents: exports };
 }
 
-function profilesOf(spec: JsonObject): string[] {
+/** Profiles a validator needs for the `spec` of a manifest (`core` plus `mcp` / `governance`). */
+export function profilesOf(spec: JsonObject): string[] {
   const agents = spec.agents as JsonObject[];
   const usesMcp = agents.some((a) => Array.isArray(a.tools) && a.tools.length > 0);
   return ['core', ...(spec.approval ? ['governance'] : []), ...(usesMcp ? ['mcp'] : [])].sort();

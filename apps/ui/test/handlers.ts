@@ -181,6 +181,7 @@ export const handlers = [
       digest: 'sha256:abc',
       definition: valid ? { name: 'ticket-updater' } : null,
       manifest: null,
+      deprecations: [f.legacyDeprecation],
     });
   }),
   http.post(api('/v1/agents'), async ({ request }) => {
@@ -196,7 +197,12 @@ export const handlers = [
   }),
   http.post(api('/v1/agents/:id/publish'), () =>
     json<ResponseOf<'/v1/agents/{id}/publish', 'post', 201>>(
-      { version: { ...f.versions[1]!, version: '1.1.0' }, created: true },
+      {
+        version: { ...f.versions[1]!, version: '1.1.0' },
+        created: true,
+        deprecations: [f.legacyDeprecation],
+        awp: { status: 'converted' },
+      },
       201,
     ),
   ),

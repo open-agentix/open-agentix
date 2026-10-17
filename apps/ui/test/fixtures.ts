@@ -163,6 +163,14 @@ export const publishedSource = draftSource
   .replace('1.1.0', '1.0.0')
   .replace('jira-cli', 'git+node');
 
+export const legacyDeprecation = {
+  code: 'legacy_format' as const,
+  message:
+    'the file format openagentix.io/v1alpha1 is deprecated and is rejected from release 0.4.0; convert it with "oax awp convert" (docs/agents-md.md)',
+  removedIn: '0.4.0',
+  docs: 'docs/agents-md.md#transition-to-awp-manifests',
+};
+
 export const agent: Agent = {
   id: ids.agent,
   name: 'ticket-updater',
@@ -183,6 +191,7 @@ export const agent: Agent = {
   disabledBy: null,
   disabledReason: null,
   draftSource,
+  deprecations: [legacyDeprecation],
 };
 
 export const draftOnlyAgent: Agent = {
@@ -255,6 +264,8 @@ export const versionDetail: AgentVersionDetail = {
       },
     ],
   },
+  awp: null,
+  deprecations: [legacyDeprecation],
 };
 
 export const run: Run = {
