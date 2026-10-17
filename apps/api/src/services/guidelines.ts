@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   MAX_PATTERN_CHARS,
+  MAX_POLICY_GLOBS,
   MAX_POLICY_PATTERNS,
   checkPatternList,
   globIssue,
@@ -94,6 +95,12 @@ export class GuidelinesService {
       if (issue)
         throw new HttpError(400, 'validation_failed', `invalid glob ${g.slice(0, 64)}: ${issue}`);
     }
+    if (rules.forbiddenTools.length + rules.requireApprovalTools.length > MAX_POLICY_GLOBS)
+      throw new HttpError(
+        400,
+        'validation_failed',
+        `at most ${MAX_POLICY_GLOBS} tool globs (forbiddenTools and requireApprovalTools together) per guideline set`,
+      );
     await this.assertMergedLimits(actor.tenantId, {
       scope: input.scope,
       name: input.name,
@@ -163,10 +170,18 @@ export class GuidelinesService {
     const globalOnly = [...existing.filter((x) => x.scope === 'global'), added].filter(
       (x) => x.scope === 'global',
     );
+    const mergedGlobs = (sets: GuidelineSet[], max: number): string | null => {
+      const r = resolveGuidelines(sets);
+      return r.forbiddenTools.length + r.requireApprovalTools.length > max
+        ? `the merged tool globs are limited to ${max}`
+        : null;
+    };
     const issue =
       added.scope === 'global'
-        ? merged(globalOnly, MAX_POLICY_PATTERNS / 2, MAX_PATTERN_CHARS / 2)
-        : merged([...existing, added], MAX_POLICY_PATTERNS, MAX_PATTERN_CHARS);
+        ? (merged(globalOnly, MAX_POLICY_PATTERNS / 2, MAX_PATTERN_CHARS / 2) ??
+          mergedGlobs(globalOnly, MAX_POLICY_GLOBS / 2))
+        : (merged([...existing, added], MAX_POLICY_PATTERNS, MAX_PATTERN_CHARS) ??
+          mergedGlobs([...existing, added], MAX_POLICY_GLOBS));
     if (issue)
       throw new HttpError(
         422,

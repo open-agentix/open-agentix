@@ -186,3 +186,41 @@ describe('evaluate and dry-run are bounded', () => {
     }
   });
 });
+
+describe('tool globs are bounded in number', () => {
+  let g: TestNode;
+  beforeAll(async () => {
+    g = await testNode();
+  });
+  afterAll(async () => g.close());
+
+  const globs = (n: number, from = 0) =>
+    Array.from({ length: n }, (_, i) => `*${'a'.repeat(84)}${from + i}b`.slice(0, 120));
+
+  it('refuses a policy of thousands of globs (about 1 MB) and more than 64 per policy', async () => {
+    const t0 = performance.now();
+    const huge = await g.req({
+      method: 'POST',
+      url: '/v1/policies',
+      payload: { name: 'globs-huge', bundle: { forbiddenTools: globs(8000) } },
+    });
+    expect(huge.statusCode).toBe(400);
+    const some = await g.req({
+      method: 'POST',
+      url: '/v1/policies',
+      payload: { name: 'globs-65', bundle: { forbiddenTools: globs(65) } },
+    });
+    expect(some.statusCode).toBe(400);
+    expect(performance.now() - t0).toBeLessThan(2000);
+  });
+
+  it('limits the enabled globs of a tenant together', async () => {
+    const make = (name: string, forbiddenTools: string[]) =>
+      g.req({ method: 'POST', url: '/v1/policies', payload: { name, bundle: { forbiddenTools } } });
+    expect((await make('g-a', globs(64, 0))).statusCode).toBe(201);
+    expect((await make('g-b', globs(64, 100))).statusCode).toBe(201);
+    const over = await make('g-c', globs(1, 200));
+    expect(over.statusCode).toBe(422);
+    expect(over.json().error).toBe('policy_limits_exceeded');
+  });
+});

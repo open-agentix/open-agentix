@@ -5,10 +5,12 @@ import {
   globIssue,
   globMatch,
   MAX_PATTERN_CHARS,
-  isCachedLinear,
   checkPatternList,
   compileLinear,
-  resetLinearCache,
+  LinearCache,
+  RegexWork,
+  precompileLinear,
+  precompilePatterns,
   usesDotOrSpaceClass,
   ToolGrantSchema,
   argConstraintIssues,
@@ -1157,7 +1159,7 @@ describe('programs of bounded size', () => {
 });
 
 describe('the matcher contract is RE2, not ECMA-262', () => {
-  const test = (p: string, text: string) => compileLinear(p, false, false)!.test(text);
+  const test = (p: string, text: string) => compileLinear(p)!.test(text);
 
   it('"." matches CR, so ^a.b$ accepts a carriage return', () => {
     expect(test('^a.b$', 'a\rb')).toBe(true);
@@ -1182,7 +1184,7 @@ describe('the matcher contract is RE2, not ECMA-262', () => {
 
   it('refuses ECMA-262 constructs RE2 does not have (fail closed)', () => {
     for (const p of ['\\u0041', '\\u{41}', '\\p{Script=Greek}', '[^]', '(?<n>a)\\k<n>'])
-      expect(compileLinear(p, false, false), p).toBeNull();
+      expect(compileLinear(p), p).toBeNull();
   });
 
   it('keeps "." and "\\s" out of deny patterns and warns about "." in a pattern', () => {
@@ -1255,15 +1257,6 @@ describe('compile cost is bounded by source size', () => {
     expect(ms2).toBeLessThan(200);
   });
 
-  it('does not fill the compile cache while validating', () => {
-    resetLinearCache();
-    const p = slow(999, 120);
-    expect(checkRegexSource(p)).toBeNull();
-    expect(isCachedLinear(p)).toBe(false);
-    expect(compileLinear(p)).not.toBeNull();
-    expect(isCachedLinear(p)).toBe(true);
-  });
-
   it('limits the characters of patterns in one AWP manifest too, not only their count', () => {
     const deny = Array.from({ length: 40 }, (_, i) => slow(i, 250)); // 40 x 231 > 8192, count is fine
     const m = manifestOf(
@@ -1287,28 +1280,28 @@ describe('compile cost is bounded by source size', () => {
     expect(r.findings.map((f) => `${f.code} ${f.path}`)).toContain('args.limit /spec');
   });
 
-  it('converges: a cold set that exceeds the compile budget is compiled over a few decisions', () => {
-    resetLinearCache();
+  it('a cold set that exceeds the compile budget is denied, not slow, and converges in a shared cache', () => {
     const deny = Array.from({ length: 32 }, (_, i) => slow(i, 250));
+    const cache = new LinearCache(49_152, 512);
     const outcomes: string[] = [];
     let worst = 0;
     for (let i = 0; i < 12; i++) {
-      const [reasons, ms] = timed(() => checkArg('k', 'hello', { required: false, deny }));
+      const [reasons, ms] = timed(() =>
+        checkArg('k', 'hello', { required: false, deny }, new RegexWork({ grant: cache })),
+      );
       worst = Math.max(worst, ms);
       outcomes.push(reasons.length === 0 ? 'allow' : 'deny');
       if (reasons.length === 0) break;
     }
-    // fail closed while patterns are still being compiled, then allowed for good
-    expect(outcomes[0]).toBe('deny');
+    expect(outcomes[0]).toBe('deny'); // fail closed while patterns are still being compiled
     expect(outcomes.at(-1)).toBe('allow');
-    expect(worst).toBeLessThan(600); // measured about 150-250 ms: the compile budget
-    const [warm, warmMs] = timed(() => checkArg('k', 'hello', { required: false, deny }));
-    expect(warm).toEqual([]);
-    expect(warmMs).toBeLessThan(100);
+    expect(worst).toBeLessThan(600); // measured 100-250 ms: the compile budget
+    // without a shared cache every decision starts cold and never converges
+    const cold = checkArg('k', 'hello', { required: false, deny });
+    expect(cold.map((r) => r.code)).toEqual(['arg_denied']);
   });
 
   it('charges cold compiles to the budget, so a decision with too many is denied', () => {
-    resetLinearCache();
     const bundle = (k: number) => ({
       forbiddenTools: [],
       forbiddenArgPatterns: Array.from({ length: 32 }, (_, i) => ({
@@ -1367,7 +1360,6 @@ describe('compile cost is bounded by source size', () => {
   });
 
   it('refuses stored data above the limits without compiling anything', () => {
-    resetLinearCache();
     const huge = Array.from({ length: 300 }, (_, i) => slow(i, 250));
     const hundred = Array.from({ length: 100 }, (_, i) => slow(i, 8));
     const t0 = performance.now();
@@ -1393,7 +1385,6 @@ describe('compile cost is bounded by source size', () => {
     );
     expect(stored.reasons.map((r) => r.message).join()).toMatch(/pattern limits of this grant/);
     expect(performance.now() - t0).toBeLessThan(100);
-    expect(compileLinear(huge[0]!, false, true)).not.toBeNull(); // nothing was cached before this line
   });
 });
 
@@ -1479,5 +1470,126 @@ ${Array.from({ length: responses }, () => `        - toolCalls: [${Array.from({ 
     expect(validateAgentSource(src(33)).valid).toBe(false);
     expect(validateAgentSource(src(1, 64)).errors).toEqual([]);
     expect(validateAgentSource(src(1, 65)).valid).toBe(false);
+  });
+});
+
+const timed = <T>(fn: () => T): [T, number] => {
+  const t0 = performance.now();
+  const out = fn();
+  return [out, performance.now() - t0];
+};
+
+describe('tenant caches: a request cannot evict, a stored policy compiles before its decisions', () => {
+  const stored = (k: number, n: number, chars: number) => ({
+    forbiddenTools: [],
+    forbiddenArgPatterns: Array.from({ length: n }, (_, i) => ({
+      pattern: `${'[\\p{L}\\p{N}\\p{P}\\p{S}]'.repeat(Math.floor((chars - 12) / 22))}u${String(k * 1000 + i).padStart(10, '0')}`,
+      reason: 'no',
+    })),
+    requireApprovalTools: [],
+  });
+  const decideWith = (
+    bundles: ReturnType<typeof stored>[],
+    caches?: { bundle?: LinearCache; grant?: LinearCache },
+  ) =>
+    evaluateToolCall(
+      { server: 's', tool: 't', args: { x: 'hello' } },
+      {
+        definition: { classification: 'internal' },
+        agent: { id: 'a', tools: [grant({ server: 's', tool: 't', allowAdditionalArgs: true })] },
+        bundles: bundles as never,
+        ...(caches ? { caches } : {}),
+      },
+    );
+
+  it('precompiled patterns are allowed from the first decision, whatever happens in other caches', async () => {
+    // the victim: 192 patterns of 128 characters (24,576 characters), the attacker: dry-run style requests
+    const victim = [stored(1, 64, 128), stored(2, 64, 128), stored(3, 64, 128)];
+    const victimCache = new LinearCache(49_152, 512);
+    const t0 = performance.now();
+    await precompilePatterns(victimCache, victim as never, null);
+    const precompileMs = performance.now() - t0;
+    const attacker = (r: number) => {
+      // each attacker request brings its own definition with 128 unique unicode-class patterns
+      const deny = Array.from(
+        { length: 128 },
+        (_, i) => stored(100 + r, 1, 64).forbiddenArgPatterns[0]!.pattern + i,
+      );
+      return checkArg('k', 'hello', { required: false, deny: deny.map((d) => d.slice(0, 250)) });
+    };
+    const verdicts: string[] = [];
+    const times: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      attacker(i);
+      attacker(i + 1000);
+      const [d, ms] = timed(() => decideWith(victim, { bundle: victimCache }));
+      verdicts.push(d.effect);
+      times.push(ms);
+    }
+    expect(new Set(verdicts)).toEqual(new Set(['allow']));
+    expect(Math.max(...times)).toBeLessThan(100);
+    expect(precompileMs).toBeLessThan(5000);
+  });
+
+  it('a stored policy gives the same verdict cold with a precompile as warm', async () => {
+    const policy = [stored(7, 64, 128), stored(8, 64, 128)];
+    const a = new LinearCache(49_152, 512);
+    await precompilePatterns(a, policy as never, null);
+    const first = decideWith(policy, { bundle: a }).effect;
+    const second = decideWith(policy, { bundle: a }).effect;
+    const b = new LinearCache(49_152, 512);
+    await precompilePatterns(b, policy as never, null);
+    expect([first, second, decideWith(policy, { bundle: b }).effect]).toEqual([
+      'allow',
+      'allow',
+      'allow',
+    ]);
+  });
+
+  it('evicts least recently used entries within a quota instead of clearing everything', () => {
+    const cache = new LinearCache(100, 4);
+    for (const p of ['aaaa', 'bbbb', 'cccc']) compileLinear(p, false, cache);
+    compileLinear('aaaa', false, cache); // a is now the most recent
+    for (let i = 0; i < 30; i++) compileLinear(`x${String(i).padStart(10, '0')}`, false, cache);
+    expect(cache.size).toBeLessThanOrEqual(4);
+    const kept = new LinearCache(100, 8);
+    compileLinear('keepkeep', false, kept);
+    expect(compileLinear('keepkeep', false, kept)).not.toBeNull();
+    expect(kept.size).toBe(1);
+  });
+
+  it('yields to the event loop while precompiling', async () => {
+    const items = Array.from({ length: 64 }, (_, i) => ({
+      source: stored(50, 1, 250).forbiddenArgPatterns[0]!.pattern.slice(0, 240) + i,
+      ignoreCase: true,
+    }));
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 1);
+    await precompileLinear(new LinearCache(49_152, 512), items);
+    clearInterval(timer);
+    expect(ticks).toBeGreaterThan(0);
+  });
+});
+
+describe('globs are bounded in number', () => {
+  it('denies, fail closed and fast, when more than 256 globs apply together', () => {
+    const globs = Array.from({ length: 300 }, (_, i) => `*${'a'.repeat(80)}${i}b`);
+    const b = {
+      forbiddenTools: globs.slice(0, 150),
+      forbiddenArgPatterns: [],
+      requireApprovalTools: globs.slice(150),
+    };
+    const t0 = performance.now();
+    const d = evaluateToolCall(
+      { server: 's', tool: 'x'.repeat(250), args: {} },
+      {
+        definition: { classification: 'internal' },
+        agent: { id: 'a', tools: [grant({ server: 's', tool: '*', allowAdditionalArgs: true })] },
+        bundles: [b],
+      },
+    );
+    expect(d.effect).toBe('deny');
+    expect(d.reasons.map((r) => r.message).join()).toMatch(/exceed their limits.*tool globs/);
+    expect(performance.now() - t0).toBeLessThan(20);
   });
 });

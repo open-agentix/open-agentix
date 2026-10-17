@@ -272,16 +272,24 @@ twenty of them 24 s), so the size is bounded too:
   charged separately, after the compile, for a pattern not in the cache: 1500 steps per source character plus
   100 per instruction, against 3,000,000 steps (about 150 ms; the charge is deliberately above measured
   compile times, which were 0.5 to 146 us per character). When a budget is gone nothing more is compiled or
-  matched in that decision (it denies, fail closed); compiled patterns stay cached (up to 65,536 source
-  characters, about 40 MB), so a large policy that does not fit one decision is compiled over a few
-  decisions, denying until it is complete. A dry run (`/v1/agents/:id/dry-run`) shares one budget over all its
-  scripted calls (at most 32 calls per response, 64 responses), and `POST /v1/policies/evaluate` is
-  rate-limited like validation. Measured with the real code (this implementation, warm): a maximum policy
+  matched in that decision (it denies, fail closed). **Caches:** there is no process-wide cache. A run of a
+  tenant uses that tenant's cache (49,152 source characters, 512 entries, least-recently-used eviction;
+  16 tenants are kept), and the control node **precompiles** the tenant's policies and the agent's grants into
+  it before the decision (in slices of 5 ms that do not hold the event loop, charged to the run that loads
+  them), so a decision finds everything compiled and its verdict does not depend on cache state or on what
+  other tenants or requests do. Whatever comes from a request (a dry run, a policy evaluation with a supplied
+  definition or extra bundles) is compiled into a cache that dies with the request, never into one that
+  another decision uses. Validation compiles into a small scratch cache that decisions never use (a
+  definition or list is limited to 8192 characters before anything is compiled); A dry run (`/v1/agents/:id/dry-run`) shares one budget over all its
+  scripted calls (at most 32 calls per response, 64 responses); the dry-run route and `POST /v1/policies/evaluate`
+  are rate-limited like validation. Measured with the real code (this implementation, warm): a maximum policy
   set of 8 x 32 patterns of 128 characters takes 22 to 61 ms per cold decision (up to 146 ms with case-insensitive
   `\p{Ll}` classes), converges in 15 to 16 decisions, and then 2 ms; the matching budget is exhausted in
   under 1 ms by a request that asks for more;
 - a `deny` rule that cannot inspect the whole value denies; a pattern the matcher cannot take denies;
-- **globs** (`forbiddenTools`, `requireApprovalTools`, `forbiddenDependencies`) are matched without a regular
+- **globs** (`forbiddenTools`, `requireApprovalTools`, `forbiddenDependencies`) are bounded in number (64 per
+  policy or guideline set, 128 per tenant's enabled policies, 256 per decision over everything that applies;
+  stored data above them is denied) and are matched without a regular
   expression (iterative two-pointer, `*a*a*a*a*!` against a 200-character name: under 5 ms; the previous
   implementation built a backtracking `RegExp`, 24.8 s). A glob is at most 128 characters with at most 8
   `*`, checked when written; a stored glob above that forbids (or requires approval), and a tool name above
@@ -564,3 +572,13 @@ reviewed tool lists of a publish), not from a database.
 `approved-publisher` (MCP tool grants, one with required approval) export without a critical extension.
 Regenerate the goldens with `UPDATE_GOLDEN=1 pnpm vitest run packages/core/test/awp-export.test.ts` and
 `pnpm format`.
+
+### Known limits of the pattern budgets
+
+- Every string argument of a call is run through every policy pattern. A string above 16384 UTF-16 units is
+  denied once any `forbiddenArgPatterns` policy exists (also an argument that a grant allows up to 65,536, as
+  the workspace tool grants do for `content` and `new`), and the matching budget (2,000,000 steps per decision)
+  caps the total length of string arguments at about 2,000,000 divided by the summed program sizes of the
+  patterns (256 patterns of about 24 instructions: roughly 300 characters). A policy set that is within every
+  write-time limit can therefore make typical calls undecidable (they deny, fail closed). Keep policy sets
+  small and their patterns short; a write-time estimate of this (a warning or 422) is tracked as a follow-up.

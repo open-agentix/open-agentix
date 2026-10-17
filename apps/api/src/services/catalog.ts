@@ -18,6 +18,10 @@ import {
   type AccessCatalog,
   type PinnedTool,
   evaluateToolCall,
+  precompilePatterns,
+  tenantPatternCaches,
+  MAX_ENABLED_POLICY_GLOBS,
+  MAX_POLICY_GLOBS,
   expandProfiles,
   loadAgentDefinition,
   type PolicyBundle,
@@ -97,7 +101,13 @@ function assertRegexes(bundle: PolicyBundle): void {
         ? `forbiddenArgPatterns: ${issue.message}`
         : `invalid pattern ${bundle.forbiddenArgPatterns[issue.index]!.pattern}: ${issue.message}`,
     );
-  // Globs are matched on every tool call: bounded length and number of "*" (see glob.ts).
+  // Globs are matched on every tool call: bounded count, length and number of "*" (see glob.ts).
+  if (bundle.forbiddenTools.length + bundle.requireApprovalTools.length > MAX_POLICY_GLOBS)
+    throw new HttpError(
+      400,
+      'validation_failed',
+      `at most ${MAX_POLICY_GLOBS} tool globs (forbiddenTools and requireApprovalTools together) per policy`,
+    );
   for (const g of [...bundle.forbiddenTools, ...bundle.requireApprovalTools]) {
     const bad = globIssue(g);
     if (bad)
@@ -111,8 +121,14 @@ const ENABLED_LIMITS = {
     bundles: MAX_ENABLED_POLICIES,
     patterns: MAX_ENABLED_POLICY_PATTERNS,
     chars: MAX_ENABLED_POLICY_CHARS,
+    globs: MAX_ENABLED_POLICY_GLOBS,
   },
-  platform: { bundles: 16, patterns: MAX_POLICY_PATTERNS, chars: MAX_PATTERN_CHARS },
+  platform: {
+    bundles: 16,
+    patterns: MAX_POLICY_PATTERNS,
+    chars: MAX_PATTERN_CHARS,
+    globs: MAX_POLICY_GLOBS,
+  },
 } as const;
 
 /** Where a run executes: connections resolve most specific first (agent, team, tenant, platform). */
@@ -1328,11 +1344,18 @@ export class CatalogService {
     );
     if (errors.length)
       throw new HttpError(400, 'validation_failed', 'tool grants are not allowed', errors);
+    const stored = await this.enabledBundles(tenantId);
+    // The tenant's own policies use the tenant's cache (precompiled outside the decision). The
+    // definition and the extra bundles come from the request: their patterns are compiled into a
+    // cache that dies with this request, never into one that other decisions use.
+    const cache = tenantPatternCaches.forTenant(tenantId);
+    if (extraBundles.length === 0) await precompilePatterns(cache, stored, null);
     return evaluateToolCall(call, {
       definition,
       agent: definition.agents.find((a) => a.id === agentId) ?? agent,
       toolAccess: definition.toolAccess,
-      bundles: [...(await this.enabledBundles(tenantId)), ...extraBundles],
+      bundles: [...stored, ...extraBundles],
+      ...(extraBundles.length === 0 ? { caches: { bundle: cache } } : {}),
     });
   }
 }

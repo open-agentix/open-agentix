@@ -14,6 +14,6 @@ const { compileLinear } = await import('../src/agents/linear-regex.js');
 describe('compileLinear without a readable program size', () => {
   it('refuses every pattern', () => {
     expect(compileLinear('a')).toBeNull();
-    expect(compileLinear('^x$', true, false)).toBeNull();
+    expect(compileLinear('^x$', true)).toBeNull();
   });
 });

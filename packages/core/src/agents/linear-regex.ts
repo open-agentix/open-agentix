@@ -19,15 +19,6 @@ export const MAX_REPEAT_SUM = 400;
 /** Largest compiled program (instructions of the matcher's NFA). */
 export const MAX_PROGRAM_SIZE = 512;
 /**
- * The cache holds the allowed maximum of one tenant's patterns (policies and a definition) so a warm
- * decision never compiles: total source characters and entries. Measured retained memory is about
- * 130 KB for a 230-character unicode-class pattern, so the characters bound is also a memory bound
- * (roughly 40 MB at the limit).
- */
-const CACHE_CHARS_BUDGET = 65_536;
-const CACHE_ENTRIES = 1024;
-
-/**
  * Limits on the SOURCE of patterns. Compiling costs about 10 ms and megabytes for a 900-character
  * pattern, so the compile cost of a set of patterns is bounded by the characters written, which is
  * what an author controls: one pattern is at most {@link MAX_PATTERN_SOURCE} characters, the patterns
@@ -54,6 +45,14 @@ export const MAX_ALL_POLICY_CHARS = 32_768;
 export const MAX_ENABLED_POLICIES = 32;
 export const MAX_ENABLED_POLICY_PATTERNS = 128;
 export const MAX_ENABLED_POLICY_CHARS = 16_384;
+/**
+ * Globs (`forbiddenTools`, `requireApprovalTools`) are matched against the tool name on every call
+ * and cost up to ~200 us each at the length limits, so their number is bounded like the patterns:
+ * per policy, per decision over everything that applies, and per tenant's enabled policies.
+ */
+export const MAX_POLICY_GLOBS = 64;
+export const MAX_ALL_POLICY_GLOBS = 256;
+export const MAX_ENABLED_POLICY_GLOBS = 128;
 
 export interface LinearRegex {
   test(text: string): boolean;
@@ -96,21 +95,114 @@ export function repeatBoundsIssue(source: string): string | null {
   return null;
 }
 
-const cache = new Map<string, LinearRegex | null>();
-let cachedChars = 0;
+/**
+ * A compile cache with a quota in source characters and entries and least-recently-used eviction.
+ * There is no process-wide cache: a tenant's decisions use that tenant's cache (`TenantPatternCaches`),
+ * everything that comes from a request (dry run, policy evaluation with a supplied definition) uses a
+ * temporary one, so nobody can evict somebody else's compiled patterns.
+ */
+export class LinearCache {
+  private readonly map = new Map<string, { re: LinearRegex | null; chars: number }>();
+  private chars = 0;
+
+  constructor(
+    readonly maxChars: number,
+    readonly maxEntries: number,
+  ) {}
+
+  has(key: string): boolean {
+    return this.map.has(key);
+  }
+
+  get(key: string): LinearRegex | null | undefined {
+    const hit = this.map.get(key);
+    if (!hit) return undefined;
+    this.map.delete(key); // most recently used goes last
+    this.map.set(key, hit);
+    return hit.re;
+  }
+
+  set(key: string, re: LinearRegex | null, chars: number): void {
+    const old = this.map.get(key);
+    if (old) {
+      this.chars -= old.chars;
+      this.map.delete(key);
+    }
+    while (
+      this.map.size > 0 &&
+      (this.chars + chars > this.maxChars || this.map.size >= this.maxEntries)
+    ) {
+      const oldest = this.map.keys().next().value as string;
+      this.chars -= this.map.get(oldest)!.chars;
+      this.map.delete(oldest);
+    }
+    this.map.set(key, { re, chars });
+    this.chars += chars;
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  clear(): void {
+    this.map.clear();
+    this.chars = 0;
+  }
+}
+
+const keyOf = (source: string, ignoreCase: boolean): string =>
+  `${ignoreCase ? 'i' : 's'}:${source}`;
+
+/** What one tenant may keep compiled: its policies and one definition (32768 + 8192 characters). */
+export const TENANT_CACHE_CHARS = 49_152;
+export const TENANT_CACHE_ENTRIES = 512;
+/** Tenants whose caches are kept; the least recently used tenant is dropped (measured ~130 KB per pattern). */
+export const TENANT_CACHES = 16;
+
+/** One cache per tenant, with a bound on the number of tenants. */
+export class TenantPatternCaches {
+  private readonly caches = new Map<string, LinearCache>();
+
+  constructor(private readonly maxTenants = TENANT_CACHES) {}
+
+  forTenant(tenantId: string): LinearCache {
+    const known = this.caches.get(tenantId);
+    if (known) {
+      this.caches.delete(tenantId);
+      this.caches.set(tenantId, known);
+      return known;
+    }
+    while (this.caches.size >= this.maxTenants) {
+      this.caches.delete(this.caches.keys().next().value as string);
+    }
+    const created = new LinearCache(TENANT_CACHE_CHARS, TENANT_CACHE_ENTRIES);
+    this.caches.set(tenantId, created);
+    return created;
+  }
+
+  clear(): void {
+    this.caches.clear();
+  }
+}
+
+/** The caches of this process (the control node); tests may clear it. */
+export const tenantPatternCaches = new TenantPatternCaches();
 
 /**
  * Compiles `source`; `null` when the linear-time engine cannot take it, or when it is too large
- * (repeat bounds, program size) or its size cannot be determined (fail closed). Runtime callers
- * cache the result (bounded by total program size); validation passes `useCache: false`.
+ * (source length, repeat bounds, program size) or its size cannot be determined (fail closed). With a
+ * `cache` the result is looked up and stored there; without one it is compiled fresh and not kept.
  */
 export function compileLinear(
   source: string,
   ignoreCase = false,
-  useCache = true,
+  cache: LinearCache | null = null,
 ): LinearRegex | null {
-  const key = `${ignoreCase ? 'i' : 's'}:${source}`;
-  if (useCache && cache.has(key)) return cache.get(key) ?? null;
+  const key = keyOf(source, ignoreCase);
+  if (cache) {
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+  }
   let compiled: LinearRegex | null = null;
   if (source.length <= MAX_PATTERN_SOURCE && repeatBoundsIssue(source) === null) {
     try {
@@ -125,26 +217,41 @@ export function compileLinear(
       compiled = null;
     }
   }
-  if (useCache) {
-    if (cachedChars + source.length > CACHE_CHARS_BUDGET || cache.size >= CACHE_ENTRIES) {
-      cache.clear();
-      cachedChars = 0;
-    }
-    cache.set(key, compiled);
-    cachedChars += source.length;
-  }
+  cache?.set(key, compiled, source.length);
   return compiled;
 }
 
-/** Whether `compileLinear` would answer from the cache (no compile work). */
-export function isCachedLinear(source: string, ignoreCase = false): boolean {
-  return cache.has(`${ignoreCase ? 'i' : 's'}:${source}`);
+/** Whether `compileLinear` would answer from `cache` (no compile work). */
+export function isCachedLinear(
+  source: string,
+  ignoreCase: boolean,
+  cache: LinearCache | null,
+): boolean {
+  return cache?.has(keyOf(source, ignoreCase)) ?? false;
 }
 
-/** Drops the cache (tests). */
-export function resetLinearCache(): void {
-  cache.clear();
-  cachedChars = 0;
+/**
+ * Compiles the patterns of a tenant ahead of its decisions, outside the decision hot path: the
+ * loader (a run, a policy write) pays for it, in slices of a few milliseconds so the event loop is
+ * not held, and a decision then finds everything in the cache. Sources over the limits are skipped
+ * (the decision refuses them without compiling). Patterns already cached cost nothing.
+ */
+export async function precompileLinear(
+  cache: LinearCache,
+  items: readonly { source: string; ignoreCase: boolean }[],
+): Promise<void> {
+  let slice = performance.now();
+  let chars = 0;
+  for (const { source, ignoreCase } of items.slice(0, 1024)) {
+    if (source.length > MAX_PATTERN_SOURCE || isCachedLinear(source, ignoreCase, cache)) continue;
+    chars += source.length;
+    if (chars > TENANT_CACHE_CHARS) break;
+    compileLinear(source, ignoreCase, cache);
+    if (performance.now() - slice > 5) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      slice = performance.now();
+    }
+  }
 }
 
 /**
@@ -152,21 +259,29 @@ export function resetLinearCache(): void {
  * tenant): count, patterns and characters in total. Returns the reason or `null`.
  */
 export function bundleSetIssue(
-  bundles: readonly { forbiddenArgPatterns: readonly { pattern: string }[] }[],
-  limits: { bundles: number; patterns: number; chars: number },
+  bundles: readonly {
+    forbiddenArgPatterns: readonly { pattern: string }[];
+    forbiddenTools?: readonly string[];
+    requireApprovalTools?: readonly string[];
+  }[],
+  limits: { bundles: number; patterns: number; chars: number; globs: number },
 ): string | null {
   if (bundles.length > limits.bundles)
     return `at most ${limits.bundles} policies may apply together`;
   let patterns = 0;
   let chars = 0;
-  for (const b of bundles)
+  let globs = 0;
+  for (const b of bundles) {
+    globs += (b.forbiddenTools?.length ?? 0) + (b.requireApprovalTools?.length ?? 0);
     for (const f of b.forbiddenArgPatterns) {
       patterns++;
       chars += f.pattern.length;
     }
+  }
   if (patterns > limits.patterns) return `at most ${limits.patterns} patterns may apply together`;
   if (chars > limits.chars)
     return `the patterns that apply together are limited to ${limits.chars} characters`;
+  if (globs > limits.globs) return `at most ${limits.globs} tool globs may apply together`;
   return null;
 }
 

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { OaxError } from '@openagentix/core';
 import {
   evaluateToolCall,
+  precompilePatterns,
+  tenantPatternCaches,
   issueRunToken,
   auditShapeOfReport,
   stepAuditEntry,
@@ -452,12 +454,19 @@ export class ControlPlaneService {
     const callCounts = new Map(counts.map((c) => [c.name, Number(c.n)]));
     const key = `${call.server}/${call.tool}`;
     if (relayedCalls > 0) callCounts.set(key, Math.max(callCounts.get(key) ?? 0, relayedCalls));
+    const bundles = await this.bundlesFor(definition, tenantId);
+    // Stored patterns of this tenant are compiled here, outside the decision and in slices that do
+    // not hold the event loop, into the tenant's own cache: the decision never compiles, and what
+    // another tenant, a dry run or an evaluation request does cannot evict them.
+    const cache = tenantPatternCaches.forTenant(tenantId);
+    await precompilePatterns(cache, bundles, agent);
     return evaluateToolCall(call, {
       definition,
       agent,
       toolAccess: (definition as PublishedDefinition).toolAccess,
-      bundles: await this.bundlesFor(definition, tenantId),
+      bundles,
       callCounts,
+      caches: { bundle: cache, grant: cache },
     });
   }
 

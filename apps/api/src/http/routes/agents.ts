@@ -459,7 +459,10 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
   app.post(
     '/v1/agents/:id/dry-run',
     {
-      config: { access: 'agents:write' },
+      config: {
+        access: 'agents:write',
+        rateLimit: { max: ctx.config.rateLimit.validateMax, timeWindow: '1 minute' },
+      },
       schema: {
         tags,
         summary:

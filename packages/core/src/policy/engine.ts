@@ -14,6 +14,10 @@ import {
   MAX_POLICY_PATTERNS,
   compileLinear,
   isCachedLinear,
+  precompileLinear,
+  LinearCache,
+  MAX_ALL_POLICY_GLOBS,
+  TENANT_CACHE_CHARS,
   patternSetIssue,
   type LinearRegex,
 } from '../agents/linear-regex.js';
@@ -95,6 +99,8 @@ export interface PolicyContext {
   callCounts?: ReadonlyMap<string, number>;
   /** Shared work budget (a dry-run request shares one over all its scripted calls). */
   work?: RegexWork;
+  /** Caches for stored patterns (a run of a tenant); absent = temporary, nothing is shared. */
+  caches?: PatternCaches;
 }
 
 export {
@@ -147,20 +153,42 @@ export const REGEX_WORK_BUDGET = 2_000_000;
 /** Compile steps all cold compiles of one decision may use together (see above). */
 export const REGEX_COMPILE_BUDGET = 3_000_000;
 
+/** The caches a decision may use: tenant caches for stored data, nothing shared for requests. */
+export interface PatternCaches {
+  /** Patterns of policies and guidelines (stored). */
+  bundle?: LinearCache;
+  /** Patterns of the agent's grants (stored when a run is decided, supplied by a dry run). */
+  grant?: LinearCache;
+}
+
 /** Work left for the expressions of one decision (or of one dry-run request). */
 export class RegexWork {
   left = REGEX_WORK_BUDGET;
   compileLeft = REGEX_COMPILE_BUDGET;
+  /** Temporary cache for whatever has no cache of its own: dies with this work object. */
+  private readonly local = new LinearCache(TENANT_CACHE_CHARS, 512);
+
+  constructor(private readonly caches: PatternCaches = {}) {}
+
   take(n: number): boolean {
     this.left -= n;
     return this.left >= 0;
   }
 
-  /** The compiled `source`, or `null` when it cannot be taken or the compile budget is gone. */
-  regex(source: string, ignoreCase = false): LinearRegex | null {
-    if (isCachedLinear(source, ignoreCase)) return compileLinear(source, ignoreCase);
+  /**
+   * The compiled `source`, or `null` when it cannot be taken or the compile budget is gone. A hit in
+   * the cache costs nothing; a miss is charged after the compile. Request-supplied patterns never
+   * reach a cache another decision uses.
+   */
+  regex(
+    source: string,
+    ignoreCase = false,
+    scope: 'bundle' | 'grant' = 'grant',
+  ): LinearRegex | null {
+    const cache = (scope === 'bundle' ? this.caches.bundle : this.caches.grant) ?? this.local;
+    if (isCachedLinear(source, ignoreCase, cache)) return compileLinear(source, ignoreCase, cache);
     if (this.compileLeft <= 0) return null;
-    const re = compileLinear(source, ignoreCase);
+    const re = compileLinear(source, ignoreCase, cache);
     this.compileLeft -=
       source.length * COMPILE_STEPS_PER_CHAR + (re?.size ?? 0) * COMPILE_STEPS_PER_INSTRUCTION;
     return re;
@@ -345,6 +373,7 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
     bundles: MAX_BUNDLES,
     patterns: MAX_ALL_POLICY_PATTERNS,
     chars: MAX_ALL_POLICY_CHARS,
+    globs: MAX_ALL_POLICY_GLOBS,
   });
   if (applied) {
     reasons.push({
@@ -399,7 +428,7 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
     });
     return { effect: 'deny', reasons, grant };
   }
-  const work = ctx.work ?? new RegexWork();
+  const work = ctx.work ?? new RegexWork(ctx.caches);
   for (const [name, c] of Object.entries(grant.args)) {
     // Own properties only: `toString` or `__proto__` is not an argument somebody declared.
     if (!Object.hasOwn(args, name) || (args as Record<string, unknown>)[name] === undefined) {
@@ -437,7 +466,7 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
         continue;
       }
       for (const f of b.forbiddenArgPatterns) {
-        const re = work.regex(f.pattern, true);
+        const re = work.regex(f.pattern, true, 'bundle');
         if (
           strings === null ||
           re === null ||
@@ -517,4 +546,25 @@ export function mergeBundles(bundles: readonly PolicyBundle[]): PolicyBundle {
     }
   }
   return merged;
+}
+
+/**
+ * Compiles, ahead of a decision, what the decision will match: the patterns of the bundles and of
+ * the agent's grants. Call it before `evaluateToolCall` for stored data (a run of a tenant) so the
+ * decision itself never compiles and its verdict does not depend on what happened to be cached.
+ */
+export async function precompilePatterns(
+  cache: LinearCache,
+  bundles: readonly PolicyBundle[],
+  agent: Pick<AgentSpec, 'tools'> | null,
+): Promise<void> {
+  const items: { source: string; ignoreCase: boolean }[] = [];
+  for (const b of bundles)
+    for (const f of b.forbiddenArgPatterns) items.push({ source: f.pattern, ignoreCase: true });
+  for (const t of agent?.tools ?? [])
+    for (const c of Object.values(t.args ?? {})) {
+      if (c.pattern !== undefined) items.push({ source: c.pattern, ignoreCase: false });
+      for (const d of c.deny ?? []) items.push({ source: d, ignoreCase: false });
+    }
+  await precompileLinear(cache, items);
 }

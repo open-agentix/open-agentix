@@ -1,6 +1,8 @@
 import { unsafeRegexReason } from './json-schema.js';
 import {
   MAX_PATTERN_SOURCE,
+  LinearCache,
+  MAX_PATTERN_CHARS,
   compileLinear,
   patternSetIssue,
   repeatBoundsIssue,
@@ -23,6 +25,9 @@ import {
  * (`maxLength`, the runtime input limit and work budget) is a separate, independent cap. The scanner is
  * linear in the pattern and never evaluates it.
  */
+
+/** Validation-only compile cache: see {@link checkRegexSource}. */
+const SCRATCH = new LinearCache(MAX_PATTERN_CHARS, 128);
 
 export type RegexIssueCode =
   'too-long' | 'syntax' | 'unsafe' | 'ambiguous-repetition' | 'unsupported' | 'too-large';
@@ -97,8 +102,8 @@ export function checkRegexSource(source: string): RegexIssue | null {
     };
   const bounds = repeatBoundsIssue(source);
   if (bounds) return { code: 'too-large', message: bounds };
-  // not cached: validation must not fill the cache with patterns nobody runs
-  if (compileLinear(source, false, false) === null)
+  // Validation compiles into a small scratch cache that decisions never use (see SCRATCH).
+  if (compileLinear(source, false, SCRATCH) === null)
     return {
       code: 'unsupported',
       message:
