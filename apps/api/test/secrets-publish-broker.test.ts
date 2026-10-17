@@ -1,8 +1,15 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { StepCredentials } from '@openagentix/core';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { auditLog, runNodeSessions, runs, secrets, tenants } from '../src/db/schema.js';
+import {
+  agentVersions,
+  auditLog,
+  runNodeSessions,
+  runs,
+  secrets,
+  tenants,
+} from '../src/db/schema.js';
 import { RUN_TOKEN_SECRET, testNode, type TestNode } from './helpers.js';
 
 /**
@@ -267,7 +274,6 @@ describe('publish', () => {
     const { review, version } = await published(['tenant:pinned-1', 'plain-legacy']);
     const [row] = await n.ctx.db.select().from(secrets).where(eq(secrets.id, sid));
     expect(row!.tenantId).toBe(id['sp-root']);
-    const { agentVersions } = await import('../src/db/schema.js');
     const [v] = await n.ctx.db.select().from(agentVersions).where(eq(agentVersions.id, version.id));
     expect(v!.secretResolution).toEqual([
       { ref: 'plain-legacy', state: 'legacy' },
@@ -657,6 +663,87 @@ describe('run time', () => {
       .from(secrets)
       .where(and(eq(secrets.name, 'scrubbed')));
     await api(tok['sp-root']!, 'POST', `/v1/secrets/${row!.id}/rotate`, { value: value('scrub2') });
+  });
+});
+
+describe('pins that no publish can produce (defence in depth of the broker)', () => {
+  /** A run row and a version row carrying exactly the given pins, written behind the API's back. */
+  async function fixture(pins: unknown[], over: { teamId?: string | null } = {}) {
+    const a = await newAgent([]);
+    const versionId = randomUUID();
+    await n.ctx.db.insert(agentVersions).values({
+      id: versionId,
+      agentId: a.id,
+      version: '9.9.9',
+      digest: randomBytes(32).toString('hex'),
+      source: 's',
+      definition: {},
+      secretResolution: pins as never,
+    });
+    const run = {
+      tenantId: id['sp-c']!,
+      teamId: over.teamId ?? null,
+      agentVersionId: versionId,
+    } as unknown as typeof runs.$inferSelect;
+    return run;
+  }
+  const prepare = (run: typeof runs.$inferSelect, ref: string) =>
+    n.services.runNodes.scoped!.prepare(run, [ref], { destinations: [] });
+  const resolved = (ref: string, scope: string, ownerNode: string, secretId: string) => ({
+    ref,
+    state: 'resolved',
+    scope,
+    ownerNode,
+    secretId,
+  });
+
+  it('refuses a personal secret for a production run', async () => {
+    const res = await api(tok['author']!, 'POST', '/v1/secrets', {
+      scope: 'personal',
+      name: 'pinned-personal',
+      value: value('pp'),
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    const run = await fixture([
+      resolved('personal:pinned-personal', 'personal', id['sp-c']!, j(res).id),
+    ]);
+    await expect(prepare(run, 'personal:pinned-personal')).rejects.toMatchObject({
+      code: 'secret_scope_not_usable',
+    });
+  });
+
+  it('refuses the team secret of another team than the run', async () => {
+    const t2 = await api(tok['sp-c']!, 'POST', '/v1/teams', { slug: 'sp-team-2', name: 'Two' });
+    const mine = await api(tok['sp-c']!, 'POST', '/v1/secrets', {
+      scope: 'team',
+      teamId: id['sp-team'],
+      name: 'pinned-team',
+      value: value('pt'),
+    });
+    const ref = 'team:pinned-team';
+    const pin = resolved(ref, 'team', id['sp-c']!, j(mine).id);
+    await expect(prepare(await fixture([pin], { teamId: j(t2).id }), ref)).rejects.toMatchObject({
+      code: 'secret_out_of_chain',
+    });
+    await expect(prepare(await fixture([pin], { teamId: null }), ref)).rejects.toMatchObject({
+      code: 'secret_out_of_chain',
+    });
+    await expect(
+      prepare(await fixture([pin], { teamId: id['sp-team']! }), ref),
+    ).resolves.toHaveLength(1);
+  });
+
+  it('refuses an unresolved pin, a missing pin and a pin whose owner does not match', async () => {
+    const sid = await secret('sp-root', 'pinned-odd', value('po'));
+    const ref = 'tenant:pinned-odd';
+    const run1 = await fixture([{ ref, state: 'unresolved', code: 'secret_not_found' }]);
+    await expect(prepare(run1, ref)).rejects.toMatchObject({ code: 'secret_unavailable' });
+    const run2 = await fixture([]);
+    await expect(prepare(run2, ref)).rejects.toMatchObject({ code: 'secret_unavailable' });
+    const run3 = await fixture([resolved(ref, 'tenant', id['sp-b']!, sid)]);
+    await expect(prepare(run3, ref)).rejects.toMatchObject({ code: 'secret_unavailable' });
+    const run4 = await fixture([resolved(ref, 'tenant', id['sp-root']!, sid)]);
+    await expect(prepare(run4, ref)).resolves.toHaveLength(1);
   });
 });
 
