@@ -146,7 +146,8 @@ export class PublishGate {
       return refuse(409, 'draft_changed', 'the draft is not the revision you checked', reviewId);
     // Recomputed from the revision's source under the lock, with the policy that applies to the
     // review: an approval that bound to another expansion or resolution no longer counts.
-    const { binding, useCase } = this.reviews.bindingOf(
+    const { binding, useCase } = await this.reviews.bindingOf(
+      tx,
       g.agent,
       g.head.source,
       g.head.digest,

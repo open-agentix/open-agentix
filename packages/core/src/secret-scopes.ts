@@ -53,6 +53,7 @@ export const SECRET_RESOLUTION_CODES = [
   'secret_out_of_chain',
   'secret_not_usable',
   'secret_scope_not_usable',
+  'secret_destination_denied',
   'personal_secret_in_version',
 ] as const;
 export type SecretResolutionCode = (typeof SECRET_RESOLUTION_CODES)[number];

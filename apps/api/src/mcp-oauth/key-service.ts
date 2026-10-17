@@ -53,6 +53,11 @@ export class KeyService {
     private readonly previous: PreviousKek | null = null,
   ) {}
 
+  /** Id of the key-encryption key that wraps new data keys. */
+  get kekId(): string {
+    return this.kek.id;
+  }
+
   get configured(): boolean {
     return this.kek.key !== null;
   }
@@ -207,6 +212,24 @@ export class KeyService {
         .where(eq(tenantDataKeys.tenantId, tenantId));
       return row?.v ?? 0;
     });
+  }
+
+  /** The version new writes of a tenant use, or `null` when the tenant has no data key yet. */
+  async activeVersionOf(tenantId: string): Promise<number | null> {
+    const [row] = await this.db
+      .select({ v: tenantDataKeys.version })
+      .from(tenantDataKeys)
+      .where(and(eq(tenantDataKeys.tenantId, tenantId), eq(tenantDataKeys.status, 'active')));
+    return row?.v ?? null;
+  }
+
+  /** Retired (not yet destroyed) data key versions of a tenant. */
+  async retiredVersionsOf(tenantId: string): Promise<number[]> {
+    const rows = await this.db
+      .select({ v: tenantDataKeys.version })
+      .from(tenantDataKeys)
+      .where(and(eq(tenantDataKeys.tenantId, tenantId), eq(tenantDataKeys.status, 'retired')));
+    return rows.map((r) => r.v).sort((a, b) => a - b);
   }
 
   /** Destroys one RETIRED data key version; the caller checked that nothing is sealed under it. */

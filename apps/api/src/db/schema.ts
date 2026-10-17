@@ -1,3 +1,4 @@
+import type { SecretPin } from '@openagentix/core';
 import { sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
@@ -450,8 +451,12 @@ export const agentVersions = pgTable(
     /** Digest of the profile expansion and of the secret resolution the approvals bound to. */
     expansionDigest: text('expansion_digest'),
     resolutionDigest: text('resolution_digest'),
-    /** The secret references pinned for production runs (names only until ADR 0017 S4). */
-    secretResolution: jsonb('secret_resolution').$type<string[]>(),
+    /**
+     * The secret references pinned for production runs (ADR 0017 section 13.3): one `SecretPin` per
+     * credential reference, with the owning node and secret id a scoped reference resolved to at
+     * publish. Versions published before slice S4 hold plain names (legacy references).
+     */
+    secretResolution: jsonb('secret_resolution').$type<(string | SecretPin)[]>(),
   },
   (t) => [
     uniqueIndex('agent_versions_agent_version_uq').on(t.agentId, t.version),

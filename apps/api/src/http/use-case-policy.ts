@@ -94,6 +94,15 @@ const SELF = [
 ] as const;
 
 const DENIED = [
+  // secrets (ADR 0017 S4): node, team or personal credentials, never part of a use case
+  'GET /v1/secrets',
+  'POST /v1/secrets',
+  'GET /v1/secrets/policy',
+  'PUT /v1/secrets/policy',
+  'GET /v1/secrets/:id',
+  'POST /v1/secrets/:id/rotate',
+  'POST /v1/secrets/:id/revoke',
+  'DELETE /v1/secrets/:id',
   // restricting a role narrows every binding below the node: tenant administrators only
   'GET /v1/tenants/:id/role-restrictions',
   'PUT /v1/tenants/:id/role-restrictions',

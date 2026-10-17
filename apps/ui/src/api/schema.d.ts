@@ -10729,7 +10729,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         name: string;
-                        scopes?: ("agents:read" | "agents:write" | "agents:publish" | "agents:review" | "agents:approve" | "agents:rules" | "runs:read" | "runs:execute" | "runs:cancel" | "runs:approve" | "events:read" | "sources:read" | "sources:write" | "connections:read" | "connections:write" | "policies:read" | "policies:write" | "audit:read" | "audit:verify" | "audit:export" | "costs:read" | "users:read" | "users:write" | "tokens:read" | "tokens:write" | "settings:read" | "settings:write")[];
+                        scopes?: ("agents:read" | "agents:write" | "agents:publish" | "agents:review" | "agents:approve" | "agents:rules" | "runs:read" | "runs:execute" | "runs:cancel" | "runs:approve" | "events:read" | "sources:read" | "sources:write" | "connections:read" | "connections:write" | "policies:read" | "policies:write" | "audit:read" | "audit:verify" | "audit:export" | "costs:read" | "users:read" | "users:write" | "tokens:read" | "tokens:write" | "settings:read" | "settings:write" | "secrets:read" | "secrets:write")[];
                         /** @default 90 */
                         expiresInDays?: number;
                     };
@@ -13320,6 +13320,979 @@ export interface paths {
                 };
             };
         };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List secrets (metadata only)
+         * @description Tenant scope lists the secrets of the acting node and the inheritable ones of its ancestors (flagged `inherited`, without the creator). Team scope needs `teamId`. Personal scope lists your own. Values are never returned.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    scope?: "personal" | "team" | "tenant";
+                    teamId?: string;
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                scope: "personal" | "team" | "tenant";
+                                name: string;
+                                /** @description what an agent writes: `<scope>:<name>` */
+                                reference: string;
+                                ownerNode: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    slugPath: string;
+                                };
+                                teamId: string | null;
+                                /** @enum {string} */
+                                backend: "internal" | "env";
+                                /** @description own secrets only */
+                                pointer: string | null;
+                                version: number;
+                                description: string | null;
+                                /** @enum {string} */
+                                usage: "development" | "production" | "any";
+                                allowedDestinations: string[];
+                                inherit: boolean;
+                                allowOverride: boolean;
+                                /** @enum {string} */
+                                state: "active" | "expired" | "revoked";
+                                /** @description owned by an ancestor node and visible here by inheritance */
+                                inherited: boolean;
+                                /** @description own secrets only */
+                                createdBy: string | null;
+                                /** @description ISO 8601 timestamp */
+                                createdAt: string;
+                                rotatedAt: string | null;
+                                expiresAt: string | null;
+                                revokedAt: string | null;
+                            }[];
+                            nextCursor: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create a secret
+         * @description The value is accepted here and never returned. At least 8 characters, at most 64 KiB. `pointer` instead of `value` creates a pointer to an operator environment secret (no value is copied). A tenant secret owned by a root node cannot be shadowed below unless `allowOverride` is true.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        scope: "personal" | "team" | "tenant";
+                        name: string;
+                        /**
+                         * Format: uuid
+                         * @description required for scope=team
+                         */
+                        teamId?: string;
+                        /** @description write-only; required unless `pointer` is given */
+                        value?: string;
+                        /** @description import helper: the legacy reference (OAX_SECRET_<NAME> or file) this secret points at; no value is copied */
+                        pointer?: string;
+                        description?: string;
+                        /**
+                         * @default any
+                         * @enum {string}
+                         */
+                        usage?: "development" | "production" | "any";
+                        /** @default [] */
+                        allowedDestinations?: string[];
+                        /**
+                         * Format: date-time
+                         * @description ISO 8601 timestamp
+                         */
+                        expiresAt?: string;
+                        /** @description tenant scope: inherit down the tree (default true); false keeps it node-only */
+                        inherit?: boolean;
+                        /** @description tenant scope: a lower node may shadow the name (default false on a root node, true below) */
+                        allowOverride?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            scope: "personal" | "team" | "tenant";
+                            name: string;
+                            /** @description what an agent writes: `<scope>:<name>` */
+                            reference: string;
+                            ownerNode: {
+                                /** Format: uuid */
+                                id: string;
+                                slugPath: string;
+                            };
+                            teamId: string | null;
+                            /** @enum {string} */
+                            backend: "internal" | "env";
+                            /** @description own secrets only */
+                            pointer: string | null;
+                            version: number;
+                            description: string | null;
+                            /** @enum {string} */
+                            usage: "development" | "production" | "any";
+                            allowedDestinations: string[];
+                            inherit: boolean;
+                            allowOverride: boolean;
+                            /** @enum {string} */
+                            state: "active" | "expired" | "revoked";
+                            /** @description owned by an ancestor node and visible here by inheritance */
+                            inherited: boolean;
+                            /** @description own secrets only */
+                            createdBy: string | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            rotatedAt: string | null;
+                            expiresAt: string | null;
+                            revokedAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/secrets/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inherited secret names this node blocks */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description what this node stores itself */
+                            blockInherited: string[];
+                            /** @description the union down the chain: own globs and those of the ancestors */
+                            effectiveBlocked: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        /**
+         * Block inherited secret names for this node and its subtree
+         * @description Narrowing only: a blocked inherited name resolves to `secret_not_found` below this node unless the node or a descendant defines its own.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description name globs ("*" only) of inherited tenant secrets this node and its subtree do not see */
+                        blockInherited: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description what this node stores itself */
+                            blockInherited: string[];
+                            /** @description the union down the chain: own globs and those of the ancestors */
+                            effectiveBlocked: string[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/secrets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Metadata of a secret */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            scope: "personal" | "team" | "tenant";
+                            name: string;
+                            /** @description what an agent writes: `<scope>:<name>` */
+                            reference: string;
+                            ownerNode: {
+                                /** Format: uuid */
+                                id: string;
+                                slugPath: string;
+                            };
+                            teamId: string | null;
+                            /** @enum {string} */
+                            backend: "internal" | "env";
+                            /** @description own secrets only */
+                            pointer: string | null;
+                            version: number;
+                            description: string | null;
+                            /** @enum {string} */
+                            usage: "development" | "production" | "any";
+                            allowedDestinations: string[];
+                            inherit: boolean;
+                            allowOverride: boolean;
+                            /** @enum {string} */
+                            state: "active" | "expired" | "revoked";
+                            /** @description owned by an ancestor node and visible here by inheritance */
+                            inherited: boolean;
+                            /** @description own secrets only */
+                            createdBy: string | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            rotatedAt: string | null;
+                            expiresAt: string | null;
+                            revokedAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete a secret
+         * @description Removes the secret and its values. A published version that pinned it fails closed at run time until a new revision is approved.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/secrets/{id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a secret to a new value
+         * @description Creates the next version; new issuances use it, sessions that already received the old value keep it until their step ends. Only on the owning node.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        value: string;
+                        /** @description a new expiry; null clears it */
+                        expiresAt?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            scope: "personal" | "team" | "tenant";
+                            name: string;
+                            /** @description what an agent writes: `<scope>:<name>` */
+                            reference: string;
+                            ownerNode: {
+                                /** Format: uuid */
+                                id: string;
+                                slugPath: string;
+                            };
+                            teamId: string | null;
+                            /** @enum {string} */
+                            backend: "internal" | "env";
+                            /** @description own secrets only */
+                            pointer: string | null;
+                            version: number;
+                            description: string | null;
+                            /** @enum {string} */
+                            usage: "development" | "production" | "any";
+                            allowedDestinations: string[];
+                            inherit: boolean;
+                            allowOverride: boolean;
+                            /** @enum {string} */
+                            state: "active" | "expired" | "revoked";
+                            /** @description owned by an ancestor node and visible here by inheritance */
+                            inherited: boolean;
+                            /** @description own secrets only */
+                            createdBy: string | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            rotatedAt: string | null;
+                            expiresAt: string | null;
+                            revokedAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/secrets/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a secret
+         * @description Blocks new issuances immediately and removes the stored values. The name stays taken. Cannot be undone.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            scope: "personal" | "team" | "tenant";
+                            name: string;
+                            /** @description what an agent writes: `<scope>:<name>` */
+                            reference: string;
+                            ownerNode: {
+                                /** Format: uuid */
+                                id: string;
+                                slugPath: string;
+                            };
+                            teamId: string | null;
+                            /** @enum {string} */
+                            backend: "internal" | "env";
+                            /** @description own secrets only */
+                            pointer: string | null;
+                            version: number;
+                            description: string | null;
+                            /** @enum {string} */
+                            usage: "development" | "production" | "any";
+                            allowedDestinations: string[];
+                            inherit: boolean;
+                            allowOverride: boolean;
+                            /** @enum {string} */
+                            state: "active" | "expired" | "revoked";
+                            /** @description owned by an ancestor node and visible here by inheritance */
+                            inherited: boolean;
+                            /** @description own secrets only */
+                            createdBy: string | null;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            rotatedAt: string | null;
+                            expiresAt: string | null;
+                            revokedAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;

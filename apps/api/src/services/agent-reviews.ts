@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
   checkApprover,
-  declaredSecretReferences,
   expandProfiles,
   isProductionUseCase,
   lifecyclePolicyDigest,
@@ -9,7 +8,6 @@ import {
   policyFromSnapshot,
   requiredApprovals,
   reviewState,
-  secretResolutionDigest,
   stricterPolicy,
   stripInvisible,
   summariseDecisions,
@@ -50,6 +48,7 @@ import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import { isTenantAdminAt, loadActor } from './grant-authority.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
+import type { SecretResolution } from './secret-resolution.js';
 import { reviewContributors, reviewHeadOf } from './review-contributors.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 
@@ -206,6 +205,7 @@ export class AgentReviewsService {
     private readonly agents: AgentsService,
     private readonly policy: LifecyclePolicyService,
     private readonly catalog: CatalogService,
+    private readonly secretResolution: SecretResolution,
   ) {}
 
   // ------------------------------------------------------------------ revisions
@@ -301,24 +301,35 @@ export class AgentReviewsService {
     });
   }
 
-  /** The digests an approval binds to, for a source and the policy that applies (slice S3 recomputes them under the lock). */
-  bindingOf(
+  /**
+   * The digests an approval binds to, for a source and the policy that applies (slice S3 recomputes
+   * them under the lock). The secret resolution is read from `db` (ADR 0017 section 13.3): every
+   * credential reference with the owning node and secret id it resolves to now, so a reviewer
+   * approves concrete credentials and a secret created later at a nearer node leaves the approval
+   * stale. `resolved` carries what publish pins and checks.
+   */
+  async bindingOf(
+    db: Db,
     agent: AgentRow,
     source: string,
     digest: string,
     policy: LifecyclePolicy,
     catalog: Awaited<ReturnType<AgentReviewsService['catalogOf']>>,
   ) {
-    void agent;
     const def = loadAgentDefinition(source);
     const { definition } = expandProfiles(def, catalog);
+    const secrets = await this.secretResolution.pinsFor(
+      db,
+      { tenantId: agent.tenantId, teamId: agent.teamId },
+      def,
+    );
     const binding: Binding = {
       digest,
       expansionDigest: definition.expansionDigest ?? '',
-      resolutionDigest: secretResolutionDigest(declaredSecretReferences(def)),
+      resolutionDigest: secrets.digest,
       policyDigest: lifecyclePolicyDigest(policy),
     };
-    return { binding, useCase: def.labels.useCase || null };
+    return { binding, useCase: def.labels.useCase || null, secrets };
   }
 
   /** Whether publishing this agent needs an approval under the effective policy (section 6). */
@@ -364,7 +375,14 @@ export class AgentReviewsService {
     const head = cached?.head ?? (await reviewHead(db, agent, review));
     const computed = cached ?? {
       head,
-      ...this.bindingOf(agent, head.source, head.digest, policy, await this.catalogOf(agent)),
+      ...(await this.bindingOf(
+        db,
+        agent,
+        head.source,
+        head.digest,
+        policy,
+        await this.catalogOf(agent),
+      )),
     };
     const {
       set: contributors,
@@ -677,7 +695,14 @@ export class AgentReviewsService {
           );
         const head = await ensureHead(tx, agent, (r) => this.auditRevision(tx, agent, r, true));
         const policy = await this.policy.effectiveFor(node, tx);
-        const { binding } = this.bindingOf(agent, head.source, head.digest, policy, catalog);
+        const { binding } = await this.bindingOf(
+          tx,
+          agent,
+          head.source,
+          head.digest,
+          policy,
+          catalog,
+        );
         let base: VersionRow | null = null;
         if (agent.latestVersionId) {
           const [v] = await tx
@@ -794,7 +819,14 @@ export class AgentReviewsService {
       );
       if (!verdict.ok)
         return { kind: 'refused', code: verdict.code, message: verdict.message, agent };
-      const { binding, useCase } = this.bindingOf(agent, head.source, head.digest, policy, catalog);
+      const { binding, useCase } = await this.bindingOf(
+        tx,
+        agent,
+        head.source,
+        head.digest,
+        policy,
+        catalog,
+      );
       // An approval binds to the expansion, the secret resolution and the policy the reviewer saw
       // (A10): a client that leaves them out would bind it to something it never looked at. They are
       // required for every approval, and for any decision while approval is required (finding 3).

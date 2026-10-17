@@ -298,7 +298,7 @@ describe.each(sqlTargets)('role restrictions (%s)', (_kind, enabled, open) => {
         token: tok['root-admin']!,
       });
       expect(view.statusCode).toBe(200);
-      expect(view.json().permissions).toHaveLength(27);
+      expect(view.json().permissions).toHaveLength(29);
       expect(view.json().denied).toEqual([]);
       // inserting an admin restriction behind the API's back changes nothing either (the table
       // refuses it, and the resolver ignores it)
@@ -309,7 +309,7 @@ describe.each(sqlTargets)('role restrictions (%s)', (_kind, enabled, open) => {
           permission: 'users:write',
         }),
       ).rejects.toThrow();
-      expect((await access('root-admin', 'div-1')).permissions).toHaveLength(27);
+      expect((await access('root-admin', 'div-1')).permissions).toHaveLength(29);
       await clear();
     });
 
