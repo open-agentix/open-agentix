@@ -20,6 +20,15 @@ All notable changes to this project are documented here. The format follows
   `agent-maintainer`. Revert with `apps/api/drizzle/down/0030_agent_roles.down.sql` (refuses while
   `agent-developer` bindings exist). The OpenAPI role enums changed accordingly.
 
+### Fixed
+
+- **`/readyz` no longer reports ready when the stored role restrictions cannot be counted (follow-up of
+  ADR 0014 S9, #346)**: on the legacy read path a failing count was treated as "none stored"; it now makes
+  the probe `503` (`checks.restrictions: false`), also with `OAX_ALLOW_UNENFORCED_RESTRICTIONS=1`. Start-up
+  logs the failure. Tests now cover each platform-operator exemption layer on its own, the organisation cap
+  with a one-for-one replacement in a single `PUT`, and the core cost test is steadier on loaded runners.
+  `docs/tenancy.md` gains the runbook step "lift the restrictions before rolling back the image".
+
 ### Security
 
 - **Rule A4 follows the grant chain, pins the policy of an open review and fails closed on an unknown
