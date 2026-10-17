@@ -21,8 +21,8 @@ export function createMcpOauth(
   role: TrustedRole,
   registry: SecretRegistry = processSecrets,
 ): McpOauthStores {
-  const { kek } = ctx.config.mcp.oauth;
-  const keys = new KeyService(ctx.db, kek, ctx.now);
+  const { kek, kekPrevious } = ctx.config.mcp.oauth;
+  const keys = new KeyService(ctx.db, kek, ctx.now, kekPrevious);
   const tokens = new McpOauthTokenStore(ctx.db, keys, registry, ctx.now);
   return {
     registry,

@@ -361,6 +361,18 @@ export const EnvSchema = z.object({
     .regex(/^[A-Za-z0-9._-]{1,64}$/)
     .default('kek-1'),
   /**
+   * The second key-encryption-key slot, for rotation (ADR 0017 section 13.6): the key that wrapped
+   * the data keys before the current one. Data keys wrapped with it still open; `oax-keys rewrap`
+   * wraps them with the current key, after which the slot can be removed. It needs its own id
+   * (`OAX_MCP_OAUTH_KEK_PREVIOUS_ID`, different from the current one).
+   */
+  OAX_MCP_OAUTH_KEK_PREVIOUS: z.string().optional(),
+  OAX_MCP_OAUTH_KEK_PREVIOUS_FILE: z.string().optional(),
+  OAX_MCP_OAUTH_KEK_PREVIOUS_ID: z
+    .string()
+    .regex(/^[A-Za-z0-9._-]{1,64}$/)
+    .optional(),
+  /**
    * Publish the Client ID Metadata Document at `<OAX_PUBLIC_URL>/v1/oauth/mcp-client.json` (ADR 0016
    * section 7.2). Off by default; needs a public https `OAX_PUBLIC_URL`; refused in air-gapped mode.
    */
@@ -548,6 +560,8 @@ export interface Config {
     /** Key-encryption key of the stored OAuth tokens; `key` is null when none is configured. */
     oauth: {
       kek: { key: Buffer | null; id: string };
+      /** The previous key while a rotation is in progress; `null` otherwise. */
+      kekPrevious: { key: Buffer; id: string } | null;
       /** Where the key came from; `env` is discouraged and warned about at start-up. */
       source: 'env' | 'file' | 'none';
       /** The key file is readable by group or others. */
@@ -684,7 +698,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // what child processes inherit (stdio MCP servers, harness CLIs) and out of `process.env` readers;
   // the kernel's copy of the start-up environment (/proc/self/environ) is NOT changed, so the file
   // variant (OAX_MCP_OAUTH_KEK_FILE) is the recommended one.
-  if (env === process.env) delete process.env.OAX_MCP_OAUTH_KEK;
+  if (env === process.env) {
+    delete process.env.OAX_MCP_OAUTH_KEK;
+    delete process.env.OAX_MCP_OAUTH_KEK_PREVIOUS;
+  }
   return result;
 }
 
@@ -884,37 +901,80 @@ function mcpOf(e: z.infer<typeof EnvSchema>): Config['mcp'] {
   };
 }
 
-/**
- * The 32-byte key-encryption key from the value or the file; errors never quote the value. The key
- * is exposed through a non-enumerable getter, so serialising or logging the config cannot print it.
- */
 function kekOf(
   e: z.infer<typeof EnvSchema>,
 ): Omit<Config['mcp']['oauth'], 'cimd' | 'dcr' | 'renewals'> {
-  if (e.OAX_MCP_OAUTH_KEK && e.OAX_MCP_OAUTH_KEK_FILE)
-    throw new OaxError(
-      'config_invalid',
-      'set only one of OAX_MCP_OAUTH_KEK and OAX_MCP_OAUTH_KEK_FILE',
-    );
-  let raw = e.OAX_MCP_OAUTH_KEK;
-  let fileLoose = false;
-  if (e.OAX_MCP_OAUTH_KEK_FILE) {
-    // The default secret resolver serves every file below OAX_SECRETS_DIR as a secret reference; a
-    // KEK there could be handed to a run node by a tenant that is allowed that reference.
-    if (insideDirectory(e.OAX_MCP_OAUTH_KEK_FILE, e.OAX_SECRETS_DIR))
+  const current = kekSlot(e, {
+    value: e.OAX_MCP_OAUTH_KEK,
+    file: e.OAX_MCP_OAUTH_KEK_FILE,
+    names: ['OAX_MCP_OAUTH_KEK', 'OAX_MCP_OAUTH_KEK_FILE'],
+  });
+  const previous = kekSlot(e, {
+    value: e.OAX_MCP_OAUTH_KEK_PREVIOUS,
+    file: e.OAX_MCP_OAUTH_KEK_PREVIOUS_FILE,
+    names: ['OAX_MCP_OAUTH_KEK_PREVIOUS', 'OAX_MCP_OAUTH_KEK_PREVIOUS_FILE'],
+  });
+  const id = e.OAX_MCP_OAUTH_KEK_ID;
+  let kekPrevious: { key: Buffer; id: string } | null = null;
+  if (previous.key) {
+    const previousId = e.OAX_MCP_OAUTH_KEK_PREVIOUS_ID;
+    if (!previousId || previousId === id)
       throw new OaxError(
         'config_invalid',
-        'OAX_MCP_OAUTH_KEK_FILE must not be inside OAX_SECRETS_DIR (its files are served as secrets)',
+        'OAX_MCP_OAUTH_KEK_PREVIOUS needs OAX_MCP_OAUTH_KEK_PREVIOUS_ID, different from OAX_MCP_OAUTH_KEK_ID',
+      );
+    if (!current.key)
+      throw new OaxError(
+        'config_invalid',
+        'OAX_MCP_OAUTH_KEK_PREVIOUS needs a current OAX_MCP_OAUTH_KEK',
+      );
+    kekPrevious = hidden({ id: previousId }, previous.key);
+  }
+  return {
+    kek: hidden({ id }, current.key),
+    kekPrevious,
+    source: current.source,
+    fileLoose: current.fileLoose || previous.fileLoose,
+  };
+}
+
+/** An object whose `key` is a non-enumerable getter: logging or serialising it never prints the key. */
+function hidden<T extends { id: string }, K extends Buffer | null>(
+  base: T,
+  key: K,
+): T & { key: K } {
+  const out = base as T & { key: K };
+  Object.defineProperty(out, 'key', { get: () => key, enumerable: false });
+  return out;
+}
+
+/** One key-encryption-key slot from a value or a file; errors never quote the value. */
+function kekSlot(
+  e: z.infer<typeof EnvSchema>,
+  slot: { value: string | undefined; file: string | undefined; names: [string, string] },
+): { key: Buffer | null; source: 'env' | 'file' | 'none'; fileLoose: boolean } {
+  const [valueName, fileName] = slot.names;
+  if (slot.value && slot.file)
+    throw new OaxError('config_invalid', `set only one of ${valueName} and ${fileName}`);
+  let raw = slot.value;
+  let fileLoose = false;
+  if (slot.file) {
+    // The default secret resolver serves every file below OAX_SECRETS_DIR as a secret reference; a
+    // KEK there could be handed to a run node by a tenant that is allowed that reference.
+    if (insideDirectory(slot.file, e.OAX_SECRETS_DIR))
+      throw new OaxError(
+        'config_invalid',
+        `${fileName} must not be inside OAX_SECRETS_DIR (its files are served as secrets)`,
       );
     try {
-      raw = readFileSync(e.OAX_MCP_OAUTH_KEK_FILE, 'utf8');
+      raw = readFileSync(slot.file, 'utf8');
       // Group- or world-readable: reported at start-up (Kubernetes Secret mounts are often 0444).
-      fileLoose = (statSync(e.OAX_MCP_OAUTH_KEK_FILE).mode & 0o077) !== 0;
+      fileLoose = (statSync(slot.file).mode & 0o077) !== 0;
     } catch {
-      throw new OaxError('config_invalid', 'OAX_MCP_OAUTH_KEK_FILE cannot be read');
+      throw new OaxError('config_invalid', `${fileName} cannot be read`);
     }
   }
-  const source = e.OAX_MCP_OAUTH_KEK_FILE ? 'file' : e.OAX_MCP_OAUTH_KEK ? 'env' : 'none';
+  const source = slot.file ? 'file' : slot.value ? 'env' : 'none';
   let key: Buffer | null = null;
   if (raw !== undefined) {
     key = Buffer.from(raw.trim(), 'base64');
@@ -922,12 +982,10 @@ function kekOf(
     if (key.length !== 32 || !/^[A-Za-z0-9+/_-]{42,44}={0,2}$/.test(raw.trim()))
       throw new OaxError(
         'config_invalid',
-        'the MCP OAuth key-encryption key must be 32 random bytes, base64 encoded',
+        `${valueName} / ${fileName} must be 32 random bytes, base64 encoded`,
       );
   }
-  const kek = { id: e.OAX_MCP_OAUTH_KEK_ID } as { id: string; key: Buffer | null };
-  Object.defineProperty(kek, 'key', { get: () => key, enumerable: false });
-  return { kek, source, fileLoose };
+  return { key, source, fileLoose };
 }
 
 /** Loopback and `localhost` names: a redirect or metadata URL there is not reachable by a remote server. */
