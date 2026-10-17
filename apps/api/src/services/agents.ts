@@ -60,7 +60,6 @@ import type { ResolvedScope } from './subtree-scope.js';
 import {
   awpRowOf,
   convertDefinition,
-  storeConversion,
   teamLookup,
   type StoredAwpRow,
 } from './legacy-awp.js';
@@ -935,7 +934,7 @@ export class AgentsService {
   ): Promise<PublishResult> {
     const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:publish');
-    this.assertLegacyWritable();
+    // Release N+1: refused by `AgentPublisher.commit`, the one place that creates a version.
     const def = loadAgentDefinition(agent.draftSource);
     this.assertLabelInScope(principal, 'agents:publish', agent, useCaseOf(def));
     this.checkRuntime(def);

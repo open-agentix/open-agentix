@@ -20,9 +20,8 @@ const DOWN = readFileSync(join(MIGRATIONS_FOLDER, `down/${TAG}.down.sql`), 'utf8
 const HEX = (c: string) => c.repeat(64);
 
 describe('migration 0038 files', () => {
-  it('is the newest migration, strictly ordered, and chains its snapshot', () => {
+  it('is ordered right after 0037, strictly ordered, and chains its snapshot', () => {
     const at = journal.entries.findIndex((e) => e.tag === TAG);
-    expect(at).toBe(journal.entries.length - 1);
     expect(journal.entries[at]!.idx).toBe(32);
     expect(journal.entries[at]!.when).toBe(1_792_700_000_007);
     expect(journal.entries[at - 1]!.tag).toBe('0037_stored_grant_chain');
