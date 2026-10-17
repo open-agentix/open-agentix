@@ -43,6 +43,7 @@ import type { Db } from '../db/client.js';
 import type { AuditService } from './audit.js';
 import { BindingReconciler } from './binding-reconciler.js';
 import { chainForGrant } from './grant-chain.js';
+import { offboardPersonalCredentials } from './personal-offboarding.js';
 import {
   currentAuthzEpoch,
   loadAuthzEpoch,
@@ -1152,6 +1153,14 @@ export class IdentityService {
         .set(set)
         .where(and(eq(users.id, id), eq(users.tenantId, actor.tenantId)))
         .returning();
+      if (rows.length > 0 && patch.disabled === true)
+        await offboardPersonalCredentials(
+          tx as unknown as Db,
+          this.audit,
+          actor,
+          id,
+          this.ctx.now(),
+        );
       if (rows.length > 0 && patch.globalRoles !== undefined)
         await mirrorGlobalRoles(
           tx as unknown as Db,

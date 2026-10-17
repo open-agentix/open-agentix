@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   BUDGET_ALERT_EVENT_TYPE,
   crossedThresholds,
+  developmentBudget,
   evaluateBudgets,
   hasPermission,
   percentUsed,
@@ -12,7 +13,9 @@ import {
   type BudgetScope,
   type BudgetUsage,
   type BudgetVerdict,
+  type DevBudgetSource,
   type Principal,
+  type RunStage,
 } from '@openagentix/core';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
@@ -40,6 +43,12 @@ export interface BudgetTarget {
   tenantId: string;
   teamId: string | null;
   useCase: string | null;
+  /**
+   * The stage of the run the spend belongs to. A development spend counts against the development
+   * budget of the node only, never against the production budgets (ADR 0017 section 8); the
+   * default is `production`.
+   */
+  stage?: RunStage;
 }
 
 /** A usage row plus what the control node needs to address it (alerts, API). */
@@ -58,15 +67,23 @@ export interface BudgetLine {
   alerts: number[];
 }
 
+/** The development budget of a node: where the limit comes from and what development runs spent. */
+export interface DevelopmentBudgetLine extends Omit<BudgetLine, 'scope'> {
+  scope: 'development';
+  source: DevBudgetSource;
+}
+
 export interface BudgetOverview {
   month: string;
   tenant: BudgetLine;
   useCases: BudgetLine[];
   teams: BudgetLine[];
+  /** Null for a caller who reads costs through use cases only (nothing of the node is shown). */
+  development: DevelopmentBudgetLine | null;
 }
 
 /** The budgets of one node of a `scope=subtree` overview. */
-export interface NodeBudgetOverview extends Omit<BudgetOverview, 'month'> {
+export interface NodeBudgetOverview extends Omit<BudgetOverview, 'month' | 'development'> {
   node: { id: string; slugPath: string; name: string };
 }
 
@@ -98,6 +115,8 @@ function budgetLine(
   };
 }
 
+/** Spend of runs of published versions: development spend never counts against production budgets. */
+const PRODUCTION_SPEND = eq(costLedger.stage, 'production');
 const toNumber = (v: unknown) => Number(v ?? 0);
 const usd = (micros: number) => micros / 1_000_000;
 const spendSum = () => sql<number>`coalesce(sum(${costLedger.costMicros}), 0)::bigint`;
@@ -126,8 +145,21 @@ export class BudgetsService {
   /** Budgets that apply to a spend target, each with this month's spend. */
   private async usages(db: Db, target: BudgetTarget, month: string): Promise<ScopedUsage[]> {
     const out: ScopedUsage[] = [];
-    const inTenant = eq(costLedger.tenantId, target.tenantId);
+    const inTenant = and(eq(costLedger.tenantId, target.tenantId), PRODUCTION_SPEND);
     const [tenant] = await db.select().from(tenants).where(eq(tenants.id, target.tenantId));
+    // Development spend is counted against its own budget and nothing else.
+    if (target.stage === 'development') {
+      const line = tenant ? await this.developmentLine(db, tenant, month) : null;
+      if (tenant && line?.limit !== null && line)
+        out.push({
+          scope: 'development',
+          key: tenant.slug,
+          scopeKey: '',
+          limitMicros: line.limit!,
+          spentMicros: line.spent,
+        });
+      return out;
+    }
     if (tenant && tenant.monthlyBudgetMicros !== null) {
       out.push({
         scope: 'tenant',
@@ -170,12 +202,36 @@ export class BudgetsService {
           limitMicros: team.monthlyBudgetMicros,
           spentMicros: await this.spent(
             db,
-            and(eq(costLedger.teamId, team.id), eq(costLedger.month, month)),
+            and(eq(costLedger.teamId, team.id), eq(costLedger.month, month), PRODUCTION_SPEND),
           ),
         });
       }
     }
     return out;
+  }
+
+  /** The development budget of a node and this month's development spend. */
+  private async developmentLine(
+    db: Db,
+    tenant: Pick<
+      typeof tenants.$inferSelect,
+      'id' | 'devMonthlyBudgetMicros' | 'monthlyBudgetMicros'
+    >,
+    month: string,
+  ): Promise<{ limit: number | null; spent: number; source: DevBudgetSource }> {
+    const budget = developmentBudget(
+      tenant.devMonthlyBudgetMicros === null ? null : Number(tenant.devMonthlyBudgetMicros),
+      tenant.monthlyBudgetMicros === null ? null : Number(tenant.monthlyBudgetMicros),
+    );
+    const spent = await this.spent(
+      db,
+      and(
+        eq(costLedger.tenantId, tenant.id),
+        eq(costLedger.month, month),
+        eq(costLedger.stage, 'development'),
+      ),
+    );
+    return { limit: budget.limitMicros, spent, source: budget.source };
   }
 
   /**
@@ -189,15 +245,22 @@ export class BudgetsService {
   /** Which use case a run is attributed to (label of the pinned agent version). */
   private async targetOfRun(runId: string): Promise<BudgetTarget> {
     const [run] = await this.ctx.db
-      .select({ tenantId: runs.tenantId, teamId: runs.teamId, versionId: runs.agentVersionId })
+      .select({
+        id: runs.id,
+        stage: runs.stage,
+        tenantId: runs.tenantId,
+        teamId: runs.teamId,
+        agentVersionId: runs.agentVersionId,
+      })
       .from(runs)
       .where(eq(runs.id, runId));
     if (!run) throw notFound('run');
-    const { definition } = await this.agents.definitionOf(run.versionId);
+    const { definition } = await this.agents.definitionOfRun(run);
     return {
       tenantId: run.tenantId,
       teamId: run.teamId,
       useCase: definition.labels.useCase ?? null,
+      stage: run.stage === 'development' ? 'development' : 'production',
     };
   }
 
@@ -220,7 +283,11 @@ export class BudgetsService {
         action: 'budget.blocked',
         target: runId,
         runId,
-        payload: { stage: 'run', breaches: verdict.breaches },
+        payload: {
+          stage: 'run',
+          runStage: target.stage ?? 'production',
+          breaches: verdict.breaches,
+        },
       });
     }
     return verdict;
@@ -327,7 +394,11 @@ export class BudgetsService {
       limit: number | null,
       spent: number,
     ): BudgetLine => budgetLine(raised, scope, key, scopeKey, limit, spent);
-    const inMonth = and(eq(costLedger.tenantId, tenantId), eq(costLedger.month, month));
+    const inMonth = and(
+      eq(costLedger.tenantId, tenantId),
+      eq(costLedger.month, month),
+      PRODUCTION_SPEND,
+    );
     const tenantLine = line(
       'tenant',
       tenant?.slug ?? null,
@@ -354,7 +425,25 @@ export class BudgetsService {
       const spent = await this.spent(db, and(inMonth, eq(costLedger.teamId, t.id)));
       teamLines.push(line('team', t.slug, t.id, t.monthlyBudgetMicros, spent));
     }
-    return { month, tenant: tenantLine, useCases, teams: teamLines };
+    const development = await this.developmentOverview(db, tenant, month, raised);
+    return { month, tenant: tenantLine, useCases, teams: teamLines, development };
+  }
+
+  private async developmentOverview(
+    db: Db,
+    tenant: typeof tenants.$inferSelect | undefined,
+    month: string,
+    raised: readonly RaisedAlert[],
+  ): Promise<DevelopmentBudgetLine | null> {
+    if (!tenant) return null;
+    const line = await this.developmentLine(db, tenant, month);
+    const base = budgetLine(raised, 'tenant', tenant.slug, '', line.limit, line.spent);
+    // The alerts of the development budget are stored under their own scope.
+    const alerts = raised
+      .filter((a) => a.scope === 'development' && a.scopeKey === '')
+      .map((a) => a.thresholdPercent)
+      .sort((a, b) => a - b);
+    return { ...base, scope: 'development', alerts, source: line.source };
   }
 
   private async overviewForUseCases(
@@ -368,7 +457,11 @@ export class BudgetsService {
       .select()
       .from(budgetAlerts)
       .where(and(eq(budgetAlerts.tenantId, tenantId), eq(budgetAlerts.month, month)));
-    const inMonth = and(eq(costLedger.tenantId, tenantId), eq(costLedger.month, month));
+    const inMonth = and(
+      eq(costLedger.tenantId, tenantId),
+      eq(costLedger.month, month),
+      PRODUCTION_SPEND,
+    );
     const mine = and(inMonth, useCaseMatch(costLedger.useCase, scopes));
     const useCases: BudgetLine[] = [];
     for (const b of await db
@@ -385,7 +478,7 @@ export class BudgetsService {
     }
     // No alerts on this line: those belong to the limit of the node, which this caller does not see.
     const tenantLine = budgetLine([], 'tenant', null, '', null, await this.spent(db, mine));
-    return { month, tenant: tenantLine, useCases, teams: [] };
+    return { month, tenant: tenantLine, useCases, teams: [], development: null };
   }
 
   /**
@@ -420,7 +513,11 @@ export class BudgetsService {
     if (pageIds.length === 0) return { items: [], nextCursor };
 
     const month = monthOf(this.ctx.now());
-    const inMonth = and(inArray(costLedger.tenantId, pageIds), eq(costLedger.month, month));
+    const inMonth = and(
+      inArray(costLedger.tenantId, pageIds),
+      eq(costLedger.month, month),
+      PRODUCTION_SPEND,
+    );
     const [raised, useCases, teamRows, tenantSpend, useCaseSpend, teamSpend] = await Promise.all([
       db
         .select()
@@ -526,6 +623,37 @@ export class BudgetsService {
       action: 'budget.set',
       target: useCase,
       payload: { scope: 'use_case', monthlyBudgetUsd },
+    });
+  }
+
+  /** Sets the monthly development budget of the acting node (otherwise 10 % of its cap applies). */
+  async setDevelopmentBudget(p: Principal, monthlyBudgetUsd: number): Promise<void> {
+    const micros = Math.round(monthlyBudgetUsd * 1_000_000);
+    await this.ctx.db
+      .update(tenants)
+      .set({ devMonthlyBudgetMicros: micros })
+      .where(eq(tenants.id, p.tenantId));
+    await this.audit.append({
+      actor: p.userId,
+      tenantId: p.tenantId,
+      action: 'budget.set',
+      target: 'development',
+      payload: { scope: 'development', monthlyBudgetUsd },
+    });
+  }
+
+  /** Removes the explicit development budget: the default (10 % of the node's cap) applies again. */
+  async removeDevelopmentBudget(p: Principal): Promise<void> {
+    await this.ctx.db
+      .update(tenants)
+      .set({ devMonthlyBudgetMicros: null })
+      .where(eq(tenants.id, p.tenantId));
+    await this.audit.append({
+      actor: p.userId,
+      tenantId: p.tenantId,
+      action: 'budget.removed',
+      target: 'development',
+      payload: { scope: 'development' },
     });
   }
 

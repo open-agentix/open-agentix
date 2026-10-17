@@ -1,4 +1,7 @@
+import { hasPermissionIn } from '@openagentix/core';
+import { eq } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
+import { agents } from '../db/schema.js';
 import { createMcpOauth, type McpOauthStores, type TrustedRole } from '../mcp-oauth/index.js';
 import { AgentCheckService } from './agent-check.js';
 import { AgentDeprecationService } from './agent-deprecation.js';
@@ -15,6 +18,7 @@ import { BudgetsService } from './budgets.js';
 import { CatalogService } from './catalog.js';
 import { ControlPlaneService } from './control-plane.js';
 import { CostsService } from './costs.js';
+import { DevRunsService } from './dev-runs.js';
 import { GuidelinesService } from './guidelines.js';
 import { IdentityService } from './identity.js';
 import { IngestService } from './ingest.js';
@@ -59,6 +63,8 @@ export interface Services {
   agentSummaries: AgentSummaryService;
   catalog: CatalogService;
   runs: RunsService;
+  /** Development runs of draft revisions (ADR 0017 S5). */
+  devRuns: DevRunsService;
   ingest: IngestService;
   control: ControlPlaneService;
   runNodes: RunNodesService;
@@ -123,6 +129,7 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const agentSummaries = new AgentSummaryService(ctx);
   const budgets = new BudgetsService(ctx, audit, agents);
   const runs = new RunsService(ctx, audit, agents, budgets);
+  const devRuns = new DevRunsService(ctx, audit, agents, catalog, budgets, lifecyclePolicy);
   const ingest = new IngestService(ctx, audit, runs);
   const guidelines = new GuidelinesService(ctx, audit);
   const runNodes = new RunNodesService(ctx, audit, agents, catalog);
@@ -162,7 +169,13 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const secretStore = new SecretStore(ctx, mcpOauth.keys);
   const secrets = new SecretsService(ctx, audit, secretStore, secretResolution);
   const secretRotation = new SecretKeyRotation(ctx, audit, mcpOauth.keys, secretStore);
-  runNodes.scoped = new ScopedSecretBroker(ctx, secretStore, secretResolution);
+  runNodes.scoped = new ScopedSecretBroker(
+    ctx,
+    secretStore,
+    secretResolution,
+    lifecyclePolicy,
+    (run) => starterEntitled(ctx, identity, run),
+  );
   const mcpOauthFlows = new McpOauthService(ctx, audit, catalog, runNodes, mcpOauth);
   const mcpTest = new McpTestService(ctx, catalog, runNodes, audit, mcpOauthFlows);
   const mcpTools = new McpToolsService(ctx, audit, catalog, mcpTest, runNodes);
@@ -191,6 +204,7 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     agentSummaries,
     catalog,
     runs,
+    devRuns,
     ingest,
     control,
     runNodes,
@@ -246,3 +260,33 @@ export {
   TenantRoleBindingsService,
   TenantsService,
 };
+
+/**
+ * Whether the user who started a development run may still use their personal secrets: the account
+ * exists and is active, can still act in the run's node, and still holds `agents:write` on the agent.
+ * Read at every issuance, so disabling the user or removing the role stops the secrets at once. Any
+ * failure counts as "no" (fail closed).
+ */
+async function starterEntitled(
+  ctx: AppContext,
+  identity: IdentityService,
+  run: { startedBy: string | null; tenantId: string; teamId: string | null; agentId: string },
+): Promise<boolean> {
+  if (!run.startedBy) return false;
+  try {
+    const home = await identity.principalForUser(run.startedBy);
+    const acting =
+      home.tenantId === run.tenantId ? home : await identity.actingIn(home, run.tenantId);
+    const [agent] = await ctx.db
+      .select({ useCase: agents.useCase })
+      .from(agents)
+      .where(eq(agents.id, run.agentId));
+    return hasPermissionIn(acting, 'agents:write', {
+      teamId: run.teamId,
+      agentId: run.agentId,
+      useCase: agent?.useCase ?? null,
+    });
+  } catch {
+    return false;
+  }
+}

@@ -3,7 +3,9 @@ import {
   ControlAgent,
   DEFAULT_CONTROL_LIMITS,
   crossedThresholds,
+  DEFAULT_DEV_BUDGET_SHARE,
   describeBudget,
+  developmentBudget,
   evaluateBudgets,
   newRunMetrics,
   percentUsed,
@@ -64,5 +66,39 @@ describe('budgets', () => {
     expect(d.reasons[0]?.rule).toBe('budget_use_case');
     recordBudgetBreaches(m, []);
     expect(agent.evaluate(m, 1).action).toBe('continue');
+  });
+});
+
+describe('development budget (ADR 0017 decision 9)', () => {
+  it('is 10 % of the monthly cap of the node until an administrator sets one', () => {
+    expect(DEFAULT_DEV_BUDGET_SHARE).toBe(0.1);
+    expect(developmentBudget(null, 100_000_000)).toEqual({
+      limitMicros: 10_000_000,
+      source: 'default',
+    });
+  });
+
+  it('prefers the explicit budget, also a higher or zero one', () => {
+    expect(developmentBudget(2_000_000, 100_000_000)).toEqual({
+      limitMicros: 2_000_000,
+      source: 'explicit',
+    });
+    expect(developmentBudget(0, 100_000_000)).toEqual({ limitMicros: 0, source: 'explicit' });
+    expect(developmentBudget(500_000_000, 100_000_000).limitMicros).toBe(500_000_000);
+  });
+
+  it('has no limit for a node without a cap and without an explicit budget', () => {
+    expect(developmentBudget(null, null)).toEqual({ limitMicros: null, source: 'none' });
+  });
+
+  it('rounds the default down and stops at the limit like every other budget', () => {
+    expect(developmentBudget(null, 15).limitMicros).toBe(1);
+    const v = evaluateBudgets([
+      { scope: 'development', key: 'acme', limitMicros: 1_000_000, spentMicros: 1_000_000 },
+    ]);
+    expect(v.blocked).toBe(true);
+    expect(v.breaches[0]?.message).toBe(
+      'development "acme" reached its monthly budget (1.00 of 1.00 USD)',
+    );
   });
 });

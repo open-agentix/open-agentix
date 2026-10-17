@@ -32,6 +32,7 @@ export * from './control/controller.js';
 export * from './redact.js';
 export * from './pii.js';
 export * from './secret-patterns.js';
+export * from './secret-dev-runs.js';
 export * from './secret-scopes.js';
 export * from './invisible-text.js';
 export * from './context-guard.js';

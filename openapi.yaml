@@ -4296,9 +4296,32 @@ paths:
                       - string
                       - "null"
                   agentVersionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the published version a production run executes; null for a development run
+                  agentRevisionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the draft revision a development run executes; null for a production run
+                  stage:
                     type: string
-                    format: uuid
-                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    enum:
+                      - production
+                      - development
+                    description: "development: a run of a draft revision, started by a person (ADR 0017 section 8)"
+                  startedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the user a development run acts as; null for production runs
                   teamId:
                     anyOf:
                       - type: string
@@ -4397,6 +4420,223 @@ paths:
                   - agentId
                   - agentName
                   - agentVersionId
+                  - agentRevisionId
+                  - stage
+                  - startedBy
+                  - teamId
+                  - eventId
+                  - status
+                  - triggeredBy
+                  - createdAt
+                  - startedAt
+                  - finishedAt
+                  - attempts
+                  - steps
+                  - tokensIn
+                  - tokensOut
+                  - costMicros
+                  - costUsd
+                  - toolCalls
+                  - errorCode
+                  - errorMessage
+                  - outputs
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /v1/agents/{id}/dev-runs:
+    post:
+      summary: Start a development run of a draft revision
+      tags:
+        - runs
+      description: "Runs a draft revision (the head revision by default) with real tools and models, as the caller: personal secrets resolve for the caller only, the spend counts against the development budget of the node, and the run is labelled stage=development everywhere. Manual only: no webhook, mail, Kafka or cron trigger can start one. Refused with draft_runs_disabled when the lifecycle policy switches draft runs off, and with dev_run_limit above three active development runs per person."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                revisionId:
+                  description: the draft revision to run; the head revision when omitted
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                data:
+                  description: Event payload (wrapped into a manual CloudEvent) or a full CloudEvent
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "202":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  agentId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  agentName:
+                    type:
+                      - string
+                      - "null"
+                  agentVersionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the published version a production run executes; null for a development run
+                  agentRevisionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the draft revision a development run executes; null for a production run
+                  stage:
+                    type: string
+                    enum:
+                      - production
+                      - development
+                    description: "development: a run of a draft revision, started by a person (ADR 0017 section 8)"
+                  startedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the user a development run acts as; null for production runs
+                  teamId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  eventId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                  status:
+                    type: string
+                    enum:
+                      - queued
+                      - running
+                      - awaiting_approval
+                      - succeeded
+                      - failed
+                      - cancelled
+                      - blocked_by_policy
+                  triggeredBy:
+                    type: string
+                  createdAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  startedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  finishedAt:
+                    anyOf:
+                      - type: string
+                        description: ISO 8601 timestamp
+                      - type: "null"
+                  attempts:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  steps:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  tokensIn:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  tokensOut:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  costMicros:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  costUsd:
+                    type: number
+                  toolCalls:
+                    type: integer
+                    minimum: -9007199254740991
+                    maximum: 9007199254740991
+                  errorCode:
+                    type:
+                      - string
+                      - "null"
+                  errorMessage:
+                    type:
+                      - string
+                      - "null"
+                  outputs: {}
+                  tenant:
+                    description: "with scope=subtree: the tenant the run belongs to"
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      slug:
+                        type: string
+                      slugPath:
+                        type: string
+                        description: slugs from the organisation root to the tenant, e.g. acme/security
+                      name:
+                        type: string
+                    required:
+                      - id
+                      - slug
+                      - slugPath
+                      - name
+                    additionalProperties: false
+                required:
+                  - id
+                  - agentId
+                  - agentName
+                  - agentVersionId
+                  - agentRevisionId
+                  - stage
+                  - startedBy
                   - teamId
                   - eventId
                   - status
@@ -10876,9 +11116,32 @@ paths:
                             - string
                             - "null"
                         agentVersionId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                          description: the published version a production run executes; null for a development run
+                        agentRevisionId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                          description: the draft revision a development run executes; null for a production run
+                        stage:
                           type: string
-                          format: uuid
-                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          enum:
+                            - production
+                            - development
+                          description: "development: a run of a draft revision, started by a person (ADR 0017 section 8)"
+                        startedBy:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                          description: the user a development run acts as; null for production runs
                         teamId:
                           anyOf:
                             - type: string
@@ -10977,6 +11240,9 @@ paths:
                         - agentId
                         - agentName
                         - agentVersionId
+                        - agentRevisionId
+                        - stage
+                        - startedBy
                         - teamId
                         - eventId
                         - status
@@ -11148,9 +11414,32 @@ paths:
                       - string
                       - "null"
                   agentVersionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the published version a production run executes; null for a development run
+                  agentRevisionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the draft revision a development run executes; null for a production run
+                  stage:
                     type: string
-                    format: uuid
-                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    enum:
+                      - production
+                      - development
+                    description: "development: a run of a draft revision, started by a person (ADR 0017 section 8)"
+                  startedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the user a development run acts as; null for production runs
                   teamId:
                     anyOf:
                       - type: string
@@ -11260,6 +11549,9 @@ paths:
                   - agentId
                   - agentName
                   - agentVersionId
+                  - agentRevisionId
+                  - stage
+                  - startedBy
                   - teamId
                   - eventId
                   - status
@@ -11586,9 +11878,32 @@ paths:
                       - string
                       - "null"
                   agentVersionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the published version a production run executes; null for a development run
+                  agentRevisionId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the draft revision a development run executes; null for a production run
+                  stage:
                     type: string
-                    format: uuid
-                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    enum:
+                      - production
+                      - development
+                    description: "development: a run of a draft revision, started by a person (ADR 0017 section 8)"
+                  startedBy:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the user a development run acts as; null for production runs
                   teamId:
                     anyOf:
                       - type: string
@@ -11687,6 +12002,9 @@ paths:
                   - agentId
                   - agentName
                   - agentVersionId
+                  - agentRevisionId
+                  - stage
+                  - startedBy
                   - teamId
                   - eventId
                   - status
@@ -12114,7 +12432,7 @@ paths:
                 additionalProperties: false
   /v1/costs/export:
     get:
-      summary: Export cost lines (tenant, team, agent, use case, run, step, provider, model) as CSV or JSON
+      summary: Export cost lines (tenant, team, agent, use case, run, step, stage, provider, model) as CSV or JSON
       tags:
         - costs
       parameters:
@@ -12204,6 +12522,7 @@ paths:
               - month
               - provider
               - model
+              - stage
           in: query
           name: groupBy
           required: false
@@ -20502,6 +20821,54 @@ paths:
                         - percentUsed
                         - alerts
                       additionalProperties: false
+                  development:
+                    anyOf:
+                      - type: object
+                        properties:
+                          scope:
+                            type: string
+                            enum:
+                              - development
+                          key:
+                            description: tenant slug, use case label or team slug
+                            type:
+                              - string
+                              - "null"
+                          limitUsd:
+                            description: monthly limit, null when no budget is set
+                            type:
+                              - number
+                              - "null"
+                          spentUsd:
+                            type: number
+                            description: spend of the current UTC month
+                          percentUsed:
+                            type:
+                              - number
+                              - "null"
+                          alerts:
+                            type: array
+                            items:
+                              type: number
+                            description: alert thresholds (50, 80, 100) raised this month
+                          source:
+                            type: string
+                            enum:
+                              - explicit
+                              - default
+                              - none
+                            description: "explicit: set by an administrator; default: 10 % of the monthly cap of the node; none: the node has neither, so development runs have no node limit"
+                        required:
+                          - scope
+                          - key
+                          - limitUsd
+                          - spentUsd
+                          - percentUsed
+                          - alerts
+                          - source
+                        additionalProperties: false
+                      - type: "null"
+                    description: the development budget of the node (runs of draft revisions, ADR 0017 section 8); null for a caller who reads costs through use cases only
                   nodes:
                     description: "with scope=subtree: the budgets of every readable node of the subtree (the acting node included), ordered by slug path"
                     type: array
@@ -20661,6 +21028,7 @@ paths:
                   - tenant
                   - useCases
                   - teams
+                  - development
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -20763,6 +21131,83 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "404":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/budgets/development:
+    put:
+      summary: Set the monthly development budget of the node (hard stop, alerts at 50, 80 and 100 %)
+      tags:
+        - budgets
+      description: Development runs (runs of draft revisions) are counted against this budget only, never against the production budgets. Until one is set, 10 % of the monthly cap of the node applies.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                monthlyBudgetUsd:
+                  type: number
+                  minimum: 0
+                  maximum: 1000000000
+              required:
+                - monthlyBudgetUsd
+      security:
+        - bearer: []
+      responses:
+        "204":
+          description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+    delete:
+      summary: Remove the explicit development budget (10 % of the monthly cap applies again)
+      tags:
+        - budgets
+      security:
+        - bearer: []
+      responses:
+        "204":
+          description: Default Response
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
           description: Default Response
           content:
             application/json:
@@ -22666,6 +23111,7 @@ paths:
                             - tenant
                             - use_case
                             - team
+                            - development
                         key:
                           type: string
                         limitMicros:

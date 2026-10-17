@@ -17,6 +17,7 @@ export const COST_GROUPS = [
   'month',
   'provider',
   'model',
+  'stage',
 ] as const;
 export type CostGroup = (typeof COST_GROUPS)[number];
 
@@ -31,6 +32,8 @@ export interface CostLine {
   useCase: string | null;
   runId: string;
   stepSeq: number | null;
+  /** `production` or `development` (a run of a draft revision, ADR 0017 section 8). */
+  stage: string;
   provider: string | null;
   model: string | null;
   tokensIn: number;
@@ -50,6 +53,7 @@ const CSV_COLUMNS: (keyof CostLine)[] = [
   'useCase',
   'runId',
   'stepSeq',
+  'stage',
   'provider',
   'model',
   'tokensIn',
@@ -91,6 +95,7 @@ const COLUMN: Record<CostGroup, SQL> = {
   month: sql`${costLedger.month}::text`,
   provider: sql`${costLedger.provider}`,
   model: sql`${costLedger.model}`,
+  stage: sql`${costLedger.stage}`,
 };
 
 /** Cost aggregation from the ledger (cached briefly, invalidated when runs finish). */
@@ -178,6 +183,7 @@ export class CostsService {
         useCase: costLedger.useCase,
         runId: costLedger.runId,
         stepSeq: costLedger.stepSeq,
+        stage: costLedger.stage,
         provider: costLedger.provider,
         model: costLedger.model,
         tokensIn: costLedger.tokensIn,

@@ -305,7 +305,7 @@ export class ControlPlaneService {
   async prepare(runId: string): Promise<PreparedRun> {
     const [run] = await this.ctx.db.select().from(runs).where(eq(runs.id, runId));
     if (!run) throw notFound('run');
-    const { definition } = await this.agents.definitionOf(run.agentVersionId);
+    const { definition } = await this.agents.definitionOfRun(run);
     const [ev] = run.eventId
       ? await this.ctx.db
           .select({ payload: events.payload })
@@ -331,12 +331,18 @@ export class ControlPlaneService {
     runId: string,
   ): Promise<{ definition: AgentDefinition; teamId: string | null; tenantId: string }> {
     const [run] = await this.ctx.db
-      .select({ v: runs.agentVersionId, t: runs.teamId, tenantId: runs.tenantId })
+      .select({
+        id: runs.id,
+        stage: runs.stage,
+        v: runs.agentVersionId,
+        t: runs.teamId,
+        tenantId: runs.tenantId,
+      })
       .from(runs)
       .where(eq(runs.id, runId));
     if (!run) throw notFound('run');
     return {
-      definition: (await this.agents.definitionOf(run.v)).definition,
+      definition: (await this.agents.definitionOfRun({ ...run, agentVersionId: run.v })).definition,
       teamId: run.t,
       tenantId: run.tenantId,
     };
@@ -732,6 +738,7 @@ export class ControlPlaneService {
         createdAt: runs.createdAt,
         startedAt: runs.startedAt,
         triggeredBy: runs.triggeredBy,
+        stage: runs.stage,
       });
     await this.ctx.db
       .update(approvals)
@@ -752,7 +759,12 @@ export class ControlPlaneService {
       action: 'run.completed',
       target: runId,
       runId,
-      payload: { status: result.status, usage: result.usage, error: result.error ?? null },
+      payload: {
+        status: result.status,
+        stage: done?.stage ?? 'production',
+        usage: result.usage,
+        error: result.error ?? null,
+      },
       // The attempt span `invoke_workflow` documents this entry (payload.otel, oax.audit.seq).
       linkSpan: true,
     });

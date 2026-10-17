@@ -2847,8 +2847,142 @@ export interface paths {
                             /** Format: uuid */
                             agentId: string;
                             agentName: string | null;
+                            /** @description the published version a production run executes; null for a development run */
+                            agentVersionId: string | null;
+                            /** @description the draft revision a development run executes; null for a production run */
+                            agentRevisionId: string | null;
+                            /**
+                             * @description development: a run of a draft revision, started by a person (ADR 0017 section 8)
+                             * @enum {string}
+                             */
+                            stage: "production" | "development";
+                            /** @description the user a development run acts as; null for production runs */
+                            startedBy: string | null;
+                            teamId: string | null;
+                            eventId: string | null;
+                            /** @enum {string} */
+                            status: "queued" | "running" | "awaiting_approval" | "succeeded" | "failed" | "cancelled" | "blocked_by_policy";
+                            triggeredBy: string;
+                            /** @description ISO 8601 timestamp */
+                            createdAt: string;
+                            startedAt: string | null;
+                            finishedAt: string | null;
+                            attempts: number;
+                            steps: number;
+                            tokensIn: number;
+                            tokensOut: number;
+                            costMicros: number;
+                            costUsd: number;
+                            toolCalls: number;
+                            errorCode: string | null;
+                            errorMessage: string | null;
+                            outputs: unknown;
+                            /** @description with scope=subtree: the tenant the run belongs to */
+                            tenant?: {
+                                /** Format: uuid */
+                                id: string;
+                                slug: string;
+                                /** @description slugs from the organisation root to the tenant, e.g. acme/security */
+                                slugPath: string;
+                                name: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Insufficient permissions */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{id}/dev-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a development run of a draft revision
+         * @description Runs a draft revision (the head revision by default) with real tools and models, as the caller: personal secrets resolve for the caller only, the spend counts against the development budget of the node, and the run is labelled stage=development everywhere. Manual only: no webhook, mail, Kafka or cron trigger can start one. Refused with draft_runs_disabled when the lifecycle policy switches draft runs off, and with dev_run_limit above three active development runs per person.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description the draft revision to run; the head revision when omitted
+                         */
+                        revisionId?: string;
+                        /** @description Event payload (wrapped into a manual CloudEvent) or a full CloudEvent */
+                        data?: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
                             /** Format: uuid */
-                            agentVersionId: string;
+                            id: string;
+                            /** Format: uuid */
+                            agentId: string;
+                            agentName: string | null;
+                            /** @description the published version a production run executes; null for a development run */
+                            agentVersionId: string | null;
+                            /** @description the draft revision a development run executes; null for a production run */
+                            agentRevisionId: string | null;
+                            /**
+                             * @description development: a run of a draft revision, started by a person (ADR 0017 section 8)
+                             * @enum {string}
+                             */
+                            stage: "production" | "development";
+                            /** @description the user a development run acts as; null for production runs */
+                            startedBy: string | null;
                             teamId: string | null;
                             eventId: string | null;
                             /** @enum {string} */
@@ -6402,8 +6536,17 @@ export interface paths {
                                 /** Format: uuid */
                                 agentId: string;
                                 agentName: string | null;
-                                /** Format: uuid */
-                                agentVersionId: string;
+                                /** @description the published version a production run executes; null for a development run */
+                                agentVersionId: string | null;
+                                /** @description the draft revision a development run executes; null for a production run */
+                                agentRevisionId: string | null;
+                                /**
+                                 * @description development: a run of a draft revision, started by a person (ADR 0017 section 8)
+                                 * @enum {string}
+                                 */
+                                stage: "production" | "development";
+                                /** @description the user a development run acts as; null for production runs */
+                                startedBy: string | null;
                                 teamId: string | null;
                                 eventId: string | null;
                                 /** @enum {string} */
@@ -6567,8 +6710,17 @@ export interface paths {
                             /** Format: uuid */
                             agentId: string;
                             agentName: string | null;
-                            /** Format: uuid */
-                            agentVersionId: string;
+                            /** @description the published version a production run executes; null for a development run */
+                            agentVersionId: string | null;
+                            /** @description the draft revision a development run executes; null for a production run */
+                            agentRevisionId: string | null;
+                            /**
+                             * @description development: a run of a draft revision, started by a person (ADR 0017 section 8)
+                             * @enum {string}
+                             */
+                            stage: "production" | "development";
+                            /** @description the user a development run acts as; null for production runs */
+                            startedBy: string | null;
                             teamId: string | null;
                             eventId: string | null;
                             /** @enum {string} */
@@ -6903,8 +7055,17 @@ export interface paths {
                             /** Format: uuid */
                             agentId: string;
                             agentName: string | null;
-                            /** Format: uuid */
-                            agentVersionId: string;
+                            /** @description the published version a production run executes; null for a development run */
+                            agentVersionId: string | null;
+                            /** @description the draft revision a development run executes; null for a production run */
+                            agentRevisionId: string | null;
+                            /**
+                             * @description development: a run of a draft revision, started by a person (ADR 0017 section 8)
+                             * @enum {string}
+                             */
+                            stage: "production" | "development";
+                            /** @description the user a development run acts as; null for production runs */
+                            startedBy: string | null;
                             teamId: string | null;
                             eventId: string | null;
                             /** @enum {string} */
@@ -7213,7 +7374,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Export cost lines (tenant, team, agent, use case, run, step, provider, model) as CSV or JSON */
+        /** Export cost lines (tenant, team, agent, use case, run, step, stage, provider, model) as CSV or JSON */
         get: {
             parameters: {
                 query?: {
@@ -7284,7 +7445,7 @@ export interface paths {
                     scope?: "node" | "subtree";
                     /** @description with scope=subtree: narrow to one node of the subtree (id or slug path). A node outside the caller's reach is 404 */
                     tenantId?: string;
-                    groupBy?: "run" | "agent" | "team" | "tenant" | "use_case" | "month" | "provider" | "model";
+                    groupBy?: "run" | "agent" | "team" | "tenant" | "use_case" | "month" | "provider" | "model" | "stage";
                     /** @description start of the period, inclusive: YYYY-MM-DD or ISO 8601 timestamp, rounded down to the first day of its month (UTC) */
                     from?: string;
                     /** @description end of the period, inclusive: same formats as `from` */
@@ -13400,6 +13561,25 @@ export interface paths {
                                 /** @description alert thresholds (50, 80, 100) raised this month */
                                 alerts: number[];
                             }[];
+                            /** @description the development budget of the node (runs of draft revisions, ADR 0017 section 8); null for a caller who reads costs through use cases only */
+                            development: {
+                                /** @enum {string} */
+                                scope: "development";
+                                /** @description tenant slug, use case label or team slug */
+                                key: string | null;
+                                /** @description monthly limit, null when no budget is set */
+                                limitUsd: number | null;
+                                /** @description spend of the current UTC month */
+                                spentUsd: number;
+                                percentUsed: number | null;
+                                /** @description alert thresholds (50, 80, 100) raised this month */
+                                alerts: number[];
+                                /**
+                                 * @description explicit: set by an administrator; default: 10 % of the monthly cap of the node; none: the node has neither, so development runs have no node limit
+                                 * @enum {string}
+                                 */
+                                source: "explicit" | "default" | "none";
+                            } | null;
                             /** @description with scope=subtree: the budgets of every readable node of the subtree (the acting node included), ordered by slug path */
                             nodes?: {
                                 node: {
@@ -13587,6 +13767,111 @@ export interface paths {
                 };
                 /** @description Default Response */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/budgets/development": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the monthly development budget of the node (hard stop, alerts at 50, 80 and 100 %)
+         * @description Development runs (runs of draft revisions) are counted against this budget only, never against the production budgets. Until one is set, 10 % of the monthly cap of the node applies.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        monthlyBudgetUsd: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        /** Remove the explicit development budget (10 % of the monthly cap applies again) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid credentials */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -15000,7 +15285,7 @@ export interface paths {
                             blocked: boolean;
                             breaches: {
                                 /** @enum {string} */
-                                scope: "tenant" | "use_case" | "team";
+                                scope: "tenant" | "use_case" | "team" | "development";
                                 key: string;
                                 limitMicros: number;
                                 spentMicros: number;

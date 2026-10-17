@@ -305,7 +305,7 @@ export function registerRunRoutes(app: ZApp, { ctx, services }: Deps): void {
       schema: {
         tags: ['costs'],
         summary:
-          'Export cost lines (tenant, team, agent, use case, run, step, provider, model) as CSV or JSON',
+          'Export cost lines (tenant, team, agent, use case, run, step, stage, provider, model) as CSV or JSON',
         security: sec,
         querystring: z.object({
           format: z.enum(['csv', 'json']).default('csv'),

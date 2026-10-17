@@ -49,6 +49,11 @@ export interface NodeDispatcherOptions {
    * (`pull_request_unavailable`) before anything starts.
    */
   delivery?: PullRequestDelivery;
+  /**
+   * The stage of the run. A development run (a draft revision, ADR 0017 section 8) publishes no
+   * side effect: a step with a `pull-request` output fails closed before anything starts.
+   */
+  stage?: 'production' | 'development';
 }
 
 /** A Git/delivery refusal becomes a failed step with its fixed, client-safe code. */
@@ -81,6 +86,12 @@ export class NodeDispatcher implements StepDispatcher {
   async dispatch(req: StepDispatchRequest): Promise<StepDispatchResult> {
     const prOutput = req.agent.outputs?.find((o) => o.format === 'pull-request');
     if (!prOutput) return this.dispatchNode(req);
+    if (this.opts.stage === 'development')
+      throw new NodeStepFailure(
+        'failed',
+        'pull_request_not_in_development',
+        `step "${req.agent.id}" has a pull-request output, which a development run never delivers`,
+      );
     // The seed is built by the worker BEFORE the node exists (and before any model money is spent):
     // the node itself never gets a route to the Git host (dogfooding D4-A).
     const delivery = this.opts.delivery;
