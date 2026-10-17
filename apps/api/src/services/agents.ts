@@ -57,12 +57,7 @@ import type { ApprovalRecord, PublishApprovalInput } from './publish-gate.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import type { ResolvedScope } from './subtree-scope.js';
-import {
-  awpRowOf,
-  convertDefinition,
-  teamLookup,
-  type StoredAwpRow,
-} from './legacy-awp.js';
+import { awpRowOf, convertDefinition, teamLookup, type StoredAwpRow } from './legacy-awp.js';
 import { useCaseMatch } from './use-case-scope.js';
 import { VERSION } from '../version.js';
 
