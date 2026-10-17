@@ -109,6 +109,7 @@ const BUDGET_MESSAGES: Record<string, string> = {
   control_budget_tenant: 'a monthly budget cannot cover the call',
   control_budget_use_case: 'a monthly budget cannot cover the call',
   control_budget_team: 'a monthly budget cannot cover the call',
+  control_budget_development: 'the development budget cannot cover the call',
 };
 
 const isModelCode = (c: unknown): c is ModelErrorCode =>
@@ -517,7 +518,7 @@ export class ModelProxyService {
     // The run row decides the tenant. A token for a run of another tenant cannot get here.
     if (!run || run.tenantId !== auth.tenantId)
       throw new ModelProxyError('model_not_allowed', 'the call is not allowed for this step');
-    const { definition } = await this.agents.definitionOf(run.agentVersionId);
+    const { definition } = await this.agents.definitionOfRun(run);
     const agent = definition.agents.find((a) => a.id === agentId);
     if (!agent)
       throw new ModelProxyError(

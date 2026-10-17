@@ -170,7 +170,7 @@ export function RunDetailPage() {
                 [
                   t('runs.version'),
                   <span key="v" className="mono">
-                    {shortId(r.agentVersionId)}
+                    {r.agentVersionId ? shortId(r.agentVersionId) : t('runs.developmentRevision')}
                   </span>,
                 ],
                 [

@@ -19,6 +19,7 @@ export interface ControlReason {
     | 'budget_tenant'
     | 'budget_use_case'
     | 'budget_team'
+    | 'budget_development'
     | 'timeout'
     | 'rate'
     | 'loop'

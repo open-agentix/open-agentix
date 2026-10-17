@@ -3,6 +3,7 @@ import type { Deps } from '../app.js';
 import { principalOf } from '../app.js';
 import {
   BudgetOverviewSchema,
+  DevelopmentBudgetBody,
   ErrorSchema,
   SubtreePageQuery,
   UseCaseBudgetBody,
@@ -86,6 +87,43 @@ export function registerBudgetRoutes(app: ZApp, { services }: Deps): void {
     },
     async (req, reply) => {
       await budgets.removeUseCaseBudget(principalOf(req), req.params.useCase);
+      return reply.status(204).send(null);
+    },
+  );
+  app.put(
+    '/v1/budgets/development',
+    {
+      config: { access: 'settings:write' },
+      schema: {
+        tags,
+        summary:
+          'Set the monthly development budget of the node (hard stop, alerts at 50, 80 and 100 %)',
+        description:
+          'Development runs (runs of draft revisions) are counted against this budget only, never against the production budgets. Until one is set, 10 % of the monthly cap of the node applies.',
+        security: sec,
+        body: DevelopmentBudgetBody,
+        response: { 204: z.null(), 403: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      await budgets.setDevelopmentBudget(principalOf(req), req.body.monthlyBudgetUsd);
+      return reply.status(204).send(null);
+    },
+  );
+
+  app.delete(
+    '/v1/budgets/development',
+    {
+      config: { access: 'settings:write' },
+      schema: {
+        tags,
+        summary: 'Remove the explicit development budget (10 % of the monthly cap applies again)',
+        security: sec,
+        response: { 204: z.null(), 403: ErrorSchema },
+      },
+    },
+    async (req, reply) => {
+      await budgets.removeDevelopmentBudget(principalOf(req));
       return reply.status(204).send(null);
     },
   );

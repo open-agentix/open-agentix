@@ -24,7 +24,7 @@ import { localDate, monthStartDate, shortId, useDocumentTitle } from '../../lib/
 import { BudgetsSection } from './BudgetsSection';
 
 const route = getRouteApi('/_app/costs');
-const GROUPS: CostGroupBy[] = ['agent', 'team', 'month', 'model', 'provider', 'run'];
+const GROUPS: CostGroupBy[] = ['agent', 'team', 'month', 'model', 'provider', 'run', 'stage'];
 type Period = 'month' | '30d' | 'all';
 
 export function periodStart(period: Period, now = new Date()): string | undefined {

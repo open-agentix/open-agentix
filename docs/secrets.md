@@ -1,8 +1,8 @@
 # Scoped secrets and the encrypted secret store
 
-Status: slice S4 of [ADR 0017](adr/0017-agent-lifecycle-governance.md) (section 13), issue #247. This page
-describes what is built; the design and the owner decisions are in the ADR. What this slice leaves out is
-listed at the end.
+Status: slices S4 (#247) and S5 (#248) of [ADR 0017](adr/0017-agent-lifecycle-governance.md) (section 13).
+This page describes what is built; the design and the owner decisions are in the ADR. What these slices
+leave out is listed at the end.
 
 ## What it gives you
 
@@ -21,7 +21,7 @@ listed at the end.
 | --- | --- | --- | --- |
 | `team:<name>` | the team of the agent | `secrets:write` on that team | runs of agents of that team |
 | `tenant:<name>` | the node of the agent, then its ancestors (nearest owner wins) | `secrets:write` held node-wide at the owning node | agents of that node and, unless `inherit: false`, of all descendants |
-| `personal:<name>` | the user who starts a run | the owner (needs `agents:write`) | development runs of the owner only; **never part of a published version** |
+| `personal:<name>` | the user who starts a development run | the owner (needs `agents:write` to create and use one) | development runs started by the owner only; **never part of a published version**, see "Development runs and personal secrets" |
 | `name` (no prefix) | operator environment and files (`OAX_SECRET_<NAME>`, `OAX_SECRETS_DIR`), unchanged | operator | unchanged |
 
 Names are lower case (`[a-z0-9][a-z0-9_.-]{0,127}`). A reference with a colon that is not one of the three
@@ -82,9 +82,61 @@ one, the normal gate applies (approvals, bindings, `publishBy`). It needs the re
 lists `secrets[] { ref, state, scope, ownerNode, foreign }` so the approvers see whose secret it is.
 Secrets of the agent's own node and own team do not trigger this.
 
+## Development runs and personal secrets
+
+A development run executes a draft revision as the person who starts it ([`agent-lifecycle.md`](agent-lifecycle.md),
+slice S5). It resolves its references **live** (nothing is pinned for a draft) and the broker applies the
+rules below at every issuance. The policy keys are read at that moment.
+
+**Personal secrets.** `personal:<name>` resolves against the user who started the run, in the node of the
+agent, and nowhere else.
+
+- A scheduled or event-triggered run and any run of a published version never receive a personal secret:
+  they have no starter, the broker refuses the scope for the stage, and a forged pin to a personal secret in
+  a published version is refused as well (`secret_scope_not_usable`).
+- A development run started by a reviewer or by another user resolves `personal:<name>` against **their own**
+  personal secrets, so it never finds the author's (`secret_not_found` when they have none of that name).
+- `allowPersonalSecretsInDevRuns: false` (or `allowDraftRuns: off`) refuses them (`secret_scope_not_usable`).
+- The starter must still be entitled **at the moment of issuance**: the account active and `agents:write`
+  held on the agent. Otherwise nothing is issued to the run, of any scope (`secret_owner_unavailable`); the
+  personal secrets are kept (a regained role brings them back) and their owner can still delete them while
+  they hold `secrets:read` (deleting needs no `agents:write`; an owner left with no role at all cannot reach the
+  route, and the secrets stay inert until the account is disabled).
+- A **disabled account** loses its personal secrets: they are deleted with their sealed values in the
+  transaction that disables the account (`secret.deleted`, `reason: owner_disabled`), queued development runs
+  of the account are cancelled and running ones are asked to stop. Enabling the account again does not bring
+  the secrets back. (Accounts are disabled, not deleted, in this release; the rule is the same for a delete.)
+- Publishing a version that references a personal secret stays refused (`personal_secret_in_version`),
+  whoever asks and whatever the review says. The `with-approval` path (`allowPersonalSecretsInPublishedAgents`,
+  `usesPersonalCredentials`) is not part of this slice.
+
+**Usage matrix.** `usage` is checked for the stage of the run:
+
+| `usage` of the secret | Run of a published version | Development run |
+| --- | --- | --- |
+| `production` | issued | refused (`secret_not_usable`), unless `allowDraftRuns: on` **and** `allowProductionSecretsInDraftRuns: true` |
+| `development` | refused (`secret_not_usable`) | issued |
+| `any` (default) | issued | issued |
+
+**Secrets of a higher node in a draft.** A published version can pin a tenant secret of an ancestor only under an
+approved review (`approval_required_for_foreign_secret`). A draft has no review, so a development run may use an
+inherited tenant secret **only if its owner marked it `usage: development`**; an inherited secret of usage `any`
+or `production` is refused (`secret_scope_not_usable`), even with the production flag. Secrets of the agent's
+own node and team are not affected. This closes the way for an author to read a higher node's credential
+through an unreviewed draft: the owner opts in per secret.
+
+**Redaction.** Every value issued to a development run is stored sealed for that run like any issued value,
+so step records, node results and audit payloads are scrubbed of it, also after the secret was rotated or
+deleted.
+
+**What a development run does not do.** It does not deliver pull requests (the step fails with
+`pull_request_not_in_development`), it is not started by any trigger, and its spend is booked as
+development spend ([`budgets.md`](budgets.md)). Tools are real and subject to the usual policy and
+approval gates.
+
 ## Run time
 
-The broker issues a scoped secret to a step only if the pinned secret passes every check, in this order:
+The broker issues a scoped secret to a step of a run of a **published version** only if the pinned secret passes every check, in this order:
 the version pinned it; the secret exists, is not revoked, not expired and still belongs to the pinned owner;
 the owner is still on the run's chain (`secret_out_of_chain`) and, below the owner, no node blocks the name;
 `usage` allows production; the step's effective egress and the hosts of its MCP connections lie inside
@@ -201,8 +253,8 @@ of the scope. A secret the caller may not see is a `404`, the same as a missing 
 - Resolution happens once per publish (under the tree, binding and agent locks) and at run time from the
   pins; no secret is resolved by name at run time.
 - A scoped reference that does not resolve makes publish fail even where approval is not required.
-- Every run of a published version is treated as a production run; `usage: development` secrets are refused
-  for them (development runs do not exist yet).
+- Every run of a published version is a production run; `usage: development` secrets are refused for
+  them. Development runs (S5) use the rules in "Development runs and personal secrets".
 - The globs of `blockInherited` and the destinations are validated narrowly (names with `*`; host names and
   `*.suffix`, no ports, no addresses). An egress entry that is an address never matches a destination.
 
@@ -218,9 +270,9 @@ of the scope. A secret the caller may not see is a `404`, the same as a missing 
 
 ## Left out (follow-up issue)
 
-Secret backends other than `internal` and the `env` pointer (Vault, AWS Secrets Manager); development runs
-and the personal-secret rules around them (`allowPersonalSecretsInDevRuns`, `with-approval` and
-`usesPersonalCredentials`); scoped references in MCP connections (`envSecrets`, `headerSecrets`) and the
+Secret backends other than `internal` and the `env` pointer (Vault, AWS Secrets Manager); the `with-approval`
+path for personal secrets in published agents (`usesPersonalCredentials`, the extra admin approval, fail
+closed when the owner leaves) and notifications of `secret_owner_unavailable`; scoped references in MCP connections (`envSecrets`, `headerSecrets`) and the
 relay; `revokeSessions` and expiry warnings (14 and 3 days); notifications of shadowing and of failing
 pinned secrets; issuance listing per descendant node (the audit has the data); metadata editing (`PATCH`);
 leak canaries as a runtime feature; `OAX_KEK_*` aliases; UI; the review view that shows "now resolved from
@@ -246,6 +298,11 @@ node X instead of node Y" (the digests carry it, the API does not render it yet)
   of unexpired sessions still use it. Watch the audit actions `secret.created`, `secret.rotated`,
   `secret.revoked` and `secret.deleted` (a rotation by an attacker with `secrets:write` is a credential
   swap): alert on them in the audit export. `secret.rotated` carries the new version only, never a value.
+- A development run is visible like any run (`runs:read`). Its credentials are redacted, but content a
+  personal credential let the run read is output of the run and visible to everybody who can read it.
+- The foreign-secret rule for drafts is an opt-in by the owner (`usage: development`); a root secret marked
+  `development` is usable by every author in the organisation who can write an agent, without a review. Use
+  `inherit: false`, `allowedDestinations` and narrow tokens for such secrets.
 - Existence oracles: a caller with `secrets:write` learns whether a `pointer` target is configured
   (`secret_not_found` vs `secret_pointer_not_allowed`) and a node that creates a name learns that an ancestor
   reserves it (`secret_name_reserved`) or that a node below owns it (`secret_name_conflict`); neither reveals

@@ -237,7 +237,7 @@ export class RunNodesService {
   async runContext(runId: string) {
     const [run] = await this.ctx.db.select().from(runs).where(eq(runs.id, runId));
     if (!run) throw notFound('run');
-    const { definition } = await this.agents.definitionOf(run.agentVersionId);
+    const { definition } = await this.agents.definitionOfRun(run);
     return { run, definition };
   }
 
@@ -788,7 +788,7 @@ export class RunNodesService {
     const scopedRefs = needs.refs.filter(isScopedRef);
     if (scopedRefs.length === 0) return new Map();
     if (!this.scoped) {
-      await this.auditDenied(s, run.tenantId, scopedRefs[0]!, 'secret_unavailable');
+      await this.auditDenied(s, run.tenantId, scopedRefs[0]!, 'secret_unavailable', run.stage);
       return this.deny(s, agent.id, 'secret_unavailable', { refs: scopedRefs });
     }
     try {
@@ -798,19 +798,19 @@ export class RunNodesService {
       return new Map(list.map((p) => [p.ref, p]));
     } catch (e) {
       if (!(e instanceof SecretDenied)) throw e;
-      await this.auditDenied(s, run.tenantId, e.ref, e.code);
+      await this.auditDenied(s, run.tenantId, e.ref, e.code, run.stage);
       return this.deny(s, agent.id, e.code, { refs: [e.ref] });
     }
   }
 
-  private auditDenied(s: SessionRow, tenantId: string, ref: string, code: string) {
+  private auditDenied(s: SessionRow, tenantId: string, ref: string, code: string, stage: string) {
     return this.audit.append({
       actor: `node:${s.nodeId}`,
       tenantId,
       action: 'secret.access_denied',
       target: ref,
       runId: s.runId,
-      payload: { ref, code },
+      payload: { ref, code, stage },
     });
   }
 
@@ -937,6 +937,7 @@ export class RunNodesService {
         connections: needs.connections.map((c) => c.server),
         expiresAt: result.expiresAt,
         source: this.source.name,
+        stage: run.stage,
         ...(prepared.size > 0 ? { secrets: [...prepared.values()].map(issuanceRecord) } : {}),
       },
     });

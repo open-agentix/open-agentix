@@ -80,6 +80,8 @@ export async function writeStepRows(
       agentId: runs.agentId,
       teamId: runs.teamId,
       tenantId: runs.tenantId,
+      runId: runs.id,
+      stage: runs.stage,
       versionId: runs.agentVersionId,
     });
   if (!run) throw notFound('run');
@@ -104,7 +106,11 @@ export async function writeStepRows(
   if ((step.costMicros ?? 0) <= 0 && (step.tokensIn ?? 0) <= 0 && (step.tokensOut ?? 0) <= 0) {
     return { metric: null };
   }
-  const { definition } = await deps.agents.definitionOf(run.versionId);
+  const { definition } = await deps.agents.definitionOfRun({
+    id: run.runId,
+    stage: run.stage,
+    agentVersionId: run.versionId,
+  });
   const extras = { ...DEFAULT_LEDGER_EXTRAS, ...opts.ledger };
   await tx.insert(costLedger).values({
     runId,
@@ -119,12 +125,18 @@ export async function writeStepRows(
     tokensIn: step.tokensIn ?? 0,
     tokensOut: step.tokensOut ?? 0,
     costMicros: step.costMicros ?? 0,
+    stage: run.stage,
     ...extras,
   });
   // Alerts at 50/80/100 % of every budget this cost line counts against.
   await deps.budgets.raiseAlerts(
     tx,
-    { tenantId: run.tenantId, teamId: run.teamId, useCase: definition.labels.useCase ?? null },
+    {
+      tenantId: run.tenantId,
+      teamId: run.teamId,
+      useCase: definition.labels.useCase ?? null,
+      stage: run.stage === 'development' ? 'development' : 'production',
+    },
     step.costMicros ?? 0,
   );
   const cacheRead = extras.cacheReadTokens;
