@@ -30,13 +30,13 @@ spec:
           tickets.get_ticket:
             allow: true
             x-openagentix-args:
-              key: { type: string, required: true, pattern: "^SEC-\\d+$" }
+              key: { type: string, required: true, pattern: "^SEC-\\d+$", maxLength: 32 }
             x-openagentix-allowAdditionalArgs: false
           tickets.update_ticket:
             allow: true
             x-openagentix-maxCallsPerRun: 1
             x-openagentix-args:
-              key: { type: string, required: true, pattern: "^SEC-\\d+$" }
+              key: { type: string, required: true, pattern: "^SEC-\\d+$", maxLength: 32 }
               status: { type: string, enum: [triaged, in-progress, done] }
             x-openagentix-allowAdditionalArgs: false
       x-openagentix-outputs:

@@ -27,6 +27,34 @@ runtime) is described on the website's agents.md reference. This page covers the
 | `runtime.runner`, `runtime.egress` | `agents[]` | Runner override for this step; egress can only narrow the pipeline's `runtime.egress` | Egress subset |
 | `runtime.harness` | `agents[]` | `claude-code` or `opencode`: the step runs in a run node through that harness, which talks to the model proxy with the step's model token ([harnesses](harnesses.md#through-the-model-proxy-run-nodes)) | Isolating runner (`container`, `kubernetes-job`), no `simulation`; enabled by the operator at publish |
 
+## Tool grants: argument constraints, call limits, wildcards
+
+A tool grant (`agents[].tools[]` with `server` and `tool`) decides one tool. Everything it adds only
+**restricts**: a grant never allows more than its `server` and `tool` name.
+
+| Field | Meaning |
+| --- | --- |
+| `args` | Constraints per top-level argument: `type`, `required`, `enum`, `const`, `pattern` (needs `maxLength`), `minLength`, `maxLength` (code points), `minimum`, `maximum`, `maxItems`, `deny` (patterns that must match no string inside the value) |
+| `allowAdditionalArgs` | Default `false`: an argument that `args` does not list denies the call. A grant with neither `args` nor `allowAdditionalArgs: true` only allows calls without arguments |
+| `maxCallsPerRun` | Allowed calls of this tool in one run (all steps); denied calls do not count; a reached limit denies with `call_limit` |
+| `approval`, `classification` | Human approval; highest data class the tool may receive |
+
+Checked at validate and publish: every `pattern` and `deny` entry must compile and must not use a
+backreference, a lookaround, or a repeated group that contains a repetition or an alternation
+(`(a+)+`, `(a|aa)*`); a `pattern` needs `maxLength`; `pattern`/`minLength`/`maxLength` need type `string`,
+`minimum`/`maximum` a numeric type, `maxItems` an array; `minimum <= maximum`, `minLength <= maxLength`.
+At run time the checks fail closed: a bound that does not fit the type of the value denies, the
+arguments must be an object, only own properties count as arguments, a string longer than `maxLength` is
+never run through a pattern, and a `deny` rule that cannot inspect the whole value denies. Denial reasons name
+the argument and the rule, never the value. Rationale and the mapping to AWP: [AWP](awp.md#argument-constraints-call-limits-and-action-groups-aep-0002).
+
+**Prefix wildcards are deprecated** (`tool: "get_*"`, `tool: "*"`; AWP decision D4). A prefix grants tools
+that do not exist yet. Publish replaces a wildcard by one grant per tool of the approved tool snapshot of a
+pinned connection, each with the limits of the wildcard, and fails with `wildcard_unreviewed` when the
+connection has no approved snapshot (unpinned connections, unknown servers) or `wildcard_empty` when nothing
+matches. Validation warns. Use a profile grant or list the tools. Versions published before keep their
+wildcard until they are republished.
+
 ## JSON Schema subset
 
 Keywords: `type`, `enum`, `const`, `properties`, `required`, `additionalProperties`, `items`,

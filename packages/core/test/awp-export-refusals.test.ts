@@ -6,6 +6,7 @@ import {
   type ExportFinding,
   type ExportResult,
   type JsonObject,
+  type PublishedDefinition,
 } from '../src/index.js';
 import { CRITICAL_EXTENSIONS } from '../src/awp/export-context.js';
 import { pinErrors } from './awp-pin.js';
@@ -33,6 +34,8 @@ interface Row {
   /** Where the value lands in the manifest once the pin offers `requiredExtensions`. */
   home: (string | number)[];
   value: unknown;
+  /** A second field the same patch makes critical (an explicit allowAdditionalArgs). */
+  also?: keyof typeof CRITICAL_EXTENSIONS;
 }
 
 const PERMISSION = ['spec', 'agents', 0, 'permissions', 'tools', 'srv.do_it'];
@@ -76,6 +79,7 @@ const TABLE: Row[] = [
     field: 'args',
     patch: (o) => (tool0(o).args = { key: { type: 'string' } }),
     path: 'agents.0.tools.0.args',
+    also: 'allowAdditionalArgs',
     home: [...PERMISSION, 'x-openagentix-args'],
     value: { key: { type: 'string', required: false } },
   },
@@ -147,22 +151,24 @@ describe('critical fields (decision D3)', () => {
 
   it.each(TABLE)('refuses $field at $path with exactly one finding', (row) => {
     const findings = refused(exportOf(probe(row.patch)));
-    expect(findings).toEqual([
+    expect(findings[0]).toEqual(
       expect.objectContaining({
         code: 'critical_extension',
         field: row.field,
         extension: CRITICAL_EXTENSIONS[row.field],
         path: row.path,
       }),
-    ]);
+    );
+    // constraints on a grant that allows more arguments say so explicitly: one more field
+    expect(findings.map((f) => f.field)).toEqual([row.field, ...(row.also ? [row.also] : [])]);
   });
 
   it.each(TABLE)('lists $field in requiredExtensions once the pin offers them', (row) => {
     const r = exported(exportOf(probe(row.patch), { requiredExtensionsSupported: true }));
     expect(at(r.manifest, row.home)).toEqual(row.value);
-    expect(at(r.manifest, ['metadata', 'requiredExtensions'])).toEqual([
-      CRITICAL_EXTENSIONS[row.field],
-    ]);
+    expect(at(r.manifest, ['metadata', 'requiredExtensions'])).toEqual(
+      [CRITICAL_EXTENSIONS[row.field], ...(row.also ? [CRITICAL_EXTENSIONS[row.also]] : [])].sort(),
+    );
   });
 
   it('lists every critical extension a manifest carries, and no operational one', () => {
@@ -279,6 +285,26 @@ const CATALOG: AccessCatalog = {
 const wildcard = (server: string, tool: string) =>
   probe((o) => (o.agents[0]!.tools = [{ server, tool, allowAdditionalArgs: true }]));
 
+/**
+ * The stored form of a version published by an older build: the wildcard grant is still in the
+ * definition, next to the list recorded at publish. Publish no longer stores this form (it expands a
+ * wildcard into explicit grants), but such versions exist and must keep exporting or being refused
+ * exactly as before.
+ */
+const legacyStored = (
+  parsed: PublishedDefinition,
+  catalog: AccessCatalog = CATALOG,
+): PublishedDefinition => {
+  const e = expandProfiles(parsed, catalog).definition;
+  return {
+    ...parsed,
+    expansion: e.expansion ?? [],
+    toolAccess: e.toolAccess ?? {},
+    expansionDigest: e.expansionDigest ?? '',
+    ...(e.wildcardExpansion ? { wildcardExpansion: e.wildcardExpansion } : {}),
+  };
+};
+
 const keysOf = (r: ExportResult): string[] => {
   const tools = at(exported(r).manifest, ['spec', 'agents', 0, 'permissions', 'tools']);
   return Object.keys(tools as Obj);
@@ -322,32 +348,30 @@ describe('wildcard grants (decision D4)', () => {
   it('refuses without a recorded tool list (parsed only, unknown connection, no match)', () => {
     const codes = (d: Parameters<typeof exportOf>[0]) => refused(exportOf(d)).map((f) => f.code);
     expect(codes(wildcard('logs', 'get_*'))).toEqual(['wildcard_expansion_missing']);
-    expect(codes(expandProfiles(wildcard('nowhere', 'get_*'), CATALOG).definition)).toEqual([
+    expect(codes(legacyStored(wildcard('nowhere', 'get_*')))).toEqual([
       'wildcard_expansion_missing',
     ]);
-    expect(codes(expandProfiles(wildcard('unpinned', 'get_*'), CATALOG).definition)).toEqual([
+    expect(codes(legacyStored(wildcard('unpinned', 'get_*')))).toEqual([
       'wildcard_expansion_missing',
     ]);
-    expect(codes(expandProfiles(wildcard('logs', 'zzz_*'), CATALOG).definition)).toEqual([
-      'wildcard_expansion_missing',
-    ]);
+    expect(codes(legacyStored(wildcard('logs', 'zzz_*')))).toEqual(['wildcard_expansion_missing']);
   });
 
   it('refuses a published version of an older build (no wildcardExpansion field)', () => {
-    const def = expandProfiles(wildcard('logs', 'get_*'), CATALOG).definition;
+    const def = legacyStored(wildcard('logs', 'get_*'));
     const old = JSON.parse(JSON.stringify(def)) as typeof def;
     delete old.wildcardExpansion;
     expect(refused(exportOf(old)).map((f) => f.path)).toEqual(['agents.0.tools.0.tool']);
   });
 
   it('refuses an empty recorded list instead of exporting a grant of nothing', () => {
-    const def = expandProfiles(wildcard('logs', 'get_*'), CATALOG).definition;
+    const def = legacyStored(wildcard('logs', 'get_*'));
     def.wildcardExpansion = { 'logs/get_*': { source: 'pinned-snapshot', tools: [] } };
     expect(refused(exportOf(def)).map((f) => f.code)).toEqual(['wildcard_expansion_missing']);
   });
 
   it('re-filters a recorded list by the pattern and refuses a list that is all foreign', () => {
-    const def = expandProfiles(wildcard('logs', 'get_*'), CATALOG).definition;
+    const def = legacyStored(wildcard('logs', 'get_*'));
     def.wildcardExpansion = {
       'logs/get_*': { source: 'pinned-snapshot', tools: ['get_a', 'put_c', 'purge'] },
     };
@@ -371,7 +395,7 @@ describe('wildcard grants (decision D4)', () => {
         },
       },
     };
-    const def = expandProfiles(wildcard('logs', 'get_*'), catalog).definition;
+    const def = legacyStored(wildcard('logs', 'get_*'), catalog);
     expect(refused(exportOf(def)).map((f) => f.code)).toEqual(['tool_name_not_representable']);
   });
 
@@ -525,16 +549,17 @@ describe('other refusals', () => {
       (agent0(o).tools as Obj[]).push({ ...first, approval: 'required' });
     });
     expect(code(exportOf(def))).toEqual(['duplicate_grant_conflict']);
-    const overlap = expandProfiles(
-      probe((o) => {
-        agent0(o).tools = [
-          { server: 'logs', tool: 'get_a', allowAdditionalArgs: true, approval: 'required' },
-          { server: 'logs', tool: 'get_*', allowAdditionalArgs: true },
-        ];
-      }),
-      CATALOG,
-    ).definition;
-    expect(code(exportOf(overlap))).toEqual(['duplicate_grant_conflict']);
+    const overlapping = probe((o) => {
+      agent0(o).tools = [
+        { server: 'logs', tool: 'get_a', allowAdditionalArgs: true, approval: 'required' },
+        { server: 'logs', tool: 'get_*', allowAdditionalArgs: true },
+      ];
+    });
+    expect(code(exportOf(legacyStored(overlapping)))).toEqual(['duplicate_grant_conflict']);
+    // Published today the wildcard is replaced by explicit tools and the exact grant keeps its own
+    // approval: no conflict, and nothing is looser than at run time.
+    const published = expandProfiles(overlapping, CATALOG).definition;
+    expect(keysOf(exportOf(published))).toEqual(['logs.get_a', 'logs.get_b']);
   });
 
   it('merges identical duplicate grants into one entry', () => {

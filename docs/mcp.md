@@ -260,8 +260,9 @@ connection or digest of another tenant answers `404`, exactly like one that does
 
 **Publish.** The profile expansion records, per connection the version holds grants on,
 `toolPins[<connection>] = { snapshotDigest, toolsDigest, granted }`: the digest of the latest approved
-snapshot, the digest over **the granted tools** of it (exact names, `prefix*` patterns and the tools
-of profile grants, over all steps of the version) and the grants themselves. It is part of
+snapshot, the digest over **the granted tools** of it (exact names and the tools of profile grants, over all
+steps of the version; a `prefix*` wildcard is replaced by the matching tools of the approved snapshot
+before, see [agents.md](agents-md.md#tool-grants-argument-constraints-call-limits-wildcards)) and the grants themselves. It is part of
 `expansionDigest` and shown by `GET /v1/agents/{id}/versions/{version}`. Publish is refused with
 `400 mcp_tools_unreviewed` when the connection has no approved snapshot (a pending one does not
 count) and with `400 mcp_tool_unknown` when a granted tool is not in it. A change to a tool that is

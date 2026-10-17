@@ -1,5 +1,6 @@
 import { canonicalJson } from '../canonical.js';
 import { toolMatchesGrant } from '../mcp-pin.js';
+import { argConstraintIssues } from '../agents/arg-rules.js';
 import type { AgentSpec } from '../agents/parser.js';
 import type { PublishedDefinition } from '../agents/profiles.js';
 import type { ToolGrant } from '../agents/schema.js';
@@ -52,16 +53,47 @@ function toolNames(
   return null;
 }
 
-/** Restrictions of a grant that AWP v1alpha1 has no field for, as extensions on the grant. */
+/**
+ * Restrictions of a grant (argument constraints, call limit, data class) on its permission entry.
+ *
+ * - Constraints that break a static rule of AEP-0002 (a pattern without `maxLength`, a lookaround,
+ *   a backreference, a repeated repetition, a bound that does not fit the type) are refused: the
+ *   validator would reject the manifest, and a pattern is never rewritten or dropped.
+ * - With the pinned schema as it is, they are the critical extensions `x-openagentix-args`,
+ *   `x-openagentix-allowAdditionalArgs` and `x-openagentix-maxCallsPerRun`. Once the pin has AEP-0002
+ *   (`PINNED_AWP_FEATURES.toolArgs`) the core fields `args`, `allowAdditionalArgs` and `maxCalls`
+ *   are written instead. `args` is written for a grant that allows no additional argument even when
+ *   it is empty: AEP-0002 ignores `allowAdditionalArgs` without `args`, so `args: {}` is how "no
+ *   arguments at all" survives the export.
+ * - The values never widen: an absent `allowAdditionalArgs` is `false` in `agents.md` and is written
+ *   as `false`; a grant that allows more (`true`) with constraints writes `true` explicitly, so a
+ *   reader does not have to know the default of the format.
+ */
 function grantExtensions(ctx: ExportContext, grant: ToolGrant, path: string): JsonObject {
   const ext: JsonObject = {};
   const args = grant.args ?? {};
-  if (Object.keys(args).length > 0) ctx.critical(ext, 'args', `${path}.args`, args as JsonValue);
-  // Absent means false: a grant without `args` only allows calls without arguments.
-  if (grant.allowAdditionalArgs !== true)
-    ctx.critical(ext, 'allowAdditionalArgs', `${path}.allowAdditionalArgs`, false);
-  if (grant.maxCallsPerRun !== undefined)
-    ctx.critical(ext, 'maxCallsPerRun', `${path}.maxCallsPerRun`, grant.maxCallsPerRun);
+  const names = Object.keys(args);
+  const open = grant.allowAdditionalArgs === true;
+  for (const name of names)
+    for (const issue of argConstraintIssues(args[name]!))
+      ctx.refuse(
+        'constraint_not_representable',
+        issue.field === '' ? `${path}.args.${name}` : `${path}.args.${name}.${issue.field}`,
+        `${issue.code}: ${issue.message}`,
+      );
+  if (ctx.toolArgs) {
+    if (names.length > 0 || !open) ext.args = args as JsonValue;
+    if (open && names.length > 0) ext.allowAdditionalArgs = true;
+    if (grant.maxCallsPerRun !== undefined) ext.maxCalls = grant.maxCallsPerRun;
+  } else {
+    if (names.length > 0) ctx.critical(ext, 'args', `${path}.args`, args as JsonValue);
+    // Absent means false: a grant without `args` only allows calls without arguments.
+    if (!open) ctx.critical(ext, 'allowAdditionalArgs', `${path}.allowAdditionalArgs`, false);
+    else if (names.length > 0)
+      ctx.critical(ext, 'allowAdditionalArgs', `${path}.allowAdditionalArgs`, true);
+    if (grant.maxCallsPerRun !== undefined)
+      ctx.critical(ext, 'maxCallsPerRun', `${path}.maxCallsPerRun`, grant.maxCallsPerRun);
+  }
   if (grant.classification !== undefined)
     ctx.critical(ext, 'classification', `${path}.classification`, grant.classification);
   return ext;

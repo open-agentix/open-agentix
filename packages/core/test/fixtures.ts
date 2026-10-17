@@ -32,6 +32,7 @@ agents:
             type: string
             required: true
             pattern: "^CVE-\\\\d{4}-\\\\d{4,}$"
+            maxLength: 32
     budget:
       maxSteps: 6
   - id: notify

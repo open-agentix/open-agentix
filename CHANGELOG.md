@@ -52,6 +52,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **Argument checks of the policy engine fail closed (AWP-7, #261)**: a bound that does not fit the type
+  of the value (`minimum` on a string, `maxItems` on a non-array, `maxLength`/`pattern` on a number) used to
+  be skipped and now denies; arguments that are not an object are denied; an argument named like an
+  inherited property (`toString`, `__proto__`) is no longer taken for a declared one (it could pass a
+  closed grant); `maxLength` counts code points; a `pattern` is not run against a string longer than its
+  `maxLength` or than 16384 units, and a `deny` rule that cannot inspect the whole value (too deep, too
+  many strings, too long) denies instead of letting it pass (it stopped silently at depth 32).
+- **The no-widening check compares extension values and refuses malformed grant positions (#368 items 1
+  and 2)**: `verifyNoWidening` now compares the argument constraints, `allowAdditionalArgs`, call limit,
+  data class, access class, input, output, schemas, guidelines, runner and toolbox of a conversion with the
+  stored definition (a missing or looser value is `grant_widened`), requires critical extensions in
+  `metadata.requiredExtensions` when the manifest or the pin has the list, and refuses a wrong type at a
+  position that can carry a grant (`permissions.tools` as a list, `secrets`/`allowHosts` as a string, a step
+  of another type or naming an agent the source lacks) instead of reading it as empty.
+
 - **Rule A4 follows the grant chain, pins the policy of an open review and fails closed on an unknown
   grantor (ADR 0017, blockers 1 to 5 and follow-ups 6 and 8 of #343)**. Before approval is enforced
   (S3): (1) a binding no longer counts when a contributor granted it further up the chain, or made the
@@ -98,6 +113,26 @@ All notable changes to this project are documented here. The format follows
   with `apps/api/drizzle/down/0037_stored_grant_chain.down.sql`.
 
 ### Added
+
+- **AWP argument constraints, call limits and action groups instead of prefix wildcards (AWP-7, #261)**:
+  the three limits of a tool grant now follow AEP-0002 (draft, not accepted; the pinned `v1alpha1` schema
+  has none of its fields). The exporter writes `args`, `allowAdditionalArgs` and `maxCallsPerRun` as the
+  critical extensions `x-openagentix-args`, `x-openagentix-allowAdditionalArgs` and
+  `x-openagentix-maxCallsPerRun` (a grant that allows more arguments but has constraints now writes the
+  `true` explicitly), and as the core fields `args`, `allowAdditionalArgs` and `maxCalls` once
+  `PINNED_AWP_FEATURES.toolArgs` is set (tested against a test-only schema copy; a test pins the flag to
+  the vendored schema). New static rules, shared by `agents.md` validation, the manifest validator and the
+  exporter: `args.pattern-invalid` (no backreference, lookaround, or repeated group with a repetition or
+  alternation), `args.pattern-unbounded` (a `pattern` needs `maxLength`), `args.type-mismatch`,
+  `args.range`, `args.with-deny`, `args.limit`. The `agents.md` examples, the demo agents and the
+  workspace tool grants gain the `maxLength` they now need (a stored `agents.md` with a `pattern` and no
+  `maxLength` is refused on the next validate or publish). A stored constraint that breaks a rule makes the export fail with `constraint_not_representable`.
+  **Prefix wildcards are deprecated (decision D4)**: publish replaces `get_*` / `*` by one explicit grant
+  per tool of the approved snapshot of a pinned connection, each with the limits of the wildcard, under the
+  existing expansion digest and publish gate, and fails with `wildcard_unreviewed` / `wildcard_empty`
+  without a reviewed list. Versions published before keep their wildcard. Removal from the authoring
+  format follows the D13 timing. Honest status: AWP is a draft; OpenAgentix is not conformant to any
+  profile. Differences from the AEP text are listed in `docs/awp.md`.
 
 - **AWP step conditions: export mapping, validator rules and skip reason (AWP-6, #260)**: the `agents.md`
   `when` condition is translated into the grammar of AEP-0001 (draft, not accepted; the pinned

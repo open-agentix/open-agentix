@@ -479,15 +479,23 @@ describe('existing-versions approval', () => {
     expect((await approve(id, next, 'new-versions')).statusCode).toBe(200);
   });
 
-  it('refuses it when a tool matching a wildcard grant was added or removed', async () => {
+  it('ignores a tool added after a wildcard grant was published, and refuses a removed one', async () => {
     tools = [tool('get_a'), tool('get_b')];
     const id = await connect('ev-names');
     await pin(id);
     const agent = await agentFor('ev-names-agent', 'ev-names', ['get_*']);
     expect((await publish(agent)).statusCode).toBe(201);
+    // publish replaced the wildcard by the two tools of the approved snapshot (AEP-0002, D4)
+    const v = (await api('GET', `/v1/agents/${agent}/versions/1.0.0`)).json();
+    expect(v.toolPins['ev-names'].granted).toEqual(['get_a', 'get_b']);
+    expect(v.definition.agents[0].tools.map((t: { tool: string }) => t.tool)).toEqual([
+      'get_a',
+      'get_b',
+    ]);
+    // a tool the server adds later is not granted, so accepting the snapshot widens nothing
     tools = [tool('get_a'), tool('get_b'), tool('get_c')];
     const added = (await refresh(id)).json().snapshot.digest;
-    expect((await approve(id, added, 'existing-versions')).statusCode).toBe(409);
+    expect((await approve(id, added, 'existing-versions')).statusCode).toBe(200);
     tools = [tool('get_a')];
     const removed = (await refresh(id)).json().snapshot.digest;
     const res = await approve(id, removed, 'existing-versions');
@@ -504,13 +512,13 @@ describe('existing-versions approval', () => {
     tools = [tool('get_a', { description: 'two' }), tool('get_b')];
     const two = (await refresh(id)).json().snapshot.digest;
     expect((await approve(id, two, 'existing-versions')).statusCode).toBe(200);
-    // snapshot 3 adds a tool: the version pinned snapshot 1, which is not "the previous digest",
-    // but it accepts snapshot 2, so it must be checked against snapshot 3 as well
-    tools = [tool('get_a', { description: 'two' }), tool('get_b'), tool('get_c')];
+    // snapshot 3 removes a granted tool: the version pinned snapshot 1, which is not "the previous
+    // digest", but it accepts snapshot 2, so it must be checked against snapshot 3 as well
+    tools = [tool('get_a', { description: 'two' })];
     const three = (await refresh(id)).json().snapshot.digest;
     const res = await approve(id, three, 'existing-versions');
     expect(res.statusCode).toBe(409);
-    expect(res.json().details.tools).toEqual(['get_c']);
+    expect(res.json().details.tools).toEqual(['get_b']);
   });
 
   it('does not let a version accept a change of a tool it does not hold', async () => {

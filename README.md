@@ -77,7 +77,7 @@ agents:
         tool: update_ticket
         approval: required
         args:
-          key: { type: string, required: true, pattern: "^SEC-\\d+$" }
+          key: { type: string, required: true, pattern: "^SEC-\\d+$", maxLength: 32 }
           status: { type: string, enum: [triaged, in-progress, done] }
 ---
 

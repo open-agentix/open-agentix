@@ -36,7 +36,7 @@ agents:
       - server: cve-db
         tool: lookup_cve
         args:
-          cveId: { type: string, required: true, pattern: "^CVE-\\\\d{4}-\\\\d{4,}$" }
+          cveId: { type: string, required: true, pattern: "^CVE-\\\\d{4}-\\\\d{4,}$", maxLength: 32 }
 ${extra}---
 `;
 

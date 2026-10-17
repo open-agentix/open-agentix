@@ -3,6 +3,7 @@ import { DARK_FACTORY_NOTICE } from '../guidelines.js';
 import { OaxError, ValidationError, type ValidationIssue } from '../errors.js';
 import { compareSemver, isSemver } from '../semver.js';
 import { checkJsonSchemaSubset, JSON_SCHEMA_LIMITS, SCHEMA_REF_PREFIX } from './json-schema.js';
+import { argConstraintIssues } from './arg-rules.js';
 import { parseAgentDefinition, type AgentDefinition, type AgentSpec } from './parser.js';
 import {
   CONFIG_PLACEHOLDER,
@@ -57,35 +58,13 @@ export interface ValidationResult {
   warnings: ValidationIssue[];
 }
 
-function checkRegex(pattern: string, path: string, errors: ValidationIssue[]): void {
-  try {
-    new RegExp(pattern, 'u');
-  } catch (e) {
-    errors.push({ path, message: `invalid regular expression: ${(e as Error).message}` });
-  }
-}
-
+/** Static rules for one argument constraint (AEP-0002 section 7.5.5, see `arg-rules.ts`). */
 function checkConstraint(c: ArgConstraint, path: string, errors: ValidationIssue[]): void {
-  if (c.pattern !== undefined) checkRegex(c.pattern, `${path}.pattern`, errors);
-  c.deny?.forEach((d, i) => checkRegex(d, `${path}.deny.${i}`, errors));
-  const numericOnly = c.minimum !== undefined || c.maximum !== undefined;
-  const stringOnly =
-    c.pattern !== undefined || c.minLength !== undefined || c.maxLength !== undefined;
-  if (numericOnly && c.type && c.type !== 'number' && c.type !== 'integer') {
-    errors.push({ path, message: 'minimum/maximum require type number or integer' });
-  }
-  if (stringOnly && c.type && c.type !== 'string') {
-    errors.push({ path, message: 'pattern/minLength/maxLength require type string' });
-  }
-  if (c.maxItems !== undefined && c.type && c.type !== 'array') {
-    errors.push({ path, message: 'maxItems requires type array' });
-  }
-  if (c.minimum !== undefined && c.maximum !== undefined && c.minimum > c.maximum) {
-    errors.push({ path, message: 'minimum is greater than maximum' });
-  }
-  if (c.minLength !== undefined && c.maxLength !== undefined && c.minLength > c.maxLength) {
-    errors.push({ path, message: 'minLength is greater than maxLength' });
-  }
+  for (const issue of argConstraintIssues(c))
+    errors.push({
+      path: issue.field === '' ? path : `${path}.${issue.field}`,
+      message: issue.message,
+    });
 }
 
 function checkHandovers(
@@ -277,8 +256,19 @@ export function checkDefinition(
           message: `tool is cleared for "${t.classification}" but the pipeline handles "${def.classification}" data; calls will be denied`,
         });
       }
-      if (t.tool.endsWith('*') && t.approval === 'none' && Object.keys(t.args).length === 0) {
-        warnings.push({ path, message: 'wildcard grant without argument constraints or approval' });
+      if (t.tool.includes('*')) {
+        warnings.push({
+          path: `${path}.tool`,
+          message:
+            `prefix wildcard "${t.tool}" is deprecated (AWP decision D4): publish replaces it by ` +
+            'the explicit tools of the approved snapshot of a pinned connection and refuses it ' +
+            'without one; list the tools or use a profile grant',
+        });
+        if (t.approval === 'none' && Object.keys(t.args).length === 0)
+          warnings.push({
+            path,
+            message: 'wildcard grant without argument constraints or approval',
+          });
       }
     });
     for (const key of Object.keys(a.budget ?? {}) as (keyof NonNullable<typeof a.budget>)[]) {

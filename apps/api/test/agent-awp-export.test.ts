@@ -110,7 +110,7 @@ describe('GET /v1/agents/{id}/versions/{v}/awp', () => {
     ]);
   });
 
-  it('refuses a wildcard grant when no approved snapshot of a pinned connection was recorded', async () => {
+  it('refuses to publish a wildcard grant that has no approved snapshot of a pinned connection', async () => {
     const created = await n.req({
       method: 'POST',
       url: '/v1/connections',
@@ -123,13 +123,20 @@ describe('GET /v1/agents/{id}/versions/{v}/awp', () => {
       },
     });
     expect(created.statusCode).toBe(201);
-    const id = await publish(LOG_READER);
-    const res = await awp(id, '1.0.0');
-    expect(res.statusCode).toBe(422);
-    expect(res.json().details.findings.map((f: { code: string }) => f.code)).toEqual([
-      'wildcard_expansion_missing',
+    const draft = await n.req({
+      method: 'POST',
+      url: '/v1/agents',
+      payload: { source: LOG_READER },
+    });
+    expect(draft.statusCode).toBe(201);
+    const pub = await n.req({ method: 'POST', url: `/v1/agents/${draft.json().id}/publish` });
+    expect(pub.statusCode).toBe(400);
+    expect(pub.json().details.map((e: { code?: string }) => e.code)).toEqual([
+      'wildcard_unreviewed',
     ]);
-    expect(res.body).not.toContain('get_lines');
+    // nothing was published and the refusal does not list the tools of the connection
+    expect(pub.body).not.toContain('get_lines');
+    expect((await awp(draft.json().id as string, '1.0.0')).statusCode).toBe(404);
   });
 
   it('refuses an owner slug that is not the team of the agent (forged owner)', async () => {

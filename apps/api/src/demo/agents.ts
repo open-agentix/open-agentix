@@ -37,6 +37,7 @@ agents:
             type: string
             required: true
             pattern: "^CVE-\\\\d{4}-\\\\d{4,}$"
+            maxLength: 32
     simulation:
       responses:
         - toolCalls:
@@ -59,6 +60,7 @@ agents:
             type: string
             required: true
             pattern: "^SEC-\\\\d+$"
+            maxLength: 32
           comment:
             type: string
             required: true
@@ -126,13 +128,13 @@ agents:
       - server: tickets
         tool: get_ticket
         args:
-          key: { type: string, required: true, pattern: "^SEC-\\\\d+$" }
+          key: { type: string, required: true, pattern: "^SEC-\\\\d+$", maxLength: 32 }
       - server: tickets
         tool: update_ticket
         approval: required
         maxCallsPerRun: 1
         args:
-          key: { type: string, required: true, pattern: "^SEC-\\\\d+$" }
+          key: { type: string, required: true, pattern: "^SEC-\\\\d+$", maxLength: 32 }
           status: { type: string, enum: [triaged, in-progress, done] }
           labels: { type: array, maxItems: 5 }
     simulation:
@@ -182,11 +184,11 @@ agents:
     tools:
       - server: tickets
         tool: get_ticket
-        args: { key: { type: string, required: true, pattern: "^DEV-\\\\d+$" } }
+        args: { key: { type: string, required: true, pattern: "^DEV-\\\\d+$", maxLength: 32 } }
       - server: tickets
         tool: add_comment
         args:
-          key: { type: string, required: true, pattern: "^DEV-\\\\d+$" }
+          key: { type: string, required: true, pattern: "^DEV-\\\\d+$", maxLength: 32 }
           comment: { type: string, maxLength: 2000 }
     simulation:
       responses:
@@ -258,7 +260,7 @@ agents:
     tools:
       - server: cve-db
         tool: lookup_cve
-        args: { cveId: { type: string, required: true, pattern: "^CVE-\\\\d{4}-\\\\d{4,}$" } }
+        args: { cveId: { type: string, required: true, pattern: "^CVE-\\\\d{4}-\\\\d{4,}$", maxLength: 32 } }
     simulation:
       responses:
         - toolCalls: [{ server: cve-db, tool: lookup_cve, args: { cveId: CVE-2023-44487 } }]

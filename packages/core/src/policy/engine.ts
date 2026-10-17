@@ -120,6 +120,63 @@ function stringsIn(value: unknown, out: string[] = [], depth = 0): string[] {
   return out;
 }
 
+/**
+ * Longest string (UTF-16 code units) a `pattern` or `deny` expression is run against. The
+ * expressions are checked statically (`checkRegexSource`), but the JavaScript engine backtracks, so
+ * the runtime also bounds the input: a longer string is denied, never matched (AEP-0002 rule 4).
+ */
+export const REGEX_INPUT_LIMIT = 16_384;
+/** Strings and nesting depth `deny` looks at; a value beyond them cannot be checked and is denied. */
+const DENY_MAX_STRINGS = 4096;
+const DENY_MAX_DEPTH = 32;
+
+/**
+ * Every string inside a value, or `null` when the value is too large or too deep to inspect. A
+ * `deny` rule that could not look at everything must not let the call through.
+ */
+function boundedStrings(value: unknown): string[] | null {
+  const out: string[] = [];
+  const todo: { v: unknown; depth: number }[] = [{ v: value, depth: 0 }];
+  while (todo.length > 0) {
+    const { v, depth } = todo.pop()!;
+    if (typeof v === 'string') {
+      if (out.length >= DENY_MAX_STRINGS) return null;
+      out.push(v);
+    } else if (Array.isArray(v) || (v && typeof v === 'object')) {
+      if (depth >= DENY_MAX_DEPTH) return null;
+      for (const x of Array.isArray(v) ? v : Object.values(v as object))
+        todo.push({ v: x, depth: depth + 1 });
+      if (todo.length > DENY_MAX_STRINGS * 4) return null;
+    }
+  }
+  return out;
+}
+
+/** Length in Unicode code points (AEP-0002 section 7.5.5), not UTF-16 code units. */
+function codePoints(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) i++;
+    }
+    n++;
+  }
+  return n;
+}
+
+const compiled = new Map<string, RegExp>();
+function compile(pattern: string): RegExp {
+  let re = compiled.get(pattern);
+  if (!re) {
+    re = new RegExp(pattern, 'u'); // no g/y flag: `test` carries no state
+    if (compiled.size >= 512) compiled.clear();
+    compiled.set(pattern, re);
+  }
+  return re;
+}
+
 export function checkArg(name: string, value: unknown, c: ArgConstraint): PolicyReason[] {
   const reasons: PolicyReason[] = [];
   const actual = typeOf(value);
@@ -142,54 +199,82 @@ export function checkArg(name: string, value: unknown, c: ArgConstraint): Policy
       message: `argument "${name}" must be one of ${JSON.stringify(c.enum)}`,
     });
   }
+  // A bound that does not fit the value's type cannot be checked, so it denies: a constraint must
+  // never pass because the value has another type than the one it was written for (fail closed).
+  const mismatch = (need: string): void => {
+    reasons.push({
+      code: 'arg_type',
+      message: `argument "${name}" must be ${need} to be checked against its constraints`,
+    });
+  };
+  const wantsString =
+    c.pattern !== undefined || c.minLength !== undefined || c.maxLength !== undefined;
   if (typeof value === 'string') {
-    if (c.pattern !== undefined && !new RegExp(c.pattern, 'u').test(value)) {
-      reasons.push({
-        code: 'arg_pattern',
-        message: `argument "${name}" does not match ${c.pattern}`,
-      });
-    }
-    if (c.minLength !== undefined && value.length < c.minLength) {
+    const length = codePoints(value);
+    let tooLong = false;
+    if (c.minLength !== undefined && length < c.minLength) {
       reasons.push({
         code: 'arg_length',
         message: `argument "${name}" is shorter than ${c.minLength}`,
       });
     }
-    if (c.maxLength !== undefined && value.length > c.maxLength) {
+    if (c.maxLength !== undefined && length > c.maxLength) {
+      tooLong = true;
       reasons.push({
         code: 'arg_length',
         message: `argument "${name}" is longer than ${c.maxLength}`,
       });
     }
-  } else if (c.pattern !== undefined) {
-    reasons.push({
-      code: 'arg_type',
-      message: `argument "${name}" must be a string to match a pattern`,
-    });
-  }
-  if (typeof value === 'number') {
-    if (c.minimum !== undefined && value < c.minimum) {
-      reasons.push({ code: 'arg_range', message: `argument "${name}" is below ${c.minimum}` });
-    }
-    if (c.maximum !== undefined && value > c.maximum) {
-      reasons.push({ code: 'arg_range', message: `argument "${name}" is above ${c.maximum}` });
-    }
-  }
-  if (Array.isArray(value) && c.maxItems !== undefined && value.length > c.maxItems) {
-    reasons.push({
-      code: 'arg_items',
-      message: `argument "${name}" has more than ${c.maxItems} items`,
-    });
-  }
-  if (c.deny) {
-    const strings = stringsIn(value);
-    for (const d of c.deny) {
-      const re = new RegExp(d, 'u');
-      if (strings.some((s) => re.test(s))) {
+    if (c.pattern !== undefined && !tooLong) {
+      if (value.length > REGEX_INPUT_LIMIT)
         reasons.push({
-          code: 'arg_denied',
-          message: `argument "${name}" matches denied pattern ${d}`,
+          code: 'arg_length',
+          message: `argument "${name}" is longer than ${REGEX_INPUT_LIMIT} and cannot be matched`,
         });
+      else if (!compile(c.pattern).test(value))
+        reasons.push({
+          code: 'arg_pattern',
+          message: `argument "${name}" does not match ${c.pattern}`,
+        });
+    }
+  } else if (wantsString) {
+    mismatch('a string');
+  }
+  if (c.minimum !== undefined || c.maximum !== undefined) {
+    if (typeof value !== 'number') mismatch('a number');
+    else {
+      if (c.minimum !== undefined && value < c.minimum) {
+        reasons.push({ code: 'arg_range', message: `argument "${name}" is below ${c.minimum}` });
+      }
+      if (c.maximum !== undefined && value > c.maximum) {
+        reasons.push({ code: 'arg_range', message: `argument "${name}" is above ${c.maximum}` });
+      }
+    }
+  }
+  if (c.maxItems !== undefined) {
+    if (!Array.isArray(value)) mismatch('an array');
+    else if (value.length > c.maxItems)
+      reasons.push({
+        code: 'arg_items',
+        message: `argument "${name}" has more than ${c.maxItems} items`,
+      });
+  }
+  if (c.deny && c.deny.length > 0) {
+    const strings = boundedStrings(value);
+    if (strings === null || strings.some((s) => s.length > REGEX_INPUT_LIMIT)) {
+      reasons.push({
+        code: 'arg_denied',
+        message: `argument "${name}" is too large or too deeply nested to check against its deny patterns`,
+      });
+    } else {
+      for (const d of c.deny) {
+        const re = compile(d);
+        if (strings.some((s) => re.test(s))) {
+          reasons.push({
+            code: 'arg_denied',
+            message: `argument "${name}" matches denied pattern ${d}`,
+          });
+        }
       }
     }
   }
@@ -224,18 +309,24 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
     return { effect: 'deny', reasons, grant: null };
   }
 
-  const args = call.args ?? {};
+  const args: unknown = call.args ?? {};
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+    // The arguments of a call are an object; anything else cannot be checked, so it is denied.
+    reasons.push({ code: 'arg_type', message: 'the arguments of a tool call must be an object' });
+    return { effect: 'deny', reasons, grant };
+  }
   for (const [name, c] of Object.entries(grant.args)) {
-    if (!(name in args) || args[name] === undefined) {
+    // Own properties only: `toString` or `__proto__` is not an argument somebody declared.
+    if (!Object.hasOwn(args, name) || (args as Record<string, unknown>)[name] === undefined) {
       if (c.required)
         reasons.push({ code: 'arg_missing', message: `argument "${name}" is required` });
       continue;
     }
-    reasons.push(...checkArg(name, args[name], c));
+    reasons.push(...checkArg(name, (args as Record<string, unknown>)[name], c));
   }
   if (!grant.allowAdditionalArgs) {
     for (const name of Object.keys(args)) {
-      if (!(name in grant.args)) {
+      if (!Object.hasOwn(grant.args, name)) {
         reasons.push({ code: 'arg_unknown', message: `argument "${name}" is not allowed` });
       }
     }

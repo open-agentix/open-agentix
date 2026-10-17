@@ -143,7 +143,7 @@ symlinks refused, `..` and absolute paths refused, results size-capped):
 | `run_tests` | optional `file` matching `^test/[a-z0-9-]+\.test\.js$`; the command itself is fixed by the connection (`node --test`), never by the model; scrubbed environment (no tokens, no proxy variables), own process group, 60 s, output 64 KiB |
 | `diff` | none; returns the current unified diff against the seed |
 
-Write tools carry the grant constraint `path: { pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$" }`
+Write tools carry the grant constraint `path: { pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$", maxLength: 220 }`
 and `deny: ["\\.\\.", "^\\."]`; the server enforces the same rule again.
 
 At the end of the step the **node** (not the model) computes the final patch from the workspace
@@ -231,11 +231,11 @@ agents:
       - server: workspace
         tool: edit_file
         maxCallsPerRun: 20
-        args: { path: { pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$", deny: ["\\.\\.", "^\\."] } }
+        args: { path: { pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$", maxLength: 220, deny: ["\\.\\.", "^\\."] } }
       - server: workspace
         tool: write_file
         maxCallsPerRun: 10
-        args: { path: { pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$", deny: ["\\.\\.", "^\\."] } }
+        args: { path: { pattern: "^(src|test)/[A-Za-z0-9._/-]{1,200}$", maxLength: 220, deny: ["\\.\\.", "^\\."] } }
       - { server: workspace, tool: run_tests, maxCallsPerRun: 8 }
       - { server: workspace, tool: diff,      maxCallsPerRun: 5 }
     outputs: [{ format: pull-request, target: dogfood-sandbox }]

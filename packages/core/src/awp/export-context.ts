@@ -41,8 +41,15 @@ export class ExportContext {
   readonly findings: ExportFinding[] = [];
   private readonly uses: CriticalUse[] = [];
 
-  /** @param stepWhen the pinned schema defines the core step field `when` (AEP-0001). */
-  constructor(private readonly stepWhen = false) {
+  /**
+   * @param stepWhen the pinned schema defines the core step field `when` (AEP-0001).
+   * @param toolArgs the pinned schema defines `args`, `allowAdditionalArgs` and `maxCalls` on a
+   *   tool permission (AEP-0002).
+   */
+  constructor(
+    private readonly stepWhen = false,
+    readonly toolArgs = false,
+  ) {
     // Writes happen through the methods below.
   }
 
