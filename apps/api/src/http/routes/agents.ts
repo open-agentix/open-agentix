@@ -204,7 +204,7 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
         tags,
         summary: 'Publish the draft as an immutable version',
         description:
-          'Needs `agents:publish`. Where the tenant policy requires approval for the agent (`requireApprovalForPublish`, `production-only` with the union of the published and the draft use case), the body names the approved `reviewId` and the `expectedDigest` of the revision you checked. In one transaction under the tree, binding and agent locks the API then checks (ADR 0017 section 4.3): the draft is that revision (`409 draft_changed`); the profile expansion and the secret resolution are recomputed and equal what was approved (`409 approval_stale` with `reason` `expansion_changed` or `secret_resolution_changed`); every approval is judged again against the bindings, grant chains, expiry and policy of this moment and enough remain, with no open request for changes (`409 approval_insufficient`); `publishBy: approver-only` lets only an approver publish (`403 publisher_not_approver`). Also `409 approval_required` (no review or digest named), `409 review_closed`, `409 role_bindings_read_required` (approval cannot be enforced race-free with `OAX_ROLE_BINDINGS_READ=legacy`), `409 version_deprecated` (the draft equals a deprecated version) and the version rules. The version is published from the revision\'s source, records the review, the distinct approvers, the policy digest and the pinned secret resolution, and the review is closed as `published`. There is no emergency or break-glass publish: no parameter, role or setting skips the approvals, and unknown body fields are a 400. Refusals are audited as `agent.publish.refused`.',
+          "Needs `agents:publish`. Where the tenant policy requires approval for the agent (`requireApprovalForPublish`, `production-only` with the union of the published and the draft use case), the body names the approved `reviewId` and the `expectedDigest` of the revision you checked. In one transaction under the tree, binding and agent locks the API then checks (ADR 0017 section 4.3): the draft is that revision (`409 draft_changed`); the profile expansion and the secret resolution are recomputed and equal what was approved (`409 approval_stale` with `reason` `expansion_changed` or `secret_resolution_changed`); every approval is judged again against the bindings, grant chains, expiry and policy of this moment and enough remain, with no open request for changes (`409 approval_insufficient`); `publishBy: approver-only` lets only an approver publish (`403 publisher_not_approver`). Also `409 approval_required` (no review or digest named), `409 review_closed`, `409 role_bindings_read_required` (approval cannot be enforced race-free with `OAX_ROLE_BINDINGS_READ=legacy`), `409 version_deprecated` (the draft equals a deprecated version) and the version rules. The version is published from the revision's source, records the review, the distinct approvers, the policy digest and the pinned secret resolution, and the review is closed as `published`. There is no emergency or break-glass publish: no parameter, role or setting skips the approvals, and unknown body fields are a 400. Refusals are audited as `agent.publish.refused`.",
         security: sec,
         params: IdParams,
         body: PublishBody,
@@ -239,7 +239,12 @@ export function registerAgentRoutes(app: ZApp, { ctx, services }: Deps): void {
         security: sec,
         params: IdParams.extend({ version: z.string() }),
         body: DeprecateBody,
-        response: { 200: DeprecateResultSchema, 400: ErrorSchema, 404: ErrorSchema, 409: ErrorSchema },
+        response: {
+          200: DeprecateResultSchema,
+          400: ErrorSchema,
+          404: ErrorSchema,
+          409: ErrorSchema,
+        },
       },
     },
     async (req) => {

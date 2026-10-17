@@ -92,7 +92,9 @@ const refuse = (
 
 /** Approvals of the current revision that failed a re-check, by the reason they failed. */
 function failedWith(ev: Evaluation, reason: string): boolean {
-  return ev.approvals.some((a) => a.decision === 'approve' && a.current && a.reasons.includes(reason));
+  return ev.approvals.some(
+    (a) => a.decision === 'approve' && a.current && a.reasons.includes(reason),
+  );
 }
 
 export class PublishGate {
@@ -182,7 +184,12 @@ export class PublishGate {
         { missing },
       );
     if (openId !== null && input.reviewId !== openId)
-      return refuse(409, 'review_closed', 'the review is not the open review of this agent', openId);
+      return refuse(
+        409,
+        'review_closed',
+        'the review is not the open review of this agent',
+        openId,
+      );
     return null;
   }
 
@@ -195,9 +202,15 @@ export class PublishGate {
     // ADR 4.3 steps 2 and 3: the approvals bound to another expansion or secret resolution than the
     // one the revision has now.
     if (failedWith(ev, 'expansion_changed'))
-      return refuse(409, 'approval_stale', 'the profile expansion changed since the approval', open.id, {
-        reason: 'expansion_changed',
-      });
+      return refuse(
+        409,
+        'approval_stale',
+        'the profile expansion changed since the approval',
+        open.id,
+        {
+          reason: 'expansion_changed',
+        },
+      );
     if (failedWith(ev, 'secret_resolution_changed'))
       return refuse(
         409,
@@ -219,7 +232,12 @@ export class PublishGate {
           changesRequested: ev.state === 'changes_requested',
           approvals: ev.approvals
             .filter((a) => a.decision === 'approve' || a.decision === 'request_changes')
-            .map((a) => ({ id: a.id, decision: a.decision, current: a.current, reasons: a.reasons })),
+            .map((a) => ({
+              id: a.id,
+              decision: a.decision,
+              current: a.current,
+              reasons: a.reasons,
+            })),
         },
       );
     const approvedBy = [...new Set(counted.map((a) => a.reviewerId))].sort();

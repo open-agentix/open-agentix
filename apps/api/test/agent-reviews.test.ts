@@ -1000,6 +1000,32 @@ describe('withdrawing', () => {
   });
 });
 
+describe('publish on the legacy read path', () => {
+  it('refuses where approval is required: it cannot be checked race-free (409 role_bindings_read_required)', async () => {
+    const a = await newAgent(tok['author']!);
+    const review = j(await open(tok['author']!, a.id));
+    await decide(tok['rev1']!, review, 'approve');
+    const res = await req(tok['author']!, 'POST', `/v1/agents/${a.id}/publish`, {
+      reviewId: review.id,
+      expectedDigest: review.revision.digest,
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(j(res).error).toBe('role_bindings_read_required');
+    expect(
+      await n.ctx.db.select().from(agentVersions).where(eq(agentVersions.agentId, a.id)),
+    ).toHaveLength(0);
+    // approval off and no open review: nothing to enforce, publish works on this path
+    await setPolicy({ requireApprovalForPublish: 'off' });
+    try {
+      const plain = await newAgent(tok['author']!);
+      const ok = await req(tok['author']!, 'POST', `/v1/agents/${plain.id}/publish`);
+      expect(ok.statusCode, ok.body).toBe(201);
+    } finally {
+      await setPolicy({ requireApprovalForPublish: null });
+    }
+  });
+});
+
 describe('audit trail', () => {
   it('rate-limits repeated refusals and never writes comment text or sources', async () => {
     const a = await newAgent(tok['author']!);

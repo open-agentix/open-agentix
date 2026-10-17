@@ -40,7 +40,6 @@ import { statusFilter, textFilter, useCaseFilter, type AgentStatus } from './age
 import {
   appendRevision,
   authorOf,
-  ensureHead,
   firstRevision,
   lockAgent,
   type RevisionRow,
@@ -813,8 +812,8 @@ export class AgentsService {
    * deterministic demo id of its name, which no request can choose) and has no version yet.
    */
   async publishDemoSeed(principal: Principal, id: string): Promise<PublishResult> {
-    const agent = await this.get(id, principal);
-    if (demoId('agent', agent.name) !== agent.id || agent.latestVersionId)
+    const [agent] = await this.ctx.db.select().from(agents).where(eq(agents.id, id));
+    if (!agent || demoId('agent', agent.name) !== agent.id || agent.latestVersionId)
       throw forbidden('only the demo seed publishes without approval');
     return this.publishWith(principal, id, {}, true);
   }
@@ -854,7 +853,8 @@ export class AgentsService {
       catalog,
       input,
       seed,
-      onRevision: (tx, locked, r) => this.auditRevision(tx, locked, r, 'system').then(() => undefined),
+      onRevision: (tx, locked, r) =>
+        this.auditRevision(tx, locked, r, 'system').then(() => undefined),
     });
     await this.ctx.cache.del(`agent-latest:${id}`);
     if (definition.expansion?.length) {

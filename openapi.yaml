@@ -2157,7 +2157,26 @@ paths:
       summary: Publish the draft as an immutable version
       tags:
         - agents
-      description: "Needs `agents:publish`. Not yet refused without an approval: `shadow` reports whether publish would have been refused (ADR 0017 S1 shadow mode); the same report is in the audit entry `agent.published`."
+      description: "Needs `agents:publish`. Where the tenant policy requires approval for the agent (`requireApprovalForPublish`, `production-only` with the union of the published and the draft use case), the body names the approved `reviewId` and the `expectedDigest` of the revision you checked. In one transaction under the tree, binding and agent locks the API then checks (ADR 0017 section 4.3): the draft is that revision (`409 draft_changed`); the profile expansion and the secret resolution are recomputed and equal what was approved (`409 approval_stale` with `reason` `expansion_changed` or `secret_resolution_changed`); every approval is judged again against the bindings, grant chains, expiry and policy of this moment and enough remain, with no open request for changes (`409 approval_insufficient`); `publishBy: approver-only` lets only an approver publish (`403 publisher_not_approver`). Also `409 approval_required` (no review or digest named), `409 review_closed`, `409 role_bindings_read_required` (approval cannot be enforced race-free with `OAX_ROLE_BINDINGS_READ=legacy`), `409 version_deprecated` (the draft equals a deprecated version) and the version rules. The version is published from the revision's source, records the review, the distinct approvers, the policy digest and the pinned secret resolution, and the review is closed as `published`. There is no emergency or break-glass publish: no parameter, role or setting skips the approvals, and unknown body fields are a 400. Refusals are audited as `agent.publish.refused`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              anyOf:
+                - type: object
+                  properties:
+                    reviewId:
+                      description: the approved review to publish under; required where approval is required
+                      type: string
+                      format: uuid
+                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                    expectedDigest:
+                      description: digest of the revision you checked (SHA-256 of the normalised source); required where approval is required
+                      type: string
+                      pattern: ^[0-9a-f]{64}$
+                  additionalProperties: false
+                - type: "null"
       parameters:
         - schema:
             type: string
@@ -2200,6 +2219,43 @@ paths:
                       publishedAt:
                         type: string
                         description: ISO 8601 timestamp
+                      reviewId:
+                        anyOf:
+                          - type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          - type: "null"
+                        description: the approved review the version was published under (ADR 0017 S3); null when approval was not required for it, and for versions from before S3
+                      deprecated:
+                        anyOf:
+                          - type: object
+                            properties:
+                              at:
+                                type: string
+                                description: ISO 8601 timestamp
+                              by:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              reason:
+                                type:
+                                  - string
+                                  - "null"
+                              rollbackTo:
+                                anyOf:
+                                  - type: string
+                                    format: uuid
+                                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                  - type: "null"
+                                description: the version the agent went back to, when this was the latest version
+                            required:
+                              - at
+                              - by
+                              - reason
+                              - rollbackTo
+                            additionalProperties: false
+                          - type: "null"
+                        description: "set when the version was deprecated: it takes no new pinned runs (409 version_deprecated)"
                     required:
                       - id
                       - agentId
@@ -2207,57 +2263,38 @@ paths:
                       - digest
                       - publishedBy
                       - publishedAt
+                      - reviewId
+                      - deprecated
                     additionalProperties: false
                   created:
                     type: boolean
-                  shadow:
-                    description: "shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed"
-                    type: object
-                    properties:
-                      enforced:
-                        type: boolean
-                        description: this version only reports; publish is not refused
-                        enum:
-                          - false
-                      approvalRequired:
-                        type: boolean
-                      wouldRefuse:
-                        type: boolean
-                        description: publish would have been refused if approvals were enforced (ADR 0017 S1)
-                      reviewId:
-                        anyOf:
-                          - type: string
+                  approval:
+                    anyOf:
+                      - type: object
+                        properties:
+                          reviewId:
+                            type: string
                             format: uuid
                             pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
-                          - type: "null"
-                      state:
-                        type:
-                          - string
-                          - "null"
-                      reasons:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            code:
+                          approvedBy:
+                            type: array
+                            items:
                               type: string
-                            message:
-                              type: string
-                          required:
-                            - code
-                            - message
-                          additionalProperties: false
-                    required:
-                      - enforced
-                      - approvalRequired
-                      - wouldRefuse
-                      - reviewId
-                      - state
-                      - reasons
-                    additionalProperties: false
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          policyDigest:
+                            type: string
+                        required:
+                          - reviewId
+                          - approvedBy
+                          - policyDigest
+                        additionalProperties: false
+                      - type: "null"
+                    description: the approvals the version was published under; null when approval was not required
                 required:
                   - version
                   - created
+                  - approval
                 additionalProperties: false
         "201":
           description: Default Response
@@ -2290,6 +2327,43 @@ paths:
                       publishedAt:
                         type: string
                         description: ISO 8601 timestamp
+                      reviewId:
+                        anyOf:
+                          - type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          - type: "null"
+                        description: the approved review the version was published under (ADR 0017 S3); null when approval was not required for it, and for versions from before S3
+                      deprecated:
+                        anyOf:
+                          - type: object
+                            properties:
+                              at:
+                                type: string
+                                description: ISO 8601 timestamp
+                              by:
+                                type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              reason:
+                                type:
+                                  - string
+                                  - "null"
+                              rollbackTo:
+                                anyOf:
+                                  - type: string
+                                    format: uuid
+                                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                  - type: "null"
+                                description: the version the agent went back to, when this was the latest version
+                            required:
+                              - at
+                              - by
+                              - reason
+                              - rollbackTo
+                            additionalProperties: false
+                          - type: "null"
+                        description: "set when the version was deprecated: it takes no new pinned runs (409 version_deprecated)"
                     required:
                       - id
                       - agentId
@@ -2297,57 +2371,187 @@ paths:
                       - digest
                       - publishedBy
                       - publishedAt
+                      - reviewId
+                      - deprecated
                     additionalProperties: false
                   created:
                     type: boolean
-                  shadow:
-                    description: "shadow mode of ADR 0017 S1: what publish would have been refused for. Absent when it could not be computed"
-                    type: object
-                    properties:
-                      enforced:
-                        type: boolean
-                        description: this version only reports; publish is not refused
-                        enum:
-                          - false
-                      approvalRequired:
-                        type: boolean
-                      wouldRefuse:
-                        type: boolean
-                        description: publish would have been refused if approvals were enforced (ADR 0017 S1)
-                      reviewId:
-                        anyOf:
-                          - type: string
+                  approval:
+                    anyOf:
+                      - type: object
+                        properties:
+                          reviewId:
+                            type: string
                             format: uuid
                             pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
-                          - type: "null"
-                      state:
-                        type:
-                          - string
-                          - "null"
-                      reasons:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            code:
+                          approvedBy:
+                            type: array
+                            items:
                               type: string
-                            message:
-                              type: string
-                          required:
-                            - code
-                            - message
-                          additionalProperties: false
-                    required:
-                      - enforced
-                      - approvalRequired
-                      - wouldRefuse
-                      - reviewId
-                      - state
-                      - reasons
-                    additionalProperties: false
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          policyDigest:
+                            type: string
+                        required:
+                          - reviewId
+                          - approvedBy
+                          - policyDigest
+                        additionalProperties: false
+                      - type: "null"
+                    description: the approvals the version was published under; null when approval was not required
                 required:
                   - version
                   - created
+                  - approval
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "401":
+          description: Missing or invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
+  /v1/agents/{id}/versions/{version}/deprecate:
+    post:
+      summary: Deprecate a version; deprecating the latest version rolls the agent back
+      tags:
+        - agents
+      description: "Needs `agents:publish` on the agent. New runs pinned to a deprecated version are refused with `409 version_deprecated`; runs that already exist are not touched. Deprecating the **latest** version is a rollback: `agents.latestVersion` goes back to the newest other version that is not deprecated and, where approval is required for the agent today, was published under an approved review. A rollback creates no version, needs no approval and is audited as `agent.version.deprecated` (with `rollbackTo`). `409 rollback_target_unapproved` when approval is required and no such version was published under an approved review, `409 no_rollback_target` when there is no other version that is not deprecated (disable the agent instead), `409 already_deprecated`. Deprecating cannot be undone: publish a version with a higher number. This is the way out of an incident; there is no break-glass publish."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              anyOf:
+                - type: object
+                  properties:
+                    reason:
+                      type: string
+                      maxLength: 500
+                  additionalProperties: false
+                - type: "null"
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+          in: path
+          name: id
+          required: true
+        - schema:
+            type: string
+          in: path
+          name: version
+          required: true
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versionId:
+                    type: string
+                    format: uuid
+                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                  version:
+                    type: string
+                  deprecatedAt:
+                    type: string
+                    description: ISO 8601 timestamp
+                  rollbackTo:
+                    anyOf:
+                      - type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          version:
+                            type: string
+                        required:
+                          - id
+                          - version
+                        additionalProperties: false
+                      - type: "null"
+                    description: "set when the deprecated version was the latest one: the version the agent went back to"
+                required:
+                  - versionId
+                  - version
+                  - deprecatedAt
+                  - rollbackTo
+                additionalProperties: false
+        "400":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -2362,11 +2566,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "404":
-          description: Not found
+          description: Default Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
         "409":
           description: Default Response
           content:
@@ -2982,6 +3196,43 @@ paths:
                         publishedAt:
                           type: string
                           description: ISO 8601 timestamp
+                        reviewId:
+                          anyOf:
+                            - type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            - type: "null"
+                          description: the approved review the version was published under (ADR 0017 S3); null when approval was not required for it, and for versions from before S3
+                        deprecated:
+                          anyOf:
+                            - type: object
+                              properties:
+                                at:
+                                  type: string
+                                  description: ISO 8601 timestamp
+                                by:
+                                  type: string
+                                  format: uuid
+                                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                reason:
+                                  type:
+                                    - string
+                                    - "null"
+                                rollbackTo:
+                                  anyOf:
+                                    - type: string
+                                      format: uuid
+                                      pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                                    - type: "null"
+                                  description: the version the agent went back to, when this was the latest version
+                              required:
+                                - at
+                                - by
+                                - reason
+                                - rollbackTo
+                              additionalProperties: false
+                            - type: "null"
+                          description: "set when the version was deprecated: it takes no new pinned runs (409 version_deprecated)"
                       required:
                         - id
                         - agentId
@@ -2989,6 +3240,8 @@ paths:
                         - digest
                         - publishedBy
                         - publishedAt
+                        - reviewId
+                        - deprecated
                       additionalProperties: false
                 required:
                   - items
@@ -3060,6 +3313,43 @@ paths:
                   publishedAt:
                     type: string
                     description: ISO 8601 timestamp
+                  reviewId:
+                    anyOf:
+                      - type: string
+                        format: uuid
+                        pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                      - type: "null"
+                    description: the approved review the version was published under (ADR 0017 S3); null when approval was not required for it, and for versions from before S3
+                  deprecated:
+                    anyOf:
+                      - type: object
+                        properties:
+                          at:
+                            type: string
+                            description: ISO 8601 timestamp
+                          by:
+                            type: string
+                            format: uuid
+                            pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                          reason:
+                            type:
+                              - string
+                              - "null"
+                          rollbackTo:
+                            anyOf:
+                              - type: string
+                                format: uuid
+                                pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                              - type: "null"
+                            description: the version the agent went back to, when this was the latest version
+                        required:
+                          - at
+                          - by
+                          - reason
+                          - rollbackTo
+                        additionalProperties: false
+                      - type: "null"
+                    description: "set when the version was deprecated: it takes no new pinned runs (409 version_deprecated)"
                   source:
                     type: string
                   definition:
@@ -3130,6 +3420,8 @@ paths:
                   - digest
                   - publishedBy
                   - publishedAt
+                  - reviewId
+                  - deprecated
                   - source
                   - definition
                 additionalProperties: false

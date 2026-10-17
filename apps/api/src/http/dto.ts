@@ -5,7 +5,12 @@ import {
   type PublishedExpansion,
 } from '@openagentix/core';
 import type { AgentSummary } from '../services/agent-summaries.js';
-import { summary, type AgentVersionRow, type DeprecationRow, type VersionSummary } from '../services/agents.js';
+import {
+  summary,
+  type AgentVersionRow,
+  type DeprecationRow,
+  type VersionSummary,
+} from '../services/agents.js';
 import type { ConnectionRow, PolicyRow } from '../services/catalog.js';
 import type { PublicUser, TeamRow, TenantRow, TokenInfo } from '../services/identity.js';
 import type { EventRow, SourceRow } from '../services/ingest.js';

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedDemo } from '../src/demo/seed.js';
+import { agents } from '../src/db/schema.js';
 import { testNode, type TestNode } from './helpers.js';
 
 let n: TestNode;
@@ -110,6 +111,14 @@ describe('demo seed', () => {
       payload: { data: { ticket: 'DEV-1', slug: 's', title: 'T' } },
     });
     expect(dry.json().status).toBe('succeeded');
+  });
+
+  it('publishes without approval only the first version of a seeded agent', async () => {
+    const [seeded] = await n.ctx.db.select().from(agents).limit(1);
+    const principal = { userId: 'x', tenantId: seeded!.tenantId } as never;
+    await expect(n.services.agents.publishDemoSeed(principal, seeded!.id)).rejects.toMatchObject({
+      statusCode: 403,
+    });
   });
 
   it('is idempotent', async () => {

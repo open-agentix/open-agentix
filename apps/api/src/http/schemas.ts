@@ -197,10 +197,14 @@ export const VersionSchema = z.object({
       at: Iso,
       by: Id,
       reason: z.string().nullable(),
-      rollbackTo: Id.nullable().describe('the version the agent went back to, when this was the latest version'),
+      rollbackTo: Id.nullable().describe(
+        'the version the agent went back to, when this was the latest version',
+      ),
     })
     .nullable()
-    .describe('set when the version was deprecated: it takes no new pinned runs (409 version_deprecated)'),
+    .describe(
+      'set when the version was deprecated: it takes no new pinned runs (409 version_deprecated)',
+    ),
 });
 export const ExpansionRecordSchema = z.object({
   agentId: z.string(),
@@ -267,12 +271,16 @@ export const AwpExportRefusalSchema = ErrorSchema.extend({
  */
 export const PublishBody = z
   .strictObject({
-    reviewId: Id.optional().describe('the approved review to publish under; required where approval is required'),
+    reviewId: Id.optional().describe(
+      'the approved review to publish under; required where approval is required',
+    ),
     expectedDigest: z
       .string()
       .regex(/^[0-9a-f]{64}$/)
       .optional()
-      .describe('digest of the revision you checked (SHA-256 of the normalised source); required where approval is required'),
+      .describe(
+        'digest of the revision you checked (SHA-256 of the normalised source); required where approval is required',
+      ),
   })
   .nullish();
 export const PublishResultSchema = z.object({
@@ -296,7 +304,9 @@ export const DeprecateResultSchema = z.object({
   rollbackTo: z
     .object({ id: Id, version: z.string() })
     .nullable()
-    .describe('set when the deprecated version was the latest one: the version the agent went back to'),
+    .describe(
+      'set when the deprecated version was the latest one: the version the agent went back to',
+    ),
 });
 
 export const RunStatusSchema = z.enum(RUN_STATUSES);

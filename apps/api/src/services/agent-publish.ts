@@ -138,7 +138,10 @@ export class AgentPublisher {
 
   /** The version rule against the versions as they are under the lock (another publish may have run). */
   private async assertVersionRule(tx: Db, agentId: string, def: AgentDefinition): Promise<void> {
-    const published = await tx.select().from(agentVersions).where(eq(agentVersions.agentId, agentId));
+    const published = await tx
+      .select()
+      .from(agentVersions)
+      .where(eq(agentVersions.agentId, agentId));
     if (checkPublish(published, def) === 'unchanged')
       throw new HttpError(409, 'draft_changed', 'the draft was published meanwhile; try again');
   }
