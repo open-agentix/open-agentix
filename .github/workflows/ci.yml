@@ -91,6 +91,40 @@ jobs:
       # Generated types and schema copies are current; a hand edit or a stale file fails here.
       - run: node scripts/awp/generate-types.mjs --check
 
+  awp-conformance:
+    name: AWP conformance harness (measured pass counts, no claim)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Regression gate: a case that passes on the base branch must pass here. The base baseline is read
+      # from git (this step only; the harness itself makes no network access and edits no file).
+      - name: baseline of the base branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          git show FETCH_HEAD:packages/awp/conformance/baseline.json > "$RUNNER_TEMP/base-baseline.json" \
+            || rm -f "$RUNNER_TEMP/base-baseline.json"
+      - name: run the harness (vendored cases, vendored suite, real exports, golden files)
+        run: |
+          set -- --out awp-report.json
+          if [ -f "$RUNNER_TEMP/base-baseline.json" ]; then set -- "$@" --baseline "$RUNNER_TEMP/base-baseline.json"; fi
+          pnpm awp:conformance "$@"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: awp-report
+          path: awp-report.json
+          retention-days: 14
+
   pr-title:
     name: Conventional Commit PR title
     if: github.event_name == 'pull_request'

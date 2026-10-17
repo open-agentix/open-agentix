@@ -1,0 +1,91 @@
+{
+  "apiVersion": "awp.agenticworkflowprotocol.org/v1alpha1",
+  "kind": "Workflow",
+  "metadata": {
+    "name": "approved-publisher",
+    "version": "1.0.0",
+    "description": "Read a pull request and comment on it after a human approves (MCP tool grants).",
+    "owner": {
+      "team": "team-docs"
+    },
+    "classification": "internal",
+    "integrity": {
+      "digest": "sha256:3e64afd110705288c553eda490da4fb230f1c00c6381c9782375fb1ed98d5214"
+    }
+  },
+  "spec": {
+    "triggers": [
+      {
+        "type": "manual"
+      }
+    ],
+    "budget": {
+      "maxCostUsd": 0.1,
+      "resources": {
+        "maxTokens": 12000,
+        "maxToolCalls": 6
+      }
+    },
+    "agents": [
+      {
+        "id": "publisher",
+        "model": {
+          "provider": "simulated",
+          "name": "sim-1"
+        },
+        "instructions": "Read the pull request and its changed files. Write one short, factual comment that summarises the change.",
+        "tools": [
+          {
+            "type": "mcp",
+            "server": "github-read",
+            "tools": ["get_pr", "list_files"]
+          },
+          {
+            "type": "mcp",
+            "server": "github-pr",
+            "tools": ["comment_pr"]
+          }
+        ],
+        "permissions": {
+          "default": "deny",
+          "tools": {
+            "github-read.get_pr": {
+              "allow": true
+            },
+            "github-read.list_files": {
+              "allow": true
+            },
+            "github-pr.comment_pr": {
+              "allow": true
+            }
+          }
+        }
+      }
+    ],
+    "workflow": [
+      {
+        "id": "publisher",
+        "type": "agent",
+        "agent": "publisher",
+        "outputs": [
+          {
+            "name": "result"
+          }
+        ]
+      }
+    ],
+    "approval": {
+      "requiredFor": ["github-pr.comment_pr"],
+      "approvers": [
+        {
+          "role": "operator"
+        },
+        {
+          "role": "admin"
+        }
+      ],
+      "timeout": "900s",
+      "onTimeout": "fail"
+    }
+  }
+}

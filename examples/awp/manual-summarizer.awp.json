@@ -1,0 +1,54 @@
+{
+  "apiVersion": "awp.agenticworkflowprotocol.org/v1alpha1",
+  "kind": "Workflow",
+  "metadata": {
+    "name": "manual-summarizer",
+    "version": "1.0.0",
+    "description": "Summarise a text that a person pastes in (manual start, no tools).",
+    "owner": {
+      "team": "team-docs"
+    },
+    "classification": "internal",
+    "integrity": {
+      "digest": "sha256:6e3a1bb983eee7a3b756de6ea44da97bc78cede4f27b69536cdc132c3d97de40"
+    }
+  },
+  "spec": {
+    "triggers": [
+      {
+        "type": "manual"
+      }
+    ],
+    "budget": {
+      "maxCostUsd": 0.05,
+      "resources": {
+        "maxTokens": 8000
+      }
+    },
+    "agents": [
+      {
+        "id": "summarizer",
+        "model": {
+          "provider": "simulated",
+          "name": "sim-1"
+        },
+        "instructions": "Summarise the text you are given in five bullet points. Keep names and numbers exactly as written.",
+        "permissions": {
+          "default": "deny"
+        }
+      }
+    ],
+    "workflow": [
+      {
+        "id": "summarizer",
+        "type": "agent",
+        "agent": "summarizer",
+        "outputs": [
+          {
+            "name": "result"
+          }
+        ]
+      }
+    ]
+  }
+}

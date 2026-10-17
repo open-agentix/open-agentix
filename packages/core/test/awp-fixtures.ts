@@ -28,32 +28,16 @@ export function exampleFiles(): string[] {
 
 export const readExample = (file: string): string => readFileSync(EXAMPLES_DIR + file, 'utf8');
 
-/** Connections of the example agents, with the reviewed tool lists a publish would see. */
-export const EXAMPLE_CATALOG: AccessCatalog = {
-  logs: {
-    tools: { get_lines: 'read', get_errors: 'read', purge: 'write' },
-    profiles: {},
-    version: 'v1',
-    pin: {
-      connectionId: 'logs-connection',
-      snapshot: {
-        digest: 'a'.repeat(64),
-        tools: ['get_lines', 'get_errors', 'purge'].map((name) => ({ name, inputSchema: {} })),
-      },
-    },
-  },
-  'cve-db': { tools: { lookup_cve: 'read' }, profiles: {}, version: 'v1' },
-  'github-read': {
-    tools: { get_pr: 'read', list_files: 'read' },
-    profiles: { read: ['get_pr', 'list_files'] },
-    version: 'v1',
-  },
-  'github-pr': {
-    tools: { comment_pr: 'write' },
-    profiles: { 'pr-comment': ['comment_pr'] },
-    version: 'v1',
-  },
-};
+/**
+ * Connections of the example agents, with the reviewed tool lists a publish would see. The data is
+ * shared with the conformance harness (`scripts/awp/conformance.mjs`).
+ */
+export const EXAMPLE_CATALOG = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL('../../awp/conformance/example-catalog.json', import.meta.url)),
+    'utf8',
+  ),
+) as AccessCatalog;
 
 /** The parsed file, as `agents.md` validation leaves it (no publish context yet). */
 export const parsedOf = (source: string): PublishedDefinition => parseAgentDefinition(source);

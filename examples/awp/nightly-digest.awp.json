@@ -1,0 +1,60 @@
+{
+  "apiVersion": "awp.agenticworkflowprotocol.org/v1alpha1",
+  "kind": "Workflow",
+  "metadata": {
+    "name": "nightly-digest",
+    "version": "1.0.0",
+    "description": "Write a short digest of the day every night (cron start, no tools).",
+    "owner": {
+      "team": "team-docs"
+    },
+    "classification": "internal",
+    "integrity": {
+      "digest": "sha256:3d01c1878817805808d072748920ade515230b1de86d42dba1813db3a8ebe352"
+    }
+  },
+  "spec": {
+    "triggers": [
+      {
+        "type": "schedule",
+        "cron": "30 22 * * *",
+        "timezone": "Europe/Berlin"
+      }
+    ],
+    "budget": {
+      "maxCostUsd": 0.08,
+      "maxDuration": "300s",
+      "resources": {
+        "maxTokens": 10000
+      }
+    },
+    "agents": [
+      {
+        "id": "digester",
+        "model": {
+          "provider": "simulated",
+          "name": "sim-1"
+        },
+        "instructions": "Write a digest of at most ten lines from the notes of the day. State what is open, not what is done.",
+        "permissions": {
+          "default": "deny"
+        },
+        "x-openagentix-model": {
+          "temperature": 0.1
+        }
+      }
+    ],
+    "workflow": [
+      {
+        "id": "digester",
+        "type": "agent",
+        "agent": "digester",
+        "outputs": [
+          {
+            "name": "result"
+          }
+        ]
+      }
+    ]
+  }
+}
