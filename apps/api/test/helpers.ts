@@ -36,6 +36,9 @@ export async function testNode(
     OAX_APPROVAL_POLL_MS: '20',
     OAX_SSE_POLL_MS: '20',
     OAX_RATE_LIMIT_MAX: '10000',
+    // Approval at publish is enforced (ADR 0017 S3) and `auto` turns it on as soon as there are two
+    // tenants: tests that are not about approval would be unable to publish. Tests of the gate set it.
+    OAX_LIFECYCLE_REQUIRE_APPROVAL: 'off',
     // Re-runs the whole suite on the resolver path: OAX_TEST_ROLE_BINDINGS_READ=bindings (ADR 0014 S2).
     ...(process.env.OAX_TEST_ROLE_BINDINGS_READ
       ? { OAX_ROLE_BINDINGS_READ: process.env.OAX_TEST_ROLE_BINDINGS_READ }
