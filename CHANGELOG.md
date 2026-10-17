@@ -69,6 +69,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Transition of the legacy `openagentix.io/v1alpha1` format to AWP manifests (AWP-3b, #257)**: release N
+  of the transition. Legacy files are still accepted on validate, publish and import, and every read
+  now reports the deprecation `legacy_format` (`deprecations` in the API, a warning from `oax validate`,
+  the audit event `agent.legacy_format_read`, the header `x-oax-deprecation` on the manifest export); the
+  legacy format is rejected from release `0.4.0` (the switch is a constant tied to the version, tested
+  with the constant forced). Migration `0038_agent_version_awp` and a one-time, idempotent conversion
+  (per agent in a transaction, run by `db:migrate` and on start) store the effective AWP manifest of
+  every published version **next to** the unchanged source and digest, or mark it `legacy-unconvertible`
+  with field-level reasons: no lossy conversion is ever stored, and an independent check refuses a
+  conversion that would grant more than the legacy file (`grant_widened`). New: `oax awp convert`,
+  `oax awp legacy-report`, `GET /v1/agents/legacy-report`, and the stored conversion on
+  `GET /v1/agents/{id}/versions/{version}` (`awp`). Existing agents keep running unchanged. AWP is a draft
+  (`v1alpha1`); openagentix is not conformant to any profile. Down path:
+  `apps/api/drizzle/down/0038_agent_version_awp.down.sql` (drops only the new table). See
+  [docs/agents-md.md](docs/agents-md.md#transition-to-awp-manifests).
+
 - **Validation of AWP manifests (AWP-3, #256)**: `POST /v1/agents/validate` and `oax validate` accept an
   `agents.md` whose front matter is an AWP `v1alpha1` manifest (`apiVersion: awp.agenticworkflowprotocol.org/v1alpha1`,
   `## Agent: <id>` sections become the `instructions`) and plain `.awp.yaml`/`.awp.json` files, and report the
