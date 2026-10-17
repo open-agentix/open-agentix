@@ -453,7 +453,10 @@ under an approved review (`agent_versions.review_id`). A rollback creates no ver
 and is audited with `rollbackTo`. If no such version exists: `409 rollback_target_unapproved` (older
 versions exist but none was published under approval, for example because they are from before S3), or
 `409 no_rollback_target` (nothing else to go back to); disable the agent in both cases.
-Deprecating an older version only marks it. After a rollback the version numbers stay ahead: the next
+A rollback puts the agent back under the use case of the version it returns to, which is a relabel: a
+caller who holds `agents:publish` only through a use-case binding cannot roll back into a use case they
+do not hold (`403`), the same rule as relabelling in a draft save or publish. Deprecating an older
+version only marks it. After a rollback the version numbers stay ahead: the next
 publish needs a higher version than every published one, and the content of a deprecated version cannot
 be published again under its number (`409 version_deprecated`).
 
