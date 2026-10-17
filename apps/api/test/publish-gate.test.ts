@@ -63,7 +63,8 @@ const JIRA = {
   },
   profiles: { read: ['get_issue', 'search_issues'] },
 };
-const PROFILE_TOOLS = '      - { server: jira, profile: read }';
+const PROFILE_TOOLS = '    access: read-only\n    tools:\n      - { server: jira, profile: read }';
+const CREDENTIALS = '    credentials:\n      - { secret: mail-hook, env: MAIL_TOKEN }';
 
 interface TestAgent {
   id: string;
@@ -72,7 +73,7 @@ interface TestAgent {
   tools: string;
 }
 
-/** An agents.md source; `extra` goes into the front matter, `tools` into the step (read-only). */
+/** An agents.md source; `extra` goes into the front matter, `tools` (complete lines) into the step. */
 const source = (name: string, version: string, extra = '', tools = '') => `---
 apiVersion: openagentix.io/v1alpha1
 kind: Agent
@@ -85,7 +86,7 @@ agents:
     provider: simulated
     model: sim-1
     instructions: Summarise the event.
-${tools ? `    access: read-only\n    tools:\n${tools}\n` : ''}---
+${tools ? `${tools}\n` : ''}---
 `;
 
 async function newAgent(by: string, extra = '', tools = ''): Promise<TestAgent> {
@@ -302,6 +303,17 @@ describe('the gate: what publish needs where approval is required', () => {
     expect(again.statusCode).toBe(200);
     expect(j(again).created).toBe(false);
     expect(await versionsOf(a.id)).toHaveLength(1);
+  });
+
+  it('pins the secret references the source declares with the version', async () => {
+    const { a, review } = await approved('', CREDENTIALS);
+    expect((await publishReview(tok['author']!, a.id, review)).statusCode).toBe(201);
+    const [v] = await versionsOf(a.id);
+    expect(v!.secretResolution).toEqual(['mail-hook']);
+    expect(v!.resolutionDigest).toBe(review.digests.resolutionDigest);
+    expect(review.digests.resolutionDigest).not.toBe(
+      (await approved()).review.digests.resolutionDigest,
+    );
   });
 
   it('lets a new review start after a publish, against the published version', async () => {
@@ -535,6 +547,27 @@ describe('the state is read under the lock, not before it', () => {
     }
     expect(await versionsOf(a.id)).toHaveLength(0);
     expect((await getReview(tok['author']!, review.id)).status).toBe('open');
+  });
+
+  it('a draft saved after the checks is not published either where no approval is required', async () => {
+    await setPolicy({ requireApprovalForPublish: 'off' });
+    try {
+      const a = await newAgent(tok['author']!);
+      const restore = afterPreLockChecks(() => edit(tok['rev2']!, a, '1.0.1'));
+      try {
+        const res = await publish(tok['author']!, a.id);
+        expect(res.statusCode, res.body).toBe(409);
+        expect(j(res).error).toBe('draft_changed');
+      } finally {
+        restore();
+      }
+      expect(await versionsOf(a.id)).toHaveLength(0);
+      // the saved draft is the next thing to publish
+      expect((await publish(tok['author']!, a.id)).statusCode).toBe(201);
+      expect((await versionsOf(a.id))[0]!.version).toBe('1.0.1');
+    } finally {
+      await resetPolicy();
+    }
   });
 
   it('the same review published meanwhile: the second publish creates nothing', async () => {

@@ -131,7 +131,6 @@ export class AgentPublisher {
       useCase: p.def.labels.useCase || null,
       catalog: p.catalog,
       policy: await this.policy.effectiveFor(at.node, tx),
-      secretReferences: declaredSecretReferences(p.def),
       input: p.input,
     });
   }

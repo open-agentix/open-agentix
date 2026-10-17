@@ -50,8 +50,6 @@ export interface ApprovalRecord {
   policyDigest: string;
   expansionDigest: string;
   resolutionDigest: string;
-  /** The secret references pinned for production runs. */
-  secretResolution: string[];
   /** The decisions that counted. */
   decisionIds: string[];
 }
@@ -74,8 +72,6 @@ export interface GateInput {
   catalog: Awaited<ReturnType<AgentReviewsService['catalogOf']>>;
   /** The effective policy at the agent's node (read under the lock). */
   policy: LifecyclePolicy;
-  /** The secret references the source declares (pinned with the version). */
-  secretReferences: string[];
   input: PublishApprovalInput;
 }
 
@@ -258,7 +254,6 @@ export class PublishGate {
         policyDigest: ev.binding.policyDigest,
         expansionDigest: ev.binding.expansionDigest,
         resolutionDigest: ev.binding.resolutionDigest,
-        secretResolution: g.secretReferences,
         decisionIds: counted.map((a) => a.id).sort(),
       },
     };
