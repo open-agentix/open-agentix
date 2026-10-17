@@ -19,6 +19,7 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:ui": "pnpm --filter @openagentix/ui test:coverage",
+    "awp:conformance": "tsc -b packages/core && node scripts/awp/conformance.mjs",
     "seed:demo": "pnpm --filter @openagentix/api seed:demo"
   },
   "devDependencies": {

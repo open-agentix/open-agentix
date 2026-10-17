@@ -27,7 +27,11 @@ export async function createControlNode(
   );
   // ADR 0014 S9: restrictions are the one kind of grant data whose loss widens access. Stored ones
   // that the legacy read path ignores are loud: error, metric, and /readyz fails (see there).
-  const unenforced = await services.roleRestrictions.countUnenforced().catch(() => 0);
+  const unenforced = await services.roleRestrictions.countUnenforced().catch((err: unknown) => {
+    // unknown is not "none": /readyz treats a failing count as not ready on the legacy read path
+    ctx.logger.error({ err }, 'could not count stored role restrictions');
+    return 0;
+  });
   ctx.metrics.unenforcedRestrictions.set(unenforced);
   if (unenforced > 0)
     ctx.logger.error(

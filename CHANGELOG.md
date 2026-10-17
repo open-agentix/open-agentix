@@ -41,6 +41,15 @@ All notable changes to this project are documented here. The format follows
   ADR 0017 decision 11 rules out; see `docs/agent-lifecycle.md`), and a connection change after the early
   catalog read, revocations included, is not seen by the publish in flight.
 
+### Fixed
+
+- **`/readyz` no longer reports ready when the stored role restrictions cannot be counted (follow-up of
+  ADR 0014 S9, #346)**: on the legacy read path a failing count was treated as "none stored"; it now makes
+  the probe `503` (`checks.restrictions: false`), also with `OAX_ALLOW_UNENFORCED_RESTRICTIONS=1`. Start-up
+  logs the failure. Tests now cover each platform-operator exemption layer on its own, the organisation cap
+  with a one-for-one replacement in a single `PUT`, and the core cost test is steadier on loaded runners.
+  `docs/tenancy.md` gains the runbook step "lift the restrictions before rolling back the image".
+
 ### Security
 
 - **Rule A4 follows the grant chain, pins the policy of an open review and fails closed on an unknown
@@ -105,6 +114,20 @@ All notable changes to this project are documented here. The format follows
   explains refusals, the Versions tab shows approved and deprecated versions and deprecates (English and
   German). `docs/agent-lifecycle.md`, `docs/configuration.md`, OpenAPI and the UI types updated.
 
+
+- **AWP conformance harness (AWP-4, #258)**: `pnpm awp:conformance` (CI job `awp-conformance`) runs, offline, (a)
+  every case of the vendored `conformance/index.json` through the OpenAgentix validator, (b) every
+  `examples/**/*.agents.md` through the real exporter and the exports (and the golden files) through the
+  vendored reference checker with `--verify-digest`, and (c) the vendored suite itself (`awp-check.mjs run`,
+  unmodified, on a temporary copy). It writes `awp-report.json` (suite version, AWP commit from
+  `PROVENANCE.json`, every case with its result, profiles; no timestamps, so local and CI output are the
+  same) and fails on a regression: a case listed in `packages/awp/conformance/baseline.json` (on pull
+  requests also the baseline of the base branch) that stops passing or disappears. A case that never
+  passed is reported without failing. Four new AWP-native examples (`manual-summarizer`, `nightly-digest`,
+  `webhook-intake`, `approved-publisher`) with golden manifests from the real exporter; an API test publishes
+  examples and checks their exports with the reference checker. The report states measured pass counts
+  only: AWP is a draft (`v1alpha1`) and openagentix is **not** conformant to any profile; no badge and no
+  claim. See [docs/awp.md](docs/awp.md).
 - **Validation of AWP manifests (AWP-3, #256)**: `POST /v1/agents/validate` and `oax validate` accept an
   `agents.md` whose front matter is an AWP `v1alpha1` manifest (`apiVersion: awp.agenticworkflowprotocol.org/v1alpha1`,
   `## Agent: <id>` sections become the `instructions`) and plain `.awp.yaml`/`.awp.json` files, and report the

@@ -306,3 +306,56 @@ any `agents.md`. The `agents.md` wrapper never lets a section override front mat
 Storing, publishing and running an AWP manifest; conversion of the legacy format (AWP-3b); source positions
 (line and column) in findings; the `awp-check` profile selection by the caller; `kind: Agent` and `kind:
 Policy` documents are validated but have no exporter counterpart.
+
+## Conformance harness (AWP-4)
+
+AWP is a **draft** (`v1alpha1`). The harness measures what this build does with the vendored conformance
+suite. It produces pass counts, not a statement: openagentix is **not conformant** to any AWP profile, there
+is no badge and no claim anywhere, and the wording stays "built to the AWP schema, conformance in progress
+(alpha)". A public statement is a separate, approved change (rule R1 of the AWP decision log) and needs a
+public CI run.
+
+```sh
+pnpm awp:conformance                     # builds packages/core, runs everything, writes awp-report.json
+node scripts/awp/conformance.mjs --baseline <file>   # extra baseline (CI passes the one of the base branch)
+```
+
+The harness is offline: its inputs are the vendored copy (`packages/awp/vendor/`, never edited), the
+examples, `packages/awp/conformance/example-catalog.json` (the connections the example agents need) and
+the built `packages/core`. It needs the repository's own `ajv` and `yaml`; nothing is installed or fetched.
+
+| Group       | What runs                                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------------------------------- |
+| `validator` | every case of `conformance/index.json` through `validateManifestSource` (the suite's pass criterion: accept or reject, the indexed `code` at the indexed `path`, no error of another family; for a structural `schema.*` code the path decides and `codeMatch` records whether the code was the same) |
+| `reference` | the vendored suite itself, `awp-check.mjs run`, unmodified, on a temporary copy of the vendored files (the specification examples are not vendored, so that directory is empty there) |
+| `export`    | every `examples/**/*.agents.md` through the real exporter, a successful export through the vendored reference checker with `--verify-digest` and through the validator; no critical extension may be in it. A refusal is `skipped` (outcome `refused`, with the codes), not a pass |
+| `golden`    | every `examples/awp/*.awp.json` equals the real export of its `agents.md` and passes the reference checker; an exported example under `examples/awp` without a golden file fails |
+
+`awp-report.json` (not committed, uploaded by CI as artefact `awp-report`) lists the AWP commit and version
+from `PROVENANCE.json`, the profiles of the suite and the profiles the validator supports, a summary per
+group and every case. It has no timestamps or paths, so the same inputs give the same file locally and in
+CI. The `validator` cases run with the profiles each case declares (default: all six profiles of the
+suite), like the existing `awp-manifest-conformance` test. The validator supports `core`, `governance` and
+`mcp` only; `atSupportedProfiles: "differs"` marks the cases whose verdict changes when only those three are
+on, and the summary counts them. Those cases pass only because the harness switches on rules for profiles
+the product does not support.
+
+**Regression gate.** `packages/awp/conformance/baseline.json` lists the ids that pass on `main`. The run
+exits 1 when one of them fails, is skipped or no longer exists (a pin upgrade or a removed example must
+update the baseline in the same, reviewed change). On pull requests CI also passes the baseline of the base
+branch, so a pull request cannot shrink the gate for itself. Cases that never passed are reported with the
+pass rate and do not fail the run. When every `validator` and `export` case passes, the output says so; the
+run never edits a file. Update the baseline deliberately with
+`node scripts/awp/conformance.mjs --write-baseline` after adding a case; a unit test fails while the file
+is stale.
+
+**Real published agents.** `apps/api/test/agent-awp-conformance.test.ts` creates and publishes the AWP-native
+examples through the API, fetches `GET /v1/agents/{id}/versions/{v}/awp`, and checks the body with the
+reference checker (`--verify-digest`), with `POST /v1/agents/validate` and against the golden file.
+It runs in the normal test job. The harness itself exports from the example catalog (a stand-in for the
+reviewed tool lists of a publish), not from a database.
+
+**Examples.** `manual-summarizer` (manual), `nightly-digest` (cron with time zone), `webhook-intake` (event),
+`approved-publisher` (MCP tool grants, one with required approval) export without a critical extension.
+Regenerate the goldens with `UPDATE_GOLDEN=1 pnpm vitest run packages/core/test/awp-export.test.ts` and
+`pnpm format`.

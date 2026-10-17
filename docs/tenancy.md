@@ -834,12 +834,29 @@ organisation, so `PUT` and `DELETE` are throttled per caller (`OAX_RATE_LIMIT_RE
 minute).
 
 **Stored but not enforced (fail-open guard).** Restrictions are the one kind of grant data whose loss widens
-access. With `OAX_ROLE_BINDINGS_READ=legacy` (also after an application rollback to a version that does not
-read them, or on old pods during a rolling deploy) stored restrictions are ignored. Therefore, when the read
+access. With `OAX_ROLE_BINDINGS_READ=legacy` stored restrictions are ignored. Therefore, when the read
 path is `legacy` and `tenant_role_restrictions` is not empty, start-up logs an error, the gauge
 `oax_unenforced_role_restrictions` is set, and `/readyz` answers `503` with `checks.restrictions: false`,
-unless `OAX_ALLOW_UNENFORCED_RESTRICTIONS=1` accepts it. Before rolling back, lift the restrictions you rely
-on or accept the wider access explicitly.
+unless `OAX_ALLOW_UNENFORCED_RESTRICTIONS=1` accepts it. If the stored restrictions cannot be counted on the
+legacy path, `/readyz` is `503` as well, and the flag does not change that (unknown is not "none").
+
+**Runbook: lift the restrictions before rolling back the image.** The guard exists only in versions that
+contain this slice. An image from before it has no guard, ignores `tenant_role_restrictions` silently and
+therefore widens access without any signal; the same holds for old pods during a rolling deploy. Before
+rolling back the application (or switching to `legacy`), delete the restrictions you rely on
+(`DELETE /v1/tenants/{id}/role-restrictions`, or accept the wider access explicitly) and only then roll back.
+
+**Legacy read path still narrows some decisions.** Request authorisation ignores restrictions on `legacy`, but
+the grant-authority checks (who may grant or restrict), the tenant-access reach, the approver facts, the
+access explanation and tenant moves read the principal's grants with `loadRawGrants`, which includes
+restrictions on every read path. Such a decision can therefore only be narrower than the legacy one, never
+wider.
+
+**Cost.** The loader selects the restrictions of the user's organisation that name a role the user holds and
+sit on or above one of the user's binding nodes (a `starts_with` prefix test, bounded by the per-organisation
+limit of 1000 restrictions). The query is rebuilt for each affected principal after every restriction write
+(the epoch bump); it has not been benchmarked at the limit on a real database. The core test that guards the
+resolver cost takes the best of three runs against a 1.5 s budget, so a loaded CI runner does not fail it.
 
 ## Moving a tenant (ADR 0014, slice S10)
 
