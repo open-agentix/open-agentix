@@ -13,6 +13,7 @@ export * from './agents/json-schema.js';
 export * from './agents/profiles.js';
 export * from './agents/conditions.js';
 export * from './agents/regex-safety.js';
+export * from './agents/linear-regex.js';
 export * from './agents/arg-rules.js';
 export * from './agents/handover.js';
 export * from './awp/types.js';

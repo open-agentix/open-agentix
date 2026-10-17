@@ -215,7 +215,7 @@ exporter share one implementation, `arg-rules.ts`). They are the rule names of t
 - `args.range`: `minimum > maximum`, `minLength > maxLength`.
 - `args.with-deny` (AWP manifests): `args` or a call limit on an entry with `allow: false`.
 - `args.limit`: more than 64 `deny` patterns on one argument (also in `agents.md`); in manifests also more than
-  256 constrained arguments on one entry.
+  256 constrained arguments on one entry or more than 256 patterns in one document.
 
 The path of a finding in a manifest is the member that breaks the rule, for example
 `/spec/agents/0/permissions/tools/jira.get_issue/x-openagentix-args/key/pattern`. The AEP's invalid
@@ -241,14 +241,33 @@ A value of the wrong type at a position that can carry a grant (`permissions.too
 `permissions.secrets` or `allowHosts` as a string, a step of another type, a step naming an agent the
 source lacks) is a `grant_widened` finding, never read as "empty".
 
-**Matching is linear-time.** `pattern`, `deny` and the policy-wide `forbiddenArgPatterns` are matched with
-[`re2js`](https://github.com/le0pard/re2js) (pure JavaScript port of RE2, pinned to an exact version, MIT, no
-dependencies, no install scripts, no native code), never with the backtracking `RegExp`. A syntax check cannot
-exclude every slow pattern (`[a-z]*[a-z]*!` took 17 s on 4000 characters in `RegExp`; the tests assert under
-100 ms). RE2 has no backreferences or lookaround, which AEP-0002 forbids anyway. Independent of the engine:
-a string above 16384 units is denied, a decision may scan at most 4,000,000 characters with all its
-expressions together (`REGEX_WORK_BUDGET`; more denies, fail closed), a `deny` rule that cannot inspect the whole
-value denies, and a pattern the matcher cannot take (a stored constraint of an older version) denies.
+**Matching is linear-time, and the contract is RE2, not ECMA-262.** `pattern`, `deny` and the policy-wide
+`forbiddenArgPatterns` are matched with [`re2js`](https://github.com/le0pard/re2js) (pure JavaScript port of
+RE2, pinned to an exact version, MIT, no dependencies, no install scripts, no native code), never with the
+backtracking `RegExp`. A syntax check cannot exclude every slow pattern (`[a-z]*[a-z]*!` took 17 s on 4000
+characters in `RegExp`). RE2 matching is linear in the input **times the size of the compiled program**, and
+the program grows with every repeat bound (`.{0,1000}x` is about 2000 instructions, 381 ms on 4096 characters;
+twenty of them 24 s), so the size is bounded too:
+
+- one repeat bound is at most 200, the bounds of one pattern add up to at most 400, and the compiled
+  program has at most 512 instructions (read from `re2Input.prog.inst`, an internal field of the pinned
+  version; if it is missing nothing compiles and everything denies). Patterns above these are refused at
+  validation (`args.pattern-invalid`) and never compiled at run time (the call is denied);
+- a definition may hold at most 256 `pattern` and `deny` expressions (a manifest document too), a pattern is at
+  most 1024 characters; validation does not fill the compile cache, the run-time cache is bounded by total
+  program size;
+- a string above 16384 units is denied; the work of all expressions of one decision is charged in
+  **steps (characters scanned times program size)**, at most 10,000,000 per decision (about half a second
+  at the measured 45 ns per step); a decision that needs more is denied (fail closed); a `deny` rule that
+  cannot inspect the whole value denies; a pattern the matcher cannot take denies.
+
+Semantics are those of RE2, which differ from ECMA-262 (pinned by tests): `.` matches CR (not LF) and the
+Unicode line separators, so `^a.b$` accepts `a\rb`; `\s` does not match no-break space or vertical tab, so
+`rm\s+-rf` does not catch `rm\u00a0-rf`; `\uXXXX`, `\u{...}`, `\p{Script=...}`, `[^]`, backreferences and
+lookaround are not supported (refused, fail closed). Therefore `deny` patterns must not use `.` or `\s`
+(spell them out: `[^\n]`, `[ \t\r\n\f\x0b\x{a0}]`); validation warns about `.` in a `pattern`. Policy-wide
+`forbiddenArgPatterns` follow the same contract (match case-insensitively); an author who needs Unicode
+whitespace writes the class out.
 **Patterns are unanchored**: a `pattern` matches when it is found anywhere in the value (substring, like
 `RegExp.test`); write `^...$` to match the whole value. Validation warns about an unanchored `pattern`.
 Policy bundles are checked with the same rules when they are written (`POST/PUT /v1/policies`).

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   REGEX_INPUT_LIMIT,
+  REGEX_WORK_BUDGET,
+  compileLinear,
+  usesDotOrSpaceClass,
   ToolGrantSchema,
   argConstraintIssues,
   checkArg,
@@ -626,6 +629,7 @@ describe('validator rules for argument constraints (AEP-0002 sections 7.5.5 and 
     expect(errors(run(m, { awp: futureSchema() }))).toEqual([
       `args.limit ${P}/args`,
       `args.limit ${P}/args/many/deny`,
+      'args.limit /spec', // more than 256 patterns in one document
     ]);
   });
 
@@ -1012,5 +1016,176 @@ describe('agents.md warnings', () => {
     );
     const r = validateAgentSource(src);
     expect(r.warnings.map((x) => x.message).join('\n')).toMatch(/profile grant gives exact grants/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Program size, repeat bounds and the semantics contract (second security review)
+// ---------------------------------------------------------------------------------------------
+
+describe('programs of bounded size', () => {
+  // Linear in the input but not in the program: these took 0.4 s, 10 s, 24 s and 96 s for one test().
+  const BIG: [string, string][] = [
+    ['.{0,1000}x', 'a'.repeat(4096)],
+    [`${'[^x]{0,999}'.repeat(10)}x`, 'a'.repeat(4096)],
+    [`${'.{0,999}'.repeat(20)}x`, 'a'.repeat(4096)],
+    [`${'[^x]{0,999}'.repeat(90)}x`, 'a'.repeat(4096)],
+  ];
+
+  it.each(BIG)('refuses %#: at validation and at run time, in under 100 ms', (pattern, text) => {
+    expect(checkRegexSource(pattern)?.code).toBe('too-large');
+    expect(compileLinear(pattern)).toBeNull();
+    const started = performance.now();
+    // a stored constraint of an older version: never compiled, never run
+    expect(
+      checkArg('k', text, { required: false, pattern, maxLength: 5000 }).map((r) => r.code),
+    ).toEqual(['arg_pattern']);
+    expect(
+      checkArg('k', [text, text], { required: false, deny: [pattern] }).map((r) => r.code),
+    ).toEqual(['arg_denied']);
+    const huge = 'a'.repeat(REGEX_INPUT_LIMIT);
+    const d = evaluateToolCall(
+      { server: 's', tool: 't', args: { x: huge } },
+      {
+        definition: { classification: 'internal' },
+        agent: { id: 'a', tools: [grant({ server: 's', tool: 't', allowAdditionalArgs: true })] },
+        bundles: [
+          {
+            forbiddenTools: [],
+            forbiddenArgPatterns: [{ pattern, reason: 'no' }],
+            requireApprovalTools: [],
+          },
+        ],
+      },
+    );
+    expect(d.effect).toBe('deny');
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
+  it('limits one repeat to 200, the sum of repeats to 400 and the program to 512 instructions', () => {
+    expect(checkRegexSource('^[a-z]{0,200}$')).toBeNull();
+    expect(checkRegexSource('^[a-z]{0,201}$')?.code).toBe('too-large');
+    expect(checkRegexSource('^[a-z]{201,}$')?.code).toBe('too-large');
+    expect(checkRegexSource('^a{100}b{100}c{100}d{100}$')).toBeNull();
+    expect(checkRegexSource('^a{100}b{100}c{100}d{100}e{1}$')?.code).toBe('too-large');
+    // a long flat pattern with no repeat at all is a long program
+    expect(checkRegexSource(`^${'(abc|def)'.repeat(110)}$`)?.code).toBe('unsupported');
+    expect(compileLinear('^(src|test)/[A-Za-z0-9._/-]{1,200}$')?.size).toBeLessThan(512);
+  });
+
+  it('does not count a brace in a class or an escape as a repeat', () => {
+    expect(checkRegexSource('^[{9999}]$')).toBeNull();
+    expect(checkRegexSource('^\\{9999\\}$')).toBeNull();
+  });
+
+  it('charges the work budget in steps (length x program size), so time stays bounded', () => {
+    const re = compileLinear('^[a-z]{200}$')!;
+    expect(re.size).toBeGreaterThan(150);
+    const strings = Array.from({ length: 5 }, () => 'a'.repeat(REGEX_INPUT_LIMIT));
+    // 5 x 16384 x ~200 steps is above the budget although the character count is small
+    expect(5 * REGEX_INPUT_LIMIT * re.size).toBeGreaterThan(REGEX_WORK_BUDGET);
+    const t0 = performance.now();
+    const reasons = checkArg('k', strings, { required: false, deny: ['^[a-z]{200}$'] });
+    expect(reasons.map((r) => r.code)).toEqual(['arg_denied']);
+    expect(reasons[0]!.message).toMatch(/cannot be checked/);
+    expect(performance.now() - t0).toBeLessThan(1500);
+    expect(checkArg('k', ['abc'], { required: false, deny: ['^[a-z]{200}$'] })).toEqual([]);
+  });
+
+  it('charges steps for a pattern and for a policy pattern, not only characters', () => {
+    const wide = '[a-z]{0,200}Q'; // about 400 instructions, never matches 'a...a'
+    const text = 'a'.repeat(REGEX_INPUT_LIMIT);
+    const size = compileLinear(wide)!.size;
+    expect(2 * REGEX_INPUT_LIMIT * size).toBeGreaterThan(REGEX_WORK_BUDGET);
+    expect(REGEX_INPUT_LIMIT * size).toBeLessThan(REGEX_WORK_BUDGET);
+    const c = { required: false, pattern: wide, maxLength: 100_000 };
+    const run = (bundles: unknown[], args: Obj, g: Obj) =>
+      evaluateToolCall(
+        { server: 's', tool: 't', args },
+        {
+          definition: { classification: 'internal' },
+          agent: { id: 'a', tools: [grant({ server: 's', tool: 't', ...g })] },
+          bundles: bundles as never,
+        },
+      );
+    // two arguments, one pattern each: the second runs out of budget and denies as "cannot be checked"
+    const d = run(
+      [],
+      { a: text, b: text },
+      {
+        args: {
+          a: { ...c, pattern: `${wide.slice(0, -1)}` },
+          b: { ...c, pattern: `${wide.slice(0, -1)}` },
+        },
+      },
+    );
+    expect(d.reasons.map((r) => r.message).join()).toMatch(
+      /b.*cannot be checked against its pattern/,
+    );
+    // two policy patterns over one large argument
+    const bundle = (p: string) => ({
+      forbiddenTools: [],
+      forbiddenArgPatterns: [{ pattern: p, reason: 'no' }],
+      requireApprovalTools: [],
+    });
+    const e = run([bundle(wide), bundle(wide)], { x: text }, { allowAdditionalArgs: true });
+    expect(e.effect).toBe('deny');
+    expect(e.reasons.map((r) => r.message).join()).toMatch(
+      /cannot be checked against a policy pattern/,
+    );
+    expect(run([bundle(wide)], { x: text }, { allowAdditionalArgs: true }).effect).toBe('allow');
+  });
+
+  it('allows at most 256 pattern and deny expressions in one definition', () => {
+    const args = (n: number, from: number) =>
+      Array.from(
+        { length: n },
+        (_, i) => `k${from + i}: { type: string, maxLength: 9, deny: ["x"] }`,
+      ).join(', ');
+    const src = (n: number) => fm(`{ server: s, tool: t, args: { ${args(n, 0)} } }`);
+    expect(validateAgentSource(src(256)).errors).toEqual([]);
+    expect(validateAgentSource(src(257)).errors.map((e) => e.message)).toEqual([
+      'at most 256 pattern and deny expressions per definition',
+    ]);
+  });
+});
+
+describe('the matcher contract is RE2, not ECMA-262', () => {
+  const test = (p: string, text: string) => compileLinear(p, false, false)!.test(text);
+
+  it('"." matches CR, so ^a.b$ accepts a carriage return', () => {
+    expect(test('^a.b$', 'a\rb')).toBe(true);
+    expect(test('^a.b$', 'a\nb')).toBe(false);
+    expect(test('^a[^\\r\\n]b$', 'a\rb')).toBe(false);
+  });
+
+  it('"\\s" does not match a no-break space or a vertical tab', () => {
+    expect(test('^a\\sb$', 'a\u00a0b')).toBe(false);
+    expect(test('^a\\sb$', 'a\u000bb')).toBe(false);
+    expect(test('^a[ \\t\\r\\n\\f\\x0b\\x{a0}]b$', 'a\u00a0b')).toBe(true);
+    expect(test('^a[ \\t\\r\\n\\f\\x0b\\x{a0}]b$', 'a\u000bb')).toBe(true);
+  });
+
+  it('refuses ECMA-262 constructs RE2 does not have (fail closed)', () => {
+    for (const p of ['\\u0041', '\\u{41}', '\\p{Script=Greek}', '[^]', '(?<n>a)\\k<n>'])
+      expect(compileLinear(p, false, false), p).toBeNull();
+  });
+
+  it('keeps "." and "\\s" out of deny patterns and warns about "." in a pattern', () => {
+    expect(usesDotOrSpaceClass('rm\\s+-rf')).toBe(true);
+    expect(usesDotOrSpaceClass('a.b')).toBe(true);
+    expect(usesDotOrSpaceClass('[\\s]')).toBe(true);
+    expect(usesDotOrSpaceClass('\\.\\.')).toBe(false);
+    expect(usesDotOrSpaceClass('[.-]')).toBe(false);
+    expect(usesDotOrSpaceClass('^[/~]')).toBe(false);
+    expect(
+      argConstraintIssues({ deny: ['rm\\s+-rf', 'a.b', '\\.\\.'], maxLength: 9 }).map(
+        (i) => `${i.code}@${i.field}`,
+      ),
+    ).toEqual(['args.pattern-invalid@deny.0', 'args.pattern-invalid@deny.1']);
+    const w = validateAgentSource(
+      fm('{ server: s, tool: t, args: { k: { pattern: "^a.b$", maxLength: 9 } } }'),
+    ).warnings.map((x) => x.message);
+    expect(w.join()).toMatch(/RE2 semantics/);
   });
 });

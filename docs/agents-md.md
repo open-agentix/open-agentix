@@ -41,8 +41,9 @@ A tool grant (`agents[].tools[]` with `server` and `tool`) decides one tool. Eve
 
 A `pattern` matches when it is found **anywhere** in the value (unanchored, a substring match): write
 `^...$` to match the whole value (validation warns when a `pattern` is not anchored). `pattern` and `deny` need
-`maxLength` of at most 4096, at most 64 `deny` patterns per argument; matching is linear-time (RE2 semantics:
-no backreferences, no lookaround) and bounded in work per call.
+`maxLength` of at most 4096, at most 64 `deny` patterns per argument; matching is linear-time with RE2 semantics (not ECMA-262: no backreferences, no lookaround; `.` matches CR;
+`\s` misses no-break space, so `deny` patterns must not use `.` or `\s`) and bounded in size (repeat bounds,
+program size, 256 expressions per definition) and in work per call.
 
 Checked at validate and publish: every `pattern` and `deny` entry must compile and must not use a
 backreference, a lookaround, or a repeated group that contains a repetition or an alternation

@@ -120,10 +120,11 @@ function typeOf(v: unknown): string {
  */
 export const REGEX_INPUT_LIMIT = 16_384;
 /**
- * Characters all expressions of one decision may scan together. A decision that needs more is denied
+ * Matcher steps (characters scanned times program size) all expressions of one decision may use
+ * together, about half a second at the measured 45 ns per step. A decision that needs more is denied
  * (fail closed), so many patterns over many large strings cannot hold the process.
  */
-export const REGEX_WORK_BUDGET = 4_000_000;
+export const REGEX_WORK_BUDGET = 10_000_000;
 
 /** Work left for the expressions of one decision. */
 export class RegexWork {
@@ -235,7 +236,7 @@ export function checkArg(
         });
       else {
         const re = compileLinear(c.pattern);
-        if (re === null || !work.take(value.length))
+        if (re === null || !work.take(value.length * re.size))
           reasons.push({
             code: 'arg_pattern',
             message: `argument "${name}" cannot be checked against its pattern`,
@@ -279,7 +280,7 @@ export function checkArg(
     } else {
       for (const d of c.deny) {
         const re = compileLinear(d);
-        if (re === null || !work.take(strings.reduce((n, x) => n + x.length, 0))) {
+        if (re === null || !work.take(strings.reduce((n, x) => n + x.length, 0) * re.size)) {
           reasons.push({
             code: 'arg_denied',
             message: `argument "${name}" cannot be checked against its deny patterns`,
@@ -363,7 +364,7 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
           strings === null ||
           re === null ||
           strings.some((x) => x.length > REGEX_INPUT_LIMIT) ||
-          !work.take(strings.reduce((n, x) => n + x.length, 0))
+          !work.take(strings.reduce((n, x) => n + x.length, 0) * re.size)
         ) {
           reasons.push({
             code: 'arg_forbidden_pattern',
@@ -372,7 +373,7 @@ export function evaluateToolCall(call: ToolCallRequest, ctx: PolicyContext): Pol
           break;
         }
         if (strings.some((x) => re.test(x)))
-          reasons.push({ code: 'arg_forbidden_pattern', message: `${f.reason} (${f.pattern})` });
+          reasons.push({ code: 'arg_forbidden_pattern', message: f.reason });
       }
     }
   }

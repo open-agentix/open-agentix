@@ -106,7 +106,7 @@ describe('evaluateToolCall', () => {
     );
     expect(sql.reasons[0]).toEqual({
       code: 'arg_forbidden_pattern',
-      message: 'SQL destruction (drop\\s+table)',
+      message: 'SQL destruction',
     });
     const notGranted = evaluateToolCall(
       { server: 'x', tool: 'delete_all', args: {} },

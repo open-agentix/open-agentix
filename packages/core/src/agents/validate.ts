@@ -3,7 +3,7 @@ import { DARK_FACTORY_NOTICE } from '../guidelines.js';
 import { OaxError, ValidationError, type ValidationIssue } from '../errors.js';
 import { compareSemver, isSemver } from '../semver.js';
 import { checkJsonSchemaSubset, JSON_SCHEMA_LIMITS, SCHEMA_REF_PREFIX } from './json-schema.js';
-import { argConstraintIssues } from './arg-rules.js';
+import { argConstraintIssues, usesDotOrSpaceClass } from './arg-rules.js';
 import { parseAgentDefinition, type AgentDefinition, type AgentSpec } from './parser.js';
 import {
   CONFIG_PLACEHOLDER,
@@ -12,6 +12,9 @@ import {
   type CredentialRef,
 } from './schema.js';
 import { parseWhen, whenStepRefs } from './when.js';
+
+/** Most `pattern` and `deny` expressions in one definition. */
+export const MAX_PATTERNS_PER_DEFINITION = 256;
 
 /** Publish-time knowledge the core cannot have on its own (filled by the control node). */
 export interface DefinitionContext {
@@ -238,6 +241,26 @@ export function checkDefinition(
     if (!seen.has(id))
       warnings.push({ path: 'pipeline', message: `agent "${id}" is never executed` });
   }
+  // Compiling a pattern costs time and memory: one definition may not bring an unbounded number.
+  const patternCount = def.agents.reduce(
+    (n, a) =>
+      n +
+      a.tools.reduce(
+        (m, t) =>
+          m +
+          Object.values(t.args).reduce(
+            (k, c) => k + (c.pattern !== undefined ? 1 : 0) + (c.deny?.length ?? 0),
+            0,
+          ),
+        0,
+      ),
+    0,
+  );
+  if (patternCount > MAX_PATTERNS_PER_DEFINITION)
+    errors.push({
+      path: 'agents',
+      message: `at most ${MAX_PATTERNS_PER_DEFINITION} pattern and deny expressions per definition`,
+    });
   def.agents.forEach((a, i) => {
     const grants = new Set<string>();
     a.tools.forEach((t, j) => {
@@ -247,6 +270,13 @@ export function checkDefinition(
       grants.add(key);
       for (const [name, c] of Object.entries(t.args)) {
         checkConstraint(c, `${path}.args.${name}`, errors);
+        if (c.pattern !== undefined && usesDotOrSpaceClass(c.pattern))
+          warnings.push({
+            path: `${path}.args.${name}.pattern`,
+            message:
+              '"." also matches CR and the Unicode line separators and "\\s" does not match no-break ' +
+              'space (RE2 semantics, not ECMA-262); use [^\\n\\r] or an explicit class to be sure',
+          });
         // `pattern` is searched for anywhere in the value, like RegExp.test (not a full match).
         if (
           c.pattern !== undefined &&

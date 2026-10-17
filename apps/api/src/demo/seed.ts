@@ -298,7 +298,9 @@ export async function seedDemo(
       bundle: {
         forbiddenTools: ['*/delete_*', 'shell/*'],
         requireApprovalTools: ['*/merge_*', '*/deploy_*'],
-        forbiddenArgPatterns: [{ pattern: 'rm\\s+-rf', reason: 'destructive shell command' }],
+        forbiddenArgPatterns: [
+          { pattern: 'rm[ \\t\\r\\n\\f\\x0b\\x{a0}]+-rf', reason: 'destructive shell command' },
+        ],
       },
       enabled: true,
     });

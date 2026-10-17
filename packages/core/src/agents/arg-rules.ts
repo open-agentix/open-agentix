@@ -38,6 +38,29 @@ export const MAX_PATTERN_SUBJECT_LENGTH = 4096;
 /** Most `deny` patterns on one argument. */
 export const MAX_DENY_PATTERNS = 64;
 
+/**
+ * `.` and `\\s` mean something else in the linear-time matcher (RE2) than in ECMA-262: `.` also
+ * matches CR and the Unicode line separators, `\\s` does not match no-break space or vertical tab.
+ * A `deny` rule written with them misses variants (`rm\\s+-rf` with a no-break space), so `deny`
+ * patterns spell the characters out (`[ \\t\\r\\n\\f\\x0b\\x{a0}]`, `[^\\n]`).
+ */
+export function usesDotOrSpaceClass(source: string): boolean {
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]!;
+    if (c === '\\') {
+      if (source[i + 1] === 's' || source[i + 1] === 'S') return true;
+      i++;
+    } else if (c === '[') {
+      for (i++; i < source.length && source[i] !== ']'; i++)
+        if (source[i] === '\\') {
+          if (source[i + 1] === 's' || source[i + 1] === 'S') return true;
+          i++;
+        }
+    } else if (c === '.') return true;
+  }
+  return false;
+}
+
 const isNum = (v: unknown): v is number => typeof v === 'number';
 
 export function argConstraintIssues(c: ArgConstraintLike): ArgRuleIssue[] {
@@ -71,7 +94,17 @@ export function argConstraintIssues(c: ArgConstraintLike): ArgRuleIssue[] {
         field: 'deny',
         message: `deny patterns require maxLength of at most ${MAX_PATTERN_SUBJECT_LENGTH} (they run against the value)`,
       });
-    c.deny.slice(0, MAX_DENY_PATTERNS).forEach((d, i) => regex(d, `deny.${i}`));
+    c.deny.slice(0, MAX_DENY_PATTERNS).forEach((d, i) => {
+      regex(d, `deny.${i}`);
+      if (typeof d === 'string' && usesDotOrSpaceClass(d))
+        out.push({
+          code: 'args.pattern-invalid',
+          field: `deny.${i}`,
+          message:
+            'deny patterns must not use "." or "\\s" (they match other characters than in ECMA-262): ' +
+            'spell them out, for example [^\\n] or [ \\t\\r\\n\\f\\x0b\\x{a0}]',
+        });
+    });
   }
   const numericOnly = c.minimum !== undefined || c.maximum !== undefined;
   const stringOnly =

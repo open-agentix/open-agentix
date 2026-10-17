@@ -1,5 +1,5 @@
 import { unsafeRegexReason } from './json-schema.js';
-import { compileLinear } from './linear-regex.js';
+import { compileLinear, repeatBoundsIssue } from './linear-regex.js';
 
 /**
  * Static rules for the regular expressions of argument constraints (AEP-0002 rule 4,
@@ -20,7 +20,7 @@ import { compileLinear } from './linear-regex.js';
  */
 
 export type RegexIssueCode =
-  'too-long' | 'syntax' | 'unsafe' | 'ambiguous-repetition' | 'unsupported';
+  'too-long' | 'syntax' | 'unsafe' | 'ambiguous-repetition' | 'unsupported' | 'too-large';
 
 export interface RegexIssue {
   code: RegexIssueCode;
@@ -90,10 +90,14 @@ export function checkRegexSource(source: string): RegexIssue | null {
       code: 'ambiguous-repetition',
       message: 'pattern must not repeat a group that contains an alternation, such as "(a|b)*"',
     };
-  if (compileLinear(source) === null)
+  const bounds = repeatBoundsIssue(source);
+  if (bounds) return { code: 'too-large', message: bounds };
+  // not cached: validation must not fill the cache with patterns nobody runs
+  if (compileLinear(source, false, false) === null)
     return {
       code: 'unsupported',
-      message: 'pattern uses a construct the linear-time matcher does not support',
+      message:
+        'pattern uses a construct the linear-time matcher does not support, or compiles to a program above 512 instructions',
     };
   return null;
 }

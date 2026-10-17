@@ -26,7 +26,7 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /** Argument names per entry and `deny` patterns per argument that are checked. */
-export const ARG_LIMITS = { maxArgs: 256, maxDeny: 64 } as const;
+export const ARG_LIMITS = { maxArgs: 256, maxDeny: 64, maxPatterns: 256 } as const;
 
 const ARGS = ['args', 'x-openagentix-args'] as const;
 const CALL_LIMITS = ['maxCalls', 'x-openagentix-maxCallsPerRun'] as const;
@@ -55,6 +55,7 @@ export function argFindings(doc: Obj): ManifestFinding[] {
   const add = (code: string, path: (string | number)[], message: string): void => {
     out.push({ severity: 'error', code, path: pointer(...path), message, section: '7.5.5' });
   };
+  let patterns = 0;
   for (const { path, entry } of entriesOf(doc)) {
     if (entry.allow === false)
       for (const field of [...ARGS, ...CALL_LIMITS])
@@ -78,6 +79,15 @@ export function argFindings(doc: Obj): ManifestFinding[] {
         const c = args[name];
         if (!isObj(c)) continue; // the schema (or the extension schema) reports a wrong shape
         const deny = Array.isArray(c.deny) ? c.deny : [];
+        patterns += (typeof c.pattern === 'string' ? 1 : 0) + deny.length;
+        if (patterns > ARG_LIMITS.maxPatterns) {
+          add(
+            'args.limit',
+            ['spec'],
+            `more than ${ARG_LIMITS.maxPatterns} pattern and deny expressions in one document`,
+          );
+          return out;
+        }
         if (deny.length > ARG_LIMITS.maxDeny)
           add(
             'args.limit',
