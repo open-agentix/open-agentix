@@ -114,7 +114,9 @@ allows calls without arguments, and AWP would read "no `args`" as unrestricted. 
 that has a tool grant is exported only if the grant sets `allowAdditionalArgs: true` and nothing else
 critical** (see `examples/awp/ticket-commenter.agents.md`). Agents without tool grants, and profile grants
 without limits, export. This is a consequence of the draft, not a recommendation to loosen argument
-checks.
+checks. A grant that allows more arguments (`true`) **and** has constraints writes the `true` explicitly,
+so a reader does not have to know the default of the format; that is one more critical field for such a
+grant.
 
 `PINNED_AWP_FEATURES.requiredExtensions` in `packages/core/src/awp/types.ts` is `false`. A test fails when
 the vendored schema disagrees, so a pin upgrade that adds AEP-0011 forces a deliberate switch. When it is
@@ -176,6 +178,92 @@ fails closed, so it never runs more than the source. (2) String ordering uses UT
 (`<`, `>`) where AEP-0001 says code points. (3) AEP-0001 allows `inputs.*` and `execution.environment`;
 `agents.md` has no such roots, so they are validated but not evaluated by this product.
 
+### Argument constraints, call limits and action groups (AEP-0002)
+
+[AEP-0002](https://github.com/open-agentix/agenticWorkflowProtocol.org/blob/main/aep/0002-tool-argument-constraints.md)
+proposes `args`, `allowAdditionalArgs` and `maxCalls` on a `permissions.tools` entry and gives prefix
+wildcards (`jira.get_*`) no place in the format (status **Review**, not accepted, target `v1alpha2`; owner
+decision D4). The pinned `v1alpha1` schema has none of the three fields, so today:
+
+| `agents.md` grant | Written now (pin without AEP-0002) | Written once `PINNED_AWP_FEATURES.toolArgs` is `true` |
+| --- | --- | --- |
+| `args` (not empty) | `x-openagentix-args` | `args` |
+| `allowAdditionalArgs: false` (the default) | `x-openagentix-allowAdditionalArgs: false` | nothing; `args: {}` is written when there are no `args` (AEP-0002 reads "no `args`" as no restriction, and ignores `allowAdditionalArgs` without `args`) |
+| `allowAdditionalArgs: true` with `args` | `x-openagentix-allowAdditionalArgs: true` | `allowAdditionalArgs: true` |
+| `maxCallsPerRun` | `x-openagentix-maxCallsPerRun` | `maxCalls` |
+| `classification` | `x-openagentix-classification` | unchanged (no AEP field; a policy rule is the planned successor) |
+
+The extensions are critical: like every critical extension they refuse the export until the pin offers
+`metadata.requiredExtensions` (see above). Both paths are tested, the core path against a **test-only copy**
+of the schema with the three fields added (never vendored); `awp-argument-constraints.test.ts` fails while
+`PINNED_AWP_FEATURES.toolArgs` and the vendored schema disagree. The vendored files are not edited; the pin
+bump that brings AEP-0002 is tracked in a follow-up issue.
+
+**Rules that apply to every constraint** (authoring in `agents.md`, validation of AWP manifests, and the
+exporter share one implementation, `arg-rules.ts`). They are the rule names of the AEP's schema changes:
+
+- `args.pattern-invalid`: a `pattern` or `deny` entry must compile (ECMA-262, Unicode mode), must not use a
+  backreference or lookaround, and must not quantify (including with `?`) a group that contains a
+  quantifier, or repeat a group that contains an alternation (`(a+)+`, `(x(y+))?`, `(a|aa)*`). This is a conservative syntactic check, **not a proof of linear time**: the JavaScript
+  engine backtracks. Every pattern is therefore also bounded by its input (next rule).
+- `args.pattern-unbounded`: a `pattern` needs a `maxLength`. At run time a `pattern` or `deny` expression is
+  never run against a string longer than `maxLength` (the call is denied) or longer than
+  `REGEX_INPUT_LIMIT` (16384 UTF-16 units, the runtime's argument size limit for `deny`).
+- `args.type-mismatch`: `pattern`, `minLength`, `maxLength` need type `string`, `minimum`/`maximum` a numeric
+  type, `maxItems` an array.
+- `args.range`: `minimum > maximum`, `minLength > maxLength`.
+- `args.with-deny` (AWP manifests): `args` or a call limit on an entry with `allow: false`.
+- `args.limit` (AWP manifests): more than 256 constrained arguments or 64 `deny` patterns on one entry.
+
+The path of a finding in a manifest is the member that breaks the rule, for example
+`/spec/agents/0/permissions/tools/jira.get_issue/x-openagentix-args/key/pattern`. The AEP's invalid
+conformance cases are not in the vendored suite yet, so the baseline is unchanged; they will be run when a
+pin brings them. An export of a stored constraint that breaks a rule is refused with
+`constraint_not_representable` (older versions may hold such a constraint; nothing is rewritten or dropped).
+
+**Run time (policy engine).** Constraints only restrict. Beyond the AEP rules the engine fails closed where
+the AEP leaves room: a bound that does not fit the type of the value (`minimum` on a string, `maxItems` on a
+non-array, `pattern` on a number) denies instead of being skipped; the arguments of a call must be an object;
+only own properties count as arguments (`toString` is not a declared argument); `maxLength` counts code
+points; a `deny` rule that cannot look at the whole value (more than 4096 strings or deeper than 32 levels)
+denies. Denial reasons name the argument and the rule, never the value.
+
+**The no-widening check (`verifyNoWidening`)** runs on every export and on every re-serve of a stored
+conversion, independent of the mapping. Besides the grants it compares the **values** of what restricts: the
+argument constraints (equality), `allowAdditionalArgs` (a source that allows no further argument must say
+so; a looser or missing value is a finding), the call limit (missing, malformed or higher than the source is a
+finding; a lower one is accepted), the data class, and the access class, input, output, schemas, guidelines,
+runner and toolbox of the source. Core and extension forms are read alike. When the manifest carries
+`metadata.requiredExtensions` (or the pin has the list), every critical extension in use must be listed.
+A value of the wrong type at a position that can carry a grant (`permissions.tools` as a list,
+`permissions.secrets` or `allowHosts` as a string, a step of another type, a step naming an agent the
+source lacks) is a `grant_widened` finding, never read as "empty".
+
+**Differences from the AEP text** (not conformance statements):
+
+1. One grant decides a call (an exact grant wins over a wildcard of an older version); AEP rule 3 asks for
+   "at least one matching entry" and rule 2 for "all applicable objects". The exporter refuses overlapping
+   grants that differ (`duplicate_grant_conflict`), so a manifest never claims a union that does not exist.
+   Policy bundles (`forbiddenArgPatterns`) apply in addition to the grant, as AEP rule 2 asks.
+2. The call limit is `maxCallsPerRun`: it counts allowed calls of the run (all steps), denied calls do not
+   count, and a reached limit is the reason `call_limit` (the AEP names `budget`).
+3. Patterns are stricter than the AEP (nested repetition and alternation under repetition are refused).
+4. Nested argument paths and policy-wide forbidden patterns (AEP open questions 1 and 3) are not supported.
+
+**Action groups, not prefix wildcards (D4).** Publish **replaces** a prefix wildcard grant (`get_*`, `*`) in
+the stored definition by one explicit grant per tool of the approved tool snapshot of a pinned connection,
+each with the limits of the wildcard (`args`, `allowAdditionalArgs`, `approval`, `maxCallsPerRun`,
+`classification`), so a constraint can only restrict. Overlaps resolve as at run time: an exact grant wins,
+and of two wildcards the first wins. This happens in `expandProfiles`, so the review, the expansion digest
+and the publish gate see exactly the expanded list (a tool added to the snapshot changes the digest; the
+gate is not weakened). A wildcard without such a list fails the publish with `wildcard_unreviewed`, a
+pattern that matches nothing with `wildcard_empty`; nothing is granted silently. Validation warns that a
+prefix wildcard is deprecated. Versions published by an older build keep their wildcard grant and the
+recorded list; they export as before. The export writes the tools as per-tool permission entries, not as
+`actionGroups`: the pinned schema's `actionGroups` would need group names and a decision on how a group key
+carries limits, which is left to the pin bump. Removal of wildcards from the authoring format follows the
+D13 timing (a later release); this release deprecates them.
+
 ### Other refusals
 
 All refusals fail closed and name the source path.
@@ -185,7 +273,8 @@ All refusals fail closed and name the source path.
 | `owner_team_mismatch`        | `owner` is not the team the agent belongs to (an author can write any slug; checked at export). |
 | `egress_not_representable`   | An egress entry that is not a plain host name (port, CIDR range, `*.suffix`).                        |
 | `owner_team_required`        | An AWP owner is a team (D15). The agent belongs to no team; assign one before exporting.              |
-| `wildcard_expansion_missing` | A wildcard grant (`get_*`, `*`) has no recorded tool list (see below).                                |
+| `wildcard_expansion_missing` | A wildcard grant (`get_*`, `*`) of an older version has no recorded tool list (see below).             |
+| `constraint_not_representable` | A stored argument constraint breaks a rule of AEP-0002 (pattern without `maxLength`, lookaround, ...). |
 | `profile_expansion_missing`  | A profile grant was never expanded (a file, not a published version).                                 |
 | `tool_name_not_representable`| `<server>.<tool>` is not an AWP action identifier.                                                    |
 | `duplicate_grant_conflict`   | One tool is granted twice with different limits.                                                      |
@@ -200,20 +289,18 @@ AWP defaults to UTC, so exporting would silently change when it fires).
 
 ### Wildcards (D4)
 
-AWP v1alpha1 has no prefix wildcards in permissions. Publish enumerates every wildcard grant into
+AWP v1alpha1 has no prefix wildcards in permissions. Publish replaces every wildcard grant by explicit
+grants (see "Argument constraints, call limits and action groups" above) and also records the list in
 `definition.wildcardExpansion` (key `server/pattern`), **only from the approved tool snapshot of a pinned
-connection**: at run time the pin check (`toolsDigest`) blocks a tool added later, so the explicit list
-is not narrower than what runs. For an unpinned connection nothing bounds a prefix grant (a tool added
-later would match), so no list is recorded and the export is refused. At export the recorded list is
-filtered again by the pattern, so a damaged record can only shrink the grant; an empty result is refused.
-The export writes the tools explicitly; no `*` appears in any permission key or tool list (a bare `*`
-is enumerated the same way). Versions published before this change have no record and are refused for
-wildcard grants (republish). The record is not part of `expansionDigest` (a function of inputs that
-digest already covers), so existing digests and review records do not change.
+connection**; without one the publish fails. The export of a version published by an older build, whose
+definition still holds the wildcard, filters the recorded list again by the pattern, so a damaged record
+can only shrink the grant; an empty result, or a version without a record, is refused
+(`wildcard_expansion_missing`, republish). No `*` appears in any permission key or tool list. The record is
+not part of `expansionDigest`; the expanded grants are.
 
-Overlapping grants of one tool (an exact grant and a wildcard, or a duplicate) are merged only if they
-are identical in limits and approval; otherwise `duplicate_grant_conflict`, because at run time the exact
-grant wins and a union would claim a control that does not exist.
+Overlapping grants of one tool (an exact grant and a wildcard of an older version, or a duplicate) are
+merged only if they are identical in limits and approval; otherwise `duplicate_grant_conflict`, because at
+run time the exact grant wins and a union would claim a control that does not exist.
 
 ### Egress
 
