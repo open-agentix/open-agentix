@@ -196,7 +196,7 @@ export const handlers = [
   }),
   http.post(api('/v1/agents/:id/publish'), () =>
     json<ResponseOf<'/v1/agents/{id}/publish', 'post', 201>>(
-      { version: { ...f.versions[1]!, version: '1.1.0' }, created: true },
+      { version: { ...f.versions[1]!, version: '1.1.0' }, created: true, approval: null },
       201,
     ),
   ),

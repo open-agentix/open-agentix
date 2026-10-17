@@ -1,7 +1,10 @@
 import type { AppContext } from '../context.js';
 import { createMcpOauth, type McpOauthStores, type TrustedRole } from '../mcp-oauth/index.js';
 import { AgentCheckService } from './agent-check.js';
+import { AgentDeprecationService } from './agent-deprecation.js';
+import { AgentPublisher } from './agent-publish.js';
 import { AgentReviewsService } from './agent-reviews.js';
+import { PublishGate } from './publish-gate.js';
 import { ReviewChangesService } from './review-changes.js';
 import { ReviewInboxService } from './review-inbox.js';
 import { ReviewThreadsService } from './review-threads.js';
@@ -43,6 +46,8 @@ export interface Services {
   lifecyclePolicy: LifecyclePolicyService;
   /** Draft revisions, reviews and approval records (ADR 0017 S1). */
   agentReviews: AgentReviewsService;
+  /** Version deprecation and rollback (ADR 0017 S3). */
+  agentDeprecation: AgentDeprecationService;
   reviewThreads: ReviewThreadsService;
   reviewChanges: ReviewChangesService;
   reviewInbox: ReviewInboxService;
@@ -86,7 +91,15 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
   const agents = new AgentsService(ctx, audit, catalog);
   const lifecyclePolicy = new LifecyclePolicyService(ctx, audit);
   const agentReviews = new AgentReviewsService(ctx, audit, agents, lifecyclePolicy, catalog);
-  agents.shadowPublish = (agent, source) => agentReviews.shadowPublish(agent, source);
+  const publishGate = new PublishGate(ctx, agentReviews);
+  agents.publisher = new AgentPublisher(ctx, audit, publishGate, lifecyclePolicy);
+  const agentDeprecation = new AgentDeprecationService(
+    ctx,
+    audit,
+    agents,
+    agentReviews,
+    lifecyclePolicy,
+  );
   const reviewThreads = new ReviewThreadsService(ctx, audit, agents, agentReviews);
   const reviewChanges = new ReviewChangesService(ctx, agents, agentReviews, lifecyclePolicy);
   const reviewInbox = new ReviewInboxService(ctx, agentReviews, lifecyclePolicy);
@@ -150,6 +163,7 @@ export function createServices(ctx: AppContext, role: TrustedRole = 'api'): Serv
     agents,
     lifecyclePolicy,
     agentReviews,
+    agentDeprecation,
     reviewThreads,
     reviewChanges,
     reviewInbox,

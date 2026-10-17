@@ -437,10 +437,59 @@ export const agentVersions = pgTable(
     publishedAt: ts('published_at').notNull().defaultNow(),
     /** The draft revision this version was published from (ADR 0017 section 4.3); `null` before 0032. */
     revisionId: uuid('revision_id'),
+    /**
+     * The approved review this version was published under (ADR 0017 section 4.3, slice S3) and the
+     * distinct reviewers whose approvals counted at that moment; both `null` for a version that was
+     * published while approval was not required (or before S3). Rollback only goes to a version with a
+     * review when approval is required for the agent today.
+     */
+    reviewId: uuid('review_id').references((): AnyPgColumn => agentReviews.id),
+    approvedBy: uuid('approved_by').array(),
+    /** Digest of the policy the approvals were checked against; `null` without a review. */
+    policyDigest: text('policy_digest'),
+    /** Digest of the profile expansion and of the secret resolution the approvals bound to. */
+    expansionDigest: text('expansion_digest'),
+    resolutionDigest: text('resolution_digest'),
+    /** The secret references pinned for production runs (names only until ADR 0017 S4). */
+    secretResolution: jsonb('secret_resolution').$type<string[]>(),
   },
   (t) => [
     uniqueIndex('agent_versions_agent_version_uq').on(t.agentId, t.version),
     index('agent_versions_agent_idx').on(t.agentId, t.publishedAt.desc()),
+    // A review approves exactly one version.
+    uniqueIndex('agent_versions_review_uq')
+      .on(t.reviewId)
+      .where(sql`${t.reviewId} is not null`),
+    check(
+      'agent_versions_approval_check',
+      sql`(${t.reviewId} is null) = (${t.approvedBy} is null) and (${t.approvedBy} is null or cardinality(${t.approvedBy}) >= 1)`,
+    ),
+  ],
+);
+
+/**
+ * A deprecated version (ADR 0017 section 3.1, slice S3): new runs pinned to it are refused with
+ * `409 version_deprecated`. Append-only; deprecating cannot be undone (publish a newer version).
+ * `rollbackToVersionId` is set when the deprecated version was the latest one: the version the agent
+ * went back to. A rollback creates no version and needs no approval.
+ */
+export const agentVersionDeprecations = pgTable(
+  'agent_version_deprecations',
+  {
+    versionId: uuid('version_id')
+      .primaryKey()
+      .references(() => agentVersions.id),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    deprecatedBy: uuid('deprecated_by').notNull(),
+    deprecatedAt: ts('deprecated_at').notNull().defaultNow(),
+    reason: text('reason'),
+    rollbackToVersionId: uuid('rollback_to_version_id').references(() => agentVersions.id),
+  },
+  (t) => [
+    index('agent_version_deprecations_agent_idx').on(t.agentId, t.deprecatedAt.desc()),
+    check('agent_version_deprecations_reason_len', sql`char_length(${t.reason}) <= 500`),
   ],
 );
 
@@ -1282,6 +1331,10 @@ export const agentReviews = pgTable(
     closedRevisionId: uuid('closed_revision_id').references(
       (): AnyPgColumn => agentDraftRevisions.id,
     ),
+    /** The version a published review ended in (ADR 0017 section 4.3 step 6); `null` otherwise. */
+    publishedVersionId: uuid('published_version_id').references(
+      (): AnyPgColumn => agentVersions.id,
+    ),
   },
   (t) => [
     // At most one open review per agent; also the lock-free guard against two openers.
@@ -1298,6 +1351,10 @@ export const agentReviews = pgTable(
     ),
     check('agent_reviews_required_check', sql`${t.requiredApprovals} between 1 and 5`),
     check('agent_reviews_closed_check', sql`(${t.status} = 'open') = (${t.closedAt} is null)`),
+    check(
+      'agent_reviews_published_check',
+      sql`(${t.status} = 'published') = (${t.publishedVersionId} is not null)`,
+    ),
   ],
 );
 

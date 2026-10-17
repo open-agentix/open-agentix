@@ -114,7 +114,7 @@ Installation defaults of the tenant policy `settings.agentLifecycle` ([agent-lif
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `OAX_LIFECYCLE_REQUIRE_APPROVAL` | `auto` | `off`, `production-only`, `on`, or `auto` (= `on` when the installation has more than one tenant, `off` for a single tenant). In this version only reported (shadow mode), not enforced. |
+| `OAX_LIFECYCLE_REQUIRE_APPROVAL` | `auto` | `off`, `production-only`, `on`, or `auto` (= `on` when the installation has more than one tenant, `off` for a single tenant). Enforced at publish (ADR 0017 S3): where it applies, `POST /v1/agents/{id}/publish` needs an approved review, and **with `OAX_ROLE_BINDINGS_READ=legacy` such a publish is refused** (`409 role_bindings_read_required`); set `bindings`, or `off` while there is no second person to approve. |
 | `OAX_LIFECYCLE_MIN_APPROVALS` | `1` | Approvals a review needs, 1 to 5. The documentation recommends 2 for production use cases. |
 | `OAX_LIFECYCLE_ALLOWED_APPROVER_ROLES` | `admin,agent-maintainer` | Comma separated, from `admin`, `agent-maintainer`, `agent-developer`, `operator`. Anything else refuses to start. |
 | `OAX_LIFECYCLE_APPROVAL_EXPIRY_HOURS` | `168` | How long an approval counts, 1 to 720. |
@@ -215,7 +215,7 @@ Bedrock uses the AWS default credential chain: on EKS annotate the ServiceAccoun
 | `OAX_DEMO_MODE` | `false` | Seeds the deterministic demo data set on first start (2 tenants, users for all six roles incl. an agent-scoped user, 6 agents incl. dark-factory, hardening and change-gated agents, runs, approvals, costs, verifiable audit chain) and makes the API read-only except sign-in and side-effect-free checks (validate, dry-run, policy evaluation, hardening review, audit verify). Responses carry `x-oax-demo: true`; `GET /v1/settings` reports `demo: true`. Use with the simulated provider only. Helm: `demo.enabled`. |
 | `OAX_DEMO_PASSWORD` | `demo-password-2026` | Shared password of the fake demo users (`admin@example.org`, `engineer@`, `integrator@`, `operator@`, `auditor@`, `viewer@`, `contractor@example.org`). Not a secret. |
 
-`pnpm seed:demo` loads the same data set into an empty database (`--force` to add anyway).
+`OAX_DEMO_MODE=true pnpm seed:demo` loads the same data set into an empty database (`--force` to add anyway).
 Compose (standalone: api, worker, ui, postgres): `docker compose -f docker-compose.demo.yml up --build`.
 
 Fixed scenarios and the optional live model are described in [`demo.md`](demo.md):

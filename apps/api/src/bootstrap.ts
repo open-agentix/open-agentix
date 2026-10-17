@@ -39,6 +39,14 @@ export async function createControlNode(
       'role restrictions are stored but NOT enforced: OAX_ROLE_BINDINGS_READ=legacy ignores them; ' +
         'switch to bindings, or set OAX_ALLOW_UNENFORCED_RESTRICTIONS=1 to accept this',
     );
+  // ADR 0017 S3: approval at publish is only checked race-free on the resolver read path; with
+  // `legacy` a publish where approval is required is refused (409 role_bindings_read_required).
+  if (config.auth.roleBindingsRead !== 'bindings' && config.lifecycle.requireApproval !== 'off')
+    ctx.logger.warn(
+      { requireApproval: config.lifecycle.requireApproval },
+      'agent publish is refused wherever approval is required: it needs OAX_ROLE_BINDINGS_READ=bindings ' +
+        '(or OAX_LIFECYCLE_REQUIRE_APPROVAL=off while there is no second person to approve)',
+    );
   await services.identity.ensureBootstrapAdmin();
   // ADR 0017 S1: every agent from before the draft revisions gets its one system revision.
   await services.agentReviews.backfillRevisions().then(

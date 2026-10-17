@@ -56,8 +56,9 @@ import { lockBindings, lockTreeShared } from './tree-lock.js';
 /**
  * Reviews and approval records (ADR 0017 sections 2 to 5, slice S1): opening a review on the
  * current draft revision, deciding it (approve, request changes, reject), withdrawing it, and
- * computing the state of a review. Publish is **not enforced** by this slice: `shadowPublish`
- * reports what publish would have been refused for, in the publish response and in the audit trail.
+ * computing the state of a review. Publish enforces approval in `publish-gate.ts` (slice S3), which
+ * uses {@link AgentReviewsService.evaluateForPublish} so that the gate and a decision judge the same
+ * way.
  *
  * Trust boundaries, in the order a decision crosses them:
  *
@@ -156,16 +157,6 @@ export interface ReviewView {
   you: { eligible: boolean; code: RefusalCode | null; message: string | null };
 }
 
-export interface ShadowReport {
-  /** Always false in this slice: nothing is refused, this only reports. */
-  enforced: false;
-  approvalRequired: boolean;
-  wouldRefuse: boolean;
-  reviewId: string | null;
-  state: string | null;
-  reasons: { code: string; message: string }[];
-}
-
 const authString = (a: ApproverAuth): string =>
   a.kind === 'session' ? 'session' : `token:${a.tokenId}`;
 const parseAuth = (s: string): ApproverAuth =>
@@ -192,7 +183,7 @@ export function reviewPolicy(
   return snapshot ? stricterPolicy(snapshot, current) : current;
 }
 
-interface Evaluation {
+export interface Evaluation {
   review: ReviewRow;
   head: RevisionRow;
   base: VersionRow | null;
@@ -310,7 +301,8 @@ export class AgentReviewsService {
     });
   }
 
-  private bindingOf(
+  /** The digests an approval binds to, for a source and the policy that applies (slice S3 recomputes them under the lock). */
+  bindingOf(
     agent: AgentRow,
     source: string,
     digest: string,
@@ -330,7 +322,7 @@ export class AgentReviewsService {
   }
 
   /** Whether publishing this agent needs an approval under the effective policy (section 6). */
-  private approvalRequired(policy: LifecyclePolicy, ...useCases: (string | null)[]): boolean {
+  approvalRequired(policy: LifecyclePolicy, ...useCases: (string | null)[]): boolean {
     if (policy.requireApprovalForPublish === 'on') return true;
     if (policy.requireApprovalForPublish === 'off') return false;
     // `production-only` uses the union of the base version's and the draft's use case.
@@ -351,6 +343,16 @@ export class AgentReviewsService {
   // ------------------------------------------------------------------ evaluation
 
   /** The state of a review, with every approval re-checked against the bindings and policy of now. */
+  async evaluateForPublish(
+    db: Db,
+    agent: AgentRow,
+    review: ReviewRow,
+    currentPolicy: LifecyclePolicy,
+    cached: { head: RevisionRow; binding: Binding; useCase: string | null },
+  ): Promise<Evaluation> {
+    return this.evaluate(db, agent, review, currentPolicy, cached);
+  }
+
   private async evaluate(
     db: Db,
     agent: AgentRow,
@@ -1085,59 +1087,6 @@ export class AgentReviewsService {
       );
       return { reviewId, clearedBy: p.userId, clearedAt };
     });
-  }
-
-  // ------------------------------------------------------------------ shadow publish
-
-  /**
-   * What publish would be refused for if approvals were enforced (slice S3): a read of the same
-   * state publish sees. It refuses nothing. `null` for the report means "not evaluated".
-   */
-  async shadowPublish(agent: AgentRow, source: string): Promise<ShadowReport> {
-    const db = this.ctx.db;
-    const current = await this.policy.effectiveForTenant(agent.tenantId, db);
-    const def = loadAgentDefinition(source);
-    const baseUseCase = agent.latestVersionId ? agent.useCase : null;
-    const [review] = await db
-      .select()
-      .from(agentReviews)
-      .where(and(eq(agentReviews.agentId, agent.id), eq(agentReviews.status, 'open')));
-    // An open review keeps the stricter of its own policy and the current one (finding 2).
-    const policy = review ? reviewPolicy(review, current) : current;
-    const required = this.approvalRequired(policy, baseUseCase, def.labels.useCase || null);
-    const base: ShadowReport = {
-      enforced: false,
-      approvalRequired: required,
-      wouldRefuse: false,
-      reviewId: null,
-      state: null,
-      reasons: [],
-    };
-    if (!required) return base;
-    if (!review)
-      return {
-        ...base,
-        wouldRefuse: true,
-        reasons: [{ code: 'no_review', message: 'approval is required and no review is open' }],
-      };
-    const ev = await this.evaluate(db, agent, review, current);
-    const reasons: { code: string; message: string }[] = [];
-    if (ev.head.digest !== loadAgentDefinition(source).digest)
-      reasons.push({ code: 'draft_changed', message: 'the draft is not the reviewed revision' });
-    if (ev.state === 'changes_requested')
-      reasons.push({ code: 'changes_requested', message: 'a reviewer requested changes' });
-    else if (ev.state !== 'approved')
-      reasons.push({
-        code: 'approval_insufficient',
-        message: `${ev.approvals.filter((a) => a.counted).length} of ${ev.required} required approvals`,
-      });
-    return {
-      ...base,
-      wouldRefuse: reasons.length > 0,
-      reviewId: review.id,
-      state: ev.state,
-      reasons,
-    };
   }
 }
 

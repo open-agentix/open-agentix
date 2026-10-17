@@ -336,7 +336,7 @@ export async function seedDemo(
     const name = /^name: (\S+)$/m.exec(source)![1]!;
     const owner = actors[DEMO_AGENT_TENANT[name]!];
     const a = await services.agents.create(owner, source, { id: demoId('agent', name) });
-    await services.agents.publish(owner, a.id);
+    await services.agents.publishDemoSeed(owner, a.id);
     agentIds.set(a.name, a.id);
   }
 

@@ -209,6 +209,8 @@ export const versions: AgentVersion[] = [
     digest: 'sha256:000000000000000000000000000',
     publishedBy: null,
     publishedAt: iso(-86_400_000 * 2),
+    reviewId: null,
+    deprecated: null,
   },
   {
     id: ids.version,
@@ -217,6 +219,8 @@ export const versions: AgentVersion[] = [
     digest: 'sha256:111111111111111111111111111',
     publishedBy: ids.admin,
     publishedAt: iso(-86_400_000),
+    reviewId: null,
+    deprecated: null,
   },
 ];
 

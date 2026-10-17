@@ -5,9 +5,10 @@
   The owner also answered the eight follow-up questions of the accepted version on 2026-10-10, see
   "Owner decisions on the follow-up questions (2026-10-10)"; one answer opened the separate design
   direction of [ADR 0018](0018-tenant-structure-as-code.md), which is Proposed).
-  **Partly implemented**: S10 (roles) and S1 (lifecycle policy, draft revisions, reviews and
-  approval records, API only and not enforced) are built in their pull requests; every other slice
-  is planned (see "Implementation status" in section 17).
+  **Partly implemented**: S10 (roles), S1 (lifecycle policy, draft revisions, reviews and approval
+  records), S2 (review threads and the Review tab) and S3 (approval enforced at publish, version
+  deprecation and rollback) are built in their pull requests; every other slice is planned (see
+  "Implementation status" in section 17).
 - Date: 2026-10-10
 - Plan items: new wave W14 (this ADR, slices S1 to S13, issues #244 to #252 and #290 to #293);
   updates W6-3 (#51, version approval bound to digest, model, eval set and policy), W7-2 (#54,
@@ -1146,10 +1147,11 @@ adds its `[Unreleased]` changelog line.
 
 #### Implementation status
 
-**S10 is implemented (roles and the rename, permissions only), S1 is implemented (API only, shadow
-mode: publish reports what it would be refused for and refuses nothing) and S2 is implemented in its
-pull request (comment threads, Review tab, decision bar, status badges, inbox).** Every other slice
-below is **planned**; no code, migration or endpoint of S3 to S9 and S11 to S13 exists on `main`. This table is updated by each slice's PR.
+**S10 is implemented (roles and the rename, permissions only), S1 is implemented (API), S2 is
+implemented (comment threads, Review tab, decision bar, status badges, inbox) and S3 is implemented in
+its pull request (approval enforced at publish, version deprecation and rollback; there is no
+break-glass).** Every other slice below is **planned**; no code, migration or endpoint of S4 to S9
+and S11 to S13 exists on `main`. This table is updated by each slice's PR.
 
 S1 decisions taken in its pull request (the ADR text above is unchanged except where noted):
 
@@ -1183,11 +1185,48 @@ S2 decisions taken in its pull request:
 - Migration `0034_review_threads`; audit events `agent.review.comment` (ids, operation, length) and
   `agent.review.thread_resolved`.
 
+S3 decisions taken in its pull request:
+
+- **No break-glass, as decision 11 says.** The issue and the owner decision exclude any emergency
+  publish; the earlier policy keys `breakGlass` and `breakGlassRatifyHours` do not exist. A test walks
+  the route table and the publish body (strict: an unknown field is `400`) for anything that skips the
+  approvals.
+- **Approval is a hard requirement, and `OAX_ROLE_BINDINGS_READ=bindings` is too.** Where approval is
+  required and the installation reads bindings with `legacy`, publish is refused with `409
+  role_bindings_read_required` instead of enforcing on a path whose binding lock does not hold
+  (alternative considered: only a warning; rejected because the gate would then be bypassable by a race
+  on exactly the installations that have not switched). The API logs a warning at start.
+- **Which approvals count is decided by the code that decides a decision**
+  (`AgentReviewsService.evaluateForPublish`), with the stricter of the review's snapshot and the policy
+  now. Publish adds only what publish alone can check: the named digests, the recomputed expansion and
+  resolution, `publishBy`.
+- **Refusal codes.** `approval_required` (nothing named), `draft_changed`, `approval_stale`
+  (`expansion_changed` | `secret_resolution_changed`), `approval_insufficient` (reasons per approval, and
+  an unresolved request for changes), `review_closed`, `publisher_not_approver`,
+  `role_bindings_read_required`. The ADR text lists "request changes" under `approval_insufficient`; it
+  stays there, with `details.changesRequested`.
+- **The response replaces `shadow` by `approval`** (`null` when none was required). `shadow` is removed
+  (before 1.0).
+- **An advisory review is closed by a publish** (status `published`, the version names no review), so an
+  agent whose approval is off does not keep an open review forever. Rollback does not count such a
+  version as approved.
+- **Rollback.** The new table `agent_version_deprecations` (append-only) instead of a mutable column on
+  the insert-only `agent_versions`. The target is the newest other non-deprecated version that was
+  published under an approved review where approval is required today (so an unapproved newer version
+  is skipped, which is also how the acceptance criterion reads); `409 rollback_target_unapproved` when
+  none is, `409 no_rollback_target` when nothing else exists. A deprecated version's content cannot be
+  published again under its number (`409 version_deprecated`); version numbers keep increasing.
+- **The demo seed** publishes through `publishDemoSeed`, which accepts only the seeded agents (fixed
+  ids) with no version yet. It is the one publish without approval and cannot be reached over HTTP.
+- **Known window.** The connection catalog behind the expansion digest is read before the locks (the
+  catalog service uses its own connection); a connection change between that read and the commit is not
+  seen by that publish (the next one refuses an approval bound to the old expansion).
+
 | # | Slice | State | Content | Depends on | Security review |
 | --- | --- | --- | --- | --- | --- |
 | S1 (#244) | Lifecycle policy, revisions, reviews and approval records (API only, not enforced) | implemented (PR; migration `0032_agent_lifecycle_reviews`, shadow mode) | `agent_draft_revisions`, `agent_reviews`, `agent_review_decisions`; `tenants.settings` (or reuse W13-2) and the lifecycle policy resolver; rule module A1 to A8 and A10; permissions `agents:review`, `agents:approve`; endpoints to open, decide, withdraw; binding of digest, expansion digest, resolution digest (placeholder until S4) and policy digest; publish reports "would be refused" in the response and audit (shadow mode) | S10 | yes: A1/A2 cannot be bypassed by role, token or platform admin; binding fields complete |
 | S2 (#245) | Comment threads and review UI | implemented (PR; migration `0034_review_threads`) | threads and comments API, outdated anchors, Review tab with rule requirements, decision bar, status badges, inbox `GET /v1/me/reviews`, i18n en/de | S1 | yes: rendering without HTML; comment content out of audit and model context |
-| S3 (#246) | Enforcement at publish, deprecation and rollback, audit | planned | publish with `reviewId` and `expectedDigest` under row lock, re-checks of section 4.3, no publish path without approval (no break-glass), version deprecation with rollback to approved versions, audit events of section 11 | S1 | yes: TOCTOU tests; no publish path without approval when required |
+| S3 (#246) | Enforcement at publish, deprecation and rollback, audit | implemented (PR; migration `0038_agent_publish_gate`) | publish with `reviewId` and `expectedDigest` under row lock, re-checks of section 4.3, no publish path without approval (no break-glass), version deprecation with rollback to approved versions, audit events of section 11 | S1 | yes: TOCTOU tests; no publish path without approval when required |
 | S4 (#247) | Secret scopes, inheritance and encrypted store | planned | key service (shared with ADR 0016 S5 #235), `secrets` table, scoped references, top-down inheritance with override, `allowOverride` (default `false` on root nodes, F4), `blockInherited` and pinned resolution, secrets API without read, broker checks, rotation and revocation, leak canaries, migration helper for env pointers | – (coordinates with #235) | yes: no plaintext at rest, AAD binding, no value in any response, shadowing cannot change a published agent's credential |
 | S5 (#248) | Personal secrets and development runs | planned | personal scope rules, draft runs of a revision (manual only, dev budget with 10 % default, `stage`), `allowDraftRuns`, `allowProductionSecretsInDraftRuns`, publish refusal and `with-approval` flag path | S3, S4 | yes: confused-deputy tests; personal secret never in a published version by default |
 | S6 (#249) | HashiCorp Vault backend | planned | `vault` backend connection, KV v2 and dynamic secrets with leases, Kubernetes and AppRole auth first, JWT/OIDC next, per-tenant path template against the owning node, dispatcher purpose `secrets`, fakes | S4 | yes: tokens never to nodes; lease revocation; path scope |

@@ -125,8 +125,8 @@ mapping (`role` or `role@team-slug`). The console shows the display names in Eng
 | `pentest` | Pentest | read-only, time-boxed (see below) |
 
 - `agents:review`, `agents:approve` and `agents:rules` are permissions. Since ADR 0017 S1 reviews and
-  decisions exist ([agent-lifecycle.md](agent-lifecycle.md)), but nothing refuses a publish without an
-  approval yet (slice S3, shadow mode only). They are deliberately **not** use-case permissions: a
+  decisions exist ([agent-lifecycle.md](agent-lifecycle.md)) and, since slice S3, a publish where the
+  tenant policy requires approval is refused without an approved review. They are deliberately **not** use-case permissions: a
   binding limited to a use case never carries them (fail closed, #336 item 7).
   An Agent Developer cannot publish (`agents:publish`), an Agent Maintainer can. Neither role holds
   `users:write`, `settings:write`, `connections:write`, `sources:write`, `policies:write` or any audit

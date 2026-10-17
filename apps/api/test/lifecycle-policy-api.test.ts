@@ -45,7 +45,11 @@ async function mkTenant(slug: string, parentId?: string) {
 
 beforeAll(async () => {
   db = PG_URL ? await openPostgres() : await openPglite();
-  n = await testNode({ OAX_DATABASE_URL: db.url, OAX_RATE_LIMIT_LOGIN_MAX: '1000' });
+  n = await testNode({
+    OAX_DATABASE_URL: db.url,
+    OAX_RATE_LIMIT_LOGIN_MAX: '1000',
+    OAX_LIFECYCLE_REQUIRE_APPROVAL: 'auto',
+  });
   const a = await mkTenant('pol-root');
   root = a.id;
   adminRoot = a.token;

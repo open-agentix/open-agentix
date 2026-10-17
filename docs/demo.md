@@ -17,7 +17,7 @@ worker, ui and PostgreSQL; the API seeds the data set on first start and the wor
 scenario runs with the simulated provider. On the dashboard, "Try a scenario" starts one of three
 CVE-triage scenarios and opens the run.
 
-Without the compose file (single process, in-memory database): `pnpm seed:demo` and the API with
+Without the compose file (single process, in-memory database): `OAX_DEMO_MODE=true pnpm seed:demo` (it refuses to run without the flag) and the API with
 `OAX_DEMO_MODE=true`.
 
 ## Guided tour
