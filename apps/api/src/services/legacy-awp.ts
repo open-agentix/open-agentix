@@ -204,9 +204,3 @@ export async function awpRowOf(db: Db, versionId: string): Promise<StoredAwpRow 
     .where(eq(agentVersionAwp.versionId, versionId));
   return row;
 }
-
-/** True when the version was marked `legacy-unconvertible`. */
-export async function isUnconvertible(db: Db, versionId: string): Promise<boolean> {
-  const row = await awpRowOf(db, versionId);
-  return row?.status === 'legacy-unconvertible';
-}

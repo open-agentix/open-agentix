@@ -56,6 +56,8 @@ export class Metrics {
   readonly eventsIngested: Counter<'kind' | 'outcome'>;
   readonly runsCreated: Counter<'trigger'>;
   readonly runsRefused: Counter<'trigger' | 'reason'>;
+  /** Reads of a stored agent in the legacy file format (AWP-3b); the audit event is deduplicated. */
+  readonly legacyFormatReads: Counter<'surface'>;
   readonly runsFinished: Counter<'status'>;
   readonly policyDecisions: Counter<'effect'>;
   readonly queueDepth: Gauge<'status'>;
@@ -217,6 +219,12 @@ export class Metrics {
       name: `${prefix}runs_refused_total`,
       help: 'Runs refused at admission (for example because the agent is disabled)',
       labelNames: ['trigger', 'reason'],
+      registers: [this.registry],
+    });
+    this.legacyFormatReads = new Counter({
+      name: `${prefix}legacy_format_reads_total`,
+      help: 'Reads of a stored agent in the deprecated openagentix.io/v1alpha1 format (AWP-3b)',
+      labelNames: ['surface'],
       registers: [this.registry],
     });
     this.runsFinished = new Counter({

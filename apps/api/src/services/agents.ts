@@ -58,7 +58,6 @@ import type { ResolvedScope } from './subtree-scope.js';
 import {
   awpRowOf,
   convertDefinition,
-  isUnconvertible,
   storeConversion,
   teamLookup,
   type StoredAwpRow,
@@ -167,8 +166,11 @@ export class AgentsService {
   }
 
   /**
-   * A read of a stored legacy agent or version: the one `legacy_format` deprecation, and the audit
-   * event `agent.legacy_format_read` (exactly one of each per read).
+   * A read of a stored legacy agent, version or manifest: the one `legacy_format` deprecation on every
+   * read, and the audit event `agent.legacy_format_read` once per principal, agent, surface (and
+   * version) and day. Every audit append takes the global audit lock, so a console that polls an
+   * agent must not write a row per request; the cache entry (shared with Valkey when configured) is
+   * the dedupe window, and every read is counted in `oax_legacy_format_reads_total`.
    */
   async legacyRead(
     principal: Principal,
@@ -177,24 +179,43 @@ export class AgentsService {
     version?: string,
   ): Promise<Deprecation[]> {
     const deprecation = legacyDeprecation();
-    await this.audit.append({
-      actor: principal.userId,
-      tenantId: agent.tenantId,
-      action: 'agent.legacy_format_read',
-      target: agent.id,
-      payload: { surface, ...(version ? { version } : {}), removedIn: deprecation.removedIn },
-    });
+    this.ctx.metrics.legacyFormatReads.inc({ surface });
+    const day = this.ctx.now().toISOString().slice(0, 10);
+    const key = `legacy-read:${principal.userId}:${agent.id}:${surface}:${version ?? ''}:${day}`;
+    if (!(await this.ctx.cache.get<boolean>(key))) {
+      await this.audit.append({
+        actor: principal.userId,
+        tenantId: agent.tenantId,
+        action: 'agent.legacy_format_read',
+        target: agent.id,
+        payload: { surface, ...(version ? { version } : {}), removedIn: deprecation.removedIn },
+      });
+      await this.ctx.cache.set(key, true, 24 * 3_600_000);
+    }
     return [deprecation];
   }
 
-  /** Release N+1: a version marked `legacy-unconvertible` is not run. */
-  async assertVersionRunnable(versionId: string): Promise<void> {
-    if (this.legacyPhase === 'removed' && (await isUnconvertible(this.ctx.db, versionId)))
-      throw new HttpError(
-        400,
-        LEGACY_REMOVED_CODE,
-        legacyRemovedMessage('this version cannot be converted to an AWP manifest and is not run'),
-      );
+  /**
+   * Release N+1: a version is not run unless it has a stored AWP conversion. A version without a row
+   * (the one-time conversion has not reached it yet) is converted on demand and refused when the
+   * conversion is refused, so the gate never fails open. Always false in release N.
+   */
+  async legacyRunRefused(versionId: string): Promise<boolean> {
+    if (this.legacyPhase !== 'removed') return false;
+    const stored = await awpRowOf(this.ctx.db, versionId);
+    if (stored) return stored.status === 'legacy-unconvertible';
+    const [row] = await this.ctx.db
+      .select({ v: agentVersions, a: agents })
+      .from(agentVersions)
+      .innerJoin(agents, eq(agents.id, agentVersions.agentId))
+      .where(eq(agentVersions.id, versionId));
+    if (!row) return false; // the caller reports the missing version
+    const c = await convertDefinition(
+      row.a,
+      row.v.definition as PublishedDefinition,
+      teamLookup(this.ctx.db, row.a.tenantId),
+    );
+    return c.status !== 'converted';
   }
 
   async teamIdForOwner(tenantId: string, owner: string): Promise<string | null> {
@@ -959,16 +980,22 @@ export class AgentsService {
         .set({ latestVersionId: v!.id, latestVersion: v!.version, useCase: useCaseOf(def) })
         .where(eq(agents.id, id));
       // AWP-3b: the effective AWP manifest is stored next to the version (never in it). A refusal is
-      // stored as `legacy-unconvertible`; neither outcome can fail the publish.
-      await storeConversion(
-        tx,
-        v!,
-        await convertDefinition(
+      // stored as `legacy-unconvertible`. The row is written in a savepoint: a database error there
+      // is logged and does not fail the publish; the version then has no row and the one-time
+      // conversion (or the read path) converts it later.
+      try {
+        const conversion = await convertDefinition(
           locked,
           v!.definition as PublishedDefinition,
           teamLookup(tx, locked.tenantId),
-        ),
-      );
+        );
+        await tx.transaction((sp) => storeConversion(sp as unknown as Db, v!, conversion));
+      } catch (e) {
+        this.ctx.logger.warn(
+          { err: e, agent: id, version: v!.version },
+          'AWP conversion not stored',
+        );
+      }
       return v!;
     });
     await this.ctx.cache.del(`agent-latest:${id}`);

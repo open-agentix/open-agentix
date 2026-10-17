@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
+  AWP_MANIFESTS_STORABLE,
   LEGACY_CONVERT_COMMAND,
   LEGACY_FORMAT_REMOVED_IN,
   exportAwpManifest,
@@ -39,6 +41,19 @@ describe('legacy format phase (constant tied to the version)', () => {
     expect(legacyFormatPhase('0.3.0', '0.3.0')).toBe('removed');
     expect(legacyFormatPhase('0.2.9', '0.3.0')).toBe('deprecated');
   });
+});
+
+describe('the removal cannot ship before AWP manifests can be stored', () => {
+  it.each(['package.json', 'apps/api/package.json', 'packages/runners/package.json'])(
+    'the version in %s is below N+1 while AWP_MANIFESTS_STORABLE is false',
+    (file) => {
+      const { version } = JSON.parse(
+        readFileSync(new URL(`../../../${file}`, import.meta.url), 'utf8'),
+      ) as { version: string };
+      if (legacyFormatPhase(version) === 'removed') expect(AWP_MANIFESTS_STORABLE).toBe(true);
+      else expect(legacyFormatPhase(version)).toBe('deprecated');
+    },
+  );
 });
 
 describe('deprecation entry and removal error', () => {
@@ -172,5 +187,116 @@ describe('verifyNoWidening catches a manifest that grants more than the source',
       },
     } as unknown as JsonObject;
     expect(verifyNoWidening(def, manifest)).toHaveLength(1);
+  });
+});
+
+describe('verifyNoWidening refuses a field it does not model', () => {
+  const grantPath = (m: JsonObject) => (m.spec as Obj).agents as Obj[];
+  const cases: [string, (m: JsonObject) => void, string][] = [
+    [
+      'permissions.filesystem.read',
+      (m) => ((agent(m).permissions as Obj).filesystem = { read: ['/'] }),
+      'spec.agents.0.permissions.filesystem',
+    ],
+    [
+      'permissions.filesystem.write',
+      (m) => ((agent(m).permissions as Obj).filesystem = { write: ['/'] }),
+      'spec.agents.0.permissions.filesystem',
+    ],
+    [
+      'permissions.environments',
+      (m) => ((agent(m).permissions as Obj).environments = ['prod']),
+      'spec.agents.0.permissions.environments',
+    ],
+    [
+      'tools[*].resources',
+      (m) => ((agent(m).tools as Obj[])[0]!.resources = ['*']),
+      'spec.agents.0.tools.0.resources',
+    ],
+    [
+      'spec.permissions',
+      (m) => ((m.spec as Obj).permissions = { default: 'allow' }),
+      'spec.permissions',
+    ],
+    [
+      'spec.secrets entry field',
+      (m) => ((m.spec as Obj).secrets = [{ name: 's', source: 'x', scope: [], value: 'v' }]),
+      'spec.secrets.0.value',
+    ],
+    [
+      'spec.mcpServers',
+      (m) => ((m.spec as Obj).mcpServers = [{ name: 'evil' }]),
+      'spec.mcpServers',
+    ],
+    [
+      'spec.actionGroups',
+      (m) => ((m.spec as Obj).actionGroups = [{ name: 'g' }]),
+      'spec.actionGroups',
+    ],
+    [
+      'foreign x- extension on an agent',
+      (m) => (agent(m)['x-evil-grant'] = true),
+      'spec.agents.0.x-evil-grant',
+    ],
+    [
+      'unknown openagentix extension',
+      (m) => (agent(m)['x-openagentix-unknown'] = 1),
+      'spec.agents.0.x-openagentix-unknown',
+    ],
+    ['ref-kind agent entry', (m) => grantPath(m).push({ ref: 'other-agent' }), 'spec.agents.1.ref'],
+    [
+      'agent field outside the model',
+      (m) => (agent(m).delegates = ['a']),
+      'spec.agents.0.delegates',
+    ],
+    ['top-level field', (m) => (m.extra = 1), 'extra'],
+    [
+      'non-MCP tool source',
+      (m) => ((agent(m).tools as Obj[])[0]!.type = 'http'),
+      'spec.agents.0.tools.0.type',
+    ],
+    [
+      'tool permission field',
+      (m) => ((((agent(m).permissions as Obj).tools as Obj)['srv.do_it'] as Obj).scope = 'all'),
+      'spec.agents.0.permissions.tools.srv.do_it.scope',
+    ],
+    [
+      'workflow step field',
+      (m) => (((m.spec as Obj).workflow as Obj[])[0]!.run = 'sh'),
+      'spec.workflow.0.run',
+    ],
+    [
+      'approval field',
+      (m) => (((m.spec as Obj).approval as Obj).autoApprove = true),
+      'spec.approval.autoApprove',
+    ],
+    ['malformed agents', (m) => ((m.spec as Obj).agents = {}), 'spec.agents'],
+  ];
+  it.each(cases)('%s', (_name, mutate, path) => {
+    const { def, manifest } = converted();
+    mutate(manifest);
+    const found = verifyNoWidening(def, manifest);
+    expect(found.map((f) => f.path)).toContain(path);
+    expect(found.every((f) => f.code === 'grant_widened')).toBe(true);
+  });
+
+  it('network access must be denied whenever it is present', () => {
+    const { def, manifest } = converted();
+    (agent(manifest).permissions as Obj).network = { allowHosts: [] };
+    expect(verifyNoWidening(def, manifest).map((f) => f.path)).toContain(
+      'spec.agents.0.permissions.network.egress',
+    );
+  });
+
+  it('accepts everything the exporter writes for the examples (no false positives)', () => {
+    for (const file of [
+      'awp/release-notes.agents.md',
+      'awp/log-reader.agents.md',
+      'awp/ticket-commenter.agents.md',
+    ]) {
+      const def = definitionOf(readExample(file));
+      const r = exportAwpManifest(def, { ownerTeam: def.owner });
+      expect(r.ok).toBe(true);
+    }
   });
 });

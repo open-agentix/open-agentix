@@ -78,7 +78,7 @@ All notable changes to this project are documented here. The format follows
   (per agent in a transaction, run by `db:migrate` and on start) store the effective AWP manifest of
   every published version **next to** the unchanged source and digest, or mark it `legacy-unconvertible`
   with field-level reasons: no lossy conversion is ever stored, and an independent check refuses a
-  conversion that would grant more than the legacy file (`grant_widened`). New: `oax awp convert`,
+  conversion that would grant more than the legacy file or contains a field it does not model (`grant_widened`), also when a stored manifest is served. The audit event of a legacy read is written once per principal, agent and day (metric `oax_legacy_format_reads_total`). New: `oax awp convert`,
   `oax awp legacy-report`, `GET /v1/agents/legacy-report`, and the stored conversion on
   `GET /v1/agents/{id}/versions/{version}` (`awp`). Existing agents keep running unchanged. AWP is a draft
   (`v1alpha1`); openagentix is not conformant to any profile. Down path:

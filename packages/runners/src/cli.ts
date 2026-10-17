@@ -60,7 +60,7 @@ Options for "run":
 `;
 
 /** Front matter of the legacy file format. */
-const LEGACY_FILE = /^apiVersion:\s*["']?openagentix\.io\/v1alpha1/m;
+const LEGACY_FILE = /(?:^|[{,])\s*["']?apiVersion["']?\s*:\s*["']?openagentix\.io\/v1alpha1/m;
 
 /** The one deprecation warning of a legacy file (`legacy_format`). */
 const legacyWarning = (): string =>

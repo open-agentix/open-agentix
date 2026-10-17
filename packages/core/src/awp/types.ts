@@ -40,6 +40,7 @@ export type ExportFindingCode =
   | 'unknown_field'
   | 'grant_widened'
   | 'conversion_error'
+  | 'stored_manifest_invalid'
   | 'not_canonicalizable';
 
 export interface ExportFinding {

@@ -1,4 +1,5 @@
 import {
+  AWP_LIMITS,
   LEGACY_CONVERT_COMMAND,
   LEGACY_FORMAT_REMOVED_IN,
   exportAwpManifest,
@@ -40,6 +41,15 @@ type Flags = Record<string, string | boolean>;
 /** `<agent-id>@<version>`: a published version, which only the control node can export. */
 const VERSIONED_AGENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@\S+$/i;
 
+/** Reads a file after checking its size (untrusted input); null when it is too large. */
+async function readBounded(file: string, io: CliIo): Promise<string | null> {
+  if (io.fileSize && (await io.fileSize(file)) > AWP_LIMITS.maxSourceBytes) {
+    io.err(`error   limit.size -: ${file} is larger than ${AWP_LIMITS.maxSourceBytes} bytes`);
+    return null;
+  }
+  return io.readFile(file);
+}
+
 function printReport(findings: ExportFinding[], io: CliIo): void {
   for (const f of findings) io.err(`error   ${f.code} ${f.path}: ${f.message}`);
 }
@@ -50,7 +60,8 @@ async function exportFile(
   io: CliIo,
   mode: 'export' | 'convert',
 ): Promise<number> {
-  const text = await io.readFile(file);
+  const text = await readBounded(file, io);
+  if (text === null) return 1;
   if (mode === 'convert' && validateManifestSource(text, { layout: 'auto' })) {
     io.err('error   the file is already an AWP manifest: nothing to convert');
     return 1;
@@ -90,7 +101,13 @@ async function legacyReport(files: string[], flags: Flags, io: CliIo): Promise<n
   let refused = 0;
   let needsPublish = 0;
   for (const file of files) {
-    const validated = validateAgentSource(await io.readFile(file));
+    const text = await readBounded(file, io);
+    if (text === null) {
+      refused += 1;
+      io.out(`invalid       ${file}`);
+      continue;
+    }
+    const validated = validateAgentSource(text);
     if (!validated.definition) {
       refused += 1;
       io.out(`invalid       ${file}`);

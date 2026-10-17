@@ -201,11 +201,11 @@ describe.each(sqlTargets)('migration 0038 on existing data (%s)', (_kind, enable
   it('refuses a row that violates the shape, an update and a delete', async () => {
     const insertBad = await failure(
       c.query(
-        `insert into agent_version_awp (version_id, agent_id, status, converter) select id, agent_id, 'converted', 'x' from agent_versions where id = $1`,
+        `insert into agent_version_awp (version_id, agent_id, status, converter) select id, agent_id, 'legacy-unconvertible', 'x' from agent_versions where id = $1`,
         [bad.version],
       ),
     );
-    expect(insertBad).toMatch(/duplicate|violates|append-only/);
+    expect(insertBad).toContain('duplicate key');
     expect(
       await failure(
         c.query(`update agent_version_awp set status = 'converted' where version_id = $1`, [

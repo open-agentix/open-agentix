@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { runCli, type CliIo } from '../src/index.js';
+import { AWP_MANIFESTS_STORABLE, legacyFormatPhase } from '@openagentix/core';
+import { CLI_VERSION, runCli, type CliIo } from '../src/index.js';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -120,5 +121,40 @@ describe('oax awp legacy-report', () => {
       await runCli(['awp', 'legacy-report', 'examples/awp/ticket-updater.awp.md'], a.cli),
     ).toBe(1);
     expect(a.out.join()).toContain('invalid');
+  });
+});
+
+describe('the CLI cannot ship the removal before AWP manifests can be stored', () => {
+  it('has a version below N+1 while AWP_MANIFESTS_STORABLE is false', () => {
+    if (legacyFormatPhase(CLI_VERSION) === 'removed') expect(AWP_MANIFESTS_STORABLE).toBe(true);
+    else expect(legacyFormatPhase(CLI_VERSION)).toBe('deprecated');
+  });
+});
+
+describe('oax awp convert and legacy-report: untrusted input', () => {
+  const big = (version?: string) => {
+    const a = io(version);
+    a.cli.fileSize = async () => 10_000_000;
+    return a;
+  };
+  it('refuses an oversized file before reading it', async () => {
+    const a = big();
+    expect(await runCli(['awp', 'convert', LEGACY, '--owner-team', 't'], a.cli)).toBe(1);
+    expect(a.err.join()).toContain('limit.size');
+    const b = big();
+    expect(await runCli(['awp', 'legacy-report', LEGACY], b.cli)).toBe(1);
+    expect(b.err.join()).toContain('limit.size');
+  });
+
+  it('recognises the legacy header written with a space before the colon or as flow style', async () => {
+    for (const text of [
+      '---\napiVersion : openagentix.io/v1alpha1\n---\n',
+      '---\n{ "apiVersion": "openagentix.io/v1alpha1", kind: Agent }\n---\n',
+    ]) {
+      const a = io('0.4.0');
+      a.cli.readFile = async () => text;
+      expect(await runCli(['validate', 'x.md'], a.cli)).toBe(1);
+      expect(a.err.join()).toContain('legacy_format_removed');
+    }
   });
 });

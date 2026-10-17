@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import {
   LEGACY_FORMAT_REMOVED_IN,
+  awpManifestDigest,
   loadAgentDefinition,
   type PublishedDefinition,
 } from '@openagentix/core';
@@ -115,16 +116,65 @@ describe('publish stores the effective AWP manifest next to the version', () => 
     const kept = await insertVersion('1.1.0');
     const live = JSON.parse((await get(`/v1/agents/${agentId}/versions/1.1.0/awp`)).body);
     const stored = { ...live, metadata: { ...live.metadata, description: 'stored earlier' } };
+    const digest = awpManifestDigest(stored);
+    stored.metadata.integrity = { digest };
     await n.ctx.db.insert(agentVersionAwp).values({
       versionId: kept,
       agentId,
       status: 'converted',
       manifest: stored,
-      manifestDigest: 'sha256:' + '0'.repeat(64),
+      manifestDigest: digest,
       converter: 'awp-export/1',
     });
     const served = JSON.parse((await get(`/v1/agents/${agentId}/versions/1.1.0/awp`)).body);
     expect(served.metadata.description).toBe('stored earlier');
+  });
+
+  it('refuses a stored manifest that no longer matches its digest or grants more than the source', async () => {
+    const source = agentSource('stored-tampered', 'team-docs');
+    const def = loadAgentDefinition(source);
+    const created = await n.req({ method: 'POST', url: '/v1/agents', payload: { source } });
+    const agentId = created.json().id as string;
+    const live = async (version: string) => {
+      const id = randomUUID();
+      await n.ctx.db.insert(agentVersions).values({
+        id,
+        agentId,
+        version,
+        digest: def.digest,
+        source,
+        definition: def as unknown as PublishedDefinition,
+      });
+      return {
+        id,
+        manifest: JSON.parse((await get(`/v1/agents/${agentId}/versions/${version}/awp`)).body),
+      };
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bad = async (version: string, mutate: (m: any) => void, fixDigest: boolean) => {
+      const { id, manifest } = await live(version);
+      mutate(manifest);
+      if (fixDigest) manifest.metadata.integrity = { digest: awpManifestDigest(manifest) };
+      await n.ctx.db.insert(agentVersionAwp).values({
+        versionId: id,
+        agentId,
+        status: 'converted',
+        manifest,
+        manifestDigest: manifest.metadata.integrity.digest,
+        converter: 'awp-export/1',
+      });
+      return get(`/v1/agents/${agentId}/versions/${version}/awp`);
+    };
+    const digestOnly = await bad('2.0.0', (m) => (m.metadata.description = 'edited'), false);
+    expect(digestOnly.statusCode).toBe(422);
+    expect(digestOnly.json().details.findings[0].code).toBe('stored_manifest_invalid');
+    const widened = await bad(
+      '2.1.0',
+      (m) => (m.spec.agents[0].permissions.tools = { 'x.y': { allow: true } }),
+      true,
+    );
+    expect(widened.statusCode).toBe(422);
+    expect(widened.json().details.findings[0].code).toBe('grant_widened');
   });
 
   it('serves the stored bytes, the same on every call', async () => {
@@ -155,11 +205,30 @@ describe('deprecations: exactly one entry and one audit event per legacy read', 
     expect(audits[1]!.payload.version).toBe('1.0.0');
   });
 
-  it('a second read is a second entry and a second event, not more entries per read', async () => {
+  it('every read carries the entry, the audit event is written once per principal, surface and day', async () => {
     const { id } = await publish(agentSource('read-again', 'team-docs'));
     await get(`/v1/agents/${id}`);
     const again = (await get(`/v1/agents/${id}`)).json();
     expect(again.deprecations).toHaveLength(1);
+    expect((await readAudits(id)).filter((a) => a.payload.surface === 'agent')).toHaveLength(1);
+    // another principal is its own window
+    const other = await n.req({
+      method: 'POST',
+      url: '/v1/users',
+      payload: {
+        email: 'second-reader@example.com',
+        displayName: 's',
+        password: 'long-password-1',
+      },
+    });
+    expect(other.statusCode).toBe(201);
+    await n.req({
+      method: 'PUT',
+      url: `/v1/agents/${id}/members`,
+      payload: { members: [{ userId: other.json().id, role: 'viewer' }] },
+    });
+    const token = await n.login('second-reader@example.com', 'long-password-1');
+    await get(`/v1/agents/${id}`, token);
     expect((await readAudits(id)).filter((a) => a.payload.surface === 'agent')).toHaveLength(2);
   });
 
@@ -271,6 +340,51 @@ describe('release N+1 behind the version constant', () => {
     });
     expect(put.json().error).toBe('legacy_format_removed');
     expect((await post(`/v1/agents/${id}/publish`)).json().error).toBe('legacy_format_removed');
+  });
+
+  it('fails closed for a version without a stored conversion: converted on demand, refused when unconvertible', async () => {
+    removed.services.agents.legacyPhase = 'deprecated';
+    await post('/v1/teams', { slug: 'team-docs', name: 'Docs' });
+    const insertNoRow = async (name: string, source: string) => {
+      const made = await post('/v1/agents', { source });
+      const agentId = made.json().id as string;
+      const def = loadAgentDefinition(source);
+      await removed.ctx.db.insert(agentVersions).values({
+        id: randomUUID(),
+        agentId,
+        version: def.version,
+        digest: def.digest,
+        source,
+        definition: def as unknown as PublishedDefinition,
+      });
+      await removed.ctx.db
+        .update(agents)
+        .set({
+          latestVersion: def.version,
+          latestVersionId: (
+            await removed.ctx.db
+              .select()
+              .from(agentVersions)
+              .where(sql`agent_id = ${agentId}`)
+          )[0]!.id,
+        })
+        .where(sql`id = ${agentId}`);
+      void name;
+      return agentId;
+    };
+    const unconv = await insertNoRow('norow-bad', ticketUpdater('norow-bad'));
+    const conv = await insertNoRow('norow-good', agentSource('norow-good', 'team-docs'));
+    await removed.services.agents.latestVersionId(unconv).catch(() => undefined);
+    removed.services.agents.legacyPhase = 'removed';
+    await removed.ctx.cache.del(`agent-latest:${unconv}`);
+    await removed.ctx.cache.del(`agent-latest:${conv}`);
+    const refused = await post(`/v1/agents/${unconv}/runs`, { data: {} });
+    expect(refused.json().error).toBe('legacy_format_removed');
+    const audit = (
+      await removed.req({ method: 'GET', url: '/v1/audit?action=run.refused&limit=50' })
+    ).json().items as { target: string; payload: { reason: string } }[];
+    expect(audit.find((e) => e.target === unconv)?.payload.reason).toBe('legacy_format_removed');
+    expect((await post(`/v1/agents/${conv}/runs`, { data: {} })).statusCode).toBe(202);
   });
 
   it('still validates an AWP manifest', async () => {
@@ -477,6 +591,64 @@ describe('GET /v1/agents/legacy-report', () => {
     expect(
       (await n.req({ method: 'GET', url: '/v1/agents/legacy-report', token: null })).statusCode,
     ).toBe(401);
+  });
+});
+
+describe('legacy report across tenants', () => {
+  it('shows each tenant its own versions only', async () => {
+    const PW = 'long-password-1';
+    const mk = async (slug: string) => {
+      const r = await n.req({
+        method: 'POST',
+        url: '/v1/tenants',
+        payload: {
+          slug,
+          name: `Org ${slug}`,
+          admin: { email: `admin@${slug}.example.org`, displayName: slug, password: PW },
+        },
+      });
+      expect(r.statusCode).toBe(201);
+      const token = await n.login(`admin@${slug}.example.org`, PW);
+      const team = await n.req({
+        method: 'POST',
+        url: '/v1/teams',
+        token,
+        payload: { slug: `team-${slug}`, name: slug },
+      });
+      expect(team.statusCode).toBe(201);
+      const created = await n.req({
+        method: 'POST',
+        url: '/v1/agents',
+        token,
+        payload: {
+          source: ticketUpdater(`tu-${slug}`).replace(
+            'owner: team-security',
+            `owner: team-${slug}`,
+          ),
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const pub = await n.req({
+        method: 'POST',
+        url: `/v1/agents/${created.json().id}/publish`,
+        token,
+      });
+      expect(pub.statusCode).toBe(201);
+      return token;
+    };
+    const a = await mk('tenant-a');
+    const b = await mk('tenant-b');
+    const names = async (token: string) =>
+      (
+        (await get('/v1/agents/legacy-report?limit=200', token)).json().items as {
+          agentName: string;
+        }[]
+      ).map((i) => i.agentName);
+    expect(await names(a)).toEqual(['tu-tenant-a']);
+    expect(await names(b)).toEqual(['tu-tenant-b']);
+    const root = await names(n.admin);
+    expect(root).not.toContain('tu-tenant-a');
+    expect(root).not.toContain('tu-tenant-b');
   });
 });
 

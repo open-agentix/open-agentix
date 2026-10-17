@@ -1,6 +1,7 @@
 import type { PublishedDefinition } from '../agents/profiles.js';
 import { toolMatchesGrant } from '../mcp-pin.js';
 import { awpSecretName } from './export-agent.js';
+import { EXTENSION_PREFIX } from './types.js';
 import type { ExportFinding, JsonObject, JsonValue } from './types.js';
 
 type Obj = { readonly [key: string]: JsonValue };
@@ -8,6 +9,113 @@ type Obj = { readonly [key: string]: JsonValue };
 const obj = (v: JsonValue | undefined): Obj =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {};
 const arr = (v: JsonValue | undefined): readonly JsonValue[] => (Array.isArray(v) ? v : []);
+
+/** Extensions the exporter writes (docs/awp.md). Any other `x-` field is not checked and refused. */
+const KNOWN_EXTENSIONS: ReadonlySet<string> = new Set(
+  [
+    'description',
+    'model',
+    'outputs',
+    'simulation',
+    'credentialEnv',
+    'runtime',
+    'mode',
+    'schemas',
+    'guidelines',
+    'when',
+    'input',
+    'output',
+    'access',
+    'args',
+    'allowAdditionalArgs',
+    'maxCallsPerRun',
+    'classification',
+  ].map((n) => `${EXTENSION_PREFIX}${n}`),
+);
+
+const set = (...keys: string[]): ReadonlySet<string> => new Set(keys);
+const ALLOWED = {
+  manifest: set('apiVersion', 'kind', 'metadata', 'spec'),
+  metadata: set(
+    'name',
+    'version',
+    'description',
+    'owner',
+    'classification',
+    'labels',
+    'integrity',
+    'requiredExtensions',
+  ),
+  spec: set('triggers', 'inputs', 'budget', 'agents', 'workflow', 'secrets', 'approval'),
+  agent: set('id', 'model', 'instructions', 'tools', 'permissions', 'budget'),
+  permissions: set('default', 'network', 'tools', 'secrets'),
+  network: set('egress', 'allowHosts'),
+  toolPermission: set('allow'),
+  source: set('type', 'server', 'tools'),
+  step: set('id', 'type', 'agent', 'outputs', 'dependsOn', 'task'),
+  approval: set('requiredFor', 'approvers', 'timeout', 'onTimeout'),
+  secret: set('name', 'source', 'scope', 'key'),
+} as const;
+
+/**
+ * Fail closed on structure: a field the check does not model could carry a grant (filesystem,
+ * environments, resources, spec-level permissions, MCP servers, action groups, a `ref` agent, a
+ * foreign extension). Every object a conversion writes has an allow-list; anything else is refused.
+ */
+function unmodelled(manifest: JsonObject): ExportFinding[] {
+  const out: ExportFinding[] = [];
+  const check = (value: JsonValue | undefined, allowed: ReadonlySet<string>, path: string) => {
+    if (value === undefined) return;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      out.push(finding(path, 'expected an object'));
+      return;
+    }
+    for (const key of Object.keys(value)) {
+      if (allowed.has(key) || KNOWN_EXTENSIONS.has(key)) continue;
+      out.push(
+        finding(
+          path ? `${path}.${key}` : key,
+          `field "${key}" is not part of what a conversion writes and is not checked`,
+        ),
+      );
+    }
+  };
+  const each = (value: JsonValue | undefined, allowed: ReadonlySet<string>, path: string) => {
+    if (value === undefined) return;
+    if (!Array.isArray(value)) return void out.push(finding(path, 'expected a list'));
+    value.forEach((v, i) => check(v, allowed, `${path}.${i}`));
+  };
+  check(manifest, ALLOWED.manifest, '');
+  check(manifest.metadata, ALLOWED.metadata, 'metadata');
+  const spec = obj(manifest.spec);
+  check(manifest.spec, ALLOWED.spec, 'spec');
+  each(spec.agents, ALLOWED.agent, 'spec.agents');
+  each(spec.workflow, ALLOWED.step, 'spec.workflow');
+  each(spec.secrets, ALLOWED.secret, 'spec.secrets');
+  check(spec.approval, ALLOWED.approval, 'spec.approval');
+  arr(spec.agents).forEach((raw, i) => {
+    const at = `spec.agents.${i}`;
+    const a = obj(raw);
+    check(a.permissions, ALLOWED.permissions, `${at}.permissions`);
+    const permissions = obj(a.permissions);
+    check(permissions.network, ALLOWED.network, `${at}.permissions.network`);
+    if (permissions.network !== undefined && obj(permissions.network).egress !== 'deny')
+      out.push(
+        finding(`${at}.permissions.network.egress`, 'network access must be denied by default'),
+      );
+    // Keys of permissions.tools are tool names: each value is checked, the names by the grant check.
+    for (const [name, entry] of Object.entries(obj(permissions.tools)))
+      check(entry, ALLOWED.toolPermission, `${at}.permissions.tools.${name}`);
+    each(a.tools, ALLOWED.source, `${at}.tools`);
+    arr(a.tools).forEach((src, j) => {
+      if (obj(src).type !== 'mcp')
+        out.push(
+          finding(`${at}.tools.${j}.type`, 'only MCP tool sources are written by a conversion'),
+        );
+    });
+  });
+  return out;
+}
 
 function finding(path: string, message: string): ExportFinding {
   return { code: 'grant_widened', path, message };
@@ -47,7 +155,7 @@ function allowedTools(
  * (critical fields), this check guards the grants.
  */
 export function verifyNoWidening(def: PublishedDefinition, manifest: JsonObject): ExportFinding[] {
-  const out: ExportFinding[] = [];
+  const out: ExportFinding[] = unmodelled(manifest);
   const spec = obj(manifest.spec);
   const sourceAgents = new Map(def.agents.map((a) => [a.id, a]));
   const required = new Set(arr(obj(spec.approval).requiredFor).map(String));

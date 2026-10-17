@@ -19,6 +19,15 @@ export const LEGACY_FORMAT_REMOVED_IN = '0.4.0';
 /** The command that converts a legacy file. */
 export const LEGACY_CONVERT_COMMAND = 'oax awp convert';
 
+/**
+ * Whether AWP manifests can be stored, published and run (a later slice). Release N+1 rejects the
+ * legacy format on every write path, which is only safe when an AWP manifest can be written instead.
+ * `awp-legacy.test.ts` fails while the version of this build is N+1 or later and this is `false`, so
+ * the version bump cannot ship the removal by accident. A pre-release of N+1 (`0.4.0-alpha.1`) counts
+ * as N+1 by design: the test then fails for it too.
+ */
+export const AWP_MANIFESTS_STORABLE = false;
+
 export type LegacyPhase = 'deprecated' | 'removed';
 
 const CORE_VERSION = /^(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:[-+].*)?$/;

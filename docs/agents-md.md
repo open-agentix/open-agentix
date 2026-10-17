@@ -156,10 +156,12 @@ project releases when it is ready, and the date follows the release notes of `0.
   in the response of `GET /v1/agents/{id}`, `GET /v1/agents/{id}/versions/{version}` and the write
   responses (create, draft update, publish, disable/enable) and `POST /v1/agents/validate` (exactly one
   entry per legacy `agents.md`, none for an AWP manifest); the header `x-oax-deprecation: legacy_format` on
-  `GET /v1/agents/{id}/versions/{version}/awp`; a warning `legacy_format` from `oax validate`. Each read of
-  a stored agent, version or manifest writes **one** audit event `agent.legacy_format_read` (payload:
-  `surface` = `agent`, `version` or `awp-export`, the version, `removedIn`). A request that is denied or
-  finds nothing writes none. The agent list and the console views that do not show the draft or a
+  `GET /v1/agents/{id}/versions/{version}/awp`; a warning `legacy_format` from `oax validate`. The audit
+  event `agent.legacy_format_read` (payload: `surface` = `agent`, `version` or `awp-export`, the version,
+  `removedIn`) is written **once per principal, agent, surface (and version) and day**, because every
+  audit append takes the global audit lock and a console polls an agent; every read is counted in the
+  metric `oax_legacy_format_reads_total{surface}`. The dedupe window is the cache (Valkey when
+  configured, otherwise per replica). A request that is denied or finds nothing writes none. The agent list and the console views that do not show the draft or a
   version do not count as a read.
 - **One-time conversion (migration `0038_agent_version_awp`).** The migration creates the table
   `agent_version_awp`; right after it (`pnpm --filter @openagentix/api db:migrate`, or migrate-on-start)
@@ -178,13 +180,18 @@ project releases when it is ready, and the date follows the release notes of `0.
   because it had no team, assign a team and publish a new version.
   Until the conversion ran for a version (a fresh upgrade before `db:migrate` finished), reads of that
   version compute the conversion on the fly and do not store it.
-- **The stored manifest is served as stored:** `GET .../versions/{version}/awp` returns the stored bytes
-  (stable even when the exporter changes later) after the live owner-team check; for a
-  `legacy-unconvertible` version it answers `422 awp_export_refused` with the stored findings.
+- **The stored manifest is served as stored, but verified:** `GET .../versions/{version}/awp` returns the
+  stored bytes (stable even when the exporter changes later) after the live owner-team check, and
+  recomputes the digest and re-runs the no-widening check against the stored definition first; a row that
+  fails either answers `422 awp_export_refused` (`stored_manifest_invalid` / `grant_widened`). For a
+  `legacy-unconvertible` version it answers `422` with the stored findings. A later converter version can
+  supersede rows by keying on the column `converter`; that path is not built yet (rows are append-only).
 - **Nothing is granted by a conversion.** After the mapping, an independent check compares the manifest with
   the stored definition and refuses the conversion (`grant_widened`) if it names an agent, a tool, an
   approval-free tool that required approval, a network host or a secret that the legacy file did not grant,
-  or does not deny by default. The critical fields that AWP v1alpha1 cannot express (argument constraints,
+  or does not deny by default. The check is a closed allow-list: any field it does not model
+  (filesystem, environments, resources, spec-level permissions, MCP servers, action groups, a `ref`
+  agent, an unknown `x-` extension, network access that is not `deny`) refuses the conversion. The critical fields that AWP v1alpha1 cannot express (argument constraints,
   call limits, conditions, handovers, runners, ...) make the version `legacy-unconvertible` instead of being
   dropped. Running an agent is unchanged: runs still use the stored definition, not the manifest.
 
@@ -213,9 +220,22 @@ Behind the constant the write paths already behave as follows (tested with the c
 `removed`): `POST /v1/agents`, `PUT /v1/agents/{id}/draft` and `POST /v1/agents/{id}/publish` answer
 `400 legacy_format_removed` with a message naming `oax awp convert`; `POST /v1/agents/validate` returns
 `valid: false` with the same code; `oax validate` of a legacy file exits `1`; a run of a version marked
-`legacy-unconvertible` is refused with `400 legacy_format_removed` (scheduled and event-triggered runs
-included). AWP manifests are validated as before. Storing and running an AWP manifest itself is a later
-slice; until it lands, **do not ship the `0.4.0` bump**: the removal is only safe together with it.
+`legacy-unconvertible`, or of a version that has no stored conversion and cannot be converted on demand,
+is refused with `400 legacy_format_removed` and the audit entry `run.refused` (scheduled and
+event-triggered runs included); the gate does not fail open. AWP manifests are validated as before. Storing and running an AWP manifest itself is a later
+slice; until it lands, **do not ship the `0.4.0` bump**: the removal is only safe together with it. A
+unit test enforces this: it fails while the version of the build (or of the CLI) is `0.4.0` or later and
+`AWP_MANIFESTS_STORABLE` (`packages/core/src/awp/legacy.ts`) is `false`. A pre-release of N+1
+(`0.4.0-alpha.1`) counts as N+1 by design, so the test fails for it as well.
+
+### Upgrade notes
+
+- The conversion row is written in a savepoint inside the publish transaction: a database error there is
+  logged and does not fail the publish (the version is converted later).
+- The startup conversion catches and logs errors and never keeps the node from starting.
+- Re-run `deploy/sql/roles.sql` (a run-once script) so that the application role also loses
+  `UPDATE`/`DELETE` on `agent_version_awp`; the default privileges grant them, and the append-only trigger
+  is the guard until then.
 
 ### Rollback
 
