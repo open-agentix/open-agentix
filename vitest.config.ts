@@ -31,6 +31,7 @@ export default defineConfig({
         'apps/*/src/**/*.ts',
         'scripts/awp/verify-pin.mjs',
         'scripts/awp/generate-types.mjs',
+        'scripts/awp/conformance.mjs',
       ],
       exclude: [
         'apps/ui/**',
