@@ -4,6 +4,7 @@ import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { agentVersionDeprecations, agentVersions, agents, tenants } from '../db/schema.js';
 import { HttpError, notFound } from '../errors.js';
+import { freshNode } from './agent-publish.js';
 import { lockAgent } from './agent-revisions.js';
 import type { AgentReviewsService } from './agent-reviews.js';
 import { cleanReason, MAX_DISABLE_REASON_LENGTH, type AgentsService } from './agents.js';
@@ -52,9 +53,11 @@ export class AgentDeprecationService {
       throw new HttpError(400, 'validation_failed', 'reason is too long');
     return this.ctx.db.transaction(async (t) => {
       const tx = t as unknown as Db;
-      const [node] = await tx.select().from(tenants).where(eq(tenants.id, found.tenantId));
-      if (!node) throw notFound('tenant');
-      await lockTreeShared(tx, node.rootId);
+      const [placed] = await tx.select().from(tenants).where(eq(tenants.id, found.tenantId));
+      if (!placed) throw notFound('tenant');
+      await lockTreeShared(tx, placed.rootId);
+      // Read again under the tree lock: a tenant move changes the chain whose policies apply.
+      const node = await freshNode(tx, placed.id);
       // Serialises with run admission (`for share` on the agent row) and with a publish.
       const agent = await lockAgent(tx, agentId);
       const [target] = await tx

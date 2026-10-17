@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { desc, eq } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   agentDraftRevisions,
   agentReviewDecisions,
@@ -13,7 +13,9 @@ import {
   users,
 } from '../src/db/schema.js';
 import { PG_URL, openPglite, openPostgres, type Sql } from './db-targets.js';
+import { sourceDigest } from '../src/services/agent-revisions.js';
 import { insertVersion, testNode, type TestNode } from './helpers.js';
+import type * as TreeLock from '../src/services/tree-lock.js';
 
 /**
  * ADR 0017 slice S3 (#246): approval is a gate at publish, over HTTP, on the resolver read path
@@ -21,6 +23,31 @@ import { insertVersion, testNode, type TestNode } from './helpers.js';
  * and of the version rules its mutation check (see the PR). Runs on PGlite and, with
  * OAX_TEST_DATABASE_URL, on a real PostgreSQL, where the races are real.
  */
+
+/**
+ * A hook that runs right before the transaction of a publish or a rollback takes the tree lock, in the
+ * window after it read its tenant row: where a tenant move can commit (real PostgreSQL only: the
+ * hook issues requests on another connection).
+ */
+const hooks = vi.hoisted(() => ({ beforeTreeLock: null as null | (() => Promise<void>) }));
+vi.mock('../src/services/tree-lock.js', async (original) => {
+  const actual = await original<typeof TreeLock>();
+  return {
+    ...actual,
+    lockTreeShared: async (...args: Parameters<typeof actual.lockTreeShared>) => {
+      const hook = hooks.beforeTreeLock;
+      if (hook) {
+        hooks.beforeTreeLock = null;
+        await hook();
+      }
+      return actual.lockTreeShared(...args);
+    },
+  };
+});
+
+/** Tests that need two real connections. */
+const real = PG_URL ? it : it.skip;
+
 const PW = 'long-password-123';
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -516,25 +543,25 @@ describe('what changes between the approval and the publish', () => {
   });
 });
 
-describe('the state is read under the lock, not before it', () => {
-  /**
-   * Runs `action` once, right after publish has read the connection catalog and before it takes its
-   * locks: the window in which every pre-lock check of publish is already behind it.
-   */
-  function afterPreLockChecks(action: () => Promise<unknown>) {
-    const catalog = n.services.catalog;
-    const original = catalog.accessCatalog.bind(catalog);
-    catalog.accessCatalog = async (scope) => {
-      const result = await original(scope);
-      catalog.accessCatalog = original;
-      await action();
-      return result;
-    };
-    return () => {
-      catalog.accessCatalog = original;
-    };
-  }
+/**
+ * Runs `action` once, right after publish has read the connection catalog and before it takes its
+ * locks: the window in which every pre-lock check of publish is already behind it.
+ */
+function afterPreLockChecks(action: () => Promise<unknown>) {
+  const catalog = n.services.catalog;
+  const original = catalog.accessCatalog.bind(catalog);
+  catalog.accessCatalog = async (scope) => {
+    const result = await original(scope);
+    catalog.accessCatalog = original;
+    await action();
+    return result;
+  };
+  return () => {
+    catalog.accessCatalog = original;
+  };
+}
 
+describe('the state is read under the lock, not before it', () => {
   it('a draft saved after the checks: draft_changed, nothing published, the review stays open', async () => {
     const { a, review } = await approved();
     const restore = afterPreLockChecks(() => edit(tok['rev2']!, a, '1.0.1'));
@@ -615,6 +642,74 @@ describe('the state is read under the lock, not before it', () => {
       restore();
     }
     expect(await versionsOf(a.id)).toHaveLength(0);
+  });
+
+  real('a tenant move before the tree lock applies the policy of the new parents', async () => {
+    const mk = async (slug: string, parentId: string) => {
+      const res = await n.req({
+        method: 'POST',
+        url: '/v1/tenants',
+        payload: { slug, name: slug, parentId },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      return j(res).id as string;
+    };
+    const p1 = await mk('mv-p1', orgA);
+    const p2 = await mk('mv-p2', orgA);
+    const node = await mk('mv-node', p1);
+    // p2 asks for two approvals, p1 for one
+    const pol = await n.req({
+      method: 'PATCH',
+      url: `/v1/tenants/${p2}/settings/agent-lifecycle`,
+      payload: { minApprovals: 2 },
+    });
+    expect(pol.statusCode, pol.body).toBe(200);
+    for (const k of ['mvauthor', 'mvrev']) {
+      await mkUser(k, []);
+      const b = await n.req({
+        method: 'POST',
+        url: `/v1/tenants/${orgA}/role-bindings`,
+        payload: { userId: uid[k], role: 'agent-maintainer', inherit: true },
+      });
+      expect(b.statusCode, b.body).toBe(201);
+      tok[k] = await n.login(`${k}@org-a.example.org`, PW);
+    }
+    const acting = { 'x-oax-tenant': node };
+    const call = (token: string, method: 'GET' | 'POST', url: string, payload?: Json) =>
+      n.req({ method, url, token, headers: acting, ...(payload ? { payload } : {}) });
+    const name = `gate-agent-${++seq}`;
+    const created = await call(tok['mvauthor']!, 'POST', '/v1/agents', {
+      source: source(name, '1.0.0'),
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = j(created).id as string;
+    const review = j(await call(tok['mvauthor']!, 'POST', `/v1/agents/${id}/reviews`));
+    const dec = await call(tok['mvrev']!, 'POST', `/v1/reviews/${review.id}/decisions`, {
+      decision: 'approve',
+      ...bound(review),
+    });
+    expect(dec.statusCode, dec.body).toBe(201);
+    const body = { reviewId: review.id, expectedDigest: review.revision.digest };
+    // the node moves under p2 after publish read its tenant row and before it takes the tree lock
+    hooks.beforeTreeLock = async () => {
+      const mv = await n.req({
+        method: 'POST',
+        url: `/v1/tenants/${node}/move`,
+        payload: { parentId: p2 },
+      });
+      expect(mv.statusCode, mv.body).toBe(200);
+    };
+    try {
+      const res = await call(tok['mvauthor']!, 'POST', `/v1/agents/${id}/publish`, body);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(j(res)).toMatchObject({
+        error: 'approval_insufficient',
+        details: { required: 2, counted: 1 },
+      });
+    } finally {
+      hooks.beforeTreeLock = null;
+    }
+    expect(await versionsOf(id)).toHaveLength(0);
   });
 
   it('a policy tightened after the checks applies', async () => {
@@ -991,6 +1086,66 @@ describe('rollback details', () => {
     expect(back).toMatchObject({ latestVersion: '1.0.0', useCase: 'ops' });
   });
 
+  real(
+    'a tenant move before the tree lock changes which versions a rollback may go back to',
+    async () => {
+      const mk = async (slug: string, parentId: string, policy?: Json) => {
+        const res = await n.req({
+          method: 'POST',
+          url: '/v1/tenants',
+          payload: { slug, name: slug, parentId },
+        });
+        expect(res.statusCode, res.body).toBe(201);
+        const id = j(res).id as string;
+        if (policy) {
+          const pol = await n.req({
+            method: 'PATCH',
+            url: `/v1/tenants/${id}/settings/agent-lifecycle`,
+            payload: policy,
+          });
+          expect(pol.statusCode, pol.body).toBe(200);
+        }
+        return id;
+      };
+      // p1 requires approval only for production use cases, p2 always; the versions are not production
+      await setPolicy({
+        requireApprovalForPublish: 'production-only',
+        productionUseCases: ['prod/**'],
+      });
+      try {
+        const p1 = await mk('rb-p1', orgA);
+        const p2 = await mk('rb-p2', orgA, { requireApprovalForPublish: 'on' });
+        const node = await mk('rb-node', p1);
+        const a = await newAgent(tok['author']!);
+        // an agent of the node with an unapproved v1.0.0 and v1.1.0 (both without a review)
+        await n.ctx.db.update(agents).set({ tenantId: node }).where(eq(agents.id, a.id));
+        await insertVersion(n, a.id, { version: '1.0.0' });
+        await insertVersion(n, a.id, { version: '1.1.0' });
+        hooks.beforeTreeLock = async () => {
+          const mv = await n.req({
+            method: 'POST',
+            url: `/v1/tenants/${node}/move`,
+            payload: { parentId: p2 },
+          });
+          expect(mv.statusCode, mv.body).toBe(200);
+        };
+        try {
+          const res = await n.req({
+            method: 'POST',
+            url: `/v1/agents/${a.id}/versions/1.1.0/deprecate`,
+            headers: { 'x-oax-tenant': node },
+          });
+          expect(res.statusCode, res.body).toBe(409);
+          expect(j(res).error).toBe('rollback_target_unapproved');
+        } finally {
+          hooks.beforeTreeLock = null;
+        }
+      } finally {
+        await resetPolicy();
+      }
+    },
+  );
+
   it('production-only: leaving a production version needs an approved target even if the target is not production', async () => {
     await setPolicy({
       requireApprovalForPublish: 'production-only',
@@ -1021,8 +1176,6 @@ describe('rollback details', () => {
 });
 
 describe('races (real PostgreSQL)', () => {
-  const real = PG_URL ? it : it.skip;
-
   real(
     'a draft saved while the publish runs is never published: the version is the approved digest',
     async () => {
@@ -1086,34 +1239,130 @@ describe('races (real PostgreSQL)', () => {
     expect(row!.status).toBe('published');
   });
 
+  /** Holds a lock of publish on a second connection until `release()`; the SQL takes it. */
+  async function holding(sqlText: string, params: unknown[]) {
+    const c = await db.session!();
+    await c.query('begin');
+    await c.query(sqlText, params);
+    return async () => {
+      await c.query('commit');
+      c.release();
+    };
+  }
+  const pending = async <T>(p: Promise<T>, ms = 1200) => {
+    let done = false;
+    void p.then(() => (done = true));
+    await new Promise((r) => setTimeout(r, ms));
+    return !done;
+  };
+
+  const LOCKS: [string, string][] = [
+    ['the binding lock', 'select pg_advisory_xact_lock(734211, hashtext($1))'],
+    ['the tree lock', 'select pg_advisory_xact_lock(734210, hashtext($1))'],
+    ['the row lock of the agent', 'select 1 from agents where id = $1 for update'],
+  ];
+  for (const [what, sqlText] of LOCKS) {
+    real(`publish waits for ${what} that another connection holds, then publishes`, async () => {
+      const { a, review } = await approved();
+      const release = await holding(sqlText, [what.includes('agent') ? a.id : orgA]);
+      const res = publishReview(tok['author']!, a.id, review);
+      expect(await pending(res)).toBe(true);
+      expect(await versionsOf(a.id)).toHaveLength(0);
+      await release();
+      expect((await res).statusCode).toBe(201);
+    });
+  }
+
   real(
-    'a role revoked while the publish runs: the version has a valid approver or there is none',
+    'a draft saved by another connection while publish waits for the agent row: draft_changed',
     async () => {
-      for (let i = 0; i < 4; i++) {
-        await mkUser(`flip${i}`, ['agent-maintainer']);
-        const a = await newAgent(tok['author']!);
-        const review = await open(tok['author']!, a.id);
-        await decide(tok[`flip${i}`]!, review);
-        const [pub, revoke] = await Promise.all([
-          publishReview(tok['author']!, a.id, review),
-          req(adminA, 'PATCH', `/v1/users/${uid[`flip${i}`]}`, { globalRoles: ['viewer'] }),
-        ]);
-        expect(revoke.statusCode, revoke.body).toBe(200);
-        // whichever came first: a publish that won was decided while the role was still there
-        const versions = await versionsOf(a.id);
-        expect(versions.length).toBe(pub.statusCode === 201 ? 1 : 0);
-        if (pub.statusCode !== 201) expect(j(pub).error).toBe('approval_insufficient');
-        const [binding] = await n.ctx.db
-          .select()
-          .from(tenantRoleBindings)
-          .where(
-            and(
-              eq(tenantRoleBindings.userId, uid[`flip${i}`]!),
-              eq(tenantRoleBindings.role, 'agent-maintainer'),
-            ),
-          );
-        expect(binding).toBeUndefined();
-      }
+      const { a, review } = await approved();
+      const [head] = await n.ctx.db
+        .select()
+        .from(agentDraftRevisions)
+        .where(eq(agentDraftRevisions.id, review.revision.id));
+      const next = source(a.name, '1.0.1');
+      const newId = randomUUID();
+      const c = await db.session!();
+      await c.query('begin');
+      await c.query('select 1 from agents where id = $1 for update', [a.id]);
+      const res = publishReview(tok['author']!, a.id, review);
+      expect(await pending(res)).toBe(true);
+      await c.query(
+        `insert into agent_draft_revisions (id, agent_id, tenant_id, seq, digest, source, author_id, author_kind, parent_id)
+       values ($1, $2, $3, $4, $5, $6, $7, 'user', $8)`,
+        [
+          newId,
+          a.id,
+          head!.tenantId,
+          head!.seq + 1,
+          sourceDigest(next),
+          next,
+          uid['rev2'],
+          head!.id,
+        ],
+      );
+      await c.query('update agents set draft_source = $2, draft_revision_id = $3 where id = $1', [
+        a.id,
+        next,
+        newId,
+      ]);
+      await c.query('commit');
+      c.release();
+      const out = await res;
+      expect(out.statusCode, out.body).toBe(409);
+      expect(j(out).error).toBe('draft_changed');
+      expect(await versionsOf(a.id)).toHaveLength(0);
+    },
+  );
+
+  /**
+   * Deterministic order of two requests that both need the binding lock: connection A holds it, the
+   * first request queues, then the second, then A lets go (advisory locks are granted in queue order).
+   */
+  async function inOrder<R extends { statusCode: number }>(
+    first: () => Promise<R>,
+    second: () => Promise<R>,
+  ) {
+    const release = await holding('select pg_advisory_xact_lock(734211, hashtext($1))', [orgA]);
+    const one = first();
+    expect(await pending(one, 800)).toBe(true);
+    const two = second();
+    expect(await pending(two, 800)).toBe(true);
+    await release();
+    return [await one, await two] as const;
+  }
+
+  real('a role revoked first: the publish that queued behind it is refused', async () => {
+    await mkUser('flipa', ['agent-maintainer']);
+    const a = await newAgent(tok['author']!);
+    const review = await open(tok['author']!, a.id);
+    await decide(tok['flipa']!, review);
+    const [revoke, pub] = await inOrder(
+      () => req(adminA, 'PATCH', `/v1/users/${uid['flipa']}`, { globalRoles: ['viewer'] }),
+      () => publishReview(tok['author']!, a.id, review),
+    );
+    expect(revoke.statusCode).toBe(200);
+    expect(pub.statusCode).toBe(409);
+    expect(j(pub).details.approvals[0].reasons).toEqual(['not_eligible']);
+    expect(await versionsOf(a.id)).toHaveLength(0);
+  });
+
+  real(
+    'a publish first: it commits with the approver still in place, the revoke follows',
+    async () => {
+      await mkUser('flipb', ['agent-maintainer']);
+      const a = await newAgent(tok['author']!);
+      const review = await open(tok['author']!, a.id);
+      await decide(tok['flipb']!, review);
+      const [pub, revoke] = await inOrder(
+        () => publishReview(tok['author']!, a.id, review),
+        () => req(adminA, 'PATCH', `/v1/users/${uid['flipb']}`, { globalRoles: ['viewer'] }),
+      );
+      expect(pub.statusCode).toBe(201);
+      expect(revoke.statusCode).toBe(200);
+      const [v] = await versionsOf(a.id);
+      expect(v!.approvedBy).toEqual([uid['flipb']]);
     },
   );
 });

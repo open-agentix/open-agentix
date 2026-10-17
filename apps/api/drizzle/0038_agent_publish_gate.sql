@@ -7,6 +7,9 @@
 -- * agent_reviews.published_version_id: the version a review ended in (status 'published').
 -- * agent_version_deprecations: append-only record of a deprecated version (and the version the agent
 --   went back to when the deprecated version was the latest one).
+-- * The two CHECK constraints are added NOT VALID and validated afterwards: validating takes only a
+--   SHARE UPDATE EXCLUSIVE lock, so large installations do not hold an ACCESS EXCLUSIVE lock on
+--   agent_reviews / agent_versions for a full scan.
 -- Down path: drizzle/down/0038_agent_publish_gate.down.sql
 CREATE TABLE "agent_version_deprecations" (
 	"version_id" uuid PRIMARY KEY NOT NULL,
@@ -32,8 +35,10 @@ CREATE INDEX "agent_version_deprecations_agent_idx" ON "agent_version_deprecatio
 ALTER TABLE "agent_reviews" ADD CONSTRAINT "agent_reviews_published_version_id_agent_versions_id_fk" FOREIGN KEY ("published_version_id") REFERENCES "public"."agent_versions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agent_versions" ADD CONSTRAINT "agent_versions_review_id_agent_reviews_id_fk" FOREIGN KEY ("review_id") REFERENCES "public"."agent_reviews"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "agent_versions_review_uq" ON "agent_versions" USING btree ("review_id") WHERE "agent_versions"."review_id" is not null;--> statement-breakpoint
-ALTER TABLE "agent_reviews" ADD CONSTRAINT "agent_reviews_published_check" CHECK (("agent_reviews"."status" = 'published') = ("agent_reviews"."published_version_id" is not null));--> statement-breakpoint
-ALTER TABLE "agent_versions" ADD CONSTRAINT "agent_versions_approval_check" CHECK (("agent_versions"."review_id" is null) = ("agent_versions"."approved_by" is null) and ("agent_versions"."approved_by" is null or cardinality("agent_versions"."approved_by") >= 1));
+ALTER TABLE "agent_reviews" ADD CONSTRAINT "agent_reviews_published_check" CHECK (("agent_reviews"."status" = 'published') = ("agent_reviews"."published_version_id" is not null)) NOT VALID;--> statement-breakpoint
+ALTER TABLE "agent_reviews" VALIDATE CONSTRAINT "agent_reviews_published_check";--> statement-breakpoint
+ALTER TABLE "agent_versions" ADD CONSTRAINT "agent_versions_approval_check" CHECK (("agent_versions"."review_id" is null) = ("agent_versions"."approved_by" is null) and ("agent_versions"."approved_by" is null or cardinality("agent_versions"."approved_by") >= 1)) NOT VALID;--> statement-breakpoint
+ALTER TABLE "agent_versions" VALIDATE CONSTRAINT "agent_versions_approval_check";
 --> statement-breakpoint
 -- Deprecations are append-only; oax_forbid_mutation() comes from migration 0001.
 CREATE TRIGGER agent_version_deprecations_append_only BEFORE UPDATE OR DELETE ON agent_version_deprecations FOR EACH ROW EXECUTE FUNCTION oax_forbid_mutation();

@@ -215,7 +215,7 @@ Bedrock uses the AWS default credential chain: on EKS annotate the ServiceAccoun
 | `OAX_DEMO_MODE` | `false` | Seeds the deterministic demo data set on first start (2 tenants, users for all six roles incl. an agent-scoped user, 6 agents incl. dark-factory, hardening and change-gated agents, runs, approvals, costs, verifiable audit chain) and makes the API read-only except sign-in and side-effect-free checks (validate, dry-run, policy evaluation, hardening review, audit verify). Responses carry `x-oax-demo: true`; `GET /v1/settings` reports `demo: true`. Use with the simulated provider only. Helm: `demo.enabled`. |
 | `OAX_DEMO_PASSWORD` | `demo-password-2026` | Shared password of the fake demo users (`admin@example.org`, `engineer@`, `integrator@`, `operator@`, `auditor@`, `viewer@`, `contractor@example.org`). Not a secret. |
 
-`pnpm seed:demo` loads the same data set into an empty database (`--force` to add anyway).
+`OAX_DEMO_MODE=true pnpm seed:demo` loads the same data set into an empty database (`--force` to add anyway).
 Compose (standalone: api, worker, ui, postgres): `docker compose -f docker-compose.demo.yml up --build`.
 
 Fixed scenarios and the optional live model are described in [`demo.md`](demo.md):

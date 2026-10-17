@@ -63,6 +63,13 @@ export interface CommitResult {
 const REFUSAL_AUDIT_WINDOW_MS = 60_000;
 const REFUSAL_AUDIT_MAX_KEYS = 2000;
 
+/** The tenant row as it is now; call it after the tree lock is held. */
+export async function freshNode(tx: Db, id: string) {
+  const [row] = await tx.select().from(tenants).where(eq(tenants.id, id));
+  if (!row) throw notFound('tenant');
+  return row;
+}
+
 export class AgentPublisher {
   private readonly refusedAt = new Map<string, number>();
 
@@ -80,10 +87,13 @@ export class AgentPublisher {
       const tx = t as unknown as Db;
       const [found] = await tx.select().from(agents).where(eq(agents.id, p.agentId));
       if (!found || found.tenantId !== p.principal.tenantId) throw notFound('agent');
-      const [node] = await tx.select().from(tenants).where(eq(tenants.id, found.tenantId));
-      if (!node) throw notFound('tenant');
-      await lockTreeShared(tx, node.rootId);
-      await lockBindings(tx, node.rootId);
+      const [placed] = await tx.select().from(tenants).where(eq(tenants.id, found.tenantId));
+      if (!placed) throw notFound('tenant');
+      await lockTreeShared(tx, placed.rootId);
+      await lockBindings(tx, placed.rootId);
+      // A tenant move holds the tree lock exclusively and changes `path` (the chain whose policies
+      // apply): the node is read again now that no move can commit before this transaction ends.
+      const node = await freshNode(tx, placed.id);
       const agent = await lockAgent(tx, p.agentId);
       const head = await ensureHead(tx, agent, (r) => p.onRevision(tx, agent, r));
       if (head.digest !== p.def.digest)

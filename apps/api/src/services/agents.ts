@@ -813,7 +813,13 @@ export class AgentsService {
    */
   async publishDemoSeed(principal: Principal, id: string): Promise<PublishResult> {
     const [agent] = await this.ctx.db.select().from(agents).where(eq(agents.id, id));
-    if (!agent || demoId('agent', agent.name) !== agent.id || agent.latestVersionId)
+    // Defence in depth: demo mode only (`pnpm seed:demo` needs OAX_DEMO_MODE=true as well).
+    if (
+      !this.ctx.config.demo.enabled ||
+      !agent ||
+      demoId('agent', agent.name) !== agent.id ||
+      agent.latestVersionId
+    )
       throw forbidden('only the demo seed publishes without approval');
     return this.publishWith(principal, id, {}, true);
   }
