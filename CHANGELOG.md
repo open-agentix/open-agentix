@@ -125,7 +125,7 @@ All notable changes to this project are documented here. The format follows
   node without cap gets `OAX_DEV_BUDGET_DEFAULT_USD`; policy and starter are re-checked when a worker
   claims the run and at every model reservation, session and relayed call; development runs use the
   default approver roles and their starter cannot approve them; personal secrets only for the author of
-  the revision that runs; development runs are visible to their starter and administrators. The CSV
+  the revision that runs; development runs and their pending approvals are visible to their starter and administrators (and approvers). The CSV
   export gets `stage` as its last column.
   Left out: the `with-approval` path for personal secrets in published versions. See
   [docs/agent-lifecycle.md](docs/agent-lifecycle.md#development-runs),

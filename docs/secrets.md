@@ -128,7 +128,12 @@ draft names them), when a worker claims the run, at credential issuance
 (`production_credentials_in_draft`, audited as `secret.access_denied`) and on the relay
 (`mcp.relay.refused`, reason `development_credentials`), unless the policy lets drafts use production
 credentials (`allowDraftRuns: on` together with `allowProductionSecretsInDraftRuns`). A connection
-without secrets (`auth: none`) is not affected. Model provider keys are the platform's and are paid from
+without secrets (`auth: none`) is not affected, and neither are things that are not secrets in the
+platform's model: plain (non-secret) headers and environment values, in-memory tools, and URLs that
+trust the network (internal services behind `egress`). **A development run can still reach every
+internal service its `egress` allows and every credential-free connection of the node**; keep production
+systems behind credentials. Runs that execute in the worker process (not in a run node) are checked at
+claim and at model reservations only: a policy tightened mid-run stops them at the next model call. Model provider keys are the platform's and are paid from
 the development budget. Connections get no `usage` field in this slice (a per-connection `usage` is in
 #376); a development run uses the same tool pins as a publish (the draft is expanded with the same
 catalog, so unreviewed tool definitions are refused as at publish, and `OAX_MCP_REQUIRE_TOOL_PIN` applies).

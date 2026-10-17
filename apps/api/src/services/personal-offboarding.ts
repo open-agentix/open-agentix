@@ -51,7 +51,12 @@ export async function offboardPersonalCredentials(
  * person's admission lock first, so a run that is being admitted at this moment either commits
  * before (and is stopped here) or waits and sees the account state.
  */
-export async function stopDevelopmentRuns(tx: Db, userId: string, now: Date): Promise<void> {
+export async function stopDevelopmentRuns(
+  tx: Db,
+  userId: string,
+  now: Date,
+  reason: 'disabled' | 'role_lost' = 'disabled',
+): Promise<void> {
   await tx.execute(sql`select pg_advisory_xact_lock(${DEV_RUN_LOCK_NS}::int, hashtext(${userId}))`);
   // A queued run is cancelled outright; a running one is asked to stop at its next check.
   await tx
@@ -61,7 +66,10 @@ export async function stopDevelopmentRuns(tx: Db, userId: string, now: Date): Pr
       cancelRequested: true,
       finishedAt: now,
       errorCode: 'cancelled',
-      errorMessage: 'the account that started the run was disabled',
+      errorMessage:
+        reason === 'disabled'
+          ? 'the account that started the run was disabled'
+          : 'the person who started the run lost the right to run drafts',
     })
     .where(
       and(eq(runs.stage, 'development'), eq(runs.startedBy, userId), eq(runs.status, 'queued')),

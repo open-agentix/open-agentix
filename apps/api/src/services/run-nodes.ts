@@ -38,7 +38,7 @@ import {
 } from './secret-broker.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
-import type { DevRunGate } from './dev-run-gate.js';
+import { connectionCarriesCredentials, type DevRunGate } from './dev-run-gate.js';
 import {
   appendNodeEvent,
   dispatchTraceContext,
@@ -847,15 +847,23 @@ export class RunNodesService {
     if (run.stage === 'development' && this.devGate) {
       await this.devGate.assertActive(run);
       // Operator secrets and connection secrets are production credentials for a draft.
-      if (legacy.length > 0 && !(await this.devGate.allowsProductionCredentials(run.tenantId))) {
+      // Connections count too: their scoped env refs would pass the `usage` check on their own.
+      const credentialed = configs.filter(connectionCarriesCredentials).map((c) => c.name);
+      if (
+        (legacy.length > 0 || credentialed.length > 0) &&
+        !(await this.devGate.allowsProductionCredentials(run.tenantId))
+      ) {
         await this.auditDenied(
           s,
           run.tenantId,
-          legacy[0]!,
+          legacy[0] ?? credentialed[0]!,
           'production_credentials_in_draft',
           run.stage,
         );
-        return this.deny(s, agentId, 'production_credentials_in_draft', { refs: legacy });
+        return this.deny(s, agentId, 'production_credentials_in_draft', {
+          refs: legacy,
+          connections: credentialed,
+        });
       }
     }
     // Platform secrets (provider keys, event sources, platform connections) never reach a node.

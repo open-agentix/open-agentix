@@ -642,6 +642,7 @@ export class RunsService {
       .where(
         and(
           visibility,
+          this.developmentApprovalFilter(principal),
           eq(approvals.status, status),
           runId ? eq(approvals.runId, runId) : undefined,
           c
@@ -658,6 +659,23 @@ export class RunsService {
   }
 
   /** Like {@link visibility} for approvals, whose agent scope goes through the run. */
+  /**
+   * Approvals of a development run show the arguments of a tool call that may hold what a personal
+   * credential let the run read: only the starter and people who may decide approvals
+   * (`runs:approve`) or administer the node (`settings:write`) see them.
+   */
+  private developmentApprovalFilter(principal: Principal): SQL | undefined {
+    if (hasPermission(principal, 'settings:write') || hasPermission(principal, 'runs:approve'))
+      return undefined;
+    return inArray(
+      approvals.runId,
+      this.ctx.db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(or(ne(runs.stage, 'development'), eq(runs.startedBy, principal.userId))),
+    );
+  }
+
   private approvalVisibility(
     principal: Principal,
     subtree: ResolvedScope | undefined,

@@ -509,7 +509,9 @@ away. The policy is read at every issuance, so tightening it affects runs that a
 The policy is read when a worker claims the run, at every model reservation, node session, credential
 issuance and relayed MCP call, not only at admission. A run that uses operator secrets or credentialed MCP
 connections is refused (`400 production_credentials_in_draft`) unless the policy lets drafts use production
-credentials, see [`secrets.md`](secrets.md). Changing a person's global roles to ones without
+credentials, see [`secrets.md`](secrets.md). Runs that execute in the worker process (not in a run node) are checked at claim and at every model
+reservation, so a tightened policy stops them at their next model call; a run node is also checked at
+every session, credential issuance and relayed call. Changing a person's global roles to ones without
 `agents:write` cancels their queued development runs and asks the running ones to stop.
 
 Limits: a person can have at most three development runs queued or running (`429 dev_run_limit`); a
@@ -525,7 +527,7 @@ are cancelled, running ones are asked to stop.
   resolution are S4 ([`secrets.md`](secrets.md)); development runs and personal secrets in development runs
   are S5 (above). The `with-approval` path for personal secrets in published agents is not part of S5 (a
   follow-up issue lists it).
-- Development runs are visible to their starter and node administrators only; audit entries and the approval inbox are not filtered by that rule yet (#376).
+- Development runs are visible to their starter and node administrators only; pending approvals of a development run (they show the tool-call arguments) are listed only to its starter, to holders of `runs:approve` and to `settings:write` holders. Audit entries, approval counts and deep-link lookups are not filtered by that rule yet (#376). Losing `agents:write` through a team or agent binding (not the global roles) does not cancel queued runs; the claim gate refuses them when a worker picks them up.
 - The connection catalog behind the expansion digest is read just before the locks are taken (a
   connection change is not serialised with publish): a change after that read and before the commit is not
   seen by this publish. **That includes revocations and narrowings**: a connection or tool grant removed,

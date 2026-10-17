@@ -6,7 +6,7 @@ import { handleMockMcpHttp, McpServerConfigSchema, type MockTool } from '@openag
 import type { OutboundDispatcher } from '@openagentix/providers';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { auditLog, runs } from '../src/db/schema.js';
+import { auditLog, connections, runs } from '../src/db/schema.js';
 import { connectionCarriesCredentials } from '../src/services/dev-run-gate.js';
 import { testNode, type TestNode } from './helpers.js';
 
@@ -155,7 +155,7 @@ beforeAll(async () => {
     expect(created.statusCode, created.body).toBe(201);
     const id = created.json().id as string;
     const r = await n.req({ method: 'POST', url: `/v1/connections/${id}/tools/refresh` });
-    if (r.statusCode === 200) {
+    if (r.statusCode === 200 && r.json().snapshot) {
       await n.req({
         method: 'POST',
         url: `/v1/connections/${id}/tool-snapshots/${r.json().snapshot.digest}/approve`,
@@ -166,7 +166,7 @@ beforeAll(async () => {
   const httpConfig = (extra: Json) => ({
     transport: 'streamable-http',
     url: 'https://jira.example.org/mcp',
-    timeoutMs: 1000,
+    timeoutMs: 10_000,
     ...extra,
   });
   await connect('prodhttp', httpConfig({ headerSecrets: { authorization: 'prod-jira-token' } }));
@@ -331,6 +331,67 @@ describe('a claimed run', () => {
     await expect(n.services.control.prepare(runId)).rejects.toMatchObject({
       code: 'production_credentials_in_draft',
     });
+    await finish(runId);
+  });
+});
+
+describe('issuance', () => {
+  it('refuses the scoped environment secrets of a credentialed connection too', async () => {
+    // a stdio connection whose stored config names a scoped secret (the save rules refuse that, so
+    // it is written behind their back): the usage of the secret alone would let it through
+    const sec = await n.req({
+      method: 'POST',
+      url: '/v1/secrets',
+      payload: {
+        scope: 'tenant',
+        name: 'ci-secret',
+        value: 'canary-ci-secret-value',
+        usage: 'any',
+      },
+    });
+    expect(sec.statusCode, sec.body).toBe(201);
+    const created = await n.req({
+      method: 'POST',
+      url: '/v1/connections',
+      payload: {
+        name: 'scopedstdio',
+        scope: 'tenant',
+        config: {
+          transport: 'stdio',
+          command: '/opt/mcp/bin/jira-mcp',
+          envSecrets: { JIRA_TOKEN: 'prod-jira-token' },
+          tools: { get_issue: { access: 'read' } },
+        },
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    await n.ctx.db
+      .update(connections)
+      .set({
+        config: {
+          ...(created.json().config as Record<string, unknown>),
+          envSecrets: { JIRA_TOKEN: 'tenant:ci-secret' },
+        },
+      })
+      .where(eq(connections.id, created.json().id));
+    const id = await agent(tool('scopedstdio'));
+    await loosen();
+    let runId: string;
+    try {
+      runId = (await devRun(id)).json().id;
+    } finally {
+      await reset();
+    }
+    await running(runId);
+    const res = await n.req({
+      method: 'POST',
+      url: `/v1/worker/runs/${runId}/credentials`,
+      token: (await session(runId)).token,
+      payload: { agentId: 'research' },
+    });
+    expect(res.statusCode, res.body).toBe(403);
+    expect(res.body).toContain('production_credentials_in_draft');
+    expect(res.body).not.toContain('canary-ci-secret-value');
     await finish(runId);
   });
 });

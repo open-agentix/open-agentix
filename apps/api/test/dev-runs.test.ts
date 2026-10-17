@@ -993,3 +993,30 @@ describe('who can see a development run', () => {
     await finish(runId);
   });
 });
+
+describe('approvals of a development run are not for every reader', () => {
+  it('shows them to the starter, to administrators and to approvers, not to other readers', async () => {
+    await mkUser('oper', 'dv-a', ['operator']);
+    const a = await newAgent([]);
+    const runId = j(await devRun('author', a)).id as string;
+    await running(runId);
+    const approvalId = await n.services.control.requestApproval(
+      runId,
+      'research',
+      { server: 'jira', tool: 'write_issue', args: { secret: 'derived-from-personal-credential' } },
+      [],
+    );
+    const seen = async (user: string) =>
+      ((await api(tok[user]!, 'GET', '/v1/approvals')).json().items as Json[]).map((r) => r.id);
+    expect(await seen('author')).toContain(approvalId);
+    expect(await seen('dv-a')).toContain(approvalId);
+    expect(await seen('oper')).toContain(approvalId);
+    for (const reader of ['viewer', 'peer', 'rev']) {
+      const list = await api(tok[reader]!, 'GET', '/v1/approvals');
+      expect(list.statusCode, reader).toBe(200);
+      expect(list.body, reader).not.toContain('derived-from-personal-credential');
+      expect(await seen(reader), reader).not.toContain(approvalId);
+    }
+    await finish(runId);
+  });
+});

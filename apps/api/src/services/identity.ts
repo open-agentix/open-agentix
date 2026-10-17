@@ -1162,7 +1162,7 @@ export class IdentityService {
           this.ctx.now(),
         );
       if (rows.length > 0 && patch.globalRoles !== undefined && !mayWriteAgents(patch.globalRoles))
-        await stopDevelopmentRuns(tx as unknown as Db, id, this.ctx.now());
+        await stopDevelopmentRuns(tx as unknown as Db, id, this.ctx.now(), 'role_lost');
       if (rows.length > 0 && patch.globalRoles !== undefined)
         await mirrorGlobalRoles(
           tx as unknown as Db,
