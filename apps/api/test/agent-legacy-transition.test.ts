@@ -21,7 +21,9 @@ let n: TestNode;
 const get = (url: string, token?: string) =>
   n.req({ method: 'GET', url, ...(token ? { token } : {}) });
 
-async function publish(source: string): Promise<{ id: string; res: { json(): any } }> {
+async function publish(
+  source: string,
+): Promise<{ id: string; res: Awaited<ReturnType<TestNode['req']>> }> {
   const created = await n.req({ method: 'POST', url: '/v1/agents', payload: { source } });
   expect(created.statusCode).toBe(201);
   const id = created.json().id as string;
@@ -78,6 +80,51 @@ describe('publish stores the effective AWP manifest next to the version', () => 
       .from(agentVersionAwp)
       .where(sql`${agentVersionAwp.versionId} = ${detail.id}`);
     expect(rows[0]!.manifest).toBeNull();
+  });
+
+  it('serves what is stored, not a fresh mapping: the stored refusal and the stored bytes win', async () => {
+    const source = agentSource('stored-wins', 'team-docs');
+    const def = loadAgentDefinition(source);
+    const created = await n.req({ method: 'POST', url: '/v1/agents', payload: { source } });
+    const agentId = created.json().id as string;
+    const insertVersion = async (version: string) => {
+      const id = randomUUID();
+      await n.ctx.db.insert(agentVersions).values({
+        id,
+        agentId,
+        version,
+        digest: def.digest,
+        source,
+        definition: def as unknown as PublishedDefinition,
+      });
+      return id;
+    };
+    const refused = await insertVersion('1.0.0');
+    await n.ctx.db.insert(agentVersionAwp).values({
+      versionId: refused,
+      agentId,
+      status: 'legacy-unconvertible',
+      findings: [{ code: 'stored_reason', path: 'x', message: 'refused earlier' }],
+      converter: 'awp-export/1',
+    });
+    const res = await get(`/v1/agents/${agentId}/versions/1.0.0/awp`);
+    expect(res.statusCode).toBe(422);
+    expect(res.json().details.findings.map((f: { code: string }) => f.code)).toEqual([
+      'stored_reason',
+    ]);
+    const kept = await insertVersion('1.1.0');
+    const live = JSON.parse((await get(`/v1/agents/${agentId}/versions/1.1.0/awp`)).body);
+    const stored = { ...live, metadata: { ...live.metadata, description: 'stored earlier' } };
+    await n.ctx.db.insert(agentVersionAwp).values({
+      versionId: kept,
+      agentId,
+      status: 'converted',
+      manifest: stored,
+      manifestDigest: 'sha256:' + '0'.repeat(64),
+      converter: 'awp-export/1',
+    });
+    const served = JSON.parse((await get(`/v1/agents/${agentId}/versions/1.1.0/awp`)).body);
+    expect(served.metadata.description).toBe('stored earlier');
   });
 
   it('serves the stored bytes, the same on every call', async () => {
