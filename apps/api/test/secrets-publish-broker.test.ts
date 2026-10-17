@@ -2,14 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { StepCredentials } from '@openagentix/core';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import {
-  auditLog,
-  connections,
-  runNodeSessions,
-  runs,
-  secrets,
-  tenants,
-} from '../src/db/schema.js';
+import { auditLog, runNodeSessions, runs, secrets, tenants } from '../src/db/schema.js';
 import { RUN_TOKEN_SECRET, testNode, type TestNode } from './helpers.js';
 
 /**
