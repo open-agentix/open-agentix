@@ -320,6 +320,12 @@ export function verifyNoWidening(
     const toolEntries = strictObj(permissions.tools, `${at}.permissions.tools`, out);
     for (const [key, raw] of Object.entries(toolEntries)) {
       const entry = obj(raw);
+      // Only booleans mean something to a reader: `"true"` or `1` must not pass for "not allowed".
+      for (const field of ['allow', 'allowAdditionalArgs', ext('allowAdditionalArgs')])
+        if (entry[field] !== undefined && typeof entry[field] !== 'boolean')
+          out.push(
+            finding(`${at}.permissions.tools.${key}.${field}`, `"${field}" must be a boolean`),
+          );
       if (entry.allow === true && !allowed.has(key))
         out.push(
           finding(`${at}.permissions.tools.${key}`, `"${key}" was not granted by the source`),

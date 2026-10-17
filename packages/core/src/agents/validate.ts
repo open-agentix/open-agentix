@@ -245,8 +245,20 @@ export function checkDefinition(
       const key = `${t.server}/${t.tool}`;
       if (grants.has(key)) errors.push({ path, message: `duplicate tool grant "${key}"` });
       grants.add(key);
-      for (const [name, c] of Object.entries(t.args))
+      for (const [name, c] of Object.entries(t.args)) {
         checkConstraint(c, `${path}.args.${name}`, errors);
+        // `pattern` is searched for anywhere in the value, like RegExp.test (not a full match).
+        if (
+          c.pattern !== undefined &&
+          !(c.pattern.startsWith('^') && /(^|[^\\])\$$/.test(c.pattern))
+        )
+          warnings.push({
+            path: `${path}.args.${name}.pattern`,
+            message:
+              'pattern is not anchored: it matches anywhere in the value (a substring); ' +
+              'write ^...$ to match the whole value',
+          });
+      }
       if (
         t.classification &&
         classificationRank(t.classification) < classificationRank(def.classification)
@@ -271,6 +283,14 @@ export function checkDefinition(
           });
       }
     });
+    if ((a.profileGrants ?? []).length > 0 && a.tools.some((t) => t.tool.includes('*')))
+      warnings.push({
+        path: `agents.${i}.tools`,
+        message:
+          'a profile grant gives exact grants without argument constraints; at publish an exact ' +
+          'grant wins over a constrained prefix wildcard for the same tool, so the wildcard limits ' +
+          'do not apply to the tools of the profile',
+      });
     for (const key of Object.keys(a.budget ?? {}) as (keyof NonNullable<typeof a.budget>)[]) {
       const av = a.budget?.[key];
       const pv = def.budget[key];
