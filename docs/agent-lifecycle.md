@@ -56,7 +56,7 @@ When a review is opened and on every decision the server computes the digests an
 | --- | --- |
 | `digest` | SHA-256 of the normalised source (as `agent_versions.digest`) |
 | `expansionDigest` | digest of the concrete grants after profile expansion against the catalog of now: the reviewer approves concrete tools, not profile names that may widen later |
-| `resolutionDigest` | digest of the secret resolution; until slice S4 it covers the sorted secret *names* the steps declare |
+| `resolutionDigest` | digest of the secret resolution (S4): for every credential reference the scope, the **owning node** and the **secret id** it resolves to now (nearest owner, see [`secrets.md`](secrets.md)); a definition with legacy references only keeps the names-only digest |
 | `policyDigest` | digest of the effective lifecycle policy (and, later, the matching agent rules) |
 | base version | what the diff is computed against |
 
@@ -244,8 +244,9 @@ review as a whole; and the outdated threads.
   (read, write or unclassified, which counts as write), the approval flag and the profile each grant
   came from (the **expanded grants**), added, removed and changed tools marked in words, egress hosts,
   secret references by name, budget, classification, runtime, owner and use case. **Secret references
-  carry the scope `legacy` and no owning node until the scoped secret store exists (slice S4)**;
-  inherited and shadowed secrets are not shown because no such data exists. **Agent rules** do not exist
+  are listed by name; their scope and owning node are not rendered in this view yet** (the resolution
+  digest carries them, [`secrets.md`](secrets.md)), so "now resolved from node X instead of node Y" is not
+  shown. **Agent rules** do not exist
   yet (slice S8): the summary says so and lists no requirement. The head is expanded against the
   connection catalog of now, as the expansion digest is; the base is what was stored when it was
   published. The endpoint also returns the part of the effective policy that decides who may approve.
@@ -399,7 +400,8 @@ and the agent row lock, in this order. Under those locks, publish
 | the review is the open review of this agent | `409 review_closed` |
 | `expectedDigest` is the digest of the head revision | `409 draft_changed` |
 | the profile expansion, recomputed from the revision's source against the connection catalog, equals the one each approval bound to | `409 approval_stale`, `details.reason = expansion_changed` |
-| the secret resolution, recomputed likewise, equals the approved one | `409 approval_stale`, `details.reason = secret_resolution_changed` |
+| every scoped secret reference resolves to a secret that can be used in production (checked before the rows above, also where approval is not required) | `422 secret_not_usable` (`details.references[] { ref, reason }`), `422 personal_secret_in_version` |
+| the secret resolution, recomputed likewise, equals the approved one (a secret created later at a nearer node, a deleted secret and a moved chain change it; a rotation does not) | `409 approval_stale`, `details.reason = secret_resolution_changed` |
 | enough approvals still count and no reviewer has an unresolved request for changes | `409 approval_insufficient` with `details.required`, `counted`, `changesRequested` and, per approval, the reasons it does not count (`expired`, `revision_changed`, `not_eligible`, `binding_granted_by_contributor`, `binding_grantor_unknown`, `approver_scope`, ...) |
 | `publishBy: approver-only`: the publisher is one of the approvers | `403 publisher_not_approver` |
 
@@ -414,8 +416,9 @@ relaxes an open review; a stricter one applies at once.
 
 On success the version is inserted **from the revision's source** (never from a value read earlier)
 with the approval record (`agent_versions.review_id`, `approved_by`, `policy_digest`,
-`expansion_digest`, `resolution_digest`, and `secret_resolution`, the secret reference names the source
-declares; names only until slice S4), `agents.latest_version_id` moves, the review is closed as `published`
+`expansion_digest`, `resolution_digest`, and `secret_resolution`, the pins of the secret references the
+source declares: the owning node and secret id of every scoped reference, read once under the same locks
+as the approval check), `agents.latest_version_id` moves, the review is closed as `published`
 (`agent_reviews.published_version_id`) and `agent.published` and `agent.review.closed` are appended in
 the same transaction. Every refusal is audited as `agent.publish.refused { code, review }` (at most one
 entry per agent, user and code and minute). A review approves exactly one version.
@@ -473,8 +476,9 @@ be published again under its number (`409 version_deprecated`).
 
 ## Limits of this slice
 
-- Agent rules are S8; notifications are S13; secret scopes and the concrete secret resolution are S4 (the
-  resolution digest binds the names until then).
+- Agent rules are S8; notifications are S13. Secret scopes, the encrypted store and the concrete secret
+  resolution are S4 ([`secrets.md`](secrets.md)); development runs and personal secrets in published agents
+  are not part of it.
 - The connection catalog behind the expansion digest is read just before the locks are taken (a
   connection change is not serialised with publish): a change after that read and before the commit is not
   seen by this publish. **That includes revocations and narrowings**: a connection or tool grant removed,
@@ -489,9 +493,8 @@ be published again under its number (`409 version_deprecated`).
   makes `OAX_LIFECYCLE_REQUIRE_APPROVAL=on` a floor for root policies and counts authors of unpublished
   drafts in the loosening guard: limit organisation administrators, watch for
   `tenant.lifecycle_policy_changed` entries that loosen `requireApprovalForPublish`.
-- Secret resolution is **names-only** until slice S4: `agent_versions.secret_resolution` records the
-  secret reference names a version declares, and the resolution digest binds those names. Nothing is
-  pinned to a concrete secret yet.
+- Versions published before slice S4 (and every version with legacy references only) record plain names in
+  `agent_versions.secret_resolution`; only scoped references are pinned to a concrete secret.
 - A rollback target that was published under approval is not re-checked against today's approvers: the
   approval was valid when the version was published (the version keeps the record).
 - Run admission sees a deprecation at once on the replica that deprecated; other replicas cache the

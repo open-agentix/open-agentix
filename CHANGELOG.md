@@ -99,6 +99,24 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Scoped secrets and the encrypted secret store (ADR 0017 S4, #247)**. Credentials per team, tenant
+  node and person, stored encrypted (AES-256-GCM, a data key per tenant node wrapped by the KEK, the secret
+  bound as AAD) and **never readable through any API**: `POST /v1/secrets` and `.../rotate` accept a value,
+  nothing returns one (`GET /v1/secrets`, `GET /v1/secrets/{id}`, `POST .../revoke`, `DELETE`, and
+  `GET/PUT /v1/secrets/policy` for `blockInherited`). New permissions `secrets:read` (admin, integrator,
+  agent-developer, agent-maintainer, auditor, pentest) and `secrets:write` (admin, integrator). Steps
+  reference them as `team:<name>`, `tenant:<name>` or `personal:<name>` in `credentials`; unprefixed
+  references keep working unchanged. Tenant secrets inherit down the tree (nearest owner wins;
+  `allowOverride: false`, default on root nodes, gives `422 secret_name_reserved`; `inherit: false` and
+  `blockInherited` narrow). The approval's `resolutionDigest` now binds the owning node and secret id of
+  each scoped reference (definitions without scoped references keep the old digest), publish pins them in
+  `agent_versions.secret_resolution` and refuses an unusable reference (`422 secret_not_usable`,
+  `personal_secret_in_version`), and the credential broker issues exactly the pinned secret, failing closed
+  (`secret_unavailable`, `secret_out_of_chain`, `secret_destination_denied`, ...) when it is revoked, expired,
+  deleted, blocked or off the chain. A second KEK slot (`OAX_MCP_OAUTH_KEK_PREVIOUS*`) and the `db:keys` tool
+  rotate KEKs and data keys; `POST /v1/secrets` with `pointer` imports a pointer to an operator environment
+  secret. Migration `0040_secrets_store` (down script included). See `docs/secrets.md`.
+
 - **Approval is a gate at publish; version deprecation and rollback (ADR 0017 S3, #246)**. In one
   transaction under the tree, binding and agent locks, publish re-checks the draft digest, recomputes the
   profile expansion and the secret resolution from the revision's source, judges every stored approval
