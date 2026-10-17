@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { type Principal, type Role } from '@openagentix/core';
+import { ROLE_PERMISSIONS, type Principal, type Role } from '@openagentix/core';
 import { asc, eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_TENANT_ID,
   agentRoleBindings,
@@ -14,7 +14,7 @@ import {
   tenants,
   users as usersTable,
 } from '../src/db/schema.js';
-import { currentAuthzEpoch } from '../src/services/role-bindings.js';
+import { currentAuthzEpoch, loadRawGrants } from '../src/services/role-bindings.js';
 import { sqlTargets } from './db-targets.js';
 import { testNode, type TestNode } from './helpers.js';
 
@@ -619,6 +619,61 @@ describe.each(sqlTargets)('role restrictions (%s)', (_kind, enabled, open) => {
         cfg.maxRoleRestrictionsPerOrg = was;
         await clear();
       }
+    });
+
+    it('replaces one restriction with another at the organisation cap in a single PUT', async () => {
+      await clear();
+      const cfg = n.ctx.config.tenancy as { maxRoleRestrictionsPerOrg: number };
+      const was = cfg.maxRoleRestrictionsPerOrg;
+      cfg.maxRoleRestrictionsPerOrg = 2;
+      try {
+        const [a, b, c] = ROLE_PERMISSIONS.operator.filter((p) => p.startsWith('runs:'));
+        const first = await put('root-admin', 'org-a', { role: 'operator', permissions: [a, b] });
+        expect(first.statusCode, first.body).toBe(200);
+        // at the cap: one more is refused, a swap (one out, one in) is not growth
+        const grow = await put('root-admin', 'org-a', { role: 'operator', permissions: [a, b, c] });
+        expect(grow.statusCode).toBe(422);
+        const swap = await put('root-admin', 'org-a', { role: 'operator', permissions: [a, c] });
+        expect(swap.statusCode, swap.body).toBe(200);
+        expect((await rows('org-a')).map((r) => r.permission).sort()).toEqual([a, c].sort());
+      } finally {
+        cfg.maxRoleRestrictionsPerOrg = was;
+        await clear();
+      }
+    });
+
+    it('loads no restrictions for a platform operator, but does for an ordinary operator', async () => {
+      await clear();
+      await put('root-admin', 'org-a', { role: 'operator', permissions: ['runs:cancel'] });
+      const load = async (who: string) => {
+        const [u] = await n.ctx.db.select().from(usersTable).where(eq(usersTable.id, uid[who]!));
+        return (await loadRawGrants(n.ctx.db, u!))!.raw;
+      };
+      expect((await load('platform-op')).restrictions).toEqual([]);
+      expect((await load('op-root')).restrictions).toHaveLength(1);
+      await clear();
+    });
+
+    it('is not ready when the stored restrictions cannot be counted on the legacy read path', async () => {
+      await clear();
+      const ready = () => n.req({ method: 'GET', url: '/readyz', token: null });
+      const auth = n.ctx.config.auth as unknown as { allowUnenforcedRestrictions: boolean };
+      const spy = vi
+        .spyOn(n.services.roleRestrictions, 'countUnenforced')
+        .mockRejectedValue(new Error('count failed'));
+      setMode('legacy');
+      try {
+        const r = await ready();
+        expect(r.statusCode).toBe(503);
+        expect(r.json().checks).toMatchObject({ restrictions: false });
+        auth.allowUnenforcedRestrictions = true; // accepting known rows does not accept unknown state
+        expect((await ready()).statusCode).toBe(503);
+      } finally {
+        auth.allowUnenforcedRestrictions = false;
+        spy.mockRestore();
+        setMode('bindings');
+      }
+      expect((await ready()).statusCode).toBe(200);
     });
 
     it('fails readiness while stored restrictions are not enforced, unless accepted', async () => {
