@@ -45,6 +45,11 @@ describe('checkRegexSource', () => {
     ['^(a+)+$', 'unsafe'],
     ['^[a-z]+(-[a-z]+)?$', 'unsafe'], // a quantified group, `?` included, that holds a quantifier
     ['^(a|aa)+$', 'ambiguous-repetition'],
+    ['^((a|a))*$', 'ambiguous-repetition'],
+    ['^(?:(?:a|a))*$', 'ambiguous-repetition'],
+    ['^((a|aa))+$', 'ambiguous-repetition'],
+    ['^((?:a|b))*$', 'ambiguous-repetition'],
+    ['^(x(y|z))+$', 'ambiguous-repetition'],
     ['^(a|a)*$', 'ambiguous-repetition'],
     ['^(x|y){2,}$', 'ambiguous-repetition'],
     ['a'.repeat(1025), 'too-long'],
@@ -67,7 +72,9 @@ describe('argConstraintIssues', () => {
   it('names the rule and the member', () => {
     expect(codes({ pattern: '^a$' })).toEqual(['args.pattern-unbounded@pattern']);
     expect(codes({ pattern: '(', maxLength: 5 })).toEqual(['args.pattern-invalid@pattern']);
-    expect(codes({ deny: ['ok', '(a)\\1'] })).toEqual(['args.pattern-invalid@deny.1']);
+    expect(codes({ deny: ['ok', '(a)\\1'], maxLength: 9 })).toEqual([
+      'args.pattern-invalid@deny.1',
+    ]);
     expect(codes({ type: 'number', pattern: '^a$', maxLength: 3 })).toEqual([
       'args.type-mismatch@',
     ]);
@@ -118,9 +125,9 @@ describe('agents.md argument constraints', () => {
   });
 
   it('applies the regular expression rules to deny patterns too', () => {
-    expect(errors('{ server: s, tool: t, args: { k: { deny: ["a(?!b)"] } } }')).toEqual([
-      expect.objectContaining({ path: 'agents.0.tools.0.args.k.deny.0' }),
-    ]);
+    expect(
+      errors('{ server: s, tool: t, args: { k: { deny: ["a(?!b)"], maxLength: 9 } } }'),
+    ).toEqual([expect.objectContaining({ path: 'agents.0.tools.0.args.k.deny.0' })]);
   });
 
   it('warns that a prefix wildcard is deprecated', () => {
@@ -550,7 +557,10 @@ describe('validator rules for argument constraints (AEP-0002 sections 7.5.5 and 
     [{ pattern: '(', maxLength: 3 }, `args.pattern-invalid ${P}/x-openagentix-args/k/pattern`],
     [{ pattern: '(a)\\1', maxLength: 3 }, `args.pattern-invalid ${P}/x-openagentix-args/k/pattern`],
     [{ pattern: 'a(?=b)', maxLength: 3 }, `args.pattern-invalid ${P}/x-openagentix-args/k/pattern`],
-    [{ deny: ['ok', '^(a+)+$'] }, `args.pattern-invalid ${P}/x-openagentix-args/k/deny/1`],
+    [
+      { deny: ['ok', '^(a+)+$'], maxLength: 9 },
+      `args.pattern-invalid ${P}/x-openagentix-args/k/deny/1`,
+    ],
     [
       { type: 'number', pattern: '^1$', maxLength: 3 },
       `args.type-mismatch ${P}/x-openagentix-args/k`,
@@ -580,7 +590,7 @@ describe('validator rules for argument constraints (AEP-0002 sections 7.5.5 and 
     delete entry['x-openagentix-allowAdditionalArgs'];
     delete (m.metadata as Obj).requiredExtensions;
     Object.assign(entry, {
-      args: { k: { pattern: '^a$' }, j: { deny: ['(a)\\1'] } },
+      args: { k: { pattern: '^a$' }, j: { deny: ['(a)\\1'], maxLength: 9 } },
       maxCalls: 1,
     });
     expect(errors(run(m, { awp: futureSchema() }))).toEqual([
@@ -610,8 +620,8 @@ describe('validator rules for argument constraints (AEP-0002 sections 7.5.5 and 
     delete entry['x-openagentix-args'];
     delete entry['x-openagentix-allowAdditionalArgs'];
     delete (m.metadata as Obj).requiredExtensions;
-    const args: Obj = { many: { deny: Array.from({ length: 65 }, () => 'x') } };
-    for (let i = 0; i < 300; i++) args[`a${i}`] = { type: 'string', deny: ['x'] };
+    const args: Obj = { many: { deny: Array.from({ length: 65 }, () => 'x'), maxLength: 9 } };
+    for (let i = 0; i < 300; i++) args[`a${i}`] = { type: 'string', deny: ['x'], maxLength: 9 };
     entry.args = args;
     expect(errors(run(m, { awp: futureSchema() }))).toEqual([
       `args.limit ${P}/args`,
@@ -826,6 +836,22 @@ describe('verifyNoWidening refuses malformed values at grant positions', () => {
     expect(paths(m)).toEqual(expect.arrayContaining(['spec.agents.0.tools.0.tools']));
   });
 
+  it('refuses allow and allowAdditionalArgs that are not booleans', () => {
+    for (const [field, value] of [
+      ['allow', 'true'],
+      ['allow', 1],
+      ['allowAdditionalArgs', 'yes'],
+      ['x-openagentix-allowAdditionalArgs', 0],
+    ] as const) {
+      const m = manifest();
+      const entry = (permissions(m).tools as Obj)['srv.do_it'] as Obj;
+      entry[field] = value;
+      expect(paths(m), `${field}=${String(value)}`).toContain(
+        `spec.agents.0.permissions.tools.srv.do_it.${field}`,
+      );
+    }
+  });
+
   it('refuses a step of another type, and any step that names an agent the source lacks', () => {
     const m = manifest();
     const steps = (m.spec as Obj).workflow as Obj[];
@@ -833,5 +859,158 @@ describe('verifyNoWidening refuses malformed values at grant positions', () => {
     expect(paths(m)).toEqual(['spec.workflow.1.type', 'spec.workflow.1']);
     steps[1] = { id: 'x', type: 'agent', agent: 'ghost' };
     expect(paths(m)).toEqual(['spec.workflow.1']);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Linear-time matching, bounds and budgets (security review of the first version)
+// ---------------------------------------------------------------------------------------------
+
+describe('patterns cannot block the process', () => {
+  const timed = (fn: () => unknown): number => {
+    const t0 = performance.now();
+    fn();
+    return performance.now() - t0;
+  };
+  // Accepted by every static rule (no nested repetition, no alternation) and still exponential or
+  // high-polynomial in a backtracking engine: 17 s, more than 60 s and more than 30 s there.
+  const HOSTILE: [string, string, string[]][] = [
+    ['[a-z]*[a-z]*!', 'a'.repeat(4000), ['arg_pattern']],
+    ['\\d*\\d*\\d*x', '1'.repeat(1000), ['arg_pattern']],
+    ['\\s*\\s*\\s*$', ' '.repeat(16384), []],
+  ];
+
+  it.each(HOSTILE)(
+    'static rules accept %s, matching takes under 100 ms',
+    (pattern, text, expected) => {
+      expect(checkRegexSource(pattern)).toBeNull();
+      let reasons: string[] = [];
+      const ms = timed(() => {
+        reasons = checkArg('k', text, { required: false, pattern, maxLength: 100_000 }).map(
+          (r) => r.code,
+        );
+      });
+      expect(ms).toBeLessThan(100);
+      expect(reasons).toEqual(expected);
+    },
+  );
+
+  it.each(HOSTILE)('deny %s over many large strings is bounded', (pattern, text) => {
+    const value = Array.from({ length: 4000 }, () => text);
+    let codes: string[] = [];
+    const ms = timed(() => {
+      codes = checkArg('k', value, { required: false, deny: [pattern, pattern, pattern] }).map(
+        (r) => r.code,
+      );
+    });
+    expect(ms).toBeLessThan(1000);
+    expect(codes).toEqual(['arg_denied']); // the work budget is exceeded: fail closed
+  });
+
+  it('a decision that scans more than the work budget is denied, not slowed down', () => {
+    const big = 'a'.repeat(REGEX_INPUT_LIMIT);
+    const value = Array.from({ length: 300 }, () => big);
+    const reasons = checkArg('k', value, { required: false, deny: ['zzz'] });
+    expect(reasons.map((r) => r.code)).toEqual(['arg_denied']);
+    expect(reasons[0]!.message).toMatch(/cannot be checked/);
+    expect(checkArg('k', ['ab', 'cd'], { required: false, deny: ['zzz'] })).toEqual([]);
+  });
+
+  it('refuses a pattern the linear-time engine cannot take, and denies at run time', () => {
+    expect(checkRegexSource('\\1')?.code).toBeDefined();
+    // a stored constraint with a backreference is not run in a backtracking engine
+    const reasons = checkArg('k', 'aa', { required: false, pattern: '(a)\\1', maxLength: 5 });
+    expect(reasons.map((r) => r.code)).toEqual(['arg_pattern']);
+    expect(reasons[0]!.message).toMatch(/cannot be checked/);
+  });
+
+  it('does not repeat the pattern or the value in a reason', () => {
+    const reasons = [
+      ...checkArg('k', 'SECRET-VALUE', { required: false, pattern: '^SECRET-PAT$', maxLength: 50 }),
+      ...checkArg('k', 'SECRET-VALUE', { required: false, deny: ['SECRET-DENY'], maxLength: 50 }),
+      ...checkArg('k', 'SECRET-DENY', { required: false, deny: ['SECRET-DENY'], maxLength: 50 }),
+    ];
+    expect(reasons.map((r) => r.code)).toEqual(['arg_pattern', 'arg_denied']);
+    expect(JSON.stringify(reasons)).not.toMatch(/SECRET/);
+  });
+});
+
+describe('static caps of pattern and deny', () => {
+  const codes = (c: Obj) => argConstraintIssues(c).map((i) => `${i.code}@${i.field}`);
+  it('bounds the matched text to 4096 and requires a bound for deny', () => {
+    expect(codes({ pattern: '^a$', maxLength: 4096 })).toEqual([]);
+    expect(codes({ pattern: '^a$', maxLength: 4097 })).toEqual(['args.pattern-unbounded@pattern']);
+    expect(codes({ deny: ['x'] })).toEqual(['args.pattern-unbounded@deny']);
+    expect(codes({ deny: ['x'], maxLength: 99999 })).toEqual(['args.pattern-unbounded@deny']);
+    expect(codes({ deny: ['x'], maxLength: 10 })).toEqual([]);
+  });
+  it('allows at most 64 deny patterns', () => {
+    const deny = Array.from({ length: 65 }, () => 'x');
+    expect(codes({ deny, maxLength: 10 })).toEqual(['args.limit@deny']);
+    expect(codes({ deny: deny.slice(1), maxLength: 10 })).toEqual([]);
+  });
+});
+
+describe('policy-wide forbidden patterns', () => {
+  const bundle = (pattern: string) => ({
+    forbiddenTools: [],
+    forbiddenArgPatterns: [{ pattern, reason: 'no' }],
+    requireApprovalTools: [],
+  });
+  const run = (args: unknown, pattern = 'rm\\s+-rf') =>
+    evaluateToolCall(
+      { server: 's', tool: 't', args: args as Record<string, unknown> },
+      {
+        definition: { classification: 'internal' },
+        agent: { id: 'a', tools: [grant({ server: 's', tool: 't', allowAdditionalArgs: true })] },
+        bundles: [bundle(pattern)],
+      },
+    );
+
+  it('matches case-insensitively and denies a hit', () => {
+    expect(run({ x: 'please RM  -rf /' }).effect).toBe('deny');
+    expect(run({ x: 'fine' }).effect).toBe('allow');
+  });
+  it('denies a value too deep or too long to inspect instead of letting it pass', () => {
+    let deep: unknown = 'rm -rf';
+    for (let i = 0; i < 40; i++) deep = [deep];
+    expect(run({ x: deep }).effect).toBe('deny');
+    expect(run({ x: 'a'.repeat(REGEX_INPUT_LIMIT + 1) }).effect).toBe('deny');
+  });
+  it('denies when the pattern cannot run, and stays fast on a hostile one', () => {
+    expect(run({ x: 'aa' }, '(a)\\1').effect).toBe('deny');
+    const t0 = performance.now();
+    expect(run({ x: 'a'.repeat(4000) }, '[a-z]*[a-z]*!').effect).toBe('allow');
+    expect(performance.now() - t0).toBeLessThan(100);
+  });
+});
+
+describe('reasons carry no caller text', () => {
+  it('does not repeat the name of an undeclared argument', () => {
+    const name = 'sk-live-0123456789abcdef-SECRET';
+    const d = decide({ server: 's', tool: 't', args: { ok: { type: 'string' } } }, { [name]: 'v' });
+    expect(d.reasons.map((r) => r.code)).toEqual(['arg_unknown']);
+    expect(JSON.stringify(d.reasons)).not.toContain('SECRET');
+  });
+});
+
+describe('agents.md warnings', () => {
+  it('warns about an unanchored pattern and not about an anchored one', () => {
+    const w = (p: string) =>
+      validateAgentSource(
+        fm(`{ server: s, tool: t, args: { k: { pattern: "${p}", maxLength: 9 } } }`),
+      ).warnings.map((x) => x.message);
+    expect(w('SEC-1').join()).toMatch(/not anchored.*substring/);
+    expect(w('^SEC-1').join()).toMatch(/not anchored/);
+    expect(w('SEC-1$').join()).toMatch(/not anchored/);
+    expect(w('^SEC-[0-9]+$').join()).not.toMatch(/not anchored/);
+  });
+  it('warns when a profile grant can override the limits of a prefix wildcard', () => {
+    const src = fm('{ server: s, tool: "get_*", args: { k: { type: string } } }').replace(
+      '      - { server',
+      '      - { server: s, profile: read }\n      - { server',
+    );
+    const r = validateAgentSource(src);
+    expect(r.warnings.map((x) => x.message).join('\n')).toMatch(/profile grant gives exact grants/);
   });
 });

@@ -52,6 +52,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- **Patterns are matched in linear time (AWP-7, #261)**: `pattern`, `deny` and policy-wide
+  `forbiddenArgPatterns` ran in the backtracking `RegExp`; patterns that pass every syntax rule
+  (`[a-z]*[a-z]*!`: 17 s on 4000 characters, `\d*\d*\d*x`: over 60 s on 1000) could block the shared API
+  process. They now run on `re2js` 2.8.6 (pure JavaScript RE2 port, exact version, MIT, no dependencies, no
+  install scripts, no native build; new dependency of `@openagentix/core`), with a work budget per decision
+  (4,000,000 characters, then deny), a string limit of 16384 units, `maxLength` of at most 4096 required for
+  `pattern` and `deny`, at most 64 `deny` patterns, and fail closed for values too deep or large. The check
+  for a repeated alternation now sees nested groups (`((a|a))*`). Policy-wide patterns no longer stop at
+  depth 32. Policy bundles are validated with the same rules when written. The reason `arg_unknown` no
+  longer repeats the argument name, and `arg_pattern` / `arg_denied` no longer repeat the pattern.
+  Patterns are unanchored (substring match); validation warns when a `pattern` has no `^...$`. The
+  no-widening check refuses an `allow` / `allowAdditionalArgs` that is not a boolean.
 - **Argument checks of the policy engine fail closed (AWP-7, #261)**: a bound that does not fit the type
   of the value (`minimum` on a string, `maxItems` on a non-array, `maxLength`/`pattern` on a number) used to
   be skipped and now denies; arguments that are not an object are denied; an argument named like an

@@ -202,18 +202,20 @@ bump that brings AEP-0002 is tracked in a follow-up issue.
 **Rules that apply to every constraint** (authoring in `agents.md`, validation of AWP manifests, and the
 exporter share one implementation, `arg-rules.ts`). They are the rule names of the AEP's schema changes:
 
-- `args.pattern-invalid`: a `pattern` or `deny` entry must compile (ECMA-262, Unicode mode), must not use a
-  backreference or lookaround, and must not quantify (including with `?`) a group that contains a
-  quantifier, or repeat a group that contains an alternation (`(a+)+`, `(x(y+))?`, `(a|aa)*`). This is a conservative syntactic check, **not a proof of linear time**: the JavaScript
-  engine backtracks. Every pattern is therefore also bounded by its input (next rule).
-- `args.pattern-unbounded`: a `pattern` needs a `maxLength`. At run time a `pattern` or `deny` expression is
-  never run against a string longer than `maxLength` (the call is denied) or longer than
-  `REGEX_INPUT_LIMIT` (16384 UTF-16 units, the runtime's argument size limit for `deny`).
+- `args.pattern-invalid`: a `pattern` or `deny` entry must compile (ECMA-262, Unicode mode) and be accepted by
+  the linear-time matcher, must not use a backreference or lookaround, must not quantify (including with `?`)
+  a group that contains a quantifier, and must not repeat a group that contains an alternation at any depth
+  (`(a+)+`, `(x(y+))?`, `(a|aa)*`, `((a|a))*`). These are conservative syntax checks, **not proofs**: the
+  security property comes from the matcher (below), not from them.
+- `args.pattern-unbounded`: a `pattern` needs a `maxLength` of at most 4096, and so do `deny` patterns (they run
+  against the value). At run time no expression is run against a string longer than `maxLength` (the call is
+  denied) or longer than `REGEX_INPUT_LIMIT` (16384 UTF-16 units).
 - `args.type-mismatch`: `pattern`, `minLength`, `maxLength` need type `string`, `minimum`/`maximum` a numeric
   type, `maxItems` an array.
 - `args.range`: `minimum > maximum`, `minLength > maxLength`.
 - `args.with-deny` (AWP manifests): `args` or a call limit on an entry with `allow: false`.
-- `args.limit` (AWP manifests): more than 256 constrained arguments or 64 `deny` patterns on one entry.
+- `args.limit`: more than 64 `deny` patterns on one argument (also in `agents.md`); in manifests also more than
+  256 constrained arguments on one entry.
 
 The path of a finding in a manifest is the member that breaks the rule, for example
 `/spec/agents/0/permissions/tools/jira.get_issue/x-openagentix-args/key/pattern`. The AEP's invalid
@@ -239,6 +241,18 @@ A value of the wrong type at a position that can carry a grant (`permissions.too
 `permissions.secrets` or `allowHosts` as a string, a step of another type, a step naming an agent the
 source lacks) is a `grant_widened` finding, never read as "empty".
 
+**Matching is linear-time.** `pattern`, `deny` and the policy-wide `forbiddenArgPatterns` are matched with
+[`re2js`](https://github.com/le0pard/re2js) (pure JavaScript port of RE2, pinned to an exact version, MIT, no
+dependencies, no install scripts, no native code), never with the backtracking `RegExp`. A syntax check cannot
+exclude every slow pattern (`[a-z]*[a-z]*!` took 17 s on 4000 characters in `RegExp`; the tests assert under
+100 ms). RE2 has no backreferences or lookaround, which AEP-0002 forbids anyway. Independent of the engine:
+a string above 16384 units is denied, a decision may scan at most 4,000,000 characters with all its
+expressions together (`REGEX_WORK_BUDGET`; more denies, fail closed), a `deny` rule that cannot inspect the whole
+value denies, and a pattern the matcher cannot take (a stored constraint of an older version) denies.
+**Patterns are unanchored**: a `pattern` matches when it is found anywhere in the value (substring, like
+`RegExp.test`); write `^...$` to match the whole value. Validation warns about an unanchored `pattern`.
+Policy bundles are checked with the same rules when they are written (`POST/PUT /v1/policies`).
+
 **Differences from the AEP text** (not conformance statements):
 
 1. One grant decides a call (an exact grant wins over a wildcard of an older version); AEP rule 3 asks for
@@ -247,7 +261,8 @@ source lacks) is a `grant_widened` finding, never read as "empty".
    Policy bundles (`forbiddenArgPatterns`) apply in addition to the grant, as AEP rule 2 asks.
 2. The call limit is `maxCallsPerRun`: it counts allowed calls of the run (all steps), denied calls do not
    count, and a reached limit is the reason `call_limit` (the AEP names `budget`).
-3. Patterns are stricter than the AEP (nested repetition and alternation under repetition are refused).
+3. Patterns are stricter than the AEP (nested repetition and alternation under repetition are refused; `deny`
+   needs `maxLength`; at most 64 `deny` patterns).
 4. Nested argument paths and policy-wide forbidden patterns (AEP open questions 1 and 3) are not supported.
 
 **Action groups, not prefix wildcards (D4).** Publish **replaces** a prefix wildcard grant (`get_*`, `*`) in

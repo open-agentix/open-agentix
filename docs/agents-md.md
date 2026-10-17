@@ -39,6 +39,11 @@ A tool grant (`agents[].tools[]` with `server` and `tool`) decides one tool. Eve
 | `maxCallsPerRun` | Allowed calls of this tool in one run (all steps); denied calls do not count; a reached limit denies with `call_limit` |
 | `approval`, `classification` | Human approval; highest data class the tool may receive |
 
+A `pattern` matches when it is found **anywhere** in the value (unanchored, a substring match): write
+`^...$` to match the whole value (validation warns when a `pattern` is not anchored). `pattern` and `deny` need
+`maxLength` of at most 4096, at most 64 `deny` patterns per argument; matching is linear-time (RE2 semantics:
+no backreferences, no lookaround) and bounded in work per call.
+
 Checked at validate and publish: every `pattern` and `deny` entry must compile and must not use a
 backreference, a lookaround, or a repeated group that contains a repetition or an alternation
 (`(a+)+`, `(a|aa)*`); a `pattern` needs `maxLength`; `pattern`/`minLength`/`maxLength` need type `string`,
