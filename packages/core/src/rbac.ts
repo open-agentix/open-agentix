@@ -57,6 +57,8 @@ export const PERMISSIONS = [
   'tokens:write',
   'settings:read',
   'settings:write',
+  'secrets:read',
+  'secrets:write',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -80,6 +82,7 @@ const AGENT_DEVELOPER_PERMISSIONS: readonly Permission[] = [
   'policies:read',
   'tokens:read',
   'tokens:write',
+  'secrets:read',
 ];
 
 export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
@@ -96,6 +99,8 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     'policies:read',
     'tokens:read',
     'tokens:write',
+    'secrets:read',
+    'secrets:write',
   ],
   operator: [
     ...READ_BASICS,
@@ -118,6 +123,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     'sources:read',
     'users:read',
     'settings:read',
+    'secrets:read',
   ],
   viewer: READ_BASICS,
   pentest: [
@@ -130,6 +136,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
     'users:read',
     'tokens:read',
     'settings:read',
+    'secrets:read',
   ],
 };
 
