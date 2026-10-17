@@ -1,3 +1,4 @@
+import { toAwpWhen } from './when-awp.js';
 import {
   EXTENSION_PREFIX,
   type ExportFinding,
@@ -40,6 +41,11 @@ export class ExportContext {
   readonly findings: ExportFinding[] = [];
   private readonly uses: CriticalUse[] = [];
 
+  /** @param stepWhen the pinned schema defines the core step field `when` (AEP-0001). */
+  constructor(private readonly stepWhen = false) {
+    // Writes happen through the methods below.
+  }
+
   refuse(code: ExportFindingCode, path: string, message: string): void {
     this.findings.push({ code, path, message });
   }
@@ -48,6 +54,21 @@ export class ExportContext {
   critical(target: JsonObject, field: CriticalField, path: string, value: JsonValue): void {
     this.uses.push({ field, path });
     target[CRITICAL_EXTENSIONS[field]] = value;
+  }
+
+  /**
+   * Writes the condition of a step in the AEP-0001 grammar: as the core field `when` when the pinned
+   * schema has it, otherwise as the critical extension `x-openagentix-when`. A condition that cannot
+   * be mapped refuses the export; it is never dropped and never written with another meaning.
+   */
+  condition(target: JsonObject, source: string, path: string, hasEvent: boolean): void {
+    const mapped = toAwpWhen(source, hasEvent);
+    if (!mapped.ok) {
+      this.refuse('condition_not_representable', path, mapped.reason);
+      return;
+    }
+    if (this.stepWhen) target.when = mapped.expression;
+    else this.critical(target, 'when', path, mapped.expression);
   }
 
   /** Records a critical extension that is merged into an object written elsewhere. */

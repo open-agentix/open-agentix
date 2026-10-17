@@ -234,7 +234,8 @@ export function stepAuditEntry(
   if (step.kind === 'condition' && step.status === 'skipped') {
     return {
       action: 'step.skipped',
-      payload: { agentId: step.agentId, when: str(out.when) },
+      // `reason` is the AEP-0001 skip reason; `agentId` is the step id, `when` the expression text.
+      payload: { agentId: step.agentId, when: str(out.when), reason: 'condition' },
     };
   }
   if (step.kind === 'condition' && step.status === 'error') {

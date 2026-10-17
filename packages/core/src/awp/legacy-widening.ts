@@ -52,7 +52,7 @@ const ALLOWED = {
   network: set('egress', 'allowHosts'),
   toolPermission: set('allow'),
   source: set('type', 'server', 'tools'),
-  step: set('id', 'type', 'agent', 'outputs', 'dependsOn', 'task'),
+  step: set('id', 'type', 'agent', 'outputs', 'dependsOn', 'task', 'when'),
   approval: set('requiredFor', 'approvers', 'timeout', 'onTimeout'),
   secret: set('name', 'source', 'scope', 'key'),
 } as const;
@@ -213,6 +213,20 @@ export function verifyNoWidening(def: PublishedDefinition, manifest: JsonObject)
   });
   arr(spec.workflow).forEach((raw, i) => {
     const step = obj(raw);
+    // A condition only restricts a step: dropping it would run a step the source skips.
+    const condition = sourceAgents.get(String(step.agent))?.when;
+    if (
+      step.type === 'agent' &&
+      condition !== undefined &&
+      typeof step.when !== 'string' &&
+      typeof step[`${EXTENSION_PREFIX}when`] !== 'string'
+    )
+      out.push(
+        finding(
+          `spec.workflow.${i}`,
+          `the condition of agent "${String(step.agent)}" is missing from its step`,
+        ),
+      );
     if (step.type === 'agent' && !sourceAgents.has(String(step.agent)))
       out.push(
         finding(

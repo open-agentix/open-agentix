@@ -73,6 +73,11 @@ mismatch and a non-boolean result are evaluation errors that fail the run; they 
   lists the failed keywords and paths (never the values); a second violation fails the run. Steps
   run by an external harness (Claude Code) cannot be asked again, so `retry` behaves like `fail`
   there.
+- **Conditions only restrict.** A false `when` skips the step and grants nothing; a true one does not
+  bypass tool grants, policies or approvals of the step. Evaluation is done by the runtime with a
+  restricted evaluator, never by a model, and an evaluation error fails the run (`condition_error`)
+  instead of skipping or running the step. How `when` is exported to AWP (draft AEP-0001) is described in
+  [awp.md](awp.md#step-conditions-when-aep-0001).
 - **Skipped steps** have no output: `exists(steps.<id>.output)` is false for later steps and the run
   can still succeed.
 - **Validation** uses ajv 8 in strict mode with the subset above: no remote references, no formats,
@@ -88,7 +93,7 @@ mismatch and a non-boolean result are evaluation errors that fail the run; they 
 
 | Audit action | Payload (never contains the offending values) |
 | --- | --- |
-| `step.skipped` | `{ agentId, when }` |
+| `step.skipped` | `{ agentId, when, reason: "condition" }` (`when` is the expression text; the values it read are never recorded) |
 | `condition.error` | `{ agentId, when, reason }` (the reason names paths and types only) |
 | `handover.invalid` | `{ agentId, direction, attempt, schemaDigest, errors: [{ instancePath, keyword, schemaPath }] }` |
 | `handover.retry` | same payload, `attempt: 2` |

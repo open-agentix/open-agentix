@@ -14,10 +14,12 @@ export const EXTENSION_PREFIX = 'x-openagentix-';
 /**
  * What the pinned AWP version offers. `requiredExtensions` is AEP-0011 (draft, not part of
  * `v1alpha1`): while it is `false`, a manifest with a critical extension is refused (decision D3).
- * `packages/core/test/awp-export-pin.test.ts` fails when the vendored schema disagrees, so a pin
- * upgrade cannot silently change what the exporter does.
+ * `stepWhen` is AEP-0001 (draft): the core step field `when`. While it is `false` a condition is
+ * written as the critical extension `x-openagentix-when`; when it is `true` it is written as `when`
+ * and is no longer an extension. `packages/core/test/awp-export-pin.test.ts` fails when the vendored
+ * schema disagrees, so a pin upgrade cannot silently change what the exporter does.
  */
-export const PINNED_AWP_FEATURES = { requiredExtensions: false } as const;
+export const PINNED_AWP_FEATURES = { requiredExtensions: false, stepWhen: false } as const;
 
 export type JsonValue =
   null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
@@ -37,6 +39,7 @@ export type ExportFindingCode =
   | 'label_not_representable'
   | 'secret_not_representable'
   | 'pipeline_not_representable'
+  | 'condition_not_representable'
   | 'unknown_field'
   | 'grant_widened'
   | 'conversion_error'
@@ -61,6 +64,8 @@ export interface ExportOptions {
   ownerTeam: string | null | undefined;
   /** Defaults to `PINNED_AWP_FEATURES.requiredExtensions`; overridable for tests only. */
   requiredExtensionsSupported?: boolean;
+  /** Defaults to `PINNED_AWP_FEATURES.stepWhen`; overridable for tests only (AEP-0001). */
+  stepWhenSupported?: boolean;
 }
 
 export type ExportResult =

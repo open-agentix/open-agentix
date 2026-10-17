@@ -42,7 +42,7 @@ const TABLE: Row[] = [
     patch: (o) => (agent0(o).when = 'steps.x.output.ok == true'),
     path: 'agents.0.when',
     home: ['spec', 'workflow', 0, 'x-openagentix-when'],
-    value: 'steps.x.output.ok == true',
+    value: 'steps.x.outputs.result.ok == true',
   },
   {
     field: 'input',

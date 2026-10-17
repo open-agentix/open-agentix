@@ -54,13 +54,18 @@ export interface TriggerExport {
   hasEvent: boolean;
 }
 
+/** True when an external event (webhook, mail, Kafka) starts the run. */
+export function hasEventTrigger(def: PublishedDefinition): boolean {
+  return (def.triggers ?? []).some((t) => ['webhook', 'mail', 'kafka'].includes(t.type));
+}
+
 export function exportTriggers(ctx: ExportContext, def: PublishedDefinition): TriggerExport {
   const source = def.triggers ?? [{ type: 'manual' as const }];
   const triggers = source.flatMap((t, i): JsonObject[] => {
     const exported = exportTrigger(ctx, t, `triggers.${i}`);
     return exported ? [exported] : [];
   });
-  return { triggers, hasEvent: source.some((t) => ['webhook', 'mail', 'kafka'].includes(t.type)) };
+  return { triggers, hasEvent: hasEventTrigger(def) };
 }
 
 /**

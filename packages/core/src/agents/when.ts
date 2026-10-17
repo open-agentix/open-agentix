@@ -31,11 +31,20 @@ export const WHEN_LIMITS = {
 export type WhenLiteral = string | number | boolean | null;
 export type CompareOp = '==' | '!=' | '<' | '<=' | '>' | '>=' | 'in';
 
+/**
+ * `agents`: the `agents.md` grammar (`steps.<id>.output`, `event`). `awp`: the grammar of AEP-0001
+ * section 3.10 (`inputs.<name>`, `steps.<id>.outputs.<name>`, `event`, `execution.environment`,
+ * double-quoted JSON strings only). The evaluator only runs the `agents` dialect.
+ */
+export type WhenDialect = 'agents' | 'awp';
+
 export interface WhenPath {
   type: 'path';
-  root: 'event' | 'step';
+  root: 'event' | 'step' | 'input' | 'execution';
   /** Step id when `root` is `step` (`steps.<id>.output...`). */
   step?: string;
+  /** `awp` only: the input name, the declared output name of the step, or `environment`. */
+  name?: string;
   /** Segments after `event` or after `steps.<id>.output`. */
   segments: (string | number)[];
 }
@@ -67,14 +76,45 @@ const NAME = /[A-Za-z_][A-Za-z0-9_-]*/y;
 const NUMBER = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
 const STEP_ID = /^[a-z][a-z0-9-]{0,62}$/;
 
-function fail(message: string, at?: number): never {
-  throw new OaxError(
-    'when_invalid',
-    at === undefined ? message : `${message} (at position ${at + 1})`,
-  );
+/** A condition that does not parse; `limit` is true when it exceeds one of {@link WHEN_LIMITS}. */
+export class WhenError extends OaxError {
+  readonly limit: boolean;
+
+  constructor(message: string, limit: boolean) {
+    super('when_invalid', message);
+    this.limit = limit;
+  }
 }
 
-function tokenize(src: string): Token[] {
+function fail(message: string, at?: number, limit = false): never {
+  throw new WhenError(at === undefined ? message : `${message} (at position ${at + 1})`, limit);
+}
+
+const JSON_SIMPLE_ESCAPES: Readonly<Record<string, string>> = {
+  '"': '"',
+  '\\': '\\',
+  '/': '/',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+};
+
+/** One JSON string escape at `src[i]` (a backslash); `null` when it is not valid JSON. */
+function jsonEscape(src: string, i: number): { text: string; length: number } | null {
+  const next = src[i + 1];
+  if (next !== undefined && Object.hasOwn(JSON_SIMPLE_ESCAPES, next))
+    return { text: JSON_SIMPLE_ESCAPES[next] as string, length: 2 };
+  if (next === 'u') {
+    const hex = src.slice(i + 2, i + 6);
+    if (/^[0-9a-fA-F]{4}$/.test(hex))
+      return { text: String.fromCharCode(Number.parseInt(hex, 16)), length: 6 };
+  }
+  return null;
+}
+
+function tokenize(src: string, dialect: WhenDialect): Token[] {
   const tokens: Token[] = [];
   let i = 0;
   while (i < src.length) {
@@ -84,8 +124,8 @@ function tokenize(src: string): Token[] {
       continue;
     }
     if (tokens.length >= WHEN_LIMITS.maxTokens)
-      fail(`too many tokens (max. ${WHEN_LIMITS.maxTokens})`);
-    if (c === '"' || c === "'") {
+      fail(`too many tokens (max. ${WHEN_LIMITS.maxTokens})`, undefined, true);
+    if (c === '"' || (c === "'" && dialect === 'agents')) {
       const start = i;
       let value = '';
       i++;
@@ -95,17 +135,25 @@ function tokenize(src: string): Token[] {
         if (ch === c) break;
         if (ch === '\\') {
           const next = src[i + 1];
+          if (dialect === 'awp') {
+            const esc = jsonEscape(src, i);
+            if (esc === null) fail('invalid escape', i);
+            value += esc.text;
+            i += esc.length;
+            continue;
+          }
           if (next !== '\\' && next !== '"' && next !== "'") fail('invalid escape', i);
           value += next;
           i += 2;
           continue;
         }
+        if (dialect === 'awp' && ch < ' ') fail('control character in a string', i);
         value += ch;
         i++;
       }
       i++;
       if (value.length > WHEN_LIMITS.maxStringLength)
-        fail(`string longer than ${WHEN_LIMITS.maxStringLength} characters`, start);
+        fail(`string longer than ${WHEN_LIMITS.maxStringLength} characters`, start, true);
       tokens.push({ t: 'str', v: value, at: start });
       continue;
     }
@@ -137,7 +185,10 @@ class Parser {
   private pos = 0;
   private depth = 0;
 
-  constructor(private readonly tokens: Token[]) {}
+  constructor(
+    private readonly tokens: Token[],
+    private readonly dialect: WhenDialect,
+  ) {}
 
   parse(): WhenNode {
     if (this.tokens.length === 0) fail('empty condition');
@@ -164,7 +215,7 @@ class Parser {
 
   private enter(at: number): void {
     if (++this.depth > WHEN_LIMITS.maxDepth)
-      fail(`nesting deeper than ${WHEN_LIMITS.maxDepth}`, at);
+      fail(`nesting deeper than ${WHEN_LIMITS.maxDepth}`, at, true);
   }
 
   private or(): WhenNode {
@@ -279,7 +330,7 @@ class Parser {
       else fail('lists may only contain literals', t?.at ?? open.at);
       this.pos++;
       if (items.length > WHEN_LIMITS.maxListItems)
-        fail(`list longer than ${WHEN_LIMITS.maxListItems} items`, open.at);
+        fail(`list longer than ${WHEN_LIMITS.maxListItems} items`, open.at, true);
       if (this.isOp(',')) {
         this.pos++;
         continue;
@@ -303,10 +354,41 @@ class Parser {
       this.pos++;
       this.expectOp('.');
       const out = this.peek();
-      if (!out || !isName(out, 'output'))
-        fail('only "steps.<id>.output" can be read', out?.at ?? head.at);
+      if (this.dialect === 'awp') {
+        if (!out || !isName(out, 'outputs'))
+          fail('only "steps.<id>.outputs.<name>" can be read', out?.at ?? head.at);
+        this.pos++;
+        this.expectOp('.');
+        const name = this.peek();
+        if (name?.t !== 'name') fail('expected an output name', name?.at ?? head.at);
+        if (FORBIDDEN_KEYS.has(name.v)) fail(`field "${name.v}" is not allowed`, name.at);
+        this.pos++;
+        node = { type: 'path', root: 'step', step: id.v, name: name.v, segments: [] };
+      } else {
+        if (!out || !isName(out, 'output'))
+          fail('only "steps.<id>.output" can be read', out?.at ?? head.at);
+        this.pos++;
+        node = { type: 'path', root: 'step', step: id.v, segments: [] };
+      }
+    } else if (this.dialect === 'awp' && (head.v === 'inputs' || head.v === 'execution')) {
+      this.expectOp('.');
+      const name = this.peek();
+      if (name?.t !== 'name') fail('expected a name', name?.at ?? head.at);
+      if (head.v === 'execution' && name.v !== 'environment')
+        fail('only "execution.environment" can be read', name.at);
+      if (FORBIDDEN_KEYS.has(name.v)) fail(`field "${name.v}" is not allowed`, name.at);
       this.pos++;
-      node = { type: 'path', root: 'step', step: id.v, segments: [] };
+      node = {
+        type: 'path',
+        root: head.v === 'inputs' ? 'input' : 'execution',
+        name: name.v,
+        segments: [],
+      };
+    } else if (this.dialect === 'awp') {
+      fail(
+        `unknown root "${head.v}" (use "inputs.<name>", "steps.<id>.outputs.<name>", "event" or "execution.environment")`,
+        head.at,
+      );
     } else {
       fail(`unknown root "${head.v}" (use "event" or "steps.<id>.output")`, head.at);
     }
@@ -327,7 +409,11 @@ class Parser {
           idx.v < 0 ||
           idx.v > WHEN_LIMITS.maxIndex
         ) {
-          fail('expected an index (0..10000)', idx?.at ?? head.at);
+          fail(
+            'expected an index (0..10000)',
+            idx?.at ?? head.at,
+            idx?.t === 'num' && Number.isInteger(idx.v) && idx.v > WHEN_LIMITS.maxIndex,
+          );
         }
         node.segments.push(idx.v);
         this.pos++;
@@ -336,7 +422,7 @@ class Parser {
         break;
       }
       if (node.segments.length > WHEN_LIMITS.maxPathSegments)
-        fail(`path longer than ${WHEN_LIMITS.maxPathSegments} segments`, head.at);
+        fail(`path longer than ${WHEN_LIMITS.maxPathSegments} segments`, head.at, true);
     }
     return node;
   }
@@ -347,10 +433,10 @@ function isName(t: Token, v: string): boolean {
 }
 
 /** Parses a `when` condition into an AST. Throws `OaxError('when_invalid')`. */
-export function parseWhen(source: string): WhenNode {
+export function parseWhen(source: string, dialect: WhenDialect = 'agents'): WhenNode {
   if (source.length > WHEN_LIMITS.maxLength)
-    fail(`condition longer than ${WHEN_LIMITS.maxLength} characters`);
-  return new Parser(tokenize(source)).parse();
+    fail(`condition longer than ${WHEN_LIMITS.maxLength} characters`, undefined, true);
+  return new Parser(tokenize(source, dialect), dialect).parse();
 }
 
 /** Step ids a condition reads (`steps.<id>.output...`), in order of first use. */

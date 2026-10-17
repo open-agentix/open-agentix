@@ -48,6 +48,9 @@ function step(value: unknown, seg: string | number): Value {
 }
 
 function resolve(path: WhenPath, scope: WhenScope): Value {
+  // Only the `agents` dialect is evaluated; a path of the `awp` dialect is an error, never a guess.
+  if (path.root !== 'event' && path.root !== 'step')
+    return fail('this condition uses the AWP grammar, which this evaluator does not run');
   let value: Value;
   if (path.root === 'event') {
     value = scope.event;
