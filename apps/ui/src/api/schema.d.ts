@@ -1077,7 +1077,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Validate an agents.md source without storing it */
+        /**
+         * Validate an agents.md source or an AWP manifest without storing it
+         * @description Accepts an agents.md file (apiVersion openagentix.io/v1alpha1) or an AWP manifest (apiVersion awp.agenticworkflowprotocol.org/v1alpha1) as agents.md front matter or as plain JSON/YAML. AWP is a draft; this is validation against the pinned schema, not a conformance claim. For an AWP manifest the issues carry the AWP diagnostic code and a JSON Pointer path.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1100,20 +1103,36 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /**
+                             * @description how the source was read
+                             * @enum {string}
+                             */
+                            format: "agents-md" | "awp";
                             valid: boolean;
                             errors: {
+                                /** @description dotted path (agents.md) or JSON Pointer (AWP manifest) */
                                 path: string;
                                 message: string;
+                                /** @description stable machine code; the AWP diagnostic code for a manifest */
+                                code?: string;
                             }[];
                             warnings: {
+                                /** @description dotted path (agents.md) or JSON Pointer (AWP manifest) */
                                 path: string;
                                 message: string;
+                                /** @description stable machine code; the AWP diagnostic code for a manifest */
+                                code?: string;
                             }[];
                             name: string | null;
                             version: string | null;
+                            /** @description agents.md: SHA-256 of the source; AWP: sha256:<hex> of the manifest (spec 9.1) */
                             digest: string | null;
                             /** @description parsed definition when valid */
                             definition: {
+                                [key: string]: unknown;
+                            } | null;
+                            /** @description effective AWP manifest when the source is a valid AWP manifest, otherwise null */
+                            manifest: {
                                 [key: string]: unknown;
                             } | null;
                         };
@@ -1135,6 +1154,19 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Default Response */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            message: string;
+                            details?: unknown;
+                        };
                     };
                 };
             };
@@ -14088,8 +14120,11 @@ export interface paths {
                             /** @description false when the plan does not parse; then `errors` says why */
                             valid: boolean;
                             errors: {
+                                /** @description dotted path (agents.md) or JSON Pointer (AWP manifest) */
                                 path: string;
                                 message: string;
+                                /** @description stable machine code; the AWP diagnostic code for a manifest */
+                                code?: string;
                             }[];
                             plan: {
                                 [key: string]: unknown;
@@ -14225,8 +14260,11 @@ export interface paths {
                         "application/json": {
                             valid: boolean;
                             errors: {
+                                /** @description dotted path (agents.md) or JSON Pointer (AWP manifest) */
                                 path: string;
                                 message: string;
+                                /** @description stable machine code; the AWP diagnostic code for a manifest */
+                                code?: string;
                             }[];
                             plan: {
                                 [key: string]: unknown;

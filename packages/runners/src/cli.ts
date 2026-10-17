@@ -1,8 +1,15 @@
 #!/usr/bin/env node
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { PolicyBundleSchema, PriceTableSchema, validateAgentSource } from '@openagentix/core';
+import {
+  AWP_LIMITS,
+  PolicyBundleSchema,
+  PriceTableSchema,
+  manifestIssues,
+  validateAgentSource,
+  validateManifestSource,
+} from '@openagentix/core';
 import { parseProviderConfigs } from '@openagentix/providers';
 import { AWP_USAGE, runAwpCommand } from './cli-awp.js';
 import { PLAN_USAGE, runPlanCommand } from './cli-plan.js';
@@ -16,6 +23,8 @@ export interface CliIo {
   out: (line: string) => void;
   err: (line: string) => void;
   readFile: (path: string) => Promise<string>;
+  /** Size in bytes, to refuse an oversized AWP manifest before reading it (optional). */
+  fileSize?: (path: string) => Promise<number>;
   env: NodeJS.ProcessEnv;
 }
 
@@ -23,7 +32,7 @@ const USAGE = `oax ${CLI_VERSION} - run openagentix agents locally
 
 Usage:
   oax run <agents.md> --event <event.json> [options]
-  oax validate <agents.md>
+  oax validate <agents.md | manifest.awp.yaml | manifest.awp.json>
   oax plan check|generate <plan.yaml> (see "oax plan --help")
   oax awp export <agents.md> (see "oax awp --help")
   oax --version
@@ -100,7 +109,37 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
   try {
     if (cmd === 'validate') {
       if (!file) throw new Error('missing <agents.md>');
-      const r = validateAgentSource(await io.readFile(file));
+      // Only *.awp.yaml, *.awp.yml and *.awp.json are AWP documents; an .md file is read as AWP when
+      // its front matter says apiVersion: awp.…; any other file keeps the legacy agents.md message.
+      const isAwpFile = /\.awp\.(?:ya?ml|json)$/i.test(file);
+      if (isAwpFile && io.fileSize) {
+        const size = await io.fileSize(file);
+        if (size > AWP_LIMITS.maxSourceBytes) {
+          io.err(
+            `error   limit.size -: the file is larger than ${AWP_LIMITS.maxSourceBytes} bytes`,
+          );
+          io.out('invalid');
+          return 1;
+        }
+      }
+      const text = await io.readFile(file);
+      const awp = isAwpFile
+        ? validateManifestSource(text, { layout: 'document' })
+        : /\.md$/i.test(file)
+          ? validateManifestSource(text, { layout: 'auto' })
+          : null;
+      if (awp) {
+        const { errors, warnings } = manifestIssues(awp);
+        for (const e of errors) io.err(`error   ${e.code} ${e.path || '-'}: ${e.message}`);
+        for (const w of warnings) io.err(`warning ${w.code} ${w.path || '-'}: ${w.message}`);
+        io.out(
+          awp.valid
+            ? `valid: ${awp.documents.length === 1 ? `${awp.name}@${awp.version} ${awp.digest}` : `${awp.documents.length} documents`} (AWP draft v1alpha1, built to the schema, conformance in progress)`
+            : 'invalid',
+        );
+        return awp.valid ? 0 : 1;
+      }
+      const r = validateAgentSource(text);
       for (const e of r.errors) io.err(`error   ${e.path}: ${e.message}`);
       for (const w of r.warnings) io.err(`warning ${w.path}: ${w.message}`);
       io.out(r.valid ? `valid: ${r.definition?.name}@${r.definition?.version}` : 'invalid');
@@ -196,6 +235,7 @@ if (isMain()) {
     out: (l) => process.stdout.write(`${l}\n`),
     err: (l) => process.stderr.write(`${l}\n`),
     readFile: (p) => readFile(p, 'utf8'),
+    fileSize: async (p) => (await stat(p)).size,
     env: process.env,
   }).then((code) => {
     process.exitCode = code;

@@ -1528,9 +1528,10 @@ paths:
                 additionalProperties: false
   /v1/agents/validate:
     post:
-      summary: Validate an agents.md source without storing it
+      summary: Validate an agents.md source or an AWP manifest without storing it
       tags:
         - agents
+      description: Accepts an agents.md file (apiVersion openagentix.io/v1alpha1) or an AWP manifest (apiVersion awp.agenticworkflowprotocol.org/v1alpha1) as agents.md front matter or as plain JSON/YAML. AWP is a draft; this is validation against the pinned schema, not a conformance claim. For an AWP manifest the issues carry the AWP diagnostic code and a JSON Pointer path.
       requestBody:
         required: true
         content:
@@ -1554,6 +1555,12 @@ paths:
               schema:
                 type: object
                 properties:
+                  format:
+                    type: string
+                    enum:
+                      - agents-md
+                      - awp
+                    description: how the source was read
                   valid:
                     type: boolean
                   errors:
@@ -1563,7 +1570,11 @@ paths:
                       properties:
                         path:
                           type: string
+                          description: dotted path (agents.md) or JSON Pointer (AWP manifest)
                         message:
+                          type: string
+                        code:
+                          description: stable machine code; the AWP diagnostic code for a manifest
                           type: string
                       required:
                         - path
@@ -1576,7 +1587,11 @@ paths:
                       properties:
                         path:
                           type: string
+                          description: dotted path (agents.md) or JSON Pointer (AWP manifest)
                         message:
+                          type: string
+                        code:
+                          description: stable machine code; the AWP diagnostic code for a manifest
                           type: string
                       required:
                         - path
@@ -1591,6 +1606,7 @@ paths:
                       - string
                       - "null"
                   digest:
+                    description: "agents.md: SHA-256 of the source; AWP: sha256:<hex> of the manifest (spec 9.1)"
                     type:
                       - string
                       - "null"
@@ -1602,7 +1618,16 @@ paths:
                         additionalProperties: {}
                       - type: "null"
                     description: parsed definition when valid
+                  manifest:
+                    anyOf:
+                      - type: object
+                        propertyNames:
+                          type: string
+                        additionalProperties: {}
+                      - type: "null"
+                    description: effective AWP manifest when the source is a valid AWP manifest, otherwise null
                 required:
+                  - format
                   - valid
                   - errors
                   - warnings
@@ -1610,6 +1635,7 @@ paths:
                   - version
                   - digest
                   - definition
+                  - manifest
                 additionalProperties: false
         "401":
           description: Missing or invalid credentials
@@ -1623,6 +1649,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "429":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  details: {}
+                required:
+                  - error
+                  - message
+                additionalProperties: false
   /v1/agents/{id}:
     get:
       summary: Get an agent with its draft
@@ -20904,7 +20946,11 @@ paths:
                       properties:
                         path:
                           type: string
+                          description: dotted path (agents.md) or JSON Pointer (AWP manifest)
                         message:
+                          type: string
+                        code:
+                          description: stable machine code; the AWP diagnostic code for a manifest
                           type: string
                       required:
                         - path
@@ -21147,7 +21193,11 @@ paths:
                       properties:
                         path:
                           type: string
+                          description: dotted path (agents.md) or JSON Pointer (AWP manifest)
                         message:
+                          type: string
+                        code:
+                          description: stable machine code; the AWP diagnostic code for a manifest
                           type: string
                       required:
                         - path

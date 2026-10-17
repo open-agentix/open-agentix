@@ -99,6 +99,27 @@ function zodIssues(error: z.ZodError): ValidationIssue[] {
 }
 
 /**
+ * A front matter with an AWP `apiVersion` is an AWP manifest (validated by `validateManifestSource`).
+ * This parser reads the legacy format only; reading an AWP manifest into a definition that can be
+ * stored or run is a later slice, so it is refused here with a clear message instead of being
+ * rejected for dozens of unknown fields.
+ */
+function rejectAwpManifest(raw: unknown): void {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return;
+  const apiVersion = (raw as Record<string, unknown>).apiVersion;
+  if (typeof apiVersion === 'string' && apiVersion.startsWith('awp.'))
+    throw new ValidationError('AWP manifests cannot be stored or run yet', [
+      {
+        path: 'apiVersion',
+        code: 'awp_not_runnable',
+        message:
+          'this file is an AWP manifest (apiVersion awp.…): it can be validated (POST /v1/agents/validate, ' +
+          'oax validate) but not yet stored, published or run; use apiVersion openagentix.io/v1alpha1',
+      },
+    ]);
+}
+
+/**
  * Parses an `agents.md` document: YAML front matter (schema-checked) plus markdown sections.
  * Agent instructions come from `## Agent: <id>` sections (or the inline `instructions` field).
  * Throws {@link ValidationError} with all structural issues. Semantic checks live in `validate.ts`.
@@ -113,6 +134,7 @@ export function parseAgentDefinition(source: string): AgentDefinition {
     );
   }
   const raw: unknown = doc.toJS({ maxAliasCount: 50 });
+  rejectAwpManifest(raw);
   const parsed = PipelineFrontMatterSchema.safeParse(raw ?? {});
   if (!parsed.success) {
     throw new ValidationError('invalid agents.md front matter', zodIssues(parsed.error));

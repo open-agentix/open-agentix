@@ -11,6 +11,8 @@ export default tseslint.config(
       'apps/api/drizzle/**',
       // vendored AWP copy: hash-pinned, never edited or linted (scripts/awp/verify-pin.mjs)
       'packages/awp/vendor/**',
+      // generated from the pinned schema (scripts/awp/generate-types.mjs --check)
+      'packages/core/src/awp/generated/**',
     ],
   },
   js.configs.recommended,

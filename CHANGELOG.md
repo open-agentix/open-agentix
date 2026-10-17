@@ -45,6 +45,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Validation of AWP manifests (AWP-3, #256)**: `POST /v1/agents/validate` and `oax validate` accept an
+  `agents.md` whose front matter is an AWP `v1alpha1` manifest (`apiVersion: awp.agenticworkflowprotocol.org/v1alpha1`,
+  `## Agent: <id>` sections become the `instructions`) and plain `.awp.yaml`/`.awp.json` files, and report the
+  AWP diagnostic `code` and JSON Pointer `path` of every finding plus the manifest digest (the same for the JSON,
+  the YAML and the `agents.md` form). Offline only: the structure is checked by the generated copy of the
+  pinned schema (`scripts/awp/generate-types.mjs`, committed output, CI `--check`), the semantic rules by
+  OpenAgentix's own port tested against the vendored reference, the `x-openagentix-*` values against the new
+  `packages/awp/extensions/openagentix-extensions.v1alpha1.json`. Fail closed: an unknown field, a field of an
+  unsupported profile (`audit`, `security`, `a2a`), an unknown or misplaced `x-openagentix-*` name, an invalid
+  extension value and an unknown `metadata.requiredExtensions` entry are errors; limits on size, nodes, depth,
+  YAML aliases, documents, workflow steps (1000) and agents (1000, `limit.steps`) apply, and the route has its own rate
+  limit (`OAX_RATE_LIMIT_VALIDATE_MAX`, default 120 per minute). The response gains `format`, `manifest` and an optional `code` per issue.
+  Validation only: an AWP manifest cannot be stored, published or run yet (`400 awp_not_runnable`), and
+  nothing is granted from it. AWP is a draft and openagentix is not conformant to any profile. See
+  [docs/awp.md](docs/awp.md).
 - **AWP manifest exporter (AWP-2, #255)**: `GET /v1/agents/{id}/versions/{version}/awp` exports a
   published agent version, and `oax awp export <agents.md>` a file as parsed, as an AWP `v1alpha1`
   `Workflow` manifest built to the pinned schema, with a JCS digest in `metadata.integrity.digest`,

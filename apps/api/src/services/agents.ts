@@ -6,16 +6,19 @@ import {
   hasPermission,
   hasPermissionIn,
   loadAgentDefinition,
+  manifestIssues,
   stripInvisible,
   useCaseCovers,
   useCaseScopes,
   validateAgentSource,
+  validateManifestSource,
   visibleAgents,
   visibleTeams,
   summariseDecisions,
   type AgentDefinition,
   type DecisionFact,
   type Principal,
+  type ValidationIssue,
   type ValidationResult,
 } from '@openagentix/core';
 import { and, desc, eq, inArray, isNotNull, isNull, lt, or, type SQL } from 'drizzle-orm';
@@ -39,6 +42,24 @@ import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import type { ResolvedScope } from './subtree-scope.js';
 import { useCaseMatch } from './use-case-scope.js';
+
+/**
+ * Outcome of validating a source without storing it: an `agents.md` file (`format: 'agents-md'`)
+ * or an AWP manifest (`format: 'awp'`, AWP-3). For an AWP manifest `errors`/`warnings` carry the AWP
+ * diagnostic `code` and the JSON Pointer `path`, `digest` is the AWP manifest digest, `manifest` the
+ * effective manifest, and `definition` is null: an AWP manifest is validated, not stored or run yet.
+ */
+export interface SourceValidation {
+  format: 'agents-md' | 'awp';
+  valid: boolean;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+  name: string | null;
+  version: string | null;
+  digest: string | null;
+  definition: AgentDefinition | null;
+  manifest: Record<string, unknown> | null;
+}
 
 /** Longest reason accepted when an agent is disabled or enabled. */
 export const MAX_DISABLE_REASON_LENGTH = 500;
@@ -183,6 +204,41 @@ export class AgentsService {
     )
       return;
     throw forbidden('the use case of the agent is outside your scope');
+  }
+
+  /**
+   * Validates an `agents.md` source or an AWP manifest (front matter with `apiVersion: awp.…`, or a
+   * plain JSON/YAML document). An AWP manifest is checked offline against the pinned schema and
+   * rules; it needs no connection catalog and reads no tenant data, so it cannot disclose any.
+   */
+  async validateSource(principal: Principal, source: string): Promise<SourceValidation> {
+    const awp = validateManifestSource(source);
+    if (awp) {
+      const { errors, warnings } = manifestIssues(awp);
+      return {
+        format: 'awp',
+        valid: awp.valid,
+        errors,
+        warnings,
+        name: awp.name,
+        version: awp.version,
+        digest: awp.valid ? awp.digest : null,
+        definition: null,
+        manifest: awp.valid ? (awp.manifest as unknown as Record<string, unknown>) : null,
+      };
+    }
+    const r = await this.validateFor(principal, source);
+    return {
+      format: 'agents-md',
+      valid: r.valid,
+      errors: r.errors,
+      warnings: r.warnings,
+      name: r.definition?.name ?? null,
+      version: r.definition?.version ?? null,
+      digest: r.definition?.digest ?? null,
+      definition: r.definition,
+      manifest: null,
+    };
   }
 
   validate(source: string): ValidationResult {

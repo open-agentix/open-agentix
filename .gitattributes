@@ -1,2 +1,3 @@
 # The vendored AWP copy is hash-pinned (scripts/awp/verify-pin.mjs): never normalise line endings.
 packages/awp/vendor/** -text
+packages/core/src/awp/generated/** linguist-generated=true -diff

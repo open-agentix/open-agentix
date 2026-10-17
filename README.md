@@ -161,11 +161,12 @@ incompatibly) for describing agentic workflows, their limits, governance and aud
 specification, not a platform, and it is not an adopted standard. It is developed by the same
 project; openagentix is one implementation of it, with no special rights over the specification.
 
-**Not implemented today:** openagentix uses its own `agents.md` format. It does not read AWP
-manifests and is **not conformant** to any AWP profile; no conformance statement has been published.
-Work towards conformance is in progress; a pinned copy of the draft schema is vendored for it, and a
-published agent version can be exported as an AWP manifest (a mapping that refuses what AWP cannot yet
-express; see [docs/awp.md](docs/awp.md)). Wording: built to the AWP schema, conformance in progress (alpha).
+**Not implemented today:** openagentix runs its own `agents.md` format only and is **not conformant** to
+any AWP profile; no conformance statement has been published. Work towards conformance is in progress; a
+pinned copy of the draft schema is vendored for it, a published agent version can be exported as an AWP
+manifest (a mapping that refuses what AWP cannot yet express), and an AWP manifest (as `agents.md` front
+matter or a plain JSON/YAML file) can be validated offline against the pinned schema, but not yet stored
+or run; see [docs/awp.md](docs/awp.md). Wording: built to the AWP schema, conformance in progress (alpha).
 
 ## Contributing
 
