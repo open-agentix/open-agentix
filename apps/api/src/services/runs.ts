@@ -3,6 +3,8 @@ import {
   bindingPermissions,
   hasPermissionIn,
   isTerminal,
+  LEGACY_REMOVED_CODE,
+  legacyRemovedMessage,
   newRunTraceIdentity,
   useCaseCovers,
   useCaseScopes,
@@ -41,10 +43,14 @@ import type { ResolvedScope } from './subtree-scope.js';
 import { useCaseMatch } from './use-case-scope.js';
 
 /** What `enqueue` reads before it opens its transaction. */
+const LEGACY_RUN_DETAIL = 'this version cannot be converted to an AWP manifest and is not run';
+
 interface AdmissionPlan {
   latest: Awaited<ReturnType<AgentsService['latestVersionId']>>;
   versionId: string | null;
   definition: AgentDefinition | null;
+  /** Release N+1 of the legacy format: the version has no AWP conversion and is not run. */
+  legacyRefused: boolean;
 }
 
 /** Trigger family for the admission span (`api`, `cron`, `webhook`, ...); a closed slug or `other`. */
@@ -141,8 +147,10 @@ export class RunsService {
     const attempt = async () => {
       const latest = await this.agents.latestVersionId(input.agentId);
       const versionId = input.versionId ?? latest.versionId;
+      // Release N+1 of the legacy format: a version that cannot be converted is not run (AWP-3b).
+      const legacyRefused = versionId ? await this.agents.legacyRunRefused(versionId) : false;
       const definition = versionId ? (await this.agents.definitionOf(versionId)).definition : null;
-      const plan = { latest, versionId, definition };
+      const plan = { latest, versionId, definition, legacyRefused };
       return input.tx
         ? this.admit(input.tx, input, plan)
         : this.ctx.db.transaction((tx) => this.admit(tx as unknown as Db, input, plan));
@@ -156,7 +164,10 @@ export class RunsService {
       await this.ctx.cache.del(`agent-latest:${input.agentId}`);
       outcome = await attempt();
     }
-    if (outcome.refused) throw agentDisabled();
+    if (outcome.refused)
+      throw outcome.reason === 'legacy_format_removed'
+        ? new HttpError(400, LEGACY_REMOVED_CODE, legacyRemovedMessage(LEGACY_RUN_DETAIL))
+        : agentDisabled();
     this.emitAdmitSpan(outcome.run, input.triggeredBy, outcome.auditSeq);
     return outcome.run;
   }
@@ -216,8 +227,11 @@ export class RunsService {
   private async admit(
     db: Db,
     input: Parameters<RunsService['enqueue']>[0],
-    { latest, versionId, definition }: AdmissionPlan,
-  ): Promise<{ refused: false; run: RunRow; auditSeq: number } | { refused: true }> {
+    { latest, versionId, definition, legacyRefused }: AdmissionPlan,
+  ): Promise<
+    | { refused: false; run: RunRow; auditSeq: number }
+    | { refused: true; reason: 'agent_disabled' | 'legacy_format_removed' }
+  > {
     // Share lock on the agent row: serialises with disable/enable until this transaction ends.
     const lockedRes = (await db.execute(
       sql`select disabled_at from agents where id = ${input.agentId} for share`,
@@ -240,10 +254,15 @@ export class RunsService {
         payload: input.event as object,
       });
     }
-    if (disabled) {
+    const refusal = disabled
+      ? ('agent_disabled' as const)
+      : legacyRefused
+        ? ('legacy_format_removed' as const)
+        : null;
+    if (refusal) {
       this.ctx.metrics.runsRefused.inc({
         trigger: triggerLabel(input.triggeredBy),
-        reason: 'agent_disabled',
+        reason: refusal,
       });
       await this.audit.append(
         {
@@ -252,14 +271,14 @@ export class RunsService {
           action: 'run.refused',
           target: input.agentId,
           payload: {
-            reason: 'agent_disabled',
+            reason: refusal,
             versionId: versionId ?? null,
             eventId: input.event.id,
           },
         },
         db,
       );
-      return { refused: true };
+      return { refused: true, reason: refusal };
     }
     const verdict = await this.budgets.verdictFor(
       {

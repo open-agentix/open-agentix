@@ -5,6 +5,10 @@ import {
   expandProfiles,
   hasPermission,
   hasPermissionIn,
+  legacyDeprecation,
+  legacyFormatPhase,
+  legacyRemovedMessage,
+  LEGACY_REMOVED_CODE,
   loadAgentDefinition,
   manifestIssues,
   stripInvisible,
@@ -16,18 +20,22 @@ import {
   visibleTeams,
   summariseDecisions,
   type AgentDefinition,
+  type Deprecation,
   type DecisionFact,
+  type LegacyPhase,
+  type PublishedDefinition,
   type Principal,
   type ValidationIssue,
   type ValidationResult,
 } from '@openagentix/core';
-import { and, desc, eq, inArray, isNotNull, isNull, lt, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { cached } from '../cache.js';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import {
   agentReviewDecisions,
   agentReviews,
+  agentVersionAwp,
   agentVersionDeprecations,
   agentVersions,
   agents,
@@ -49,7 +57,9 @@ import type { ApprovalRecord, PublishApprovalInput } from './publish-gate.js';
 import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import type { ResolvedScope } from './subtree-scope.js';
+import { awpRowOf, convertDefinition, teamLookup, type StoredAwpRow } from './legacy-awp.js';
 import { useCaseMatch } from './use-case-scope.js';
+import { VERSION } from '../version.js';
 
 /**
  * Outcome of validating a source without storing it: an `agents.md` file (`format: 'agents-md'`)
@@ -67,6 +77,8 @@ export interface SourceValidation {
   digest: string | null;
   definition: AgentDefinition | null;
   manifest: Record<string, unknown> | null;
+  /** `legacy_format` once per legacy `agents.md` source (AWP-3b); empty for an AWP manifest. */
+  deprecations: Deprecation[];
 }
 
 /** Longest reason accepted when an agent is disabled or enabled. */
@@ -162,6 +174,72 @@ export class AgentsService {
 
   /** Wired by `createServices`: the transaction of a publish with its approval gate (ADR 0017 S3). */
   publisher: AgentPublisher | undefined;
+
+  /**
+   * AWP-3b: release N (`deprecated`) or N+1 (`removed`) of the legacy file format. Derived from the
+   * version of this build by a constant (`LEGACY_FORMAT_REMOVED_IN`), not from configuration; the
+   * field exists so that the N+1 behaviour can be tested without building another release.
+   */
+  legacyPhase: LegacyPhase = legacyFormatPhase(VERSION);
+
+  /** Release N+1: the legacy format is refused on every write path, naming `oax awp convert`. */
+  assertLegacyWritable(): void {
+    if (this.legacyPhase === 'removed')
+      throw new HttpError(400, LEGACY_REMOVED_CODE, legacyRemovedMessage());
+  }
+
+  /**
+   * A read of a stored legacy agent, version or manifest: the one `legacy_format` deprecation on every
+   * read, and the audit event `agent.legacy_format_read` once per principal, agent, surface (and
+   * version) and day. Every audit append takes the global audit lock, so a console that polls an
+   * agent must not write a row per request; the cache entry (shared with Valkey when configured) is
+   * the dedupe window, and every read is counted in `oax_legacy_format_reads_total`.
+   */
+  async legacyRead(
+    principal: Principal,
+    agent: AgentRow,
+    surface: 'agent' | 'version' | 'awp-export',
+    version?: string,
+  ): Promise<Deprecation[]> {
+    const deprecation = legacyDeprecation();
+    this.ctx.metrics.legacyFormatReads.inc({ surface });
+    const day = this.ctx.now().toISOString().slice(0, 10);
+    const key = `legacy-read:${principal.userId}:${agent.id}:${surface}:${version ?? ''}:${day}`;
+    if (!(await this.ctx.cache.get<boolean>(key))) {
+      await this.audit.append({
+        actor: principal.userId,
+        tenantId: agent.tenantId,
+        action: 'agent.legacy_format_read',
+        target: agent.id,
+        payload: { surface, ...(version ? { version } : {}), removedIn: deprecation.removedIn },
+      });
+      await this.ctx.cache.set(key, true, 24 * 3_600_000);
+    }
+    return [deprecation];
+  }
+
+  /**
+   * Release N+1: a version is not run unless it has a stored AWP conversion. A version without a row
+   * (the one-time conversion has not reached it yet) is converted on demand and refused when the
+   * conversion is refused, so the gate never fails open. Always false in release N.
+   */
+  async legacyRunRefused(versionId: string): Promise<boolean> {
+    if (this.legacyPhase !== 'removed') return false;
+    const stored = await awpRowOf(this.ctx.db, versionId);
+    if (stored) return stored.status === 'legacy-unconvertible';
+    const [row] = await this.ctx.db
+      .select({ v: agentVersions, a: agents })
+      .from(agentVersions)
+      .innerJoin(agents, eq(agents.id, agentVersions.agentId))
+      .where(eq(agentVersions.id, versionId));
+    if (!row) return false; // the caller reports the missing version
+    const c = await convertDefinition(
+      row.a,
+      row.v.definition as PublishedDefinition,
+      teamLookup(this.ctx.db, row.a.tenantId),
+    );
+    return c.status !== 'converted';
+  }
 
   async teamIdForOwner(tenantId: string, owner: string): Promise<string | null> {
     const [t] = await this.ctx.db
@@ -260,9 +338,25 @@ export class AgentsService {
         digest: awp.valid ? awp.digest : null,
         definition: null,
         manifest: awp.valid ? (awp.manifest as unknown as Record<string, unknown>) : null,
+        deprecations: [],
       };
     }
     const r = await this.validateFor(principal, source);
+    if (this.legacyPhase === 'removed')
+      return {
+        format: 'agents-md',
+        valid: false,
+        errors: [
+          { path: 'apiVersion', code: LEGACY_REMOVED_CODE, message: legacyRemovedMessage() },
+        ],
+        warnings: [],
+        name: null,
+        version: null,
+        digest: null,
+        definition: null,
+        manifest: null,
+        deprecations: [],
+      };
     return {
       format: 'agents-md',
       valid: r.valid,
@@ -273,6 +367,7 @@ export class AgentsService {
       digest: r.definition?.digest ?? null,
       definition: r.definition,
       manifest: null,
+      deprecations: [legacyDeprecation()],
     };
   }
 
@@ -332,6 +427,7 @@ export class AgentsService {
     source: string,
     opts: { id?: string } = {},
   ): Promise<AgentRow> {
+    this.assertLegacyWritable();
     const def = loadAgentDefinition(source);
     const teamId = await this.teamIdForOwner(principal.tenantId, def.owner);
     if (!hasPermission(principal, 'agents:write', teamId)) {
@@ -505,6 +601,7 @@ export class AgentsService {
   async updateDraft(principal: Principal, id: string, source: string): Promise<AgentRow> {
     const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:write');
+    this.assertLegacyWritable();
     const def = loadAgentDefinition(source);
     if (def.name !== agent.name)
       throw new HttpError(400, 'validation_failed', `name must stay "${agent.name}"`);
@@ -832,6 +929,7 @@ export class AgentsService {
   ): Promise<PublishResult> {
     const agent = await this.get(id, principal);
     await this.assertAccess(principal, agent, 'agents:publish');
+    // Release N+1: refused by `AgentPublisher.commit`, the one place that creates a version.
     const def = loadAgentDefinition(agent.draftSource);
     this.assertLabelInScope(principal, 'agents:publish', agent, useCaseOf(def));
     this.checkRuntime(def);
@@ -859,6 +957,7 @@ export class AgentsService {
       catalog,
       input,
       seed,
+      legacyPhase: this.legacyPhase,
       onRevision: (tx, locked, r) =>
         this.auditRevision(tx, locked, r, 'system').then(() => undefined),
     });
@@ -962,6 +1061,80 @@ export class AgentsService {
       'tenant stdio connections run only in run nodes',
       errors,
     );
+  }
+
+  /** The stored AWP conversion of a version, if the one-time conversion or its publish made one. */
+  awpOf(versionId: string): Promise<StoredAwpRow | undefined> {
+    return awpRowOf(this.ctx.db, versionId);
+  }
+
+  /**
+   * `oax awp legacy-report` for stored versions: how many versions of the visible agents are
+   * converted, unconvertible or not yet converted, and the unconvertible ones with the field-level
+   * reasons of the refusal. Newest first, keyset-paged.
+   */
+  async legacyReport(principal: Principal, query: { limit: number; cursor?: string | undefined }) {
+    const visibility = this.visibility(principal, undefined);
+    const empty = {
+      counts: { converted: 0, unconvertible: 0, pending: 0 },
+      items: [],
+      nextCursor: null,
+    };
+    if (!visibility) return empty;
+    const c = decodeTimeCursor(query.cursor);
+    const counts = await this.ctx.db
+      .select({ status: agentVersionAwp.status, n: sql<number>`count(*)::int` })
+      .from(agentVersionAwp)
+      .innerJoin(agents, eq(agents.id, agentVersionAwp.agentId))
+      .where(visibility)
+      .groupBy(agentVersionAwp.status);
+    const [pending] = await this.ctx.db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(agentVersions)
+      .innerJoin(agents, eq(agents.id, agentVersions.agentId))
+      .leftJoin(agentVersionAwp, eq(agentVersionAwp.versionId, agentVersions.id))
+      .where(and(visibility, isNull(agentVersionAwp.versionId)));
+    const rows = await this.ctx.db
+      .select({
+        row: agentVersionAwp,
+        agentName: agents.name,
+        version: agentVersions.version,
+      })
+      .from(agentVersionAwp)
+      .innerJoin(agents, eq(agents.id, agentVersionAwp.agentId))
+      .innerJoin(agentVersions, eq(agentVersions.id, agentVersionAwp.versionId))
+      .where(
+        and(
+          visibility,
+          eq(agentVersionAwp.status, 'legacy-unconvertible'),
+          c
+            ? or(
+                lt(agentVersionAwp.convertedAt, c.t),
+                and(eq(agentVersionAwp.convertedAt, c.t), lt(agentVersionAwp.versionId, c.id)),
+              )
+            : undefined,
+        ),
+      )
+      .orderBy(desc(agentVersionAwp.convertedAt), desc(agentVersionAwp.versionId))
+      .limit(query.limit + 1);
+    const out = page(rows, query.limit, (r) =>
+      encodeTimeCursor(r.row.convertedAt, r.row.versionId),
+    );
+    return {
+      counts: {
+        converted: counts.find((r) => r.status === 'converted')?.n ?? 0,
+        unconvertible: counts.find((r) => r.status === 'legacy-unconvertible')?.n ?? 0,
+        pending: pending?.n ?? 0,
+      },
+      items: out.items.map((r) => ({
+        agentId: r.row.agentId,
+        agentName: r.agentName,
+        versionId: r.row.versionId,
+        version: r.version,
+        findings: r.row.findings as { code: string; path: string; message: string }[],
+      })),
+      nextCursor: out.nextCursor,
+    };
   }
 
   async versions(id: string): Promise<VersionSummary[]> {

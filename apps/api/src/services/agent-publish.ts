@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import {
   checkPublish,
   declaredSecretReferences,
+  LEGACY_REMOVED_CODE,
+  legacyRemovedMessage,
+  type LegacyPhase,
+  type PublishedDefinition,
   type AgentDefinition,
   type Principal,
 } from '@openagentix/core';
@@ -21,6 +25,7 @@ import type {
   PublishApprovalInput,
   PublishGate,
 } from './publish-gate.js';
+import { convertDefinition, storeConversion, teamLookup } from './legacy-awp.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 
 /**
@@ -52,6 +57,8 @@ export interface CommitParams {
   onRevision: (tx: Db, agent: AgentRow, revision: RevisionRow) => Promise<void>;
   /** The deterministic demo seed only (see `AgentsService.publishDemoSeed`): no approval gate. */
   seed?: boolean;
+  /** AWP-3b: release N or N+1 of the legacy format (from the build version). */
+  legacyPhase: LegacyPhase;
 }
 
 export interface CommitResult {
@@ -82,6 +89,10 @@ export class AgentPublisher {
 
   /** Publishes or throws the refusal of the gate (audited, rate-limited) as an `HttpError`. */
   async commit(p: CommitParams): Promise<CommitResult> {
+    // AWP-3b, release N+1: no path creates a version from a legacy file (publish through an approved
+    // review included; every version is created below).
+    if (p.legacyPhase === 'removed')
+      throw new HttpError(400, LEGACY_REMOVED_CODE, legacyRemovedMessage());
     type Outcome = { kind: 'refused'; refusal: GateRefusal } | ({ kind: 'done' } & CommitResult);
     const outcome = await this.ctx.db.transaction(async (t): Promise<Outcome> => {
       const tx = t as unknown as Db;
@@ -103,6 +114,7 @@ export class AgentPublisher {
       if (gated.kind === 'refused') return { kind: 'refused', refusal: gated.refusal };
       const record = gated.kind === 'approved' ? gated.record : null;
       const version = await this.insertVersion(tx, p, head, record);
+      await this.storeAwpConversion(tx, agent, version);
       await tx
         .update(agents)
         .set({
@@ -153,6 +165,31 @@ export class AgentPublisher {
       .where(eq(agentVersions.agentId, agentId));
     if (checkPublish(published, def) === 'unchanged')
       throw new HttpError(409, 'draft_changed', 'the draft was published meanwhile; try again');
+  }
+
+  /**
+   * AWP-3b: the effective AWP manifest is stored next to the version (never in it); a refusal is
+   * stored as `legacy-unconvertible`. The row is written in a savepoint: a database error is logged
+   * and does not fail the publish; the one-time conversion (or the read path) converts it later.
+   */
+  private async storeAwpConversion(
+    tx: Db,
+    agent: AgentRow,
+    version: typeof agentVersions.$inferSelect,
+  ): Promise<void> {
+    try {
+      const conversion = await convertDefinition(
+        agent,
+        version.definition as PublishedDefinition,
+        teamLookup(tx, agent.tenantId),
+      );
+      await tx.transaction((sp) => storeConversion(sp as unknown as Db, version, conversion));
+    } catch (e) {
+      this.ctx.logger.warn(
+        { err: e, agent: agent.id, version: version.version },
+        'AWP conversion not stored',
+      );
+    }
   }
 
   private async insertVersion(

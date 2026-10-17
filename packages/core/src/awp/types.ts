@@ -38,6 +38,9 @@ export type ExportFindingCode =
   | 'secret_not_representable'
   | 'pipeline_not_representable'
   | 'unknown_field'
+  | 'grant_widened'
+  | 'conversion_error'
+  | 'stored_manifest_invalid'
   | 'not_canonicalizable';
 
 export interface ExportFinding {

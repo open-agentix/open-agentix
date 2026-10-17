@@ -88,6 +88,17 @@ export const IssueSchema = z.object({
     .optional()
     .describe('stable machine code; the AWP diagnostic code for a manifest'),
 });
+export const DeprecationSchema = z
+  .object({
+    code: z.literal('legacy_format'),
+    message: z.string(),
+    removedIn: z.string().describe('first release that rejects the legacy format'),
+    docs: z.string().describe('where the conversion is documented'),
+  })
+  .describe(
+    'A deprecation notice. `legacy_format`: the file format openagentix.io/v1alpha1 is deprecated and rejected from `removedIn`; convert it with `oax awp convert` (AWP-3b). AWP is a draft (v1alpha1).',
+  );
+
 export const ValidationResultSchema = z.object({
   format: z.enum(['agents-md', 'awp']).describe('how the source was read'),
   valid: z.boolean(),
@@ -104,6 +115,11 @@ export const ValidationResultSchema = z.object({
     .record(z.string(), z.unknown())
     .nullable()
     .describe('effective AWP manifest when the source is a valid AWP manifest, otherwise null'),
+  deprecations: z
+    .array(DeprecationSchema)
+    .describe(
+      'exactly one `legacy_format` entry for an agents.md source, none for an AWP manifest',
+    ),
 });
 
 export const AgentSchema = z.object({
@@ -170,7 +186,12 @@ export const AgentSchema = z.object({
       'monthly budget closest to its limit among the scopes that apply; null without costs:read or limit',
     ),
 });
-export const AgentDetailSchema = AgentSchema.extend({ draftSource: z.string() });
+export const AgentDetailSchema = AgentSchema.extend({
+  draftSource: z.string(),
+  deprecations: z
+    .array(DeprecationSchema)
+    .describe('`legacy_format` for a stored legacy draft (every stored agent until AWP storage)'),
+});
 export const DisableBody = z
   .object({
     reason: z
@@ -227,6 +248,29 @@ export const ToolPinSchema = z.object({
     .array(z.string())
     .describe("the version's grants on the connection (names and `prefix*`)"),
 });
+export const AwpConversionFindingSchema = z.object({
+  code: z.string(),
+  path: z.string().describe('path of the source field in the stored definition'),
+  message: z.string(),
+  field: z.string().optional().describe('critical_extension: the source field'),
+  extension: z
+    .string()
+    .optional()
+    .describe('critical_extension: the extension that would carry it'),
+});
+export const AwpConversionSchema = z
+  .object({
+    status: z.enum(['converted', 'legacy-unconvertible']),
+    manifestDigest: z.string().nullable().describe('`sha256:<hex>` of the stored manifest'),
+    findings: z
+      .array(AwpConversionFindingSchema)
+      .describe('why the conversion was refused (legacy-unconvertible); empty when converted'),
+    converter: z.string(),
+    convertedAt: Iso,
+  })
+  .describe(
+    'The stored effective AWP manifest of this version (AWP-3b), made once next to the unchanged source. The manifest itself: GET /v1/agents/{id}/versions/{version}/awp.',
+  );
 export const VersionDetailSchema = VersionSchema.extend({
   source: z.string(),
   definition: z.record(z.string(), z.unknown()),
@@ -244,6 +288,10 @@ export const VersionDetailSchema = VersionSchema.extend({
     .describe(
       'pinned tool definitions per MCP connection (ADR 0016 section 5); absent for versions published before pinning',
     ),
+  awp: AwpConversionSchema.nullable().describe(
+    'null while the one-time conversion has not run for this version',
+  ),
+  deprecations: z.array(DeprecationSchema).describe('exactly one `legacy_format` entry per read'),
 });
 export const AwpManifestSchema = z
   .record(z.string(), z.unknown())
@@ -264,6 +312,23 @@ export const AwpExportRefusalSchema = ErrorSchema.extend({
   details: z.object({
     findings: z.array(AwpExportFindingSchema),
   }),
+});
+export const LegacyReportSchema = z.object({
+  counts: z.object({
+    converted: z.number().int(),
+    unconvertible: z.number().int(),
+    pending: z.number().int().describe('versions without a stored conversion yet'),
+  }),
+  items: z.array(
+    z.object({
+      agentId: Id,
+      agentName: z.string(),
+      versionId: Id,
+      version: z.string(),
+      findings: z.array(AwpConversionFindingSchema),
+    }),
+  ),
+  nextCursor: z.string().nullable(),
 });
 /**
  * Body of publish (ADR 0017 section 4.3). Strict on purpose: there is no parameter that skips an
@@ -286,6 +351,11 @@ export const PublishBody = z
 export const PublishResultSchema = z.object({
   version: VersionSchema,
   created: z.boolean(),
+  deprecations: z.array(DeprecationSchema),
+  awp: z
+    .object({ status: z.enum(['converted', 'legacy-unconvertible']) })
+    .nullable()
+    .describe('result of the conversion stored with the version'),
   approval: z
     .object({
       reviewId: Id,

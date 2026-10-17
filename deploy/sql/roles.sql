@@ -11,7 +11,7 @@ GRANT USAGE ON SCHEMA public TO openagentix_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO openagentix_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO openagentix_app;
 
-REVOKE UPDATE, DELETE, TRUNCATE ON audit_log, audit_checkpoints, agent_versions FROM openagentix_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_log, audit_checkpoints, agent_versions, agent_version_awp FROM openagentix_app;
 
 -- Review threads are resolved and comments edited (UPDATE), but never deleted or truncated.
 REVOKE DELETE, TRUNCATE ON agent_review_threads, agent_review_comments FROM openagentix_app;

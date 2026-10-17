@@ -219,7 +219,8 @@ oax validate examples/awp/ticket-updater.awp.md
 | plain JSON or YAML | `examples/awp/*.awp.json` | One or more YAML documents (spec 3.1); every document is validated on its own. |
 
 A text is treated as AWP when its `apiVersion` starts with `awp.`; a file with `openagentix.io/v1alpha1` is
-the legacy format and goes to the legacy parser unchanged (its conversion is AWP-3b). The legacy parser
+the legacy format and goes to the legacy parser unchanged (it is deprecated; the transition, the one-time
+conversion and `oax awp convert` are described in [agents.md: transition to AWP manifests](agents-md.md#transition-to-awp-manifests)). The legacy parser
 refuses an AWP file with `awp_not_runnable` instead of listing dozens of unknown fields.
 
 **Effective manifest and digest.** For `agents.md` the effective manifest is the front matter with the text
@@ -303,7 +304,8 @@ any `agents.md`. The `agents.md` wrapper never lets a section override front mat
 
 ### Left out of this slice
 
-Storing, publishing and running an AWP manifest; conversion of the legacy format (AWP-3b); source positions
+Storing, publishing and running an AWP manifest (the legacy conversion of AWP-3b stores the
+manifest next to a version but does not run from it); source positions
 (line and column) in findings; the `awp-check` profile selection by the caller; `kind: Agent` and `kind:
 Policy` documents are validated but have no exporter counterpart.
 
