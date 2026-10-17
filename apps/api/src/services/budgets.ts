@@ -633,7 +633,11 @@ export class BudgetsService {
     // Development spend is outside the node cap, and the cap is the operator's: an administrator of
     // the node cannot use the development budget to spend more than the cap allows.
     const [node] = await this.ctx.db.select().from(tenants).where(eq(tenants.id, p.tenantId));
-    if (node?.monthlyBudgetMicros !== null && node?.monthlyBudgetMicros !== undefined && micros > Number(node.monthlyBudgetMicros))
+    if (
+      node?.monthlyBudgetMicros !== null &&
+      node?.monthlyBudgetMicros !== undefined &&
+      micros > Number(node.monthlyBudgetMicros)
+    )
       throw new HttpError(
         422,
         'dev_budget_above_cap',
