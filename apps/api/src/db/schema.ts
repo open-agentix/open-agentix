@@ -889,6 +889,90 @@ export const tenantDataKeys = pgTable(
 );
 
 /**
+ * Secrets of the internal store (ADR 0017 section 13, slice S4). One row per secret: identity,
+ * scope and metadata, never a value. `tenant_id` is the OWNING node (whose data key seals the
+ * values); `scope_id` is that node for `tenant`, the team for `team` and the user for `personal`.
+ * `inherit` and `allow_override` exist for `tenant` secrets only (inheritance down the tree,
+ * section 13.3). `backend = 'env'` is a pointer to an operator environment secret (the import
+ * helper) and has no versions. A revoked secret keeps its row (so the name stays reserved and a
+ * pinned reference fails closed) but loses its values. Read by no API route as anything but metadata.
+ */
+export const secrets = pgTable(
+  'secrets',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    scope: text('scope').notNull(),
+    scopeId: uuid('scope_id').notNull(),
+    name: text('name').notNull(),
+    backend: text('backend').notNull().default('internal'),
+    /** `env` backend only: the legacy reference the pointer names (never a value). */
+    pointer: text('pointer'),
+    currentVersion: integer('current_version').notNull().default(1),
+    description: text('description'),
+    usage: text('usage').notNull().default('any'),
+    allowedDestinations: jsonb('allowed_destinations').$type<string[]>().notNull().default([]),
+    inherit: boolean('inherit').notNull().default(false),
+    allowOverride: boolean('allow_override').notNull().default(false),
+    createdBy: uuid('created_by'),
+    createdAt: created(),
+    rotatedAt: ts('rotated_at'),
+    expiresAt: ts('expires_at'),
+    revokedAt: ts('revoked_at'),
+    revokedBy: uuid('revoked_by'),
+  },
+  (t) => [
+    uniqueIndex('secrets_identity_uq').on(t.tenantId, t.scope, t.scopeId, t.name),
+    index('secrets_scope_idx').on(t.scope, t.scopeId),
+    check('secrets_scope_check', sql`${t.scope} in ('personal', 'team', 'tenant')`),
+    check('secrets_usage_check', sql`${t.usage} in ('development', 'production', 'any')`),
+    check('secrets_backend_check', sql`${t.backend} in ('internal', 'env')`),
+    check('secrets_pointer_check', sql`(${t.backend} = 'env') = (${t.pointer} is not null)`),
+    check('secrets_name_check', sql`${t.name} ~ '^[a-z0-9][a-z0-9_.-]{0,127}$'`),
+    check('secrets_description_len', sql`char_length(${t.description}) <= 500`),
+    // A tenant secret is owned by its own node; inheritance exists for tenant secrets only.
+    check(
+      'secrets_tenant_scope_check',
+      sql`${t.scope} <> 'tenant' or ${t.scopeId} = ${t.tenantId}`,
+    ),
+    check(
+      'secrets_inherit_check',
+      sql`${t.scope} = 'tenant' or (not ${t.inherit} and not ${t.allowOverride})`,
+    ),
+  ],
+);
+
+/**
+ * The sealed values of a secret, one row per version (`oaxe1` envelope, AES-256-GCM under the owning
+ * node's data key `dek_version`). The AAD binds `tenant_id | scope | scope_id | name | secret id |
+ * version`, so a ciphertext copied to another row, secret or node does not open; `aad_digest` is the
+ * SHA-256 of that AAD, a cheap integrity check that a row's identity columns were not edited.
+ */
+export const secretVersions = pgTable(
+  'secret_versions',
+  {
+    secretId: uuid('secret_id')
+      .notNull()
+      .references(() => secrets.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    ciphertext: text('ciphertext').notNull(),
+    dekVersion: integer('dek_version').notNull(),
+    aadDigest: text('aad_digest').notNull(),
+    createdBy: uuid('created_by'),
+    createdAt: created(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.secretId, t.version] }),
+    index('secret_versions_dek_idx').on(t.tenantId, t.dekVersion),
+  ],
+);
+
+/**
  * OAuth tokens of MCP connections (ADR 0016 section 7.5). The only stored credential values of the
  * platform, and they are ciphertext: `access_token_enc` / `refresh_token_enc` are AES-256-GCM
  * envelopes under the tenant data key `key_version`, bound to (tenant, connection, issuer,

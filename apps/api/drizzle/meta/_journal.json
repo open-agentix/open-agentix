@@ -232,6 +232,13 @@
       "when": 1792700000007,
       "tag": "0038_agent_publish_gate",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792700000009,
+      "tag": "0040_secrets_store",
+      "breakpoints": true
     }
   ]
 }
