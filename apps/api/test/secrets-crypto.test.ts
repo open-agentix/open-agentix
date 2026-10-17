@@ -299,3 +299,76 @@ describe('crypto-shredding', () => {
     await expect(store.open(owner)).rejects.toMatchObject({ code: 'secret_unavailable' });
   });
 });
+
+describe('purge of issued values', () => {
+  const DAY = 24 * 3_600_000;
+  const rows = (count: number, expiredAgoMs: number, tenantId = node['cr-one']!) =>
+    Array.from({ length: count }, () => ({
+      id: randomUUID(),
+      runId: randomUUID(),
+      sessionId: randomUUID(),
+      tenantId,
+      secretId: randomUUID(),
+      version: 1,
+      ciphertext: 'oaxe1.x.y.z',
+      dekVersion: 1,
+      expiresAt: new Date(Date.now() - expiredAgoMs),
+    }));
+  const total = async () => (await n.ctx.db.select().from(runSecretIssuances)).length;
+  const clear = () => n.ctx.db.delete(runSecretIssuances);
+
+  it('deletes at most one batch, oldest first, and only what expired more than a day ago', async () => {
+    await clear();
+    await n.ctx.db.insert(runSecretIssuances).values([
+      ...rows(7, 3 * DAY),
+      ...rows(5, 2 * DAY, node['cr-two']!),
+      ...rows(4, 3_600_000), // expired an hour ago: still needed for redaction
+      ...rows(3, -3_600_000), // session still running
+    ]);
+    expect(await store.purgeIssued(5)).toBe(5);
+    expect(await total()).toBe(14);
+    expect(await store.purgeIssued(100)).toBe(7);
+    expect(await total()).toBe(7);
+    expect(await store.purgeIssued(100)).toBe(0);
+  });
+
+  it('works off a backlog in batches across tenants (the periodic pass)', async () => {
+    await clear();
+    await n.ctx.db
+      .insert(runSecretIssuances)
+      .values([...rows(30, 3 * DAY), ...rows(30, 4 * DAY, node['cr-two']!)]);
+    expect(await rotation.purgeIssued()).toBe(60);
+    expect(await total()).toBe(0);
+  });
+
+  it('keeps the purge on the issuance path small', async () => {
+    await clear();
+    await n.ctx.db.insert(runSecretIssuances).values(rows(50, 3 * DAY));
+    const s = await make('cr-one', 'purge-path', 'value-purge-path');
+    await store.recordIssued(
+      n.ctx.db,
+      {
+        runId: randomUUID(),
+        sessionId: randomUUID(),
+        expiresAt: new Date(Date.now() + 60_000),
+        secret: s,
+      },
+      'value-purge-path',
+    );
+    // at most 20 old rows went with it; the new one is there
+    expect(await total()).toBe(50 - 20 + 1);
+  });
+
+  it('runs on a timer and stops', async () => {
+    await clear();
+    await n.ctx.db.insert(runSecretIssuances).values(rows(12, 3 * DAY));
+    rotation.startPurge(0.05);
+    try {
+      for (let i = 0; i < 60 && (await total()) > 0; i++)
+        await new Promise((r) => setTimeout(r, 50));
+      expect(await total()).toBe(0);
+    } finally {
+      await rotation.stopPurge();
+    }
+  });
+});

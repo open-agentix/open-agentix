@@ -29,7 +29,9 @@ scopes (`group:x`, `Team:x`) is invalid; it is never read as a legacy name. The 
 step credential is derived as before (`team:jira-token` becomes `TEAM_JIRA_TOKEN`; set `env` to choose).
 
 Scoped references are supported in the `credentials` of a step (the credential broker path of run nodes).
-The MCP connection schema (`envSecrets`, `headerSecrets`) does not accept them yet (see "Left out").
+**Limitation:** a scoped reference in an MCP connection (`envSecrets`, `headerSecrets`) is not supported:
+connection save rules refuse it, and one that reached a stored connection some other way is never pinned, so
+the broker refuses it with `secret_unavailable` (fail closed). See "Left out".
 
 ## Inheritance of tenant secrets
 
@@ -98,6 +100,19 @@ run (`run_secret_issuances`, under the owner's data key, kept until a day after 
 scrubber of node results and the pull request delivery check read it from there. So the redaction covers
 what was **issued**, also after the secret was rotated, revoked or deleted, and for every credential source.
 
+Consequences you should know:
+
+- **Retention.** A sealed copy of an issued value stays until **one day after its session expired**, also
+  after the secret was revoked or deleted; a periodic purge (every 15 minutes, in bounded batches, in the api
+  process, safe on several replicas) removes the expired rows, and an issuance removes at most 20 on its way.
+  Crypto-shredding the owning node makes the copies unreadable at once.
+- **Operator environment values are copied into the database** (sealed, and so into backups) when a
+  pointer secret is issued; they leave it with the purge. Rotating the environment value does not change the
+  copy of an earlier issuance.
+- **Availability.** A value that cannot be remembered is not issued: the step gets
+  `credential_scope (unavailable)`, nothing leaves the control node, and the issuance is given back so that
+  the node can retry (a failure after a dynamic credential source handed out a lease is not given back).
+
 ## Encryption at rest
 
 - AES-256-GCM, one **data key (DEK) per tenant node** (`tenant_data_keys`, versioned), wrapped by a **key-
@@ -111,8 +126,8 @@ what was **issued**, also after the secret was rotated, revoked or deleted, and 
 - Without a KEK nothing can be stored (`503 key_service_unconfigured`) and nothing is issued.
 - Only the **current** version of a secret is stored. A rotation seals the new version and deletes the
   older one; a session that already received the old value keeps it until its step ends.
-- Revoking deletes the values and keeps the row, so the name stays taken and a pinned reference fails
-  closed.
+- Revoking deletes the stored values and keeps the row, so the name stays taken and a pinned reference
+  fails closed. Sealed copies of values already **issued** to runs remain until the purge (see Run time).
 - A secret is owned by the node whose data key seals it; an inherited secret is opened with the **owning**
   node's key. Shredding a node (`destroyTenantKeys`) makes its secrets unreadable for good and ends every
   descendant's use of them; it does not touch an ancestor's secrets.
@@ -195,7 +210,11 @@ of the scope. A secret the caller may not see is a `404`, the same as a missing 
   are immutable in the database, like the identity: the API has no edit of them, so a changed value can only
   come from outside the service. The broker also checks that the pinned row is the secret the reference names.
 - A reserving secret (`allowOverride: false`, inheritable) cannot be created while a node below already owns
-  that name (`422 secret_name_conflict`), because that secret would keep winning for its subtree.
+  that name (`422 secret_name_conflict`), because that secret would keep winning for its subtree. Creating
+  tenant secrets of one name within an organisation is serialised by an advisory lock, so a reserving secret
+  and a same-named secret below it cannot both be created at the same time.
+- The decision path of reviews uses the same predicate as publish: any decision on a review that pins a
+  secret of a higher node needs the digests, whatever the policy says.
 
 ## Left out (follow-up issue)
 

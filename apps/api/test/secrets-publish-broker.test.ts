@@ -661,6 +661,40 @@ describe('run time', () => {
     expect(denied.res.body).toContain('secret_not_allowed');
   });
 
+  it('does not issue when the value cannot be remembered, and lets the step retry', async () => {
+    const v = value('record-fails');
+    await secret('sp-root', 'record-fails', v);
+    const { a } = await published(['tenant:record-fails']);
+    const runId = await newRun(a);
+    const s = await session(runId);
+    const store = (
+      n.services.runNodes.scoped as unknown as { store: { recordIssued: () => Promise<void> } }
+    ).store;
+    const spy = vi.spyOn(store, 'recordIssued').mockRejectedValueOnce(new Error('disk full'));
+    try {
+      const failed = await credentials(runId, s.token);
+      expect(failed.statusCode, failed.body).toBe(403);
+      expect(failed.body).toContain('unavailable');
+      expect(failed.body).not.toContain(v);
+      expect(failed.body).not.toContain('disk full');
+    } finally {
+      spy.mockRestore();
+    }
+    // nothing was issued or remembered, and the issuance is given back
+    const [row] = await n.ctx.db
+      .select()
+      .from(runNodeSessions)
+      .where(eq(runNodeSessions.id, s.sessionId));
+    expect(row!.credentialsIssued).toEqual([]);
+    expect(await n.services.runNodes.scoped!.issuedValues(runId)).toEqual([]);
+    expect((await auditOf('credential.denied', runId)).map((p) => p['reason'])).toEqual([
+      'unavailable',
+    ]);
+    const retry = await credentials(runId, s.token);
+    expect(retry.statusCode, retry.body).toBe(200);
+    expect((j(retry) as StepCredentials).credentials[0]!.value).toBe(v);
+  });
+
   describe('redaction covers every value issued to the run', () => {
     const report = (v: string) => ({ text: `the token is ${v} ok`, nested: { again: [v] } });
     async function issued(name: string) {

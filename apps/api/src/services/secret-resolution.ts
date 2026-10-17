@@ -182,3 +182,27 @@ const resolved = (ref: string, row: SecretRow): Resolved => ({
 const unresolved = (ref: string, code: string): Resolved => ({
   pin: { ref, state: 'unresolved', code },
 });
+
+/** A scoped secret of another node that a version would pin (inherited from an ancestor). */
+export interface ForeignSecret {
+  ref: string;
+  scope: string;
+  ownerNode: string;
+}
+
+/**
+ * The scoped secrets a version would pin that belong to ANOTHER node than the agent's own: inherited
+ * from an ancestor (ADR 0017 section 13.3). Using one always needs an approved review (see
+ * `PublishGate`), whatever the lifecycle policy says: the agent's author may not hand a credential
+ * of a higher node to a step on their own authority.
+ */
+export function foreignOf(
+  agent: { tenantId: string },
+  resolved: readonly Resolved[],
+): ForeignSecret[] {
+  return resolved.flatMap((r) =>
+    r.secret && r.secret.scope === 'tenant' && r.secret.tenantId !== agent.tenantId
+      ? [{ ref: r.pin.ref, scope: r.secret.scope, ownerNode: r.secret.tenantId }]
+      : [],
+  );
+}

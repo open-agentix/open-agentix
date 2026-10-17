@@ -23,6 +23,9 @@ export interface RotationReport {
 }
 
 const SYSTEM_ACTOR = 'system:key-rotation';
+/** Rows per purge batch and the pause between passes (the backlog is worked off in batches). */
+const PURGE_BATCH = 500;
+const PURGE_MAX_BATCHES = 20;
 
 /**
  * Operator-driven key rotation (ADR 0017 section 13.6). Every step is idempotent and resumable, so
@@ -42,6 +45,43 @@ export class SecretKeyRotation {
     private readonly keys: KeyService,
     private readonly store: SecretStore,
   ) {}
+
+  private purgeTimer: NodeJS.Timeout | undefined;
+  private purging: Promise<unknown> | undefined;
+
+  /**
+   * Starts the periodic purge of the sealed values issued to runs (a day after their session
+   * expired). Bounded batches; safe on several replicas. The timer never keeps the process alive.
+   */
+  startPurge(seconds: number): void {
+    if (seconds <= 0 || this.purgeTimer) return;
+    this.purgeTimer = setInterval(() => {
+      if (this.purging) return;
+      this.purging = this.purgeIssued()
+        .catch((e: unknown) => this.ctx.logger.error({ err: e }, 'issued secret purge failed'))
+        .finally(() => {
+          this.purging = undefined;
+        });
+    }, seconds * 1000);
+    this.purgeTimer.unref();
+  }
+
+  async stopPurge(): Promise<void> {
+    if (this.purgeTimer) clearInterval(this.purgeTimer);
+    this.purgeTimer = undefined;
+    await this.purging;
+  }
+
+  /** One pass: up to `PURGE_MAX_BATCHES` batches; returns the rows deleted. */
+  async purgeIssued(): Promise<number> {
+    let total = 0;
+    for (let i = 0; i < PURGE_MAX_BATCHES; i++) {
+      const n = await this.store.purgeIssued(PURGE_BATCH);
+      total += n;
+      if (n < PURGE_BATCH) break;
+    }
+    return total;
+  }
 
   async rewrapKeys(batch = 500): Promise<RotationReport> {
     const changed = await this.keys.rewrapKeys(batch);

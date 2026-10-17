@@ -20,15 +20,19 @@ import type { AuditService } from './audit.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
 import type {
   ApprovalRecord,
-  ForeignSecret,
   GateOutcome,
   GateRefusal,
   PublishApprovalInput,
   PublishGate,
 } from './publish-gate.js';
 import { convertDefinition, storeConversion, teamLookup } from './legacy-awp.js';
-import type { Resolved, SecretResolution } from './secret-resolution.js';
-import { stateOf } from './secret-resolution.js';
+import {
+  foreignOf,
+  stateOf,
+  type ForeignSecret,
+  type Resolved,
+  type SecretResolution,
+} from './secret-resolution.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
 
 /**
@@ -376,21 +380,4 @@ export class AgentPublisher {
       payload: { code: refusal.code, review: refusal.reviewId },
     });
   }
-}
-
-/**
- * The scoped secrets a version would pin that belong to ANOTHER node than the agent's own: inherited
- * from an ancestor (ADR 0017 section 13.3). Using one always needs an approved review (see
- * `PublishGate`), whatever the lifecycle policy says: the agent's author may not hand a credential
- * of a higher node to a step on their own authority.
- */
-export function foreignOf(
-  agent: Pick<AgentRow, 'tenantId'>,
-  resolved: readonly Resolved[],
-): ForeignSecret[] {
-  return resolved.flatMap((r) =>
-    r.secret && r.secret.scope === 'tenant' && r.secret.tenantId !== agent.tenantId
-      ? [{ ref: r.pin.ref, scope: r.secret.scope, ownerNode: r.secret.tenantId }]
-      : [],
-  );
 }

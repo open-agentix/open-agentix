@@ -739,6 +739,14 @@ export class RunNodesService {
     if (!row) throw new HttpError(409, 'conflict', 'the step result was already submitted');
   }
 
+  /** Takes `agentId` out of the issued marks of a session (the issuance failed before anything left). */
+  private async unmarkIssued(sessionId: string, agentId: string): Promise<void> {
+    await this.ctx.db
+      .update(runNodeSessions)
+      .set({ credentialsIssued: sql`${runNodeSessions.credentialsIssued} - ${agentId}::text` })
+      .where(eq(runNodeSessions.id, sessionId));
+  }
+
   private async deny(
     s: SessionRow,
     agentId: string,
@@ -863,14 +871,20 @@ export class RunNodesService {
           .where(eq(runNodeSessions.id, s.id));
     };
     let expiresAt = s.expiresAt;
+    let scopedFailed = false;
     try {
       for (const ref of needs.refs) {
         const scoped = prepared.get(ref);
         if (scoped) {
-          const value = await this.scoped!.open(scoped);
-          // Recorded before the value leaves: a value that cannot be remembered is not issued.
-          await this.scoped!.recordIssued(run, s, scoped, value);
-          values.set(ref, value);
+          try {
+            const value = await this.scoped!.open(scoped);
+            // Recorded before the value leaves: a value that cannot be remembered is not issued.
+            await this.scoped!.recordIssued(run, s, scoped, value);
+            values.set(ref, value);
+          } catch (e) {
+            scopedFailed = true;
+            throw e;
+          }
           continue;
         }
         const issued = await this.source.issue(ref, {
@@ -886,6 +900,9 @@ export class RunNodesService {
     } catch {
       // Handles issued before the failure are still recalled when the session is revoked.
       await persistHandles();
+      // Our own store failed before any dynamic credential was handed out and nothing left the
+      // control node: give the step its one issuance back so that a retry can work.
+      if (scopedFailed && handles.length === 0) await this.unmarkIssued(s.id, agentId);
       // The reason stays out of the response (it can name backends); the audit entry has the refs.
       return this.deny(s, agentId, 'unavailable', { refs: needs.refs });
     }

@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { OaxError } from '@openagentix/core';
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq, inArray, lt } from 'drizzle-orm';
 import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { runSecretIssuances, secretVersions, type secrets } from '../db/schema.js';
@@ -35,6 +35,8 @@ export function secretAad(identity: SecretIdentity, version: number): Buffer {
 
 /** One day after a session expired its issued values are no longer needed for redaction. */
 const ISSUED_RETENTION_MS = 24 * 3_600_000;
+/** Rows an issuance may purge on the way; the periodic pass handles the backlog. */
+const IN_PATH_PURGE_ROWS = 20;
 
 function issuedAad(
   owner: string,
@@ -177,9 +179,8 @@ export class SecretStore {
     const aad = issuedAad(secret.tenantId, runId, sessionId, secret.id, secret.currentVersion);
     const sealed = await this.keys.sealTo([value], { tenantId: secret.tenantId, aad }, db);
     const now = this.ctx.now();
-    await db
-      .delete(runSecretIssuances)
-      .where(lt(runSecretIssuances.expiresAt, new Date(now.getTime() - ISSUED_RETENTION_MS)));
+    // Small and bounded: the periodic purge does the rest (`SecretKeyRotation.startPurge`).
+    await this.purgeIssued(IN_PATH_PURGE_ROWS, db);
     await db.insert(runSecretIssuances).values({
       id: randomUUID(),
       runId,
@@ -192,6 +193,25 @@ export class SecretStore {
       createdAt: now,
       expiresAt: issued.expiresAt,
     });
+  }
+
+  /**
+   * Deletes at most `limit` sealed issued values whose session expired more than a day ago, oldest
+   * first. Bounded so that neither the periodic pass nor an issuance holds a long delete.
+   */
+  async purgeIssued(limit: number, db: Db = this.ctx.db): Promise<number> {
+    const cutoff = new Date(this.ctx.now().getTime() - ISSUED_RETENTION_MS);
+    const old = db
+      .select({ id: runSecretIssuances.id })
+      .from(runSecretIssuances)
+      .where(lt(runSecretIssuances.expiresAt, cutoff))
+      .orderBy(runSecretIssuances.expiresAt)
+      .limit(limit);
+    const gone = await db
+      .delete(runSecretIssuances)
+      .where(inArray(runSecretIssuances.id, old))
+      .returning({ id: runSecretIssuances.id });
+    return gone.length;
   }
 
   /** Every value issued to a run (best effort: a row whose key is gone is skipped). */

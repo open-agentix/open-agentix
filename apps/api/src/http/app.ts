@@ -393,6 +393,9 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
   app.addHook('onClose', async () => {
     await deps.services.pentest.stop();
   });
+  app.addHook('onClose', async () => {
+    await deps.services.secretRotation.stopPurge();
+  });
   await app.ready();
   return app;
 }

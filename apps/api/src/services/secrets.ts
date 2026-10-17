@@ -22,7 +22,7 @@ import { SecretPolicy } from './secret-policy.js';
 import type { SecretResolution } from './secret-resolution.js';
 import type { SecretRow, SecretStore } from './secret-store.js';
 import { SecretViews, type SecretListInput, type SecretView } from './secret-views.js';
-import { lockTreeShared } from './tree-lock.js';
+import { lockSecretName, lockTreeShared } from './tree-lock.js';
 
 export type { SecretListInput, SecretView };
 
@@ -186,6 +186,7 @@ export class SecretsService {
         await lockTreeShared(tx, node.rootId);
         const scopeId = await this.scopeIdOf(tx, p, input);
         const tenantScope = input.scope === 'tenant';
+        if (tenantScope) await lockSecretName(tx, node.rootId, input.name);
         const shadowed = tenantScope ? await this.checkShadowing(tx, node, input.name) : null;
         const reserving =
           tenantScope &&

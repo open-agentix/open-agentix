@@ -140,6 +140,14 @@ describe.each(sqlTargets)('migration 0040 (%s)', (_kind, enabled, open) => {
     await c.query(`update secrets set description = 'ok', expires_at = now() where id = $1`, [id]);
   });
 
+  it('keeps the pointer of an env-backed secret immutable', async () => {
+    const id = randomUUID();
+    await insert({ name: 'ptr-fixed', backend: 'env', pointer: 'legacy-name' }, id);
+    expect(
+      await failure(c.query(`update secrets set pointer = 'other-name' where id = $1`, [id])),
+    ).toMatch(/immutable/);
+  });
+
   it('deletes the sealed values with their secret', async () => {
     const id = randomUUID();
     await insert({ name: 'sealed' }, id);

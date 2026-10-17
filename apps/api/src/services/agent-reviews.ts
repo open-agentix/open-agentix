@@ -48,7 +48,7 @@ import type { AuditService } from './audit.js';
 import type { CatalogService } from './catalog.js';
 import { isTenantAdminAt, loadActor } from './grant-authority.js';
 import type { LifecyclePolicyService } from './lifecycle-policy.js';
-import type { SecretResolution } from './secret-resolution.js';
+import { foreignOf, type SecretResolution } from './secret-resolution.js';
 import { reviewContributors, reviewHeadOf } from './review-contributors.js';
 import { TenantTree } from './tenant-tree.js';
 import { lockBindings, lockTreeShared } from './tree-lock.js';
@@ -863,7 +863,7 @@ export class AgentReviewsService {
       );
       if (!verdict.ok)
         return { kind: 'refused', code: verdict.code, message: verdict.message, agent };
-      const { binding, useCase } = await this.bindingOf(
+      const { binding, useCase, secrets } = await this.bindingOf(
         tx,
         agent,
         head.source,
@@ -874,11 +874,10 @@ export class AgentReviewsService {
       // An approval binds to the expansion, the secret resolution and the policy the reviewer saw
       // (A10): a client that leaves them out would bind it to something it never looked at. They are
       // required for every approval, and for any decision while approval is required (finding 3).
-      const required = this.approvalRequired(
-        policy,
-        review.baseVersionId ? agent.useCase : null,
-        useCase,
-      );
+      // A secret of a higher node makes approval required whatever the policy says (same predicate as publish).
+      const required =
+        foreignOf(agent, secrets.resolved).length > 0 ||
+        this.approvalRequired(policy, review.baseVersionId ? agent.useCase : null, useCase);
       if (input.decision === 'approve' || required) {
         const missing = (
           [

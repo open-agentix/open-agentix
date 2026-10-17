@@ -145,7 +145,7 @@ All notable changes to this project are documented here. The format follows
   rotate KEKs and data keys; `POST /v1/secrets` with `pointer` imports a pointer to an operator environment
   secret. A version that pins a secret of a higher node is published only under an approved review whatever
   the policy says (`approval_required_for_foreign_secret`), and the values issued to a run are kept sealed so
-  that its redaction survives a rotation or revocation. Migration `0040_secrets_store` (down script
+  that its redaction survives a rotation or revocation (a periodic purge removes them a day after the session expired). Migration `0040_secrets_store` (down script
   included). See `docs/secrets.md`.
 
 - **Approval is a gate at publish; version deprecation and rollback (ADR 0017 S3, #246)**. In one

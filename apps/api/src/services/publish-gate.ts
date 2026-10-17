@@ -4,6 +4,7 @@ import type { AppContext } from '../context.js';
 import type { Db } from '../db/client.js';
 import { agentReviews, type agentDraftRevisions } from '../db/schema.js';
 import type { AgentRow } from './agent-revisions.js';
+import type { ForeignSecret } from './secret-resolution.js';
 import { reviewPolicy, type AgentReviewsService, type Evaluation } from './agent-reviews.js';
 
 /**
@@ -78,13 +79,6 @@ export interface GateInput {
    * required whatever the policy says (ADR 0017 section 13.3, review of slice S4).
    */
   foreignSecrets?: readonly ForeignSecret[];
-}
-
-/** A scoped secret of another node that a version would pin. */
-export interface ForeignSecret {
-  ref: string;
-  scope: string;
-  ownerNode: string;
 }
 
 const refuse = (

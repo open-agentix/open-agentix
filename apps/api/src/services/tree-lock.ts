@@ -14,6 +14,7 @@ import type { Db } from '../db/client.js';
  */
 const TREE_LOCK_NS = 734_210;
 const BINDINGS_LOCK_NS = 734_211;
+const SECRET_NAME_LOCK_NS = 734_212;
 
 /**
  * The tree lock of the organisation, shared: grants, revocations, renames and child creation hold
@@ -41,5 +42,17 @@ export async function lockTreeExclusive(tx: Db, rootId: string): Promise<void> {
 export async function lockBindings(tx: Db, rootId: string): Promise<void> {
   await tx.execute(
     sql`select pg_advisory_xact_lock(${BINDINGS_LOCK_NS}::int, hashtext(${rootId}))`,
+  );
+}
+
+/**
+ * Serialises the creation of tenant secrets of one name within an organisation (ADR 0017 section
+ * 13.3): a reserving secret (`allowOverride: false`) and a same-named secret below it check each
+ * other's existence, which two concurrent creations would otherwise both pass. Taken after the shared
+ * tree lock and before the audit chain lock, like the binding lock.
+ */
+export async function lockSecretName(tx: Db, rootId: string, name: string): Promise<void> {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(${SECRET_NAME_LOCK_NS}::int, hashtext(${rootId + ':' + name}))`,
   );
 }

@@ -117,6 +117,21 @@ beforeAll(async () => {
 }, 180_000);
 afterAll(async () => n?.close());
 
+describe('a reservation and a shadow created at the same time', () => {
+  it('never both succeed', async () => {
+    const make = (node: string, body: Json = {}) =>
+      api(tok[node]!, 'POST', '/v1/secrets', {
+        scope: 'tenant',
+        name: 'race-name',
+        value: 'race-value-0001',
+        ...body,
+      });
+    const [root, child] = await Promise.all([make('fr-root'), make('fr-child')]);
+    expect([root.statusCode, child.statusCode].sort()).not.toEqual([201, 201]);
+    expect([root.statusCode, child.statusCode]).toContain(201);
+  });
+});
+
 describe('foreign secrets need an approved review whatever the policy says', () => {
   it('lets a secret of the own node and of the own team be published without a review', async () => {
     const a = await agent('tenant:own-key');
@@ -172,6 +187,25 @@ describe('foreign secrets need an approved review whatever the policy says', () 
     const res = await api(tok['fr-child']!, 'POST', `/v1/agents/${a}/publish`);
     expect(res.statusCode).toBe(409);
     expect(j(res).error).toBe('approval_required_for_foreign_secret');
+  });
+
+  it('needs the digests for any decision on a foreign-secret review, also a request for changes', async () => {
+    const a = await agent('tenant:org-key');
+    const review = await openReview(a);
+    const decide = (rid: string, digest: string) =>
+      api(tok['rev']!, 'POST', `/v1/reviews/${rid}/decisions`, {
+        decision: 'request_changes',
+        comment: 'no',
+        expectedDigest: digest,
+      });
+    const bare = await decide(review.id, review.revision.digest);
+    expect(bare.statusCode, bare.body).toBe(400);
+    expect(bare.body).toContain('expectedResolutionDigest');
+    // an own-secret review under the same policy does not need them for a request for changes
+    const own = await agent('tenant:own-key');
+    const ownReview = await openReview(own);
+    const ok = await decide(ownReview.id, ownReview.revision.digest);
+    expect(ok.statusCode, ok.body).toBe(201);
   });
 
   it('does not mark an own secret as foreign in the review', async () => {
