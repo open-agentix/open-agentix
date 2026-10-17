@@ -606,13 +606,18 @@ describe('validator rules for argument constraints (AEP-0002 sections 7.5.5 and 
 
   it('stops at the limit instead of checking an unbounded number of constraints', () => {
     const m = base();
+    const entry = permission(m);
+    delete entry['x-openagentix-args'];
+    delete entry['x-openagentix-allowAdditionalArgs'];
+    delete (m.metadata as Obj).requiredExtensions;
     const args: Obj = {};
-    for (let i = 0; i < 300; i++) args[`a${i}`] = { type: 'string' };
-    permission(m)['x-openagentix-args'] = args;
-    const r = run(m, { awp: futureSchema() });
-    expect(r.findings.some((f) => f.code === 'extension.invalid' || f.code === 'args.limit')).toBe(
-      true,
-    );
+    for (let i = 0; i < 300; i++) args[`a${i}`] = { type: 'string', deny: ['x'] };
+    args.many = { deny: Array.from({ length: 65 }, () => 'x') };
+    entry.args = args;
+    expect(errors(run(m, { awp: futureSchema() }))).toEqual([
+      `args.limit ${P}/args`,
+      `args.limit ${P}/args/many/deny`,
+    ]);
   });
 
   it('keeps the exported manifest valid under the pinned schema', () => {
@@ -711,6 +716,12 @@ describe('verifyNoWidening compares the values of restricting extensions', () =>
     expect(check(d, m)).toEqual([
       'spec.agents.0.permissions.tools.srv.do_it.x-openagentix-classification',
     ]);
+  });
+
+  it('refuses a granted tool whose permission entry, and with it every limit, is missing', () => {
+    const { d, m } = build();
+    delete (((m.spec as Obj).agents as Obj[])[0]!.permissions as { tools: Obj }).tools['srv.do_it'];
+    expect(check(d, m)).toEqual(['spec.agents.0.permissions.tools.srv.do_it']);
   });
 
   it('accepts the core form of the same limits', () => {
