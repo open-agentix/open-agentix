@@ -98,9 +98,10 @@ function stepExtensions(
   agent: AgentSpec,
   index: number,
   step: JsonObject,
+  hasEvent: boolean,
 ): void {
   const at = (field: string) => `agents.${index}.${field}`;
-  if (agent.when !== undefined) ctx.critical(step, 'when', at('when'), agent.when);
+  if (agent.when !== undefined) ctx.condition(step, agent.when, at('when'), hasEvent);
   if (agent.input !== undefined) ctx.critical(step, 'input', at('input'), agent.input as JsonValue);
   if (agent.output !== undefined)
     ctx.critical(step, 'output', at('output'), agent.output as JsonValue);
@@ -160,6 +161,7 @@ export function exportAgent(
   def: PublishedDefinition,
   agent: AgentSpec,
   index: number,
+  hasEvent: boolean,
 ): AgentExport {
   rejectUnknownKeys(ctx, agent, KNOWN_AGENT_KEYS, `agents.${index}`);
   const tools = exportTools(ctx, def, agent, index);
@@ -184,6 +186,6 @@ export function exportAgent(
   if (Object.keys(credentialEnv).length > 0) out[extension('credentialEnv')] = credentialEnv;
   runtimeExtension(ctx, agent, index, out);
   const step: JsonObject = { id: agent.id, type: 'agent', agent: agent.id };
-  stepExtensions(ctx, agent, index, step);
+  stepExtensions(ctx, agent, index, step, hasEvent);
   return { agent: out, step, secrets, approvalRequired: tools.approvalRequired };
 }

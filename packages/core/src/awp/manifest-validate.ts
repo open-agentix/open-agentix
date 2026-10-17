@@ -5,6 +5,7 @@ import { extensionFindings } from './manifest-extensions.js';
 import { awpManifestDigest } from './manifest-digest.js';
 import { injectAgentSections, parseManifestSource } from './manifest-parse.js';
 import { pinnedValidator, structuralFindings } from './manifest-schema.js';
+import { whenFindings } from './manifest-when.js';
 import { semanticFindings } from './manifest-semantic.js';
 import {
   AWP_LIMITS,
@@ -139,6 +140,7 @@ export function validateManifestValue(
       ...(options.schemas?.extensions ? { schema: options.schemas.extensions } : {}),
     }),
   );
+  findings.push(...whenFindings(doc));
   findings.push(
     ...semanticFindings(doc, {
       profiles: new Set<string>(options.profiles ?? SUPPORTED_AWP_PROFILES),

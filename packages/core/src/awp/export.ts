@@ -3,7 +3,13 @@ import { JcsError } from '../jcs.js';
 import { exportAgent, type AgentExport } from './export-agent.js';
 import { exportBudget } from './export-budget.js';
 import { ExportContext, rejectUnknownKeys } from './export-context.js';
-import { exportApproval, exportSecrets, exportSteps, exportTriggers } from './export-workflow.js';
+import {
+  exportApproval,
+  exportSecrets,
+  exportSteps,
+  exportTriggers,
+  hasEventTrigger,
+} from './export-workflow.js';
 import { verifyNoWidening } from './legacy-widening.js';
 import { awpManifestDigest } from './manifest-digest.js';
 import {
@@ -100,7 +106,8 @@ function exportSpec(
   ctx: ExportContext,
   def: PublishedDefinition,
 ): { spec: JsonObject; agents: AgentExport[] } {
-  const exports = def.agents.map((a, i) => exportAgent(ctx, def, a, i));
+  const hasEventInput = hasEventTrigger(def);
+  const exports = def.agents.map((a, i) => exportAgent(ctx, def, a, i, hasEventInput));
   const { triggers, hasEvent } = exportTriggers(ctx, def);
   const byId = new Map(exports.map((e) => [String(e.agent.id), e]));
   const spec: JsonObject = { triggers };
@@ -146,7 +153,7 @@ export function profilesOf(spec: JsonObject): string[] {
  * The result is a mapping to the AWP schema. It is not a conformance claim.
  */
 export function exportAwpManifest(def: PublishedDefinition, options: ExportOptions): ExportResult {
-  const ctx = new ExportContext();
+  const ctx = new ExportContext(options.stepWhenSupported ?? PINNED_AWP_FEATURES.stepWhen);
   rejectUnknownKeys(ctx, def, KNOWN_DEFINITION_KEYS, '');
   const metadata = exportMetadata(ctx, def, options.ownerTeam);
   const { spec } = exportSpec(ctx, def);
