@@ -948,6 +948,49 @@ describe('rollback details', () => {
     expect(j(run).agentVersionId).toBe(v1.id);
   });
 
+  it('a use-case administrator cannot roll an agent back into a use case they do not hold', async () => {
+    await mkUser('ucsec', ['viewer']);
+    await n.ctx.db.insert(tenantRoleBindings).values({
+      id: randomUUID(),
+      userId: uid['ucsec']!,
+      tenantId: orgA,
+      role: 'agent-maintainer',
+      inherit: false,
+      useCase: 'sec',
+      source: 'grant',
+    });
+    tok['ucsec'] = await n.login('ucsec@org-a.example.org', PW);
+    // 1.0.0 belongs to use case ops, the latest 1.1.0 to sec
+    const a = await newAgent(tok['author']!, 'labels:\n  useCase: ops');
+    await approvedVersion(a, '1.0.0');
+    expect((await edit(tok['author']!, a, '1.1.0', 'labels:\n  useCase: sec')).statusCode).toBe(
+      200,
+    );
+    const review = await open(tok['author']!, a.id);
+    await decide(tok['rev1']!, review);
+    const pub = await publishReview(
+      tok['author']!,
+      a.id,
+      await getReview(tok['author']!, review.id),
+    );
+    expect(pub.statusCode, pub.body).toBe(201);
+    const refused = await req(tok['ucsec']!, 'POST', `/v1/agents/${a.id}/versions/1.1.0/deprecate`);
+    expect(refused.statusCode, refused.body).toBe(403);
+    const [still] = await n.ctx.db.select().from(agents).where(eq(agents.id, a.id));
+    expect(still).toMatchObject({ latestVersion: '1.1.0', useCase: 'sec' });
+    expect(
+      await n.ctx.db
+        .select()
+        .from(agentVersionDeprecations)
+        .where(eq(agentVersionDeprecations.agentId, a.id)),
+    ).toHaveLength(0);
+    // somebody with authority over the node does it, and the agent returns to use case ops
+    const ok = await req(tok['author']!, 'POST', `/v1/agents/${a.id}/versions/1.1.0/deprecate`);
+    expect(ok.statusCode, ok.body).toBe(200);
+    const [back] = await n.ctx.db.select().from(agents).where(eq(agents.id, a.id));
+    expect(back).toMatchObject({ latestVersion: '1.0.0', useCase: 'ops' });
+  });
+
   it('production-only: leaving a production version needs an approved target even if the target is not production', async () => {
     await setPolicy({
       requireApprovalForPublish: 'production-only',

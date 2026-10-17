@@ -210,7 +210,7 @@ export class AgentsService {
    * case: it would land in another use case, where its administrators never chose it. Callers who
    * hold the permission node-wide, for the team or for the agent are not limited by the label.
    */
-  private assertLabelInScope(
+  assertLabelInScope(
     principal: Principal,
     permission: 'agents:write' | 'agents:publish',
     agent: AgentRow,

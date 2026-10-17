@@ -72,6 +72,15 @@ export class AgentDeprecationService {
         agent.latestVersionId === target.id
           ? await this.rollbackTarget(tx, agent, target, await this.policy.effectiveFor(node, tx))
           : null;
+      // A rollback puts the agent back under the use case of the version it returns to: that is a
+      // relabel, which a use-case administrator may not do into a use case they do not hold.
+      if (rollbackTo)
+        this.agents.assertLabelInScope(
+          principal,
+          'agents:publish',
+          agent,
+          loadAgentDefinition(rollbackTo.source).labels.useCase || null,
+        );
       const now = this.ctx.now();
       await tx.insert(agentVersionDeprecations).values({
         versionId: target.id,
