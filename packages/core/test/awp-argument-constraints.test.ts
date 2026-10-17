@@ -1162,8 +1162,16 @@ describe('the matcher contract is RE2, not ECMA-262', () => {
   it('"\\s" does not match a no-break space or a vertical tab', () => {
     expect(test('^a\\sb$', 'a\u00a0b')).toBe(false);
     expect(test('^a\\sb$', 'a\u000bb')).toBe(false);
-    expect(test('^a[ \\t\\r\\n\\f\\x0b\\x{a0}]b$', 'a\u00a0b')).toBe(true);
-    expect(test('^a[ \\t\\r\\n\\f\\x0b\\x{a0}]b$', 'a\u000bb')).toBe(true);
+    expect(test('^a[ \\t\\r\\n\\f\\x0b\\xa0]b$', 'a\u00a0b')).toBe(true);
+    expect(test('^a[ \\t\\r\\n\\f\\x0b\\xa0]b$', 'a\u000bb')).toBe(true);
+  });
+
+  it('accepts the documented spelled-out class, in validation and at run time', () => {
+    const nbsp = 'rm[ \\t\\r\\n\\f\\x0b\\xa0]+-rf';
+    expect(checkRegexSource(nbsp)).toBeNull();
+    expect(test(nbsp, 'rm\u00a0-rf')).toBe(true);
+    expect(test(nbsp, 'rm\u000b-rf')).toBe(true);
+    expect(test('rm\\s+-rf', 'rm\u00a0-rf')).toBe(false);
   });
 
   it('refuses ECMA-262 constructs RE2 does not have (fail closed)', () => {

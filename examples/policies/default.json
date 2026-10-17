@@ -1,8 +1,8 @@
 {
   "forbiddenTools": ["*/delete_*", "shell/*"],
   "forbiddenArgPatterns": [
-    { "pattern": "rm[ \\t\\r\\n\\f\\x0b\\x{a0}]+-rf", "reason": "destructive shell command" },
-    { "pattern": "drop[ \\t\\r\\n\\f\\x0b\\x{a0}]+table", "reason": "destructive SQL" }
+    { "pattern": "rm[ \\t\\r\\n\\f\\x0b\\xa0]+-rf", "reason": "destructive shell command" },
+    { "pattern": "drop[ \\t\\r\\n\\f\\x0b\\xa0]+table", "reason": "destructive SQL" }
   ],
   "requireApprovalTools": ["*/merge_*", "*/deploy_*"],
   "maxClassification": "confidential"

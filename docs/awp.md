@@ -265,7 +265,7 @@ Semantics are those of RE2, which differ from ECMA-262 (pinned by tests): `.` ma
 Unicode line separators, so `^a.b$` accepts `a\rb`; `\s` does not match no-break space or vertical tab, so
 `rm\s+-rf` does not catch `rm\u00a0-rf`; `\uXXXX`, `\u{...}`, `\p{Script=...}`, `[^]`, backreferences and
 lookaround are not supported (refused, fail closed). Therefore `deny` patterns must not use `.` or `\s`
-(spell them out: `[^\n]`, `[ \t\r\n\f\x0b\x{a0}]`); validation warns about `.` in a `pattern`. Policy-wide
+(spell them out: `[^\n]`, `[ \t\r\n\f\x0b\xa0]`); validation warns about `.` in a `pattern`. Policy-wide
 `forbiddenArgPatterns` follow the same contract (match case-insensitively); an author who needs Unicode
 whitespace writes the class out.
 **Patterns are unanchored**: a `pattern` matches when it is found anywhere in the value (substring, like

@@ -42,7 +42,7 @@ export const MAX_DENY_PATTERNS = 64;
  * `.` and `\\s` mean something else in the linear-time matcher (RE2) than in ECMA-262: `.` also
  * matches CR and the Unicode line separators, `\\s` does not match no-break space or vertical tab.
  * A `deny` rule written with them misses variants (`rm\\s+-rf` with a no-break space), so `deny`
- * patterns spell the characters out (`[ \\t\\r\\n\\f\\x0b\\x{a0}]`, `[^\\n]`).
+ * patterns spell the characters out (`[ \\t\\r\\n\\f\\x0b\\xa0]`, `[^\\n]`).
  */
 export function usesDotOrSpaceClass(source: string): boolean {
   for (let i = 0; i < source.length; i++) {
@@ -102,7 +102,7 @@ export function argConstraintIssues(c: ArgConstraintLike): ArgRuleIssue[] {
           field: `deny.${i}`,
           message:
             'deny patterns must not use "." or "\\s" (they match other characters than in ECMA-262): ' +
-            'spell them out, for example [^\\n] or [ \\t\\r\\n\\f\\x0b\\x{a0}]',
+            'spell them out, for example [^\\n] or [ \\t\\r\\n\\f\\x0b\\xa0]',
         });
     });
   }
