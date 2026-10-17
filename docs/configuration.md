@@ -114,7 +114,7 @@ Installation defaults of the tenant policy `settings.agentLifecycle` ([agent-lif
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `OAX_LIFECYCLE_REQUIRE_APPROVAL` | `auto` | `off`, `production-only`, `on`, or `auto` (= `on` when the installation has more than one tenant, `off` for a single tenant). In this version only reported (shadow mode), not enforced. |
+| `OAX_LIFECYCLE_REQUIRE_APPROVAL` | `auto` | `off`, `production-only`, `on`, or `auto` (= `on` when the installation has more than one tenant, `off` for a single tenant). Enforced at publish (ADR 0017 S3): where it applies, `POST /v1/agents/{id}/publish` needs an approved review, and **with `OAX_ROLE_BINDINGS_READ=legacy` such a publish is refused** (`409 role_bindings_read_required`); set `bindings`, or `off` while there is no second person to approve. |
 | `OAX_LIFECYCLE_MIN_APPROVALS` | `1` | Approvals a review needs, 1 to 5. The documentation recommends 2 for production use cases. |
 | `OAX_LIFECYCLE_ALLOWED_APPROVER_ROLES` | `admin,agent-maintainer` | Comma separated, from `admin`, `agent-maintainer`, `agent-developer`, `operator`. Anything else refuses to start. |
 | `OAX_LIFECYCLE_APPROVAL_EXPIRY_HOURS` | `168` | How long an approval counts, 1 to 720. |

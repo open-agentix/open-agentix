@@ -20,6 +20,20 @@ All notable changes to this project are documented here. The format follows
   `agent-maintainer`. Revert with `apps/api/drizzle/down/0030_agent_roles.down.sql` (refuses while
   `agent-developer` bindings exist). The OpenAPI role enums changed accordingly.
 
+- **Publish is refused without an approved review where the policy requires approval; the `shadow`
+  report is gone (ADR 0017 S3, #246)**. `POST /v1/agents/{id}/publish` now needs `reviewId` and
+  `expectedDigest` of an approved review wherever `requireApprovalForPublish` applies (`on`, or
+  `production-only` for a production use case; `OAX_LIFECYCLE_REQUIRE_APPROVAL=auto` is `on` with more
+  than one tenant). Clients that published without a body get `409 approval_required`. The response
+  field `shadow` is replaced by `approval` (`null` when none was required). **With
+  `OAX_ROLE_BINDINGS_READ=legacy` such a publish is refused (`409 role_bindings_read_required`)**: set
+  `bindings` before upgrading a multi-tenant installation (read the notes of that switch first), or set
+  `OAX_LIFECYCLE_REQUIRE_APPROVAL=off` if there is no second person to approve. Versions published
+  before this release have no approval record, so a rollback onto them is refused (`409
+  rollback_target_unapproved`) where approval is required. Migration `0038_agent_publish_gate`; revert
+  with `apps/api/drizzle/down/0038_agent_publish_gate.down.sql` before the down scripts of `0037`,
+  `0034` and `0032`.
+
 ### Security
 
 - **Rule A4 follows the grant chain, pins the policy of an open review and fails closed on an unknown
@@ -68,6 +82,21 @@ All notable changes to this project are documented here. The format follows
   with `apps/api/drizzle/down/0037_stored_grant_chain.down.sql`.
 
 ### Added
+
+- **Approval is a gate at publish; version deprecation and rollback (ADR 0017 S3, #246)**. In one
+  transaction under the tree, binding and agent locks, publish re-checks the draft digest, recomputes the
+  profile expansion and the secret resolution from the revision's source, judges every stored approval
+  again (rules A1 to A8 and A10 with the bindings, grant chains, expiry and policy of that moment) and
+  publishes from the revision's source (`409 draft_changed`, `approval_stale`, `approval_insufficient`,
+  `approval_required`, `review_closed`, `publisher_not_approver`). The version row records the review,
+  the distinct approvers, the policy digest, the expansion and resolution digests and the pinned secret
+  references; the review is closed as `published`; every refusal is audited as `agent.publish.refused`.
+  `POST /v1/agents/{id}/versions/{version}/deprecate` refuses new pinned runs (`409 version_deprecated`);
+  deprecating the latest version rolls back to the newest non-deprecated version published under an
+  approved review (no new version, no approval, audited as `agent.version.deprecated`). There is no
+  break-glass (a test walks the route table). Console: the publish dialog names the open review and
+  explains refusals, the Versions tab shows approved and deprecated versions and deprecates (English and
+  German). `docs/agent-lifecycle.md`, `docs/configuration.md`, OpenAPI and the UI types updated.
 
 - **Validation of AWP manifests (AWP-3, #256)**: `POST /v1/agents/validate` and `oax validate` accept an
   `agents.md` whose front matter is an AWP `v1alpha1` manifest (`apiVersion: awp.agenticworkflowprotocol.org/v1alpha1`,
@@ -158,8 +187,8 @@ All notable changes to this project are documented here. The format follows
   included (`403 self_approval`); bindings granted by a contributor do not make a reviewer eligible; API
   tokens decide only when the tenant allows it; the default approvers are `admin` and `agent-maintainer`. The
   tenant policy `settings.agentLifecycle` (`GET/PATCH /v1/tenants/{id}/settings/agent-lifecycle`, installation
-  defaults `OAX_LIFECYCLE_*`) is narrowing only (`422 not_narrowing`). **Publish is not refused yet**: its
-  response and audit entry carry a `shadow` report of what it would have been refused for. New audit events
+  defaults `OAX_LIFECYCLE_*`) is narrowing only (`422 not_narrowing`). Publish only reported what it would have been refused for (a `shadow` report; replaced by the
+  enforcement of S3, below). New audit events
   `agent.revision.created`, `agent.review.*` and `tenant.lifecycle_policy_changed`. Migration
   `0032_agent_lifecycle_reviews` (additive; adds `granted_by` to team and agent bindings). Role-binding
   changes that widen a binding now make the person who made them its grantor. See
