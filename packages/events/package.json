@@ -22,6 +22,6 @@
     "@openagentix/core": "workspace:*",
     "croner": "10.0.1",
     "kafkajs": "2.2.4",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   }
 }

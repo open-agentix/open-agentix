@@ -23,7 +23,7 @@
     "@openagentix/events": "workspace:*",
     "@openagentix/mcp": "workspace:*",
     "@openagentix/providers": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "bin": {
     "oax": "./dist/cli.js"
