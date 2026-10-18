@@ -24,7 +24,7 @@
     "@openagentix/mcp": "workspace:*",
     "@openagentix/providers": "workspace:*",
     "@openagentix/runners": "workspace:*",
-    "drizzle-orm": "0.45.3",
+    "drizzle-orm": "0.45.4",
     "pino": "10.4.0"
   },
   "devDependencies": {
