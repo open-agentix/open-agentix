@@ -1296,9 +1296,12 @@ describe('compile cost is bounded by source size', () => {
     expect(outcomes[0]).toBe('deny'); // fail closed while patterns are still being compiled
     expect(outcomes.at(-1)).toBe('allow');
     expect(worst).toBeLessThan(600); // measured 100-250 ms: the compile budget
-    // without a shared cache every decision starts cold and never converges
-    const cold = checkArg('k', 'hello', { required: false, deny });
-    expect(cold.map((r) => r.code)).toEqual(['arg_denied']);
+    // without a shared cache (a request-supplied definition) every decision starts cold and never
+    // converges: nothing a request compiles is kept for anybody else
+    for (let i = 0; i < 12; i++)
+      expect(checkArg('k', 'hello', { required: false, deny }).map((r) => r.code)).toEqual([
+        'arg_denied',
+      ]);
   });
 
   it('charges cold compiles to the budget, so a decision with too many is denied', () => {
@@ -1546,16 +1549,23 @@ describe('tenant caches: a request cannot evict, a stored policy compiles before
     ]);
   });
 
-  it('evicts least recently used entries within a quota instead of clearing everything', () => {
-    const cache = new LinearCache(100, 4);
-    for (const p of ['aaaa', 'bbbb', 'cccc']) compileLinear(p, false, cache);
-    compileLinear('aaaa', false, cache); // a is now the most recent
-    for (let i = 0; i < 30; i++) compileLinear(`x${String(i).padStart(10, '0')}`, false, cache);
-    expect(cache.size).toBeLessThanOrEqual(4);
-    const kept = new LinearCache(100, 8);
-    compileLinear('keepkeep', false, kept);
-    expect(compileLinear('keepkeep', false, kept)).not.toBeNull();
-    expect(kept.size).toBe(1);
+  it('evicts the least recently used entry within a quota instead of clearing everything', () => {
+    const cache = new LinearCache(1000, 4);
+    for (const p of ['aaaa', 'bbbb', 'cccc', 'dddd']) compileLinear(p, false, cache);
+    compileLinear('aaaa', false, cache); // a is now the most recently used
+    compileLinear('eeee', false, cache); // full: the least recently used (b) goes, not everything
+    expect(cache.size).toBe(4);
+    const has = (p: string) => cache.get(`s:${p}`) !== undefined;
+    expect(['aaaa', 'bbbb', 'cccc', 'dddd', 'eeee'].map(has)).toEqual([
+      true,
+      false,
+      true,
+      true,
+      true,
+    ]);
+    const chars = new LinearCache(10, 100); // a quota in characters
+    for (const p of ['aaaa', 'bbbb', 'cccc']) compileLinear(p, false, chars);
+    expect(chars.size).toBe(2);
   });
 
   it('yields to the event loop while precompiling', async () => {

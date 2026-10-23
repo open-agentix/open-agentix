@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { CVE_TRIAGE } from './fixtures.js';
 import { testNode, type TestNode } from './helpers.js';
 
 /**
@@ -166,6 +167,30 @@ describe('limits that hold for what applies together', () => {
 });
 
 describe('evaluate and dry-run are bounded', () => {
+  it('rate-limits the dry-run route like validation', async () => {
+    const strict = await testNode({ OAX_RATE_LIMIT_VALIDATE_MAX: '3' });
+    try {
+      await strict.req({
+        method: 'POST',
+        url: '/v1/teams',
+        payload: { slug: 'team-security', name: 'Security' },
+      });
+      const id = (
+        await strict.req({ method: 'POST', url: '/v1/agents', payload: { source: CVE_TRIAGE } })
+      ).json().id;
+      const statuses: number[] = [];
+      for (let i = 0; i < 5; i++)
+        statuses.push(
+          (await strict.req({ method: 'POST', url: `/v1/agents/${id}/dry-run`, payload: {} }))
+            .statusCode,
+        );
+      expect(statuses.slice(3)).toEqual([429, 429]);
+      expect(statuses.slice(0, 3)).not.toContain(429);
+    } finally {
+      await strict.close();
+    }
+  });
+
   it('rate-limits POST /v1/policies/evaluate like validation', async () => {
     const strict = await testNode({ OAX_RATE_LIMIT_VALIDATE_MAX: '3' });
     try {
@@ -212,6 +237,22 @@ describe('tool globs are bounded in number', () => {
     });
     expect(some.statusCode).toBe(400);
     expect(performance.now() - t0).toBeLessThan(2000);
+  });
+
+  it('refuses a guideline set with more than 64 tool globs', async () => {
+    const res = await g.req({
+      method: 'POST',
+      url: '/v1/guidelines',
+      payload: {
+        scope: 'global',
+        name: 'many-globs',
+        version: '1.0.0',
+        content: '# R',
+        rules: { forbiddenTools: globs(40), requireApprovalTools: globs(25, 100) },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/at most 64 tool globs/);
   });
 
   it('limits the enabled globs of a tenant together', async () => {
